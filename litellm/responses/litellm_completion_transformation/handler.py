@@ -28,6 +28,14 @@ from litellm.types.utils import ModelResponse
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
+def _chat_verbosity(responses_api_request: Mapping[str, object]) -> Mapping[str, object]:
+    match responses_api_request.get("text"):
+        case {"verbosity": str() as verbosity}:
+            return {"verbosity": verbosity}
+        case _:
+            return {}
+
+
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
@@ -52,8 +60,6 @@ class LiteLLMCompletionTransformationHandler:
         bridged_request: Final[ResponsesAPIOptionalRequestParams] = (
             {**responses_api_request, "tools": list(hoisted.tools)} if hoisted.hoisted else responses_api_request
         )
-        text_config: Final = bridged_request.get("text")
-        verbosity: Final = text_config.get("verbosity") if isinstance(text_config, Mapping) else None
         litellm_completion_request: Final[dict] = {
             **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
@@ -64,7 +70,7 @@ class LiteLLMCompletionTransformationHandler:
                 extra_headers=extra_headers,
                 **kwargs,
             ),
-            **({"verbosity": verbosity} if verbosity is not None else {}),
+            **_chat_verbosity(bridged_request),
         }
 
         if _is_async:
