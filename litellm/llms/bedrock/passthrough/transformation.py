@@ -110,7 +110,9 @@ def _with_request_metadata(
     litellm_params: Mapping[str, object],
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
     if action in _BEDROCK_CONVERSE_ACTIONS:
-        return headers, _with_body_request_metadata(action, body, litellm_params)
+        return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
+            action, body, litellm_params
+        )
     if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body:
         return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
             action, body, litellm_params
@@ -136,6 +138,10 @@ def _converse_guardrail_config(action: str, guardrail_config: object) -> object:
     return {key: value for key, value in fields.items() if key != "streamProcessingMode"}
 
 
+def _without_invoke_guardrail_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {name: value for name, value in headers.items() if name.lower() not in _BEDROCK_INVOKE_GUARDRAIL_HEADERS}
+
+
 def _with_deployment_guardrail(
     action: str,
     headers: Mapping[str, str],
@@ -145,7 +151,10 @@ def _with_deployment_guardrail(
     if guardrail_config is None:
         return headers, body
     if action in _BEDROCK_CONVERSE_ACTIONS:
-        return headers, {**body, "guardrailConfig": _converse_guardrail_config(action, guardrail_config)}
+        return _without_invoke_guardrail_headers(headers), {
+            **body,
+            "guardrailConfig": _converse_guardrail_config(action, guardrail_config),
+        }
     if action in _BEDROCK_INVOKE_ACTIONS:
         guardrail_headers: Final = tuple(bedrock_invoke_guardrail_headers(guardrail_config).items())
         return merge_bedrock_invoke_headers(

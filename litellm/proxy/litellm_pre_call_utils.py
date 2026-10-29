@@ -2502,6 +2502,7 @@ def refresh_proxy_server_request_body_snapshot(
         frozenset(
             {
                 "secret_fields",
+                "request_headers",
                 "proxy_server_request",
                 "litellm_logging_obj",
                 VECTOR_STORE_CALLER_METADATA_KWARG,

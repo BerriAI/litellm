@@ -977,7 +977,11 @@ async def test_converse_passthrough_signs_proxy_identity_into_request_metadata(
     caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "ticket": "T-42"}}
 
     request: Final = await _sent_passthrough_request(
-        action, caller_body, PROXY_IDENTITY, request_query_params=query_params
+        action,
+        caller_body,
+        PROXY_IDENTITY,
+        request_query_params=query_params,
+        request_headers={f"x-pass-{REQUEST_METADATA_HEADER.upper()}": '{"user_api_key_team_alias":"forged"}'},
     )
 
     assert json.loads(request.content) == {
@@ -1281,12 +1285,14 @@ async def test_deployment_guardrail_replaces_the_caller_converse_guardrail(
         {**CONVERSE_BODY, "guardrailConfig": caller_guardrail},
         {},
         deployment_params={"guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"}},
+        request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS,
     )
 
     assert json.loads(request.content) == {
         **CONVERSE_BODY,
         "guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"},
     }
+    assert _invoke_guardrail_headers(request) == {}
 
 
 @pytest.mark.asyncio

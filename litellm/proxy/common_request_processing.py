@@ -89,6 +89,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
+from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
@@ -3493,6 +3494,7 @@ class ProxyBaseLLMRequestProcessing:
             HttpPassThroughEndpointHelpers,
         )
 
+        self.data["request_headers"] = BasePassthroughUtils.pass_through_prefixed_headers(request.headers)
         result: Final = await self.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,

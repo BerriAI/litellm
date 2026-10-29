@@ -5,6 +5,7 @@ from urllib.parse import unquote
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import boto3
@@ -25,6 +26,7 @@ _MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 _EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 _METADATA_HEADER: Final = "x-amzn-bedrock-request-metadata"
 _HEADER_MAX_CHARS: Final = 8500
+_LATENCY_HEADER: Final = "x-amzn-bedrock-performanceconfig-latency"
 _LONG_SPEND_LOGS_METADATA: Final = tuple((f"{index:02d}".ljust(256, "k"), "\n" * 256) for index in range(12))
 _CONVERSE_REPLY: Final[Mapping[str, JsonValue]] = {
     "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
@@ -105,9 +107,11 @@ class Rig:
     long_key: str
     long_identity: tuple[tuple[str, str], ...]
 
-    def runtime(self, key: str, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201  # boto3 clients are untyped
+    def runtime(  # noqa: ANN201  # boto3 clients are untyped
+        self, key: str, monkeypatch: pytest.MonkeyPatch, extra_headers: Mapping[str, str] = MappingProxyType({})
+    ):
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", key)
-        return boto3.client(
+        client: Final = boto3.client(
             "bedrock-runtime",
             endpoint_url=f"{str(self.proxy.client.base_url).rstrip('/')}/bedrock",
             region_name="us-east-1",
@@ -117,6 +121,11 @@ class Rig:
                 parameter_validation=False,
             ),
         )
+        client.meta.events.register(
+            "before-send.bedrock-runtime.*",
+            lambda request, **_: request.headers.update(extra_headers),
+        )
+        return client
 
     def received(self, marker: str) -> tuple[Request, ...]:
         return tuple(request for request in self.wire.drain() if marker.encode() in request.body)
@@ -243,6 +252,54 @@ def test_boto3_passthrough_calls_carry_the_key_identity_in_signed_request_metada
     ], [request.body for request in converse_requests]
     assert [_METADATA_HEADER in request.headers for request in converse_requests] == [False, False]
     assert [json.loads(request.body) for request in invoke_requests] == [_invoke_body(marker), _invoke_body(marker)]
+    assert [json.loads(request.headers[_METADATA_HEADER]) for request in invoke_requests] == [
+        rig.identity,
+        rig.identity,
+    ], [request.headers for request in invoke_requests]
+    assert all(_METADATA_HEADER in _signed_header_names(request) for request in invoke_requests), [
+        request.headers["authorization"] for request in invoke_requests
+    ]
+
+
+def test_caller_request_metadata_header_sent_through_x_pass_never_replaces_the_key_identity(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = f"forged-header-{uuid.uuid4().hex}"
+    runtime: Final = rig.runtime(
+        rig.key,
+        monkeypatch,
+        {
+            f"x-pass-{_METADATA_HEADER}": json.dumps({"user_api_key_team_alias": "forged", "ticket": "T-42"}),
+            f"x-pass-{_LATENCY_HEADER}": "optimized",
+        },
+    )
+    model: Final = rig.strict_model
+
+    runtime.converse(modelId=model, messages=_messages(marker))
+    tuple(runtime.converse_stream(modelId=model, messages=_messages(marker))["stream"])
+    runtime.invoke_model(modelId=model, body=json.dumps(_invoke_body(marker)))["body"].read()
+    tuple(runtime.invoke_model_with_response_stream(modelId=model, body=json.dumps(_invoke_body(marker)))["body"])
+
+    received: Final = rig.received(marker)
+    assert [request.target.rsplit("/", 1)[-1] for request in received] == [
+        "converse",
+        "converse-stream",
+        "invoke",
+        "invoke-with-response-stream",
+    ], received
+    assert all(
+        request.headers.get(_LATENCY_HEADER) == "optimized" and _LATENCY_HEADER in _signed_header_names(request)
+        for request in received
+    ), [request.headers for request in received]
+    converse_requests: Final = received[:2]
+    invoke_requests: Final = received[2:]
+    assert [_METADATA_HEADER in request.headers for request in converse_requests] == [False, False], [
+        request.headers for request in converse_requests
+    ]
+    assert [json.loads(request.body)["requestMetadata"] for request in converse_requests] == [
+        rig.identity,
+        rig.identity,
+    ], [request.body for request in converse_requests]
     assert [json.loads(request.headers[_METADATA_HEADER]) for request in invoke_requests] == [
         rig.identity,
         rig.identity,

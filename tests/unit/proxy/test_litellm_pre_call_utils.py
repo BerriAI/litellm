@@ -871,6 +871,55 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields(
 
 
 @pytest.mark.asyncio
+async def test_pass_through_body_snapshot_never_carries_forwarded_x_pass_header_values():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cookie: Final = "session=caller-session-secret"
+    provider_token: Final = "Bearer caller-provider-secret"
+    pass_headers: Final = {
+        "x-pass-cookie": cookie,
+        "x-pass-authorization": provider_token,
+        "x-pass-x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
+    }
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/bedrock/model/bedrock-model/invoke",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [
+                (b"authorization", b"Bearer sk-litellm-key"),
+                *((name.encode(), value.encode()) for name, value in pass_headers.items()),
+            ],
+        }
+    )
+    endpoint: Final = "/model/bedrock-model-snapshot-control/invoke"
+
+    enriched: Final = await add_litellm_data_to_request(
+        data={
+            "model": "bedrock-model",
+            "method": "POST",
+            "endpoint": endpoint,
+            "data": {"messages": []},
+            "custom_llm_provider": "bedrock",
+            "request_headers": pass_headers,
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+
+    logged_body: Final = json.dumps(enriched["proxy_server_request"]["body"], default=str)
+    assert endpoint in logged_body
+    assert enriched["request_headers"]["x-pass-cookie"] == cookie
+    assert cookie not in logged_body
+    assert provider_token not in logged_body
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_request():
     """Regression: the body snapshot used to include the proxy_server_request
     key itself, producing the path
