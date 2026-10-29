@@ -31,7 +31,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import deployment_ids_failed_in_request
+from litellm.router_utils.common_utils import deployment_ids_failed_in_request, prefer_web_search_deployments
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -433,6 +433,10 @@ class DeploymentAffinityCheck(CustomLogger):
         failed_deployment_ids: Final = deployment_ids_failed_in_request(
             cast(Mapping[str, object], request_kwargs)  # cast-ok: request kwargs keys are param names
         )
+        pin_candidates: Final = prefer_web_search_deployments(
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            request_kwargs,
+        )
         user_key: Final = (
             self.get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
             if (session_affinity_active or enable_user_key)
@@ -464,7 +468,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
                 if session_model_id and session_model_id not in failed_deployment_ids:
                     session_deployment: Final = self._find_deployment_by_model_id(
-                        healthy_deployments=typed_healthy_deployments,
+                        healthy_deployments=pin_candidates,
                         model_id=session_model_id,
                     )
                     if session_deployment is not None:
@@ -501,7 +505,7 @@ class DeploymentAffinityCheck(CustomLogger):
             return typed_healthy_deployments
 
         deployment = self._find_deployment_by_model_id(
-            healthy_deployments=typed_healthy_deployments,
+            healthy_deployments=pin_candidates,
             model_id=model_id,
         )
         if deployment is None:

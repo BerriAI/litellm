@@ -1299,3 +1299,101 @@ async def test_previous_response_id_pin_holds_even_after_its_deployment_failed()
         },
         parent_otel_span=None,
     ) == [healthy_deployments[0]]
+
+
+def _mixed_web_search_router(optional_pre_call_checks: list[str]) -> litellm.Router:  # mutable-ok: Router signature
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi"},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi"},
+                "model_info": {"id": "search"},
+            },
+        ],
+        optional_pre_call_checks=optional_pre_call_checks,
+    )
+
+
+_CALLER_METADATA: Final = {"user_api_key_hash": "caller-1", "session_id": "session-1"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "web_search_request",
+    [{"web_search_options": {}}, {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}],
+    ids=["web-search-options", "web-search-tool"],
+)
+@pytest.mark.parametrize(
+    ("optional_pre_call_checks", "pin_key"),
+    [
+        (
+            ["deployment_affinity"],
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+        (
+            ["session_affinity"],
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin"],
+)
+async def test_pin_on_a_deployment_without_web_search_yields_to_a_web_search_request(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    pin_key: str,
+    web_search_request: dict[str, object],  # mutable-ok: request kwargs
+):
+    router: Final = _mixed_web_search_router(optional_pre_call_checks)
+    await router.cache.async_set_cache(pin_key, {"model_id": "no-search"}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    plain: Final = await router.acompletion(model="mixed", messages=messages, metadata=dict(_CALLER_METADATA))
+    searching: Final = await router.acompletion(
+        model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), **web_search_request
+    )
+
+    assert plain._hidden_params["model_id"] == "no-search"
+    assert searching._hidden_params["model_id"] == "search"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("search_supported", "tried"),
+    [((False, False), ()), ((False, True), ("search",))],
+    ids=["no-deployment-can-search", "capable-deployment-already-tried"],
+)
+async def test_pin_holds_for_a_web_search_request_when_no_untried_deployment_can_search(
+    search_supported: tuple[bool, bool], tried: tuple[str, ...]
+):
+    cache: Final = AsyncMock()
+    cache.async_get_cache = AsyncMock(return_value={"model_id": "no-search"})
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache, ttl_seconds=60, enable_user_key_affinity=True, enable_responses_api_affinity=False
+    )
+    healthy_deployments: Final = [
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "openai/gpt-x"},
+            "model_info": {"id": model_id, "supports_web_search": supported},
+        }
+        for model_id, supported in zip(("no-search", "search"), search_supported)
+    ]
+
+    filtered: Final = await callback.async_filter_deployments(
+        model="mixed",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={
+            "metadata": {"user_api_key_hash": "caller-1"},
+            "web_search_options": {},
+            "_excluded_deployment_ids": list(tried),
+        },
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["no-search"]
