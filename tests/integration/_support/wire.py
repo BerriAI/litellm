@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import socket
 import ssl
 import threading
 import time
 from collections.abc import Callable, Generator, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -97,6 +98,11 @@ def _await_release(
     return gate.is_set()
 
 
+def _stop_reading(connection: socket.socket) -> None:
+    with suppress(OSError):
+        socket.socket.shutdown(connection, socket.SHUT_RD)
+
+
 @contextmanager
 def wire_server(
     respond: Callable[[Request], Reply],
@@ -111,11 +117,11 @@ def wire_server(
     disconnected: Final[SimpleQueue[str]] = SimpleQueue()
     connected: Final[SimpleQueue[str]] = SimpleQueue()
     closed: Final[SimpleQueue[str]] = SimpleQueue()
+    accepted: Final[SimpleQueue[socket.socket]] = SimpleQueue()
     closing: Final = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
-        timeout = 5
 
         def setup(self) -> None:
             super().setup()
@@ -130,6 +136,9 @@ def wire_server(
             self.wfile.flush()
 
         def respond(self) -> None:
+            if closing.is_set():
+                self.close_connection = True
+                return
             headers: Final = {name.lower(): value for name, value in self.headers.items()}
             try:
                 body: Final = read_body(headers, self.rfile)
@@ -220,6 +229,11 @@ def wire_server(
             if tls is not None:
                 self.socket = tls.wrap_socket(self.socket, server_side=True)
 
+        def process_request(self, request: socket.socket | tuple[bytes, socket.socket], client_address: object) -> None:
+            if isinstance(request, socket.socket):
+                accepted.put(request)
+            super().process_request(request, client_address)
+
     with OwnedHTTPServer(("127.0.0.1", port), Handler) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
@@ -234,6 +248,8 @@ def wire_server(
         finally:
             closing.set()
             server.shutdown()
+            for connection in tuple(accepted.get_nowait() for _ in range(accepted.qsize())):
+                _stop_reading(connection)
             thread.join(timeout=6)
             assert not thread.is_alive(), "Owned HTTP server survived cleanup"
             server.server_close()
