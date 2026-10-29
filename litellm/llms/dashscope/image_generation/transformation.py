@@ -56,7 +56,7 @@ DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/a
 CHAT_COMPATIBLE_MODE_PATH: Final = "/compatible-mode/v1"
 
 # Maps OpenAI size strings (WxH) to DashScope size strings (W*H)
-OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
+OPENAI_TO_DASHSCOPE_SIZE: Final[Mapping[str, str]] = {
     "256x256": "256*256",
     "512x512": "512*512",
     "1024x1024": "1024*1024",
