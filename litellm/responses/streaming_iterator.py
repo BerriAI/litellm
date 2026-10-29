@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     is_background_response,
     requests_background,
     without_budget_reservation,
+    without_io_token_reservation,
 )
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2512,8 +2513,6 @@ class ResponsesWebSocketStreaming:
 
     def _detach_admission_reservations(self) -> None:
         """Only the first turn settles the connection's admission reservations; later turns charge their own usage."""
-        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import without_io_token_reservation
-
         litellm_params: Final = _json_object_or_none(
             self.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
         )
@@ -3396,8 +3395,6 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
     def _detach_io_token_reservation(self) -> None:
-        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import without_io_token_reservation
-
         connection_metadata: Final = self.extra_kwargs.get("metadata")
         self.litellm_metadata = without_io_token_reservation(self.litellm_metadata)
         if _is_json_object(connection_metadata):
