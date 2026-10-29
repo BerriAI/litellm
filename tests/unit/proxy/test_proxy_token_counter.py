@@ -91,6 +91,8 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 
 def _hugging_face_offline() -> NoReturn:
     raise OSError("unit tests never download the Kimi K3 tokenizer")
@@ -277,6 +279,39 @@ async def test_token_counter_reads_an_oidc_api_key_only_when_it_calls_the_provid
         await token_counter(request=request, call_endpoint=call_endpoint)
     assert excinfo.value.code == "401"
     assert str(tmp_path) not in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_token_counter_answers_503_when_the_metadata_server_behind_an_oidc_google_api_key_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    audience: Final = f"https://count.test/{uuid.uuid4().hex}"
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": f"oidc/google/{audience}"},
+                }
+            ]
+        ),
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get(url__regex=r"/computeMetadata/v1/instance/service-accounts/default/identity").respond(
+            500, text="metadata server unavailable"
+        )
+        with pytest.raises(ProxyException) as excinfo:
+            await token_counter(
+                request=TokenCountRequest(model="claude", messages=[{"role": "user", "content": "hello"}]),
+                call_endpoint=True,
+            )
+
+    assert excinfo.value.code == "503"
+    assert "oidc/google secret reference could not be resolved" in excinfo.value.message
+    assert audience.removeprefix("https://") not in excinfo.value.message
 
 
 @pytest.mark.asyncio
@@ -612,6 +647,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
     ):
         # Mock router to return Anthropic deployment
         with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+            route_entry_points_to_stubs(mock_router)
             mock_router.model_list = [
                 {
                     "model_name": "claude-3-5-sonnet",
@@ -673,6 +709,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
 
             # Mock router to return GPT-4 deployment
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                route_entry_points_to_stubs(mock_router)
                 mock_router.model_list = [
                     {
                         "model_name": "gpt-4",
@@ -732,6 +769,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
 
             # Mock router to return Anthropic deployment
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                route_entry_points_to_stubs(mock_router)
                 mock_router.model_list = [
                     {
                         "model_name": "claude-3-5-sonnet",
@@ -1072,7 +1110,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
 
         litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.async_get_available_deployment = AsyncMock(
             return_value={
                 "litellm_params": {
@@ -1127,7 +1165,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
         "model_info": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
@@ -1191,7 +1229,7 @@ async def test_proxy_token_counter_error_raises_when_enabled():
         "model_info": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
