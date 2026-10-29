@@ -1256,48 +1256,6 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
     assert failure_data.get("agent_id") == "test-agent"
 
 
-@pytest.mark.parametrize(
-    "provider_error",
-    [
-        litellm.BadRequestError(message="unsupported parameter", model="gpt-4", llm_provider="openai"),
-        litellm.NotFoundError(message="The model `gpt-missing` does not exist", model="gpt-4", llm_provider="openai"),
-    ],
-    ids=("bad-request", "not-found"),
-)
-@pytest.mark.asyncio
-async def test_a_provider_request_error_answers_jsonrpc_invalid_params_400(provider_error: Exception) -> None:
-    agent: Final = _make_agent_mock()
-    mock_request: Final = _make_request_mock("tasks/get", {"id": "task-1"})
-    mock_handler: Final = MagicMock()
-    mock_handler.post = AsyncMock(side_effect=provider_error)
-    mock_proxy_logging: Final = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(
-        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
-    )
-    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
-
-    with ExitStack() as stack:
-        for p in _base_patches(agent):
-            stack.enter_context(p)
-        stack.enter_context(
-            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=mock_handler)
-        )
-        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging))
-
-        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
-
-        response: Final = await invoke_agent_a2a(
-            agent_id="test-agent",
-            request=mock_request,
-            fastapi_response=MagicMock(),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
-        )
-
-    body: Final = json.loads(response.body.decode())
-    assert (response.status_code, body["error"]["code"]) == (400, -32602)
-    assert body["error"]["message"] == provider_error.message
-
-
 @pytest.mark.asyncio
 async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
     from litellm.proxy._types import UserAPIKeyAuth

@@ -414,7 +414,7 @@ def _map_openai_exception(
     elif (
         "invalid_request_error" in error_str
         and "Incorrect API key provided" not in error_str
-        and getattr(original_exception, "status_code", None) in (None, 400)
+        and getattr(original_exception, "status_code", None) not in (401, 404)
     ):
         raise BadRequestError(
             message=f"{exception_provider} - {message}",
