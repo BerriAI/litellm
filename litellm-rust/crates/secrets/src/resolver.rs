@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::compatibility::python_manager_string;
-use litellm_core_utils::{serde_compat::parse_str_bool, settings::Lookup};
+use litellm_core_utils::{
+    serde_compat::{parse_str_bool, parse_true_false},
+    settings::Lookup,
+};
 
 use crate::state::{LookupTarget, normalize_secret_name};
 use crate::{Error, OidcResolver, Secret, SecretManagerState, SecretValue};
@@ -167,7 +170,7 @@ impl SecretResolver {
             return Some(python_manager_string(SecretValue::new(value)));
         }
         Some(
-            parse_str_bool(&value)
+            parse_true_false(&value)
                 .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool),
         )
     }

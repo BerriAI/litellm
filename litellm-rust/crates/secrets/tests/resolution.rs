@@ -96,17 +96,20 @@ async fn native_defaults_apply_to_absence_but_never_hide_provider_failures(
 }
 
 #[rstest::rstest]
-#[case::lowercase_true("true", Some(true))]
-#[case::padded_false(" FALSE ", Some(false))]
-#[case::capitalized_true("True", Some(true))]
-#[case::parenthesized("(True)", None)]
-#[case::commented("False # comment", None)]
-#[case::number("1", None)]
-#[case::text("secret", None)]
+#[case::lowercase_true("true", Some(true), Some(true))]
+#[case::padded_false(" FALSE ", Some(false), Some(false))]
+#[case::capitalized_true("True", Some(true), Some(true))]
+#[case::parenthesized("(True)", None, None)]
+#[case::commented("False # comment", None, None)]
+#[case::one("1", None, Some(true))]
+#[case::zero("0", None, Some(false))]
+#[case::off(" Off ", None, Some(false))]
+#[case::text("secret", None, None)]
 #[tokio::test]
-async fn environment_values_are_coerced_like_str_to_bool(
+async fn environment_values_become_booleans_only_for_true_or_false(
     #[case] input: &str,
     #[case] boolean: Option<bool>,
+    #[case] flag: Option<bool>,
 ) {
     let resolver = resolver(Some(input));
     assert_eq!(
@@ -124,7 +127,7 @@ async fn environment_values_are_coerced_like_str_to_bool(
     );
     assert_eq!(
         resolver.get_secret_bool("key", Some(true)).await.unwrap(),
-        boolean
+        flag
     );
 }
 
@@ -216,7 +219,7 @@ async fn custom_manager_absence_uses_environment_instead_of_the_default() {
 #[case::capitalized_true("True", Some(Secret::Bool(true)), Some(true))]
 #[case::parenthesized_false("(False)", Some(Secret::Bool(false)), Some(false))]
 #[case::lowercase_true("true", None, Some(true))]
-#[case::number("1", None, None)]
+#[case::number("1", None, Some(true))]
 #[case::text("secret", None, None)]
 #[tokio::test]
 async fn manager_strings_are_coerced_like_literal_eval(

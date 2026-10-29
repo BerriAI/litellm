@@ -5,6 +5,7 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -125,6 +126,12 @@ def _get_oidc_http_handler(timeout: httpx.Timeout | None = None) -> HTTPHandler:
     return HTTPHandler(timeout=timeout)
 
 
+_TRUE_FALSE_STRINGS: Final = MappingProxyType({"true": True, "false": False})
+_BOOL_STRINGS: Final = MappingProxyType(
+    {**_TRUE_FALSE_STRINGS, "1": True, "yes": True, "on": True, "0": False, "no": False, "off": False}
+)
+
+
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
@@ -138,18 +145,7 @@ def str_to_bool(value: str | None) -> bool | None:
     """
     if value is None:
         return None
-
-    true_values: Final = {"true"}
-    false_values: Final = {"false"}
-
-    value_lower: Final = value.strip().lower()
-
-    if value_lower in true_values:
-        return True
-    elif value_lower in false_values:
-        return False
-    else:
-        return None
+    return _BOOL_STRINGS.get(value.strip().lower())
 
 
 def get_secret_str(
@@ -422,8 +418,8 @@ def get_secret(
                 return secret
         else:
             secret = os.environ.get(secret_name)
-            secret_value_as_bool = str_to_bool(secret) if secret is not None else None
-            if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
+            secret_value_as_bool = _TRUE_FALSE_STRINGS.get(secret.strip().lower()) if secret is not None else None
+            if secret_value_as_bool is not None:
                 return secret_value_as_bool
             else:
                 return secret

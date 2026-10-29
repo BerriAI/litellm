@@ -346,8 +346,11 @@ mod tests {
     #[case("None", None)]
     #[case("' True '", Some(true))]
     #[case("' fAlSe '", Some(false))]
-    #[case("'yes'", None)]
-    #[case("'1'", None)]
+    #[case("'yes'", Some(true))]
+    #[case("'1'", Some(true))]
+    #[case("' OFF '", Some(false))]
+    #[case("'0'", Some(false))]
+    #[case("'t'", None)]
     #[case("'unknown'", None)]
     fn string_boolean_tokens_remain_separate_from_truthiness(
         #[case] source: &str,

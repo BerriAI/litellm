@@ -28,6 +28,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
     get_shared_realtime_ssl_context,
     get_ssl_configuration,
+    get_ssl_verify,
     realtime_ssl_for_url,
 )
 from litellm.types.llms.custom_http import VerifyTypes
@@ -1923,6 +1924,32 @@ async def test_http2_flag_bypasses_aiohttp_transport(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("LITELLM_HTTP2", "True")
     assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
     assert AsyncHTTPHandler.create_async_transport() is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "http2"),
+    [("1", True), ("yes", True), ("ON", True), ("True", True), ("0", False), ("no", False), ("off", False)],
+)
+def test_litellm_http2_env_reads_the_common_boolean_spellings(
+    monkeypatch: pytest.MonkeyPatch, raw: str, http2: bool
+) -> None:
+    monkeypatch.setattr(litellm, "http2", False)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
+    monkeypatch.setenv("LITELLM_HTTP2", raw)
+
+    assert AsyncHTTPHandler.should_use_aiohttp_transport() is not http2
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0", False), (" off ", False), ("no", False), ("1", True)])
+def test_ssl_verify_env_reads_the_common_boolean_spellings(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: bool
+) -> None:
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setenv("SSL_VERIFY", raw)
+
+    assert get_ssl_verify() is expected
 
 
 @pytest.mark.asyncio

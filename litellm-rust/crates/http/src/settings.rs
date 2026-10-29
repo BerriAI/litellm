@@ -209,6 +209,9 @@ mod tests {
     #[case("true", SslVerify::Enabled)]
     #[case(" True ", SslVerify::Enabled)]
     #[case("FALSE", SslVerify::Disabled)]
+    #[case("1", SslVerify::Enabled)]
+    #[case("0", SslVerify::Disabled)]
+    #[case(" off ", SslVerify::Disabled)]
     #[case("/etc/ssl/bundle.pem", SslVerify::CaBundle("/etc/ssl/bundle.pem".into()))]
     fn ssl_verify_parses_bools_and_treats_anything_else_as_a_bundle_path(
         #[case] value: &str,
@@ -398,9 +401,14 @@ mod tests {
     #[rstest]
     #[case("true", Some(true))]
     #[case("True", Some(true))]
+    #[case("1", Some(true))]
+    #[case("yes", Some(true))]
+    #[case("on", Some(true))]
     #[case("false", None)]
-    #[case("1", None)]
-    fn boolean_switches_only_turn_on_for_true(
+    #[case("0", None)]
+    #[case("off", None)]
+    #[case("2", None)]
+    fn boolean_switches_turn_on_for_true_words(
         #[case] value: &'static str,
         #[case] expected: Option<bool>,
     ) {

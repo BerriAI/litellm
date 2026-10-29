@@ -4,9 +4,11 @@ from typing import Final
 
 from fastapi import APIRouter
 
+from litellm.proxy.common_utils.admin_ui_utils import is_admin_ui_disabled
 from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_enabled
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
     UiDiscoveryEndpoints,
 )
@@ -22,11 +24,11 @@ async def get_ui_config():
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
     auto_redirect_ui_login_to_sso: Final = (
-        os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", "false").lower() == "true"
+        str_to_bool(os.getenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO")) is True
         or general_settings.get("auto_redirect_ui_login_to_sso", False) is True
     )
-    admin_ui_disabled: Final = os.getenv("DISABLE_ADMIN_UI", "false").lower() == "true"
-    use_si_terminology: Final = os.getenv("LITELLM_UI_USE_SI_TERMINOLOGY", "false").lower() == "true"
+    admin_ui_disabled: Final = is_admin_ui_disabled()
+    use_si_terminology: Final = str_to_bool(os.getenv("LITELLM_UI_USE_SI_TERMINOLOGY")) is True
     hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
 
     sso_configured: Final = has_user_setup_sso()

@@ -92,17 +92,27 @@ mod tests {
     }
 
     #[test]
-    fn enabled_only_switches_on_for_true_and_never_forces_off() {
+    fn enabled_switches_on_for_true_words_and_never_forces_off() {
         let env = env_of(&[
             ("LOWER", "true"),
             ("PADDED", " True "),
-            ("OFF", "false"),
             ("ONE", "1"),
+            ("YES", "yes"),
+            ("ON", "ON"),
+            ("FALSE", "false"),
+            ("ZERO", "0"),
+            ("OFF", "off"),
+            ("WORD", "enabled"),
         ]);
         assert_eq!(env.enabled("LOWER"), Some(true));
         assert_eq!(env.enabled("PADDED"), Some(true));
+        assert_eq!(env.enabled("ONE"), Some(true));
+        assert_eq!(env.enabled("YES"), Some(true));
+        assert_eq!(env.enabled("ON"), Some(true));
+        assert_eq!(env.enabled("FALSE"), None);
+        assert_eq!(env.enabled("ZERO"), None);
         assert_eq!(env.enabled("OFF"), None);
-        assert_eq!(env.enabled("ONE"), None);
+        assert_eq!(env.enabled("WORD"), None);
         assert_eq!(env.enabled("ABSENT"), None);
     }
 
