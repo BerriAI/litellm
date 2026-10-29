@@ -845,5 +845,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
             "populate_request_with_path_params: Updated request_data with vector_store_ids=%s",
             request_data.get("vector_store_ids"),
         )
-    else:
-        verbose_proxy_logger.debug("populate_request_with_path_params: No vector_store_id present in path=%s", path)

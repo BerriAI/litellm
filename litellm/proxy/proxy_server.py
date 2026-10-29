@@ -18437,7 +18437,6 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug("receiving data: %s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args

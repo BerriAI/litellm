@@ -8075,7 +8075,6 @@ async def vector_store_access_check(
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
     if not vector_store_ids_to_run:
-        verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
         return True
 
     #########################################################
