@@ -219,6 +219,7 @@ pub struct LiteLlmSettings {
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
     pub drop_params: Option<Spelled<bool>>,
+    pub reasoning_auto_summary: Option<Spelled<bool>>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
@@ -240,6 +241,7 @@ impl fmt::Debug for LiteLlmSettings {
         formatter
             .debug_struct("LiteLlmSettings")
             .field("drop_params", &self.drop_params)
+            .field("reasoning_auto_summary", &self.reasoning_auto_summary)
             .field("request_timeout", &self.request_timeout)
             .field("num_retries", &self.num_retries)
             .field("cache", &self.cache)

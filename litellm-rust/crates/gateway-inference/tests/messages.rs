@@ -5,7 +5,7 @@ use axum::{
     http::Request,
 };
 use rstest::rstest;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -73,6 +73,46 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].headers.contains_key("authorization"));
     assert!(!requests[0].headers.contains_key("x-request-id"));
+}
+
+#[rstest]
+#[case::dropped_by_request(json!({"drop_params": true, "speed": "fast"}))]
+#[case::dropped_by_path(json!({"additional_drop_params": ["top_k"], "top_k": 5}))]
+#[tokio::test]
+async fn request_drop_settings_apply_and_never_reach_the_provider(#[case] settings: Value) {
+    let upstream = MockServer::start().await;
+    let messages = json!([{"role": "user", "content": "hi"}]);
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_json(
+            json!({"model": "test-model", "messages": messages, "max_tokens": 16, "stream": false}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"id": "msg_test",
+            "type": "message", "role": "assistant", "model": "test-model",
+            "content": [{"type": "text", "text": "hello"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}})),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let body: Map<String, Value> = json!({"model": "public/model", "messages": messages,
+        "max_tokens": 16, "stream": false})
+    .as_object()
+    .unwrap()
+    .clone()
+    .into_iter()
+    .chain(settings.as_object().unwrap().clone())
+    .collect();
+
+    let response = support::post(
+        support::app("anthropic/test-model", &upstream.uri()),
+        "/v1/messages",
+        Value::Object(body),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
 }
 
 #[tokio::test]

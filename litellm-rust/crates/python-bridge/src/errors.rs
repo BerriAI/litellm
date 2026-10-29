@@ -276,7 +276,7 @@ mod tests {
             value: "5".into(),
             hint: String::new(),
         }),
-        Some("claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`.")
+        Some("claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config.")
     )]
     #[case::missing_field(
         litellm_llms::Error::MissingField("max_tokens").into(),

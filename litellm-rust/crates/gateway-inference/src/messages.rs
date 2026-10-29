@@ -13,6 +13,7 @@ use axum::{
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_router::REQUEST_SETTINGS;
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
@@ -72,8 +73,10 @@ fn project(
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
+    let shaping = deployment.shaping_for(&body);
     let body = body
         .into_iter()
+        .filter(|(name, _)| !REQUEST_SETTINGS.contains(&name.as_str()))
         .map(|(name, value)| match name.as_str() {
             "model" => (name, Value::from(deployment.model.as_str())),
             _ => (name, value),
@@ -88,7 +91,7 @@ fn project(
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
         timeout: deployment.timeout,
-        shaping: deployment.shaping.clone(),
+        shaping,
     })
 }
 

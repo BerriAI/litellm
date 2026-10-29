@@ -100,6 +100,7 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         custom_llm_provider: Some("test-provider".into()),
         litellm_params: Default::default(),
         timeout: Some(Duration::from_secs(7)),
+        drops_params_globally: false,
         shaping: MessagesShaping {
             settings: MessagesSettings {
                 drop_params: true,

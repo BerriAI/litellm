@@ -4420,6 +4420,7 @@ dependencies = [
  "litellm-inference-messages",
  "litellm-router-types",
  "rstest",
+ "serde_json",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ litellm-core-utils.workspace = true
 litellm-inference.workspace = true
 litellm-inference-messages.workspace = true
 litellm-router-types.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

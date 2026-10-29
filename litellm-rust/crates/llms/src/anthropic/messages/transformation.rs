@@ -580,52 +580,52 @@ mod tests {
     #[case::temperature(
         sampling_removed(),
         json!({"temperature": 0.3}),
-        "claude does not support temperature=0.3. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.3. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::temperature_just_below_one(
         sampling_removed(),
         json!({"temperature": 0.99}),
-        "claude does not support temperature=0.99. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.99. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::whole_number_temperature_keeps_its_decimal(
         sampling_removed(),
         json!({"temperature": 2.0}),
-        "claude does not support temperature=2.0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=2.0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_p(
         sampling_removed(),
         json!({"top_p": 0.9}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_k(
         sampling_removed(),
         json!({"top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_k_next_to_unit_temperature(
         sampling_removed(),
         json!({"temperature": 1.0, "top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::temperature_ahead_of_top_k(
         sampling_removed(),
         json!({"temperature": 0.5, "top_k": 5}),
-        "claude does not support temperature=0.5. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.5. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_p_ahead_of_top_k(
         sampling_removed(),
         json!({"top_p": 0.9, "top_k": 5}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::speed(
         unmapped(),
         json!({"speed": "fast"}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::speed_ahead_of_sampling_params(
         sampling_removed(),
         json!({"speed": "fast", "temperature": 0.5}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     fn removed_params_are_rejected_without_drop_params(
         #[case] capabilities: MessagesModelCapabilities,
