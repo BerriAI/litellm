@@ -6,7 +6,9 @@ use litellm_secrets_types::{
     AwsOperationContext, CyberarkOperationContext, GoogleOperationContext,
     HashicorpOperationContext, SecretOperationContext,
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{prelude::*, types::PyDict};
+
+use super::ManagerError;
 
 pub(super) fn read_request(
     system: KeyManagementSystem,
@@ -39,9 +41,7 @@ pub(super) fn read_request(
             SecretOperationContext::Google(GoogleOperationContext::default())
         }
         _ => {
-            return Err(PyValueError::new_err(
-                "secret manager does not support provider reads",
-            ));
+            return Err(ManagerError::ProviderReads.into());
         }
     };
     Ok(PythonReadRequest {
@@ -89,9 +89,7 @@ fn aws_context(
 
 fn read_timeout(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Duration>> {
     read_timeout_seconds(value)?
-        .map(|value| {
-            Duration::try_from_secs_f64(value).map_err(|_| PyValueError::new_err("invalid timeout"))
-        })
+        .map(|value| Ok(Duration::try_from_secs_f64(value).map_err(ManagerError::Timeout)?))
         .transpose()
 }
 

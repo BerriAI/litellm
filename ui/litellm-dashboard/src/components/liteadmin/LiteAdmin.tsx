@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
+import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { cn } from "@/lib/cva.config";
@@ -185,7 +186,7 @@ export default function LiteAdminTrigger() {
     >
       <AriaAvatar />
       <span className="hidden lg:inline">{ARIA_AGENT_LABEL}</span>
-      <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
+      <Kbd className="hidden lg:inline-flex">⌘J</Kbd>
     </Button>
   );
 }

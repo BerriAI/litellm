@@ -169,6 +169,16 @@ class EntityRollupRow(RollupMetricsRow):
 
 
 @dataclass(frozen=True, slots=True)
+class GuardrailSpendRow:
+    date: str
+    guardrail_id: str
+    guardrail_name: str
+    api_key: str
+    spend: float
+    untracked_units: int
+
+
+@dataclass(frozen=True, slots=True)
 class AggregatedRows:
     grouping_rows: tuple[GroupingSetsRow, ...]
     entity_rows: tuple[EntityRollupRow, ...] | None
