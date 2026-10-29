@@ -4668,6 +4668,7 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    STAAN = "staan"
     DEEPSEEK = "deepseek"
     XAI = "xai"
 

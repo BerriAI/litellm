@@ -4072,6 +4072,13 @@
         "generateContent": false
       }
     },
+    "staan": {
+      "display_name": "Staan (`staan`)",
+      "url": "https://docs.litellm.ai/docs/search/staan",
+      "endpoints": {
+        "search": true
+      }
+    },
     "you_com": {
       "display_name": "You.com (`you_com`)",
       "url": "https://docs.litellm.ai/docs/search/you_com",
