@@ -300,7 +300,7 @@ async def test_aimage_generation_ignores_a_non_string_base_url_like_the_sync_pat
     )
 
     response: Final = await litellm.aimage_generation(
-        model="dall-e-3",
+        model="gpt-image-2.5-sunburst",
         prompt="a red circle",
         api_base=api_base,
         base_url=httpx.URL(api_base),
@@ -688,3 +688,24 @@ async def test_chatgpt_images_forward_client_login_and_workspace(
     assert "cookie" not in request.headers
     assert "x-litellm-api-key" not in request.headers
     assert json.loads(request.content) == {"model": "gpt-image-2", "prompt": "A blue circle"}
+
+
+def test_image_generation_without_a_model_or_provider_fails_before_calling_any_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="model is required"):
+        litellm.image_generation(prompt="a red circle", api_key="fake_openai_api_key")
+
+    assert not respx_mock.calls
+
+
+def test_topaz_image_variation_works_without_a_model(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.topazlabs.com/image/v1/enhance").mock(
+        return_value=httpx.Response(200, content=b"enhanced-image", headers={"content-type": "image/png"})
+    )
+
+    response: Final = litellm.image_variation(image=b"source-image", custom_llm_provider="topaz", api_key="fake-key")
+
+    assert route.call_count == 1
+    assert response.data is not None
+    assert response.data[0].b64_json == base64.b64encode(b"enhanced-image").decode()
