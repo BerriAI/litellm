@@ -6666,7 +6666,7 @@ class ProxyConfig:
             reset_color_code: Final = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy")
+                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy{reset_color_code}")
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -9885,7 +9885,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
             request_data=request_data,
         )
         verbose_proxy_logger.debug(
-            "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s",
             e,
         )
         if isinstance(e, HTTPException):
@@ -10715,7 +10715,7 @@ async def async_data_generator(
         )
         client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
-            "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s",
             e,
         )
 
@@ -12450,6 +12450,12 @@ async def model_list(
 
     hidden_names: Final = blocked_names | unhealthy_names
 
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
+
+    asks_for_allowlist_names: Final = (
+        include_model_access_groups is True and return_wildcard_routes is True and only_model_access_groups is not True
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -12470,7 +12476,10 @@ async def model_list(
         all_models = get_complete_model_list(
             key_models=[],
             team_models=[],
-            proxy_model_list=proxy_model_list,
+            proxy_model_list=[
+                *proxy_model_list,
+                *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
+            ],
             user_model=None,
             infer_model_from_keys=False,
             return_wildcard_routes=include_wildcard_routes,
@@ -12531,7 +12540,7 @@ async def model_list(
 
     # Otherwise, use the normal behavior (current implementation)
     # Get available models for the user
-    all_models = await get_available_models_for_user(
+    available_models: Final = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
         general_settings=general_settings,
@@ -12544,6 +12553,11 @@ async def model_list(
         return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
+    offers_typesafe_allowlist_names: Final = (
+        asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
+    )
+    typesafe_names_to_offer: Final = typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else ()
+    all_models = [*available_models, *(name for name in typesafe_names_to_offer if name not in available_models)]
 
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
@@ -18497,7 +18511,6 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug("receiving data: %s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
