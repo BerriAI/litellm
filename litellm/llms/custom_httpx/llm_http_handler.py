@@ -2581,6 +2581,7 @@ class BaseLLMHTTPHandler:
                 "preset_cache_key": None,
                 "stream_response": {},
                 "model_info": kwargs.get("model_info"),
+                **litellm_params.per_second_pricing(),
                 **vertex_location_params,
                 **anthropic_messages_optional_request_params,
             },
