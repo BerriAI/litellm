@@ -2,6 +2,7 @@
 Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
+import copy
 import json
 import logging
 import re
@@ -1816,6 +1817,185 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         assert result["tools"] == [{"type": "function", "name": "Bash"}]
         assert result["tool_choice"] == "none"
+
+    async def _blocked_and_rewritten(
+        self, rules: list[dict[str, str]], request: dict[str, object], call_type: CallTypesLiteral
+    ) -> tuple[str, dict[str, object]]:
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(self._pre_call(rules, "block"), copy.deepcopy(request), call_type)
+        rewritten = await self._run_pre_call(self._pre_call(rules, "rewrite"), request, call_type)
+        return excinfo.value.detail["detection_message"], rewritten
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("denied_tool", "detection_message"),
+        [
+            (
+                {"type": "function", "name": "mcp__weather__lookup"},
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'",
+            ),
+            (
+                {"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]},
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'",
+            ),
+            ({"type": "web_search"}, "Tool 'web_search' denied by rule 'deny_search'"),
+        ],
+        ids=["flat", "namespace_member", "hosted_type"],
+    )
+    async def test_pre_call_checks_and_strips_tools_in_responses_additional_tools_items(
+        self, denied_tool: dict[str, object], detection_message: str
+    ) -> None:
+        rules = [
+            {"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"},
+            {"id": "deny_search", "tool_type": r"^web_search$", "decision": "deny"},
+        ]
+        get_weather = {"type": "function", "name": "get_weather"}
+        request = {
+            "model": "gpt-5",
+            "input": [
+                {"role": "user", "content": "hi"},
+                {"type": "additional_tools", "tools": [get_weather, denied_tool]},
+                {"type": "additional_tools", "tools": [denied_tool]},
+            ],
+            "tools": [],
+            "tool_choice": "required",
+        }
+
+        message, rewritten = await self._blocked_and_rewritten(rules, request, "responses")
+
+        assert message == detection_message
+        assert rewritten["input"] == [
+            {"role": "user", "content": "hi"},
+            {"type": "additional_tools", "tools": [get_weather]},
+        ]
+        assert rewritten["tool_choice"] == "required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call_type", "bash", "read"),
+        [
+            (
+                "acompletion",
+                {"type": "function", "function": {"name": "Bash"}},
+                {"type": "function", "function": {"name": "Read"}},
+            ),
+            ("responses", {"type": "function", "name": "Bash"}, {"type": "function", "name": "Read"}),
+            (
+                "anthropic_messages",
+                {"name": "Bash", "input_schema": {"type": "object"}},
+                {"name": "Read", "input_schema": {"type": "object"}},
+            ),
+        ],
+        ids=["chat", "responses", "anthropic"],
+    )
+    async def test_pre_call_checks_and_strips_tools_in_extra_body(
+        self, call_type: CallTypesLiteral, bash: dict[str, object], read: dict[str, object]
+    ) -> None:
+        request = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "input": "hi",
+            "extra_body": {"tools": [bash, read], "seed": 7},
+        }
+
+        message, rewritten = await self._blocked_and_rewritten(self.rules, request, call_type)
+
+        assert message == "Tool 'Read' denied by rule 'deny_read'"
+        assert rewritten["extra_body"] == {"tools": [bash], "seed": 7}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {"id": "deny_deepwiki", "tool_name": r"^deepwiki$", "decision": "deny"},
+            {"id": "deny_deepwiki", "tool_name": r"^deepwiki$", "tool_type": r"^mcp_toolset$", "decision": "deny"},
+        ],
+        ids=["by_server_name", "by_server_name_and_mcp_toolset_type"],
+    )
+    async def test_pre_call_checks_and_strips_anthropic_mcp_servers_like_an_mcp_toolset(
+        self, rule: dict[str, str]
+    ) -> None:
+        deepwiki = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
+        files = {"type": "url", "url": "https://files.example.com/mcp", "name": "files"}
+        request = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "mcp_servers": [deepwiki, files],
+            "tool_choice": {"type": "any"},
+        }
+
+        message, rewritten = await self._blocked_and_rewritten([rule], request, "anthropic_messages")
+
+        assert message == "Tool 'deepwiki' denied by rule 'deny_deepwiki'"
+        assert rewritten["mcp_servers"] == [files]
+        assert rewritten["tool_choice"] == {"type": "any"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rule", "tool", "detection_message", "kept_tools"),
+        [
+            (
+                {"id": "deny_code", "tool_type": r"^codeExecution$", "decision": "deny"},
+                {"googleSearch": {}, "codeExecution": {}},
+                "Tool 'codeExecution' denied by rule 'deny_code'",
+                [{"googleSearch": {}}],
+            ),
+            (
+                {"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"},
+                {"functionDeclarations": [{"name": "mcp__weather__lookup"}], "googleSearch": {}},
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'",
+                [{"googleSearch": {}}],
+            ),
+            (
+                {"id": "deny_search", "tool_type": r"^googleSearch$", "decision": "deny"},
+                {"functionDeclarations": [{"name": "get_weather"}], "googleSearch": {}},
+                "Tool 'googleSearch' denied by rule 'deny_search'",
+                [{"functionDeclarations": [{"name": "get_weather"}]}],
+            ),
+            (
+                {"id": "deny_builtin", "tool_type": r"^(googleSearch|codeExecution)$", "decision": "deny"},
+                {"googleSearch": {}, "codeExecution": {}},
+                "Tool 'googleSearch' denied by rule 'deny_builtin'",
+                [],
+            ),
+        ],
+        ids=["denied_key_beside_a_key", "every_declaration_denied", "denied_key_beside_declarations", "all_denied"],
+    )
+    async def test_pre_call_checks_and_strips_each_part_of_a_multi_key_gemini_tool(
+        self,
+        rule: dict[str, str],
+        tool: dict[str, object],
+        detection_message: str,
+        kept_tools: list[dict[str, object]],
+    ) -> None:
+        request = {"model": "gemini-3", "contents": [{"role": "user", "parts": [{"text": "hi"}]}], "tools": [tool]}
+
+        message, rewritten = await self._blocked_and_rewritten([rule], request, "agenerate_content")
+
+        assert message == detection_message
+        assert rewritten["tools"] == kept_tools
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("tool", "call_type"),
+        [({"type": "web_search"}, "responses"), ({"googleSearch": {}}, "acompletion")],
+        ids=["responses_hosted_type", "gemini_tool_key"],
+    )
+    async def test_pre_call_matches_a_name_rule_against_a_nameless_tool_by_its_type(
+        self,
+        tool: dict[str, object],
+        call_type: CallTypesLiteral,
+        on_disallowed_action: Literal["block", "rewrite"],
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_all", "tool_name": r".*", "decision": "allow"}], on_disallowed_action, default_action="deny"
+        )
+        data = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "input": "hi", "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert result["tools"] == [tool]
 
     @pytest.mark.asyncio
     async def test_denied_anthropic_tool_use_is_blocked(self):
