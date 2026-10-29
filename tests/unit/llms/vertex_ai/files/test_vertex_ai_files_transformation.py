@@ -169,6 +169,17 @@ class TestBatchObjectNaming:
         object_name = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": "gemini-2.5-flash"}}])
         assert object_name.startswith("litellm-vertex-files/publishers/google/models/gemini-2.5-flash/")
 
+    @pytest.mark.parametrize(
+        ("model", "stored_model"),
+        [
+            ("multimodalembedding@001", "publishers/google/models/multimodalembedding_001/"),
+            ("claude-haiku-4-5@20251001", "publishers/anthropic/models/claude-haiku-4-5@20251001/"),
+        ],
+    )
+    def test_only_claude_models_keep_the_at_version_in_their_object_name(self, config, model, stored_model):
+        object_name: Final = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": model}}])
+        assert object_name.startswith(f"litellm-vertex-files/{stored_model}")
+
     def test_should_store_fine_tuned_endpoint_under_endpoints_path(self, config):
         """A numeric endpoint id must not be filed under publishers/google/models/gemini/<id>,
         which the batch transformation later mangles into a nonexistent publisher model (LIT-6899)."""

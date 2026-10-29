@@ -86,7 +86,7 @@ def _vertex_batch_list_payload(response: _VertexBatchListJsonSource) -> dict[str
 def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> MaskedHTTPStatusError:
     body: Final = mask_sensitive_info(error.response.text)
     return MaskedHTTPStatusError(
-        httpx.HTTPStatusError(f"Vertex AI batch create failed: {body}", request=error.request, response=error.response),
+        httpx.HTTPStatusError(f"{error}\n{body}", request=error.request, response=error.response),
         message=body,
         text=body,
     )
@@ -184,6 +184,11 @@ class VertexAIBatchPrediction(VertexLLM):
                 data=json.dumps(vertex_batch_request),
             )
         except httpx.HTTPStatusError as e:
+            litellm.verbose_logger.error(
+                "Vertex AI batch create failed: status=%s, body=%s",
+                e.response.status_code,
+                e.response.text[:1000],
+            )
             raise _vertex_batch_create_error(e) from e
 
         payload_view: Final[_VertexBatchPayloadView] = {"payload": response.json()}
@@ -280,6 +285,11 @@ class VertexAIBatchPrediction(VertexLLM):
                 data=json.dumps(vertex_batch_request),
             )
         except httpx.HTTPStatusError as e:
+            litellm.verbose_logger.error(
+                "Vertex AI batch create failed: status=%s, body=%s",
+                e.response.status_code,
+                e.response.text[:1000],
+            )
             raise _vertex_batch_create_error(e) from e
 
         payload_view: Final[_VertexBatchPayloadView] = {"payload": response.json()}

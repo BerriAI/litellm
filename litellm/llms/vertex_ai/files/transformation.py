@@ -1115,11 +1115,16 @@ def _publisher_model_path(raw_model: str) -> str:
 def _managed_batch_object_name(raw_model: str, *, passthrough: bool) -> str:
     endpoint_id: Final = get_vertex_ai_fine_tuned_endpoint_id(raw_model)
     model_path: Final = f"endpoints/{endpoint_id}" if endpoint_id is not None else _publisher_model_path(raw_model)
-    safe_model_path: Final = "@".join(
+    prefix: Final = _PASSTHROUGH_MANAGED_GCS_PREFIX if passthrough else VERTEX_AI_MANAGED_GCS_PREFIX
+    return f"{prefix}{_safe_managed_model_path(model_path)}/{uuid.uuid4()}"
+
+
+def _safe_managed_model_path(model_path: str) -> str:
+    if not is_vertex_anthropic_batch_model(model_path):
+        return sanitize_cloud_object_path(model_path, fallback="model")
+    return "@".join(
         sanitize_cloud_object_path(version_part, fallback="model") for version_part in model_path.split("@")
     )
-    prefix: Final = _PASSTHROUGH_MANAGED_GCS_PREFIX if passthrough else VERTEX_AI_MANAGED_GCS_PREFIX
-    return f"{prefix}{safe_model_path}/{uuid.uuid4()}"
 
 
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):

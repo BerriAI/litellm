@@ -46,6 +46,7 @@ from litellm.proxy.utils import handle_exception_on_proxy  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
 HMOD = "litellm.llms.vertex_ai.batches.handler"
+_CLIENT_ERROR_429: Final = "Client error '429 Too Many Requests' for url 'https://x/batchPredictionJobs'"
 TOKEN = "ya29.fake-access-token"
 PROJECT = "my-project"
 LOCATION = "us-central1"
@@ -380,11 +381,11 @@ def test_create_batch_sync_httpstatuserror_carries_vertex_status_body_and_header
         status_code=429, request=request, text="boom", headers={"retry-after": "30"}
     )
     client.post.side_effect = httpx.HTTPStatusError(
-        "boom", request=request, response=err_response
+        _CLIENT_ERROR_429, request=request, response=err_response
     )
 
     with patch(f"{HMOD}.get_httpx_client", return_value=client):
-        with pytest.raises(httpx.HTTPStatusError, match="Vertex AI batch create failed: boom") as exc_info:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             h.create_batch(
                 _is_async=False,
                 create_batch_data=CREATE_DATA,
@@ -399,6 +400,7 @@ def test_create_batch_sync_httpstatuserror_carries_vertex_status_body_and_header
     assert exc_info.value.response.headers["retry-after"] == "30"
     assert handle_exception_on_proxy(exc_info.value).code == "429"
     assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
+    assert str(exc_info.value).splitlines() == [_CLIENT_ERROR_429, "boom"]
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -815,7 +817,7 @@ def test_create_batch_async_httpstatuserror_carries_vertex_status_body_and_heade
     )
     async_client.post = AsyncMock(
         side_effect=httpx.HTTPStatusError(
-            "boom", request=request, response=err_response
+            _CLIENT_ERROR_429, request=request, response=err_response
         )
     )
 
@@ -833,12 +835,13 @@ def test_create_batch_async_httpstatuserror_carries_vertex_status_body_and_heade
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(httpx.HTTPStatusError, match="Vertex AI batch create failed: boom") as exc_info:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
             _run(coro)
     assert exc_info.value.response.status_code == 429
     assert exc_info.value.response.headers["retry-after"] == "30"
     assert handle_exception_on_proxy(exc_info.value).code == "429"
     assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
+    assert str(exc_info.value).splitlines() == [_CLIENT_ERROR_429, "boom"]
 
 
 def test_async_retrieve_batch_non_200_raises():
