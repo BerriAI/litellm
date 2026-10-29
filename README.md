@@ -122,6 +122,8 @@ response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content
 response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"role": "user", "content": "Hello!"}])
 ```
 
+[**Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk) - Route each prompt to a model based on complexity, with routing rules defined in Python.
+
 ### AI Gateway (Proxy Server)
 
 [**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
@@ -442,7 +444,7 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both give you
 <tr>
 <th style={{width: '14%'}}></th>
 <th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/simple_proxy">LiteLLM AI Gateway</a></strong></th>
-<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/">LiteLLM Python SDK</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/python_sdk">LiteLLM Python SDK</a></strong></th>
 </tr>
 </thead>
 <tbody>
