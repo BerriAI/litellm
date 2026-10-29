@@ -34,6 +34,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
+from litellm.exceptions import EndpointNotSupportedByModelError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
@@ -87,7 +88,6 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
-from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -1992,7 +1992,7 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
-    if isinstance(failure, UnsupportedEndpointError):
+    if isinstance(failure, EndpointNotSupportedByModelError):
         return json.dumps(
             {
                 "type": "error",
@@ -2359,8 +2359,10 @@ async def _responses_websocket_session(
                 await websocket.send_text(_responses_ws_failure_frame(e))
             with contextlib.suppress(Exception):
                 await websocket.close(
-                    code=1008 if isinstance(e, UnsupportedEndpointError) else 1011,
-                    reason="Pre-call error" if isinstance(e, UnsupportedEndpointError) else "Internal server error",
+                    code=1008 if isinstance(e, EndpointNotSupportedByModelError) else 1011,
+                    reason="Pre-call error"
+                    if isinstance(e, EndpointNotSupportedByModelError)
+                    else "Internal server error",
                 )
             return crash_row
         return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None

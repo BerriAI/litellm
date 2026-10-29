@@ -143,7 +143,6 @@ from litellm.router import Router
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
-from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
@@ -2713,10 +2712,7 @@ class ProxyBaseLLMRequestProcessing:
                                 group_alias,
                             ),
                         }
-                        if (
-                            endpoint_unsupported_by_model(route_type, probe_data, llm_router, user_api_key_dict.team_id)
-                            is not None
-                        ):
+                        if endpoint_unsupported_by_model(route_type, probe_data, llm_router, user_api_key_dict.team_id):
                             continue
                         return await self.common_processing_pre_call_logic(
                             request=request,
@@ -2735,8 +2731,6 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except UnsupportedEndpointError:
-                        continue
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):
                             raise

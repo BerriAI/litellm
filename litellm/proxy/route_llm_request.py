@@ -436,10 +436,10 @@ def endpoint_unsupported_by_model(
     data: Mapping[str, object],
     llm_router: LitellmRouter | None,
     team_id: str | None,
-) -> litellm.BadRequestError | None:
+) -> bool:
     model: Final = data.get("model")
     if not isinstance(model, str) or llm_router is None:
-        return None
+        return False
     metadata: Final = data.get("metadata")
     request_kwargs: Final = {
         **data,
@@ -448,7 +448,7 @@ def endpoint_unsupported_by_model(
             "user_api_key_team_id": team_id,
         },
     }
-    return llm_router.endpoint_error_for_request(model, route_type, request_kwargs)
+    return not llm_router.get_routable_deployments(model, request_kwargs, call_type=route_type)
 
 
 class MockTestingParamsDisabledError(HTTPException):

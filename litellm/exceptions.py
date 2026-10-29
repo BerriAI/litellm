@@ -321,6 +321,17 @@ class UnsupportedEndpointError(BadRequestError):
     pass
 
 
+class EndpointNotSupportedByModelError(BadRequestError):
+    def __init__(self, message: str, model: str, llm_provider: str = "") -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # inherited public exception constructor is untyped
+            message=message, model=model, llm_provider=llm_provider
+        )
+        self.message = message
+        self.type = "invalid_request_error"
+        self.param = "model"
+        self.code = "400"
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,

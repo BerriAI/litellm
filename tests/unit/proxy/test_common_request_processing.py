@@ -7679,7 +7679,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, logging_obj
 
         mock_router = MagicMock()
-        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7771,7 +7770,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
-        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = None
 
         with patch.object(
@@ -7811,7 +7809,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
-        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
 
         with patch.object(
@@ -7855,7 +7852,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = MagicMock()
-        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         user_api_key_dict = MagicMock()
@@ -7903,7 +7899,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
-        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7948,7 +7943,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             raise ValueError("unexpected auth failure on fallback")
 
         mock_router = MagicMock()
-        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -8058,7 +8052,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = MagicMock()
-        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{primary_model: [fallback_model]}]
 
         with patch.object(

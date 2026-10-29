@@ -12222,22 +12222,32 @@ def test_synchronous_text_completion_rejects_a_restricted_model_before_the_provi
         assert provider.call_count == 0
 
 
-def test_endpoint_preflight_returns_unavailable_model_errors_as_values() -> None:
+def test_routable_deployments_leave_out_models_that_refuse_the_call_type() -> None:
     router: Final = Router(
         model_list=[
             {
                 "model_name": "available",
                 "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "unit-provider-key"},
-            }
+            },
+            {
+                "model_name": "embed-only",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "unit-provider-key"},
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            },
         ],
         num_retries=0,
     )
-    missing: Final = "unregistered-fallback"
-    error: Final = router.endpoint_error_for_request(missing, "acompletion", {})
-    assert isinstance(error, litellm.BadRequestError)
-    assert error.status_code == 400
-    assert error.model == missing
-    assert router.endpoint_error_for_request("available", "acompletion", {}) is None
+
+    def routable(model: str, call_type: str | None) -> tuple[str, ...]:
+        return tuple(
+            deployment["model_name"] for deployment in router.get_routable_deployments(model, {}, call_type=call_type)
+        )
+
+    assert routable("unregistered-fallback", "acompletion") == ()
+    assert routable("available", "acompletion") == ("available",)
+    assert routable("embed-only", "acompletion") == ()
+    assert routable("embed-only", "aembedding") == ("embed-only",)
+    assert routable("embed-only", None) == ("embed-only",)
 
 
 def test_routing_groups_legacy_property_forwards_to_public_attribute():

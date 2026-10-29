@@ -4,7 +4,8 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError, eligible_deployments, endpoint_selection
+from litellm.exceptions import EndpointNotSupportedByModelError
+from litellm.router_utils.endpoint_eligibility import eligible_deployments, endpoint_selection
 
 _DEPLOYMENT: Final = TypeAdapter(list[dict[str, object]])
 
@@ -52,7 +53,7 @@ def test_unsupported_error_explains_the_requested_operation_and_available_endpoi
     deployment: Final = _deployment({"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]})
     with endpoint_selection("acreate_interaction"):
         result: Final = eligible_deployments("shared", (deployment,))
-    assert isinstance(result, UnsupportedEndpointError)
+    assert isinstance(result, EndpointNotSupportedByModelError)
     assert result.status_code == 400
     assert "/v1beta/interactions" in result.message
     assert "/v1/embeddings" in result.message
@@ -73,7 +74,7 @@ def test_nested_non_chat_calls_do_not_inherit_the_outer_chat_restriction() -> No
             embedding_result: Final = eligible_deployments("shared", (deployment,))
         chat_result: Final = eligible_deployments("shared", (deployment,))
     assert embedding_result == (deployment,)
-    assert isinstance(chat_result, UnsupportedEndpointError)
+    assert isinstance(chat_result, EndpointNotSupportedByModelError)
 
 
 @pytest.mark.parametrize(

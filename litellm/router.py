@@ -283,7 +283,6 @@ from litellm.router_utils.embedding_batch_size_check import (
     log_rejection_before_provider_call,
 )
 from litellm.router_utils.endpoint_eligibility import (
-    UnsupportedEndpointError,
     eligible_deployments,
     endpoint_selection,
 )
@@ -14758,9 +14757,15 @@ class Router:
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
-    def get_routable_deployments(self, model: str) -> tuple[DeploymentTypedDict, ...]:
+    def get_routable_deployments(
+        self,
+        model: str,
+        request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        call_type: str | None = None,
+    ) -> tuple[DeploymentTypedDict, ...]:
         try:
-            _, candidates = self._common_checks_available_deployment(model=model, request_kwargs={})  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # its signature leaves input and the result untyped
+            with endpoint_selection(call_type, model=model):
+                _, candidates = self._common_checks_available_deployment(model=model, request_kwargs=request_kwargs)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # its signature leaves input and the result untyped
         except (litellm.BadRequestError, ValueError):
             return ()
         if isinstance(candidates, dict):
@@ -14851,16 +14856,6 @@ class Router:
             return False
         deployment_model: Final = litellm_params.get("model")
         return isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None
-
-    def endpoint_error_for_request(
-        self, model: str, call_type: str, request_kwargs: Mapping[str, object]
-    ) -> litellm.BadRequestError | None:
-        try:
-            with endpoint_selection(call_type, model=model):
-                self._common_checks_available_deployment(model=model, request_kwargs=request_kwargs)
-        except litellm.BadRequestError as error:
-            return error
-        return None
 
     def _common_checks_available_deployment(
         self,
@@ -15047,9 +15042,9 @@ class Router:
                 llm_provider="",
             )
         eligible: Final = eligible_deployments(model, selectable)
-        if isinstance(eligible, UnsupportedEndpointError):
-            raise eligible
-        return list(eligible)
+        if isinstance(eligible, tuple):
+            return list(eligible)
+        raise eligible
 
     def _filter_reserved_deployments(
         self,

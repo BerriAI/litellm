@@ -6,7 +6,7 @@ from typing import Final, TypeVar
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import EndpointNotSupportedByModelError
 
 CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -48,17 +48,6 @@ class _EndpointDeclaration(BaseModel):
     supported_endpoints: tuple[str, ...] | None = None
 
 
-class UnsupportedEndpointError(BadRequestError):
-    def __init__(self, message: str, model: str, llm_provider: str = "") -> None:
-        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # inherited public exception constructor is untyped
-            message=message, model=model, llm_provider=llm_provider
-        )
-        self.message = message
-        self.type = "invalid_request_error"
-        self.param = "model"
-        self.code = "400"
-
-
 @contextmanager
 def endpoint_selection(call_type: object, module: object = None, model: object = None) -> Generator[None]:
     qualified_call: Final = f"{module}.{call_type}" if module == "litellm.interactions.main" else call_type
@@ -84,7 +73,7 @@ def non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[str] | Non
 
 def eligible_deployments(
     model: str, deployments: Sequence[_Deployment]
-) -> tuple[_Deployment, ...] | UnsupportedEndpointError:
+) -> tuple[_Deployment, ...] | EndpointNotSupportedByModelError:
     endpoint, requested_model = _REQUEST_SELECTION.get()
     if endpoint is None or not deployments:
         return tuple(deployments)
@@ -95,7 +84,7 @@ def eligible_deployments(
     supported: Final = ", ".join(
         sorted(frozenset[str]().union(*(non_chat_endpoints(deployment) or frozenset() for deployment in deployments)))
     )
-    return UnsupportedEndpointError(
+    return EndpointNotSupportedByModelError(
         message=f"{endpoint} is not supported by model={requested}. Supported endpoints: {supported or 'none'}",
         model=model,
         llm_provider="",
