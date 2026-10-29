@@ -10572,10 +10572,10 @@ class ProviderConfigManager:
             return VertexVectorStoreConfig()
         if api_type == "search_api":
             from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
-                VertexSearchAPIVectorStoreConfig,
+                vertex_search_api_vector_store_config,
             )
 
-            return VertexSearchAPIVectorStoreConfig()
+            return vertex_search_api_vector_store_config
         return None
 
     @staticmethod

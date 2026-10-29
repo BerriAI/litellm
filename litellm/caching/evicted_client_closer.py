@@ -44,6 +44,8 @@ from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import Final
 
+import httpx
+
 from litellm.constants import (
     EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS,
     EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING,
@@ -94,13 +96,24 @@ def _close_function(client: object) -> Callable[[], object] | None:
     return close_fn
 
 
-def _transport_of(client: object) -> object:
-    """The httpx transport behind an SDK wrapper, a litellm handler, or a bare client."""
+def _mounted_transports(holder: object) -> tuple[object, ...]:
+    mounts: Final[object] = getattr(holder, "_mounts", None)
+    if not isinstance(mounts, dict):
+        return ()
+    return tuple(
+        mounted
+        for mounted in mounts.values()  # pyright: ignore[reportUnknownVariableType]  # untyped httpx mount map
+        if isinstance(mounted, (httpx.AsyncBaseTransport, httpx.BaseTransport))
+    )
+
+
+def _transports_of(client: object) -> tuple[object, ...]:
+    """The httpx transports behind an SDK wrapper, a litellm handler, or a bare client, proxy mounts included."""
     for holder in (getattr(client, "_client", None), getattr(client, "client", None), client):
         transport: object = getattr(holder, "_transport", None)
         if transport is not None:
-            return transport
-    return None
+            return (transport, *_mounted_transports(holder))
+    return ()
 
 
 def _connection_is_idle(connection: object) -> bool:
@@ -123,6 +136,17 @@ def _pool_has_busy_connection(transport: object) -> bool | None:
     )
 
 
+def _transport_in_flight(transport: object) -> bool:
+    spread_in_flight: Final[object] = getattr(transport, "has_request_in_flight", None)
+    if callable(spread_in_flight):
+        return bool(spread_in_flight())
+    pooled_busy: Final = _pool_has_busy_connection(transport)
+    if pooled_busy is not None:
+        return pooled_busy
+    session: Final[object] = getattr(transport, "client", None)
+    return bool(getattr(getattr(session, "connector", None), "_acquired", None))
+
+
 def _has_connection_in_flight(client: object) -> bool:
     """Whether the client is servicing a request right now.
 
@@ -138,12 +162,7 @@ def _has_connection_in_flight(client: object) -> bool:
     try:
         if getattr(getattr(client, "connection_pool", None), "_in_use_connections", None):
             return True
-        transport: Final = _transport_of(client)
-        pooled_busy: Final = _pool_has_busy_connection(transport)
-        if pooled_busy is not None:
-            return pooled_busy
-        session: Final[object] = getattr(transport, "client", None)
-        return bool(getattr(getattr(session, "connector", None), "_acquired", None))
+        return any(_transport_in_flight(transport) for transport in _transports_of(client))
     except Exception:  # noqa: BLE001 - a client that cannot report its state is treated as idle
         return False
 
