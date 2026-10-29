@@ -23,6 +23,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    drops_unsupported_params,
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
@@ -184,6 +185,22 @@ def _tools_the_model_accepts(
 
 
 _OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+
+
+def _with_extra_body_fields(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    extra_body: Final = params.get("extra_body")
+    without_extra_body: Final = {key: value for key, value in params.items() if key != "extra_body"}
+    if extra_body is None:
+        return without_extra_body
+    if isinstance(extra_body, Mapping):
+        return {**without_extra_body, **_JSON_OBJECT.validate_python(extra_body)}
+    if drop_params:
+        return without_extra_body
+    raise litellm.exceptions.BadRequestError(
+        message=f"extra_body must be a JSON object, got {type(extra_body).__name__}. Set drop_params=True to drop it.",
+        model="bedrock",
+        llm_provider="bedrock",
+    )
 
 
 def _has_native_text_format(output_config: object) -> bool:
@@ -1692,7 +1709,9 @@ class AmazonConverseConfig(BaseConfig):
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
         cleaned_params: Final = filter_exceptions_from_params(optional_params)
-        inference_params = safe_deep_copy(cleaned_params)
+        inference_params = safe_deep_copy(
+            _with_extra_body_fields(cleaned_params, drops_unsupported_params(drop_params))
+        )
         supported_converse_params: Final = list(AmazonConverseConfig.__annotations__.keys()) + ["top_k"]
         supported_tool_call_params: Final = ["tools", "tool_choice"]
         supported_config_params: Final = list(self.get_config_blocks().keys())

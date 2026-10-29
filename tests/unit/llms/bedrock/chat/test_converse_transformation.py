@@ -483,6 +483,59 @@ def test_bedrock_nova_top_k_aliases_are_forwarded(parameter: str, respx_mock: re
     assert request_body["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
 
 
+def _converse_body_sent(**params: object) -> Mapping[str, object]:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+            request=request,
+        )
+
+    litellm.completion(
+        model="bedrock/converse/global.openai.gpt-6.1-sol",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        aws_access_key_id="AKIAEXTRABODYKEY",
+        aws_secret_access_key="extra-body-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **params,
+    )
+    return json.loads(requests[0].content)
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_converse_sends_extra_body_fields_like_top_level_fields(drop_params: bool) -> None:
+    fields: Final = {"instructions": "Answer in French.", "previous_response_id": "resp_123"}
+
+    from_extra_body: Final = _converse_body_sent(extra_body=fields, drop_params=drop_params)
+    from_top_level: Final = _converse_body_sent(**fields, drop_params=drop_params)
+
+    assert from_extra_body == from_top_level
+    assert from_extra_body["additionalModelRequestFields"]["instructions"] == "Answer in French."
+
+
+def test_bedrock_converse_extra_body_field_wins_over_the_same_top_level_field() -> None:
+    body: Final = _converse_body_sent(instructions="top level", extra_body={"instructions": "from extra_body"})
+
+    assert body["additionalModelRequestFields"]["instructions"] == "from extra_body"
+
+
+def test_bedrock_converse_drops_a_non_object_extra_body_under_drop_params() -> None:
+    assert _converse_body_sent(extra_body="not an object", drop_params=True) == _converse_body_sent(drop_params=True)
+
+
+def test_bedrock_converse_rejects_a_non_object_extra_body_without_drop_params() -> None:
+    with pytest.raises(litellm.BadRequestError, match="extra_body must be a JSON object"):
+        _converse_body_sent(extra_body="not an object")
+
+
 @pytest.mark.parametrize(
     ("model_id", "expected_url"),
     [
