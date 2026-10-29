@@ -85,7 +85,12 @@ from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
-from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
+from litellm.responses.streaming_iterator import (
+    GuardedResponsesWsFrame,
+    ResponsesWsFrameGuard,
+    responses_ws_turn_request_body,
+    spawn_logging_task,
+)
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -2111,14 +2116,14 @@ def _responses_ws_frame_guard(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
             )
         except Exception as e:
-            await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
+            await _bill_rejected_frame(rejected_frame_auth, e, _with_frame_request(frame_data, frame))
             raise
         if guarded_data.get("model") != model:
             rerouted: Final = ValueError(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
                 f" is bound to {model!r}, send this turn over HTTP /v1/responses"
             )
-            await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
+            await _bill_rejected_frame(rejected_frame_auth, rerouted, _with_frame_request(frame_data, frame))
             raise rerouted
         # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
@@ -2138,6 +2143,14 @@ def _responses_ws_frame_guard(
         )
 
     return guard
+
+
+def _with_frame_request(
+    frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
+    frame: str,
+) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
+    """A rejected frame's failure row stores the frame as its request, as an HTTP request a guardrail blocks does."""
+    return {**frame_data, "proxy_server_request": {"body": dict(responses_ws_turn_request_body(frame))}}
 
 
 def _without_untrusted_metadata(key: str, value: object) -> object:

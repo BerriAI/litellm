@@ -2336,7 +2336,7 @@ _UNSTORED_FRAME_KEYS: Final = frozenset({"type", "response", "user"})
 _MASKED_FRAME_FIELDS: Final = ("input", "instructions")
 
 
-def _turn_request_body(client_frame: str | None) -> Mapping[str, object]:
+def responses_ws_turn_request_body(client_frame: str | None) -> Mapping[str, object]:
     """The turn's ``response.create`` as the body of the equivalent HTTP ``/v1/responses`` request, without the
     ``user`` that a socket never checks as an end user, so logging callbacks do not attribute the turn to it."""
     frame: Final = _json_object_or_none(client_frame)
@@ -2349,9 +2349,13 @@ def _turn_request_body(client_frame: str | None) -> Mapping[str, object]:
 
 def _masked_turn_request_body(client_frame: str, forwarded_frame: str) -> Mapping[str, object]:
     """The client's request with the PII-masked text the provider is sent in place of its own."""
-    client: Final = _turn_request_body(client_frame)
-    forwarded: Final = _turn_request_body(forwarded_frame)
+    client: Final = responses_ws_turn_request_body(client_frame)
+    forwarded: Final = responses_ws_turn_request_body(forwarded_frame)
     return {**client, **{key: forwarded[key] for key in _MASKED_FRAME_FIELDS if key in client and key in forwarded}}
+
+
+def _without_masked_fields(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in request_body.items() if key not in _MASKED_FRAME_FIELDS}
 
 
 def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
@@ -2570,16 +2574,31 @@ class ResponsesWebSocketStreaming:
             return
         if guarded.pii_tokens:
             self._remember_pii_tokens(guarded.pii_tokens)
-        masked: Final = await self._mask_response_create(guarded.frame)
-        request_body: Final = (
-            _masked_turn_request_body(guarded.frame, masked)
-            if self.guardrail_callbacks
-            else _turn_request_body(guarded.frame)
-        )
-        if not await self._admit_or_reject_turn(guarded, request_body, message, turn_admission):
+        if not await self._admit_or_reject_turn(guarded, message, turn_admission):
             return
-        self._record_client_frame(masked, request_body, guarded.guardrail_information, guarded.bill_failed_request)
+        masked: Final = await self._mask_response_create(guarded.frame)
+        self._record_client_frame(
+            masked,
+            self._stored_turn_request_body(guarded.frame, masked),
+            guarded.guardrail_information,
+            guarded.bill_failed_request,
+        )
         await self.backend_ws.send(masked)
+
+    def _stored_turn_request_body(self, client_frame: str, forwarded_frame: str) -> Mapping[str, object]:
+        if self.guardrail_callbacks:
+            return _masked_turn_request_body(client_frame, forwarded_frame)
+        return responses_ws_turn_request_body(client_frame)
+
+    async def _refused_turn_request_body(self, client_frame: str) -> Mapping[str, object]:
+        if not self.guardrail_callbacks:
+            return responses_ws_turn_request_body(client_frame)
+        try:
+            masked: Final = await self._mask_response_create(client_frame)
+        except Exception as e:  # noqa: BLE001  # a refused turn is answered and billed even when its text cannot be masked
+            verbose_logger.info("Responses WebSocket: could not mask a refused turn's request: %s", e)
+            return _without_masked_fields(responses_ws_turn_request_body(client_frame))
+        return _masked_turn_request_body(client_frame, masked)
 
     def _remember_pii_tokens(self, pii_tokens: Mapping[str, str]) -> None:
         metadata: Final = self.request_data.get("metadata")
@@ -2980,18 +2999,16 @@ class ResponsesWebSocketStreaming:
         return True
 
     async def _admit_or_reject_turn(
-        self,
-        guarded: GuardedResponsesWsFrame,
-        request_body: Mapping[str, object],
-        message: str,
-        turn_admission: Callable[[], Awaitable[None]] | None,
+        self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: Callable[[], Awaitable[None]] | None
     ) -> bool:
         rejection: Final = await _admit_frame_turn(turn_admission, message)
         if rejection is None:
             return True
         if self._failure is None:
             self._failure = rejection
-        await _reject_guarded_turn(self.websocket, guarded, rejection, request_body)
+        await _reject_guarded_turn(
+            self.websocket, guarded, rejection, await self._refused_turn_request_body(guarded.frame)
+        )
         return False
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
@@ -3557,7 +3574,7 @@ class ManagedResponsesWebSocketHandler:
         guarded: Final = await self._guard_frame(raw_message)
         if guarded is None:
             return
-        request_body: Final = _turn_request_body(guarded.frame)
+        request_body: Final = responses_ws_turn_request_body(guarded.frame)
         rejection: Final = await _admit_frame_turn(turn_admission, raw_message)
         if rejection is not None:
             if self._failure is None:

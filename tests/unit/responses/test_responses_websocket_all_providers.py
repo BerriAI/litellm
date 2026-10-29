@@ -2662,8 +2662,9 @@ class _FakeWSGuardrail:
     path can reverse it. ``_unmask_pii_text`` performs that reversal.
     """
 
-    def __init__(self, mask_map=None):
+    def __init__(self, mask_map=None, blocked_entities=()):
         self.mask_map = mask_map or {"alice@example.com": "<EMAIL_ADDRESS_1>"}
+        self.blocked_entities = blocked_entities
         self.output_parse_pii = True
         self.apply_to_output = True
 
@@ -2671,6 +2672,8 @@ class _FakeWSGuardrail:
         return None
 
     async def check_pii(self, text, output_parse_pii, presidio_config, request_data):
+        if any(entity in text for entity in self.blocked_entities):
+            raise ValueError("blocked entity found")
         masked = text
         tokens = {}
         for original, token in self.mask_map.items():
@@ -2754,6 +2757,40 @@ class TestNativeWebSocketGuardrailMasking:
 
         backend_ws.send.assert_not_awaited()
         bill_failed_request.assert_called_once_with(refusal, {"input": "email <EMAIL_ADDRESS_1>"})
+
+    @pytest.mark.asyncio
+    async def test_a_refused_turn_whose_text_cannot_be_masked_is_answered_and_the_socket_keeps_relaying(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.exceptions import RateLimitError
+
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        refused = json.dumps(
+            {"type": "response.create", "input": "card 4111", "instructions": "card 4111", "store": False}
+        )
+        admitted = json.dumps({"type": "response.create", "input": "Say the word gamma"})
+        bill_failed_request = MagicMock()
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[refused, admitted, Exception("stop")])
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            guardrail_callbacks=[_FakeWSGuardrail(blocked_entities=("4111",))],
+            frame_guard=_guard_recording(MagicMock(), bill_failed_request),
+            turn_admission=AsyncMock(side_effect=[refusal, None]),
+        )
+
+        await handler.client_to_backend()
+
+        assert json.loads(websocket.send_text.await_args.args[0])["status"] == 429
+        bill_failed_request.assert_called_once_with(refusal, {"store": False})
+        assert [json.loads(call.args[0])["input"] for call in backend_ws.send.await_args_list] == [
+            "Say the word gamma"
+        ]
 
     @pytest.mark.asyncio
     async def test_mask_response_create_flat_string_input(self):

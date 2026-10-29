@@ -2155,6 +2155,7 @@ class TestResponsesWSFirstFrameModelAuth:
             {"guardrail_cost": 0.5}
         ]
         assert failure["request_data"]["input"] == "hi"
+        assert failure["request_data"]["proxy_server_request"] == {"body": {"input": "hi"}}
         assert len(failure["request_data"]["litellm_call_id"]) == 36
 
     @pytest.mark.asyncio
