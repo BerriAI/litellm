@@ -129,10 +129,15 @@ def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | 
     return itpm_key, otpm_key
 
 
-def _tokenizer_model(deployment: object) -> str:
+def _served_model(deployment: object) -> str:
     params: Final = deployment.get("litellm_params") if is_str_keyed_mapping(deployment) else None
     served: Final = params.get("model") if is_str_keyed_mapping(params) else None
-    return deployment_openai_model(deployment) or (served if isinstance(served, str) else "")
+    return served if isinstance(served, str) else ""
+
+
+def _tokenizer_and_served_models(deployment: object) -> tuple[str, str]:
+    served: Final = _served_model(deployment)
+    return deployment_openai_model(deployment) or served, served
 
 
 def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "") -> int:
@@ -165,14 +170,18 @@ def _model_max_output_tokens(model_name: str) -> int | None:
 _OUTPUT_CAP_KEYS: Final = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 
 
-def _explicit_max_tokens(request_kwargs: dict[str, Any] | None) -> int | None:
+def _explicit_max_tokens(request_kwargs: Mapping[str, object] | None) -> int | None:
     if not request_kwargs:
         return None
     explicit: Final = next(
         (request_kwargs[key] for key in _OUTPUT_CAP_KEYS if request_kwargs.get(key) is not None),
         None,
     )
-    return None if explicit is None else max(0, int(explicit))
+    match explicit:
+        case int() | float() | str():
+            return max(0, int(explicit))
+        case _:
+            return None
 
 
 def _otpm_reservation(explicit_max_tokens: int | None, model_name: str, otpm_limit: int) -> int:
@@ -438,7 +447,7 @@ def io_token_pre_call_check(
         return deployment
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
-    _model: Final = _tokenizer_model(deployment)
+    _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
     explicit_max_tokens: Final = _explicit_max_tokens(request_kwargs)
 
@@ -463,7 +472,7 @@ def io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _otpm_reservation(explicit_max_tokens, _model, otpm_limit)
+        otpm_reserved = _otpm_reservation(explicit_max_tokens, served_model, otpm_limit)
         try:
             _sync_increment_with_rollback(
                 dual_cache,
@@ -502,7 +511,7 @@ async def async_io_token_pre_call_check(
         return deployment
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
-    _model: Final = _tokenizer_model(deployment)
+    _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
     explicit_max_tokens: Final = _explicit_max_tokens(request_kwargs)
 
@@ -528,7 +537,7 @@ async def async_io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _otpm_reservation(explicit_max_tokens, _model, otpm_limit)
+        otpm_reserved = _otpm_reservation(explicit_max_tokens, served_model, otpm_limit)
         try:
             await _increment_with_rollback(
                 dual_cache,
