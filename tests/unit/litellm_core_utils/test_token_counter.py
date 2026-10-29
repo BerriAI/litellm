@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final, cast
 from unittest.mock import MagicMock, sentinel
 
@@ -1447,29 +1448,80 @@ def test_retry_failing_after_an_earlier_download_loaded_the_tokenizer_keeps_it()
     assert later_counts == (loaded,) * 3
 
 
-def test_fork_guard_error_in_a_retry_waits_out_the_next_window_like_any_failed_retry():
+class _NativePanic(BaseException):
+    pass
+
+
+def _fork_guard_error() -> BaseException:
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 
+    return ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+
+
+def _native_panic() -> BaseException:
+    return _NativePanic("tokenizer parser panicked")
+
+
+@pytest.mark.parametrize("escaping_error", (_fork_guard_error, _native_panic), ids=("fork_guard", "native_panic"))
+def test_retry_that_raises_past_failure_handling_still_retries_after_the_next_window(
+    escaping_error: Callable[[], BaseException],
+):
     model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
     clock: Final = MagicMock(return_value=0.0)
-    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_run_now)
+    error: Final = escaping_error()
+    retries: Final = SimpleQueue[Future[None]]()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="tokenizer-retry") as pool:
+
+        def start_retry(retry: Callable[[], None]) -> None:
+            retries.put(pool.submit(retry))
+
+        outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_retry)
+        with patch(
+            "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+        ) as from_pretrained:
+            _return_huggingface_tokenizer(model, outcomes)
+            clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            from_pretrained.side_effect = error
+            _return_huggingface_tokenizer(model, outcomes)
+            raised: Final = retries.get(timeout=5).exception(timeout=5)
+            from_pretrained.side_effect = None
+            from_pretrained.return_value = sentinel.tokenizer
+            inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+            no_retry_inside_the_next_window: Final = retries.empty()
+            clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            _return_huggingface_tokenizer(model, outcomes)
+            retries.get(timeout=5).result(timeout=5)
+            after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert raised is error
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert no_retry_inside_the_next_window
+    assert from_pretrained.call_count == 3
+    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_process_forked_during_a_retry_starts_its_own_retry_instead_of_waiting_on_the_parents():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    pid: Final = MagicMock(return_value=100)
+    start_retry: Final = MagicMock()
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_retry, pid=pid)
     with patch(
         "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
     ) as from_pretrained:
         _return_huggingface_tokenizer(model, outcomes)
         clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
-        from_pretrained.side_effect = ForkedAfterNativeRuntimeStarted("native runtime started before fork")
         _return_huggingface_tokenizer(model, outcomes)
+        _return_huggingface_tokenizer(model, outcomes)
+        retries_started_by_the_parent: Final = start_retry.call_count
+        pid.return_value = 101
         from_pretrained.side_effect = None
         from_pretrained.return_value = sentinel.tokenizer
-        inside_the_next_window: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
-        downloads_inside_the_next_window: Final = from_pretrained.call_count
-        clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
         _return_huggingface_tokenizer(model, outcomes)
-        after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
-    assert all(isinstance(count, _HuggingFaceTokenizerLoadFailure) for count in inside_the_next_window)
-    assert downloads_inside_the_next_window == 2
-    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+        start_retry.call_args.args[0]()
+        in_the_forked_process: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert retries_started_by_the_parent == 1
+    assert start_retry.call_count == 2
+    assert in_the_forked_process == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
 def test_retry_thread_that_cannot_start_answers_the_count_and_retries_after_the_next_window():

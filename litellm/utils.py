@@ -2677,7 +2677,7 @@ class _HuggingFaceTokenizerLoaded:
 class _HuggingFaceTokenizerLoadFailure:
     reason: str
     retry_at: float
-    retrying: bool = False
+    retry_pid: int | None = None
 
 
 _HuggingFaceTokenizerKey: TypeAlias = tuple[HuggingFaceTokenizerKind, Decision]
@@ -2692,6 +2692,7 @@ def _start_in_daemon_thread(work: Callable[[], None]) -> None:
 class _HuggingFaceTokenizerLoadOutcomes:
     clock: Callable[[], float] = time.monotonic
     start_retry: Callable[[Callable[[], None]], None] = _start_in_daemon_thread
+    pid: Callable[[], int] = os.getpid
     lock: threading.Lock = field(default_factory=threading.Lock)
     by_tokenizer: Mapping[_HuggingFaceTokenizerKey, _HuggingFaceTokenizerLoadOutcome] = field(
         default_factory=lambda: MappingProxyType({})
@@ -2704,11 +2705,11 @@ class _HuggingFaceTokenizerLoadOutcomes:
             known: Final = self.by_tokenizer.get(key)
             if (
                 not isinstance(known, _HuggingFaceTokenizerLoadFailure)
-                or known.retrying
+                or known.retry_pid == self.pid()
                 or self.clock() < known.retry_at
             ):
                 return known
-            retrying: Final = replace(known, retrying=True)
+            retrying: Final = replace(known, retry_pid=self.pid())
             self._remember(key, retrying)
         try:
             self.start_retry(retry_when_due)
@@ -2739,6 +2740,12 @@ class _HuggingFaceTokenizerLoadOutcomes:
             failure: Final = self._failure(reason)
             self._remember(key, failure)
             return failure
+
+    def end_retry(self, key: _HuggingFaceTokenizerKey) -> None:
+        with self.lock:
+            known: Final = self.by_tokenizer.get(key)
+            if isinstance(known, _HuggingFaceTokenizerLoadFailure) and known.retry_pid is not None:
+                self._remember(key, self._failure(known.reason))
 
     def flush_cache(self) -> None:
         with self.lock:
@@ -2830,12 +2837,10 @@ def _load_huggingface_tokenizer_remembering_outcome(
 def _retry_huggingface_tokenizer_load(
     model: str, key: _HuggingFaceTokenizerKey, outcomes: _HuggingFaceTokenizerLoadOutcomes
 ) -> None:
-    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
-
     try:
         _load_huggingface_tokenizer_remembering_outcome(model, key, outcomes, outcomes.remember_failed_retry)
-    except (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking) as error:
-        outcomes.remember_failed_retry(key, str(error))
+    finally:
+        outcomes.end_retry(key)
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
