@@ -682,6 +682,7 @@ publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
+streamlake_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
@@ -973,6 +974,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             openinfer_models.add(key)
         elif value.get("litellm_provider") == "kyma":
             kyma_models.add(key)
+        elif value.get("litellm_provider") == "streamlake":
+            streamlake_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1149,6 +1152,7 @@ model_list = list(
     | darkbloom_models
     | openinfer_models
     | kyma_models
+    | streamlake_models
     | zerogpu_models
     | v0_models
     | morph_models
@@ -1270,6 +1274,7 @@ def _build_models_by_provider() -> dict:
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
         "kyma": kyma_models,
+        "streamlake": streamlake_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
