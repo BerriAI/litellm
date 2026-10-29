@@ -196,6 +196,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search = tool_search_routing(request_tools)
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
 
+    async def aclose(self) -> None:
+        await self.litellm_custom_stream_wrapper.aclose()
+
     def _tool_search_execution(self, call_id: str, fn_name: str) -> ToolSearchExecution | None:
         known: Final = self._tool_search_executions.get(call_id)
         if known is not None:

@@ -1207,11 +1207,8 @@ class TestCheckResponsesCost:
             return_value=1
         )
 
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
+            mock_aget.return_value = _terminal_response()
             await check_responses_cost_instance.check_responses_cost()
 
         assert [_is_billed(call[1]["litellm_metadata"]) for call in mock_aget.call_args_list] == [False]
@@ -1252,7 +1249,7 @@ class TestCheckResponsesCost:
         )
 
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = MagicMock(status="completed")
+            mock_aget.return_value = _terminal_response()
             await check_responses_cost_instance.check_responses_cost()
 
         (billed,) = billed_logger.billed

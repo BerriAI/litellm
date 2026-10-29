@@ -764,18 +764,23 @@ class AsyncHTTPHandler:
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         max_response_bytes: int | None = None,
+        stream: bool = False,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        query: Final = httpx.QueryParams(params).merge(HTTPHandler.extract_query_params(url))
+        request_headers: Final = httpx.Headers(headers)
 
-        params = params or {}
-        params.update(HTTPHandler.extract_query_params(url))
+        if stream:
+            return await self._send_streaming_get(
+                url, params=query, headers=request_headers, follow_redirects=follow_redirects, timeout=timeout
+            )
 
         if max_response_bytes is not None:
             return await self._get_with_response_limit(
                 url,
-                params=httpx.QueryParams(params),
-                headers=httpx.Headers(headers),
+                params=query,
+                headers=request_headers,
                 max_bytes=max_response_bytes,
                 follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
                 timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
@@ -783,12 +788,40 @@ class AsyncHTTPHandler:
 
         response: Final = await self.client.get(
             url,
-            params=params,
-            headers=headers,
+            params=query,
+            headers=request_headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
+
+    async def _send_streaming_get(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: httpx.Headers,
+        follow_redirects: bool | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        start_time: Final = time.time()
+        request: Final = self.client.build_request(
+            "GET", url, params=params, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
+        )
+        try:
+            response: Final = await self.client.send(
+                request,
+                stream=True,
+                follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
+            )
+            _anchor_handler_to(response, self)
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
+        except httpx.HTTPStatusError as e:
+            await _raise_masked_async_error(e, True)
+        else:
+            return response
 
     async def _get_with_response_limit(
         self,
@@ -1468,21 +1501,54 @@ class HTTPHandler:
         headers: Mapping[str, Any] | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
+        stream: bool = False,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
-        params = params or {}
-        params.update(self.extract_query_params(url))
+        query: Final = httpx.QueryParams(params).merge(self.extract_query_params(url))
+
+        if stream:
+            return self._send_streaming_get(
+                url, params=query, headers=headers, follow_redirects=follow_redirects, timeout=timeout
+            )
 
         response: Final = self.client.get(
             url,
-            params=params,
+            params=query,
             headers=headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
 
         return response
+
+    def _send_streaming_get(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: Mapping[str, str] | None,
+        follow_redirects: bool | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        start_time: Final = time.time()
+        request: Final = self.client.build_request(
+            "GET", url, params=params, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
+        )
+        try:
+            response: Final = self.client.send(
+                request,
+                stream=True,
+                follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
+            )
+            _anchor_handler_to(response, self)
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            _raise_timeout(e, start_time)
+        except httpx.HTTPStatusError as e:
+            _raise_masked_sync_error(e, True)
+        else:
+            return response
 
     @staticmethod
     def extract_query_params(url: str) -> dict[str, str]:

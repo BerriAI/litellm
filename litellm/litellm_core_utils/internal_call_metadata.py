@@ -120,7 +120,7 @@ def is_unbilled_non_inference_call(
     origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) if metadata is not None else None
     if origin == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN:
         return False
-    if not is_background_response(response):
+    if not is_background_response(_finished_response(response)):
         return True
     return origin == BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN or _is_managed_background_call(metadata)
 

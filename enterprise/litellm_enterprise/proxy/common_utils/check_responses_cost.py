@@ -30,7 +30,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
@@ -290,12 +290,14 @@ class CheckResponsesCost:
         sees provider env vars, so it fails for every deployment whose credentials
         live in the config; the row then never leaves ``queued``.
         """
-        if not via_router:
-            return await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
-        router_response = await self.llm_router.aget_responses(
-            response_id=response_id, litellm_metadata=litellm_metadata
+        retrieved: Final[object] = (
+            await self.llm_router.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
+            if via_router
+            else await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
         )
-        return cast(ResponsesAPIResponse, router_response)
+        if not isinstance(retrieved, ResponsesAPIResponse):
+            raise TypeError(f"Retrieving {response_id} did not return a response object")
+        return retrieved
 
     async def _fetch_unbilled(self, target: _PollTarget) -> ResponsesAPIResponse:
         return await self._get_response(
