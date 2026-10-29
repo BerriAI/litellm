@@ -17,7 +17,7 @@ import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, BeforeValidator, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -144,11 +144,15 @@ def _delta_from_upstream(upstream_delta: "BaseModel | _UpstreamDeltaLike | None"
 def _sdk_logprobs_as_dict(logprobs: object) -> object:
     if isinstance(logprobs, ChoiceLogprobs) or not isinstance(logprobs, BaseModel):
         return logprobs
-    return logprobs.model_dump()
+    return logprobs.model_dump(exclude_unset=True)
 
 
-_UPSTREAM_LOGPROBS: Final[TypeAdapter[ChoiceLogprobs]] = TypeAdapter(
-    Annotated[ChoiceLogprobs, BeforeValidator(_sdk_logprobs_as_dict)]
+_UPSTREAM_LOGPROBS: Final[TypeAdapter[ChoiceLogprobs | JsonValue]] = TypeAdapter(
+    Annotated[
+        ChoiceLogprobs | JsonValue,
+        Field(union_mode="left_to_right"),
+        BeforeValidator(_sdk_logprobs_as_dict),
+    ]
 )
 
 

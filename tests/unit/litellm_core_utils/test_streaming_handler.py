@@ -1750,6 +1750,80 @@ async def test_stream_finish_chunk_with_logprobs_reaches_caller_as_litellm_logpr
     assert [chunk.usage.total_tokens for chunk in chunks if getattr(chunk, "usage", None)] == expected_usage_totals
 
 
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize(
+    ("finish_logprobs", "expected_wire_logprobs"),
+    [
+        pytest.param(
+            {"content": [{"token": "<|return|>"}]},
+            {"content": [{"token": "<|return|>"}]},
+            id="token-without-logprob",
+        ),
+        pytest.param(-0.25, -0.25, id="scalar-logprobs"),
+    ],
+)
+async def test_stream_finish_chunk_with_nonstandard_logprobs_still_finishes(
+    async_stream: bool,
+    finish_logprobs: object,
+    expected_wire_logprobs: object,
+    logging_obj: Logging,
+) -> None:
+    upstream_chunks: Final = (
+        [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}],
+        [{"index": 0, "delta": {}, "logprobs": finish_logprobs, "finish_reason": "stop"}],
+    )
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-nonstandard-logprobs",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": choices,
+                }
+            )
+            + "\n\n"
+            for choices in upstream_chunks
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        if isinstance(client, AsyncOpenAI)
+        else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream, model="test-model", logging_obj=logging_obj, custom_llm_provider="openai"
+    )
+
+    try:
+        chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    wire_choices: Final = tuple(
+        itertools.chain.from_iterable(
+            json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))["choices"] for chunk in chunks
+        )
+    )
+    finish_choices: Final = [choice for choice in wire_choices if choice.get("finish_reason")]
+
+    assert [choice["finish_reason"] for choice in finish_choices] == ["stop"]
+    assert finish_choices[0]["logprobs"] == expected_wire_logprobs
+
+
 def _hosted_vllm_stream_wrapper(logging_obj: Logging, error_payload: dict) -> CustomStreamWrapper:
     """A CustomStreamWrapper over the real OpenAI-compatible line iterator,
     fed an HTTP 200 SSE body that carries an in-body error payload the way
