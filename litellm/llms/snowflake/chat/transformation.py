@@ -9,6 +9,7 @@ Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 import httpx
@@ -18,6 +19,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -96,6 +98,20 @@ def is_snowflake_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
+
+
+_CORTEX_CLAUDE_USER_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
+
+
+def _user_parts(message: AllMessageValues) -> tuple[object, ...]:
+    return parts_of(message.get("content")) if message["role"] == "user" else ()
+
+
+def _untranslatable_user_part_types(messages: Sequence[AllMessageValues]) -> frozenset[str]:
+    part_types: Final = frozenset(
+        str(message_field(part, "type")) for part in chain.from_iterable(map(_user_parts, messages))
+    )
+    return part_types - _CORTEX_CLAUDE_USER_PART_TYPES
 
 
 def _clean_input_schema(schema: object) -> object:
@@ -207,6 +223,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     ) -> tuple[list[AnthropicSystemMessageContent] | None, list[AllAnthropicPassThroughMessageValues]]:
         """Cortex's /messages endpoint speaks Anthropic's dialect, so the shared translators own the shape."""
         conversation_messages: Final = list(messages)
+        untranslatable: Final = _untranslatable_user_part_types(conversation_messages)
+        if untranslatable and not drop_params:
+            raise SnowflakeException(
+                status_code=400,
+                message=f"Snowflake Cortex Claude cannot take {', '.join(sorted(untranslatable))} parts in a user "
+                "message. Remove them, or pass drop_params=True to drop them",
+            )
         system: Final = [
             part
             for part in AnthropicConfig().translate_system_message(messages=conversation_messages)

@@ -954,6 +954,11 @@ def create_anthropic_image_param(
             return _anthropic_content_element_factory(
                 convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
             )
+        elif format is not None and format.partition(";")[0].strip() == "application/pdf":
+            return AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceUrl(type="url", url=image_url),
+            )
         else:
             # HTTPS URL - pass directly for regular Anthropic
             return AnthropicMessagesImageParam(

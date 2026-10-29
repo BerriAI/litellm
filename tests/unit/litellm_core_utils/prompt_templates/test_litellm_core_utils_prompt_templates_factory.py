@@ -9436,3 +9436,16 @@ def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monke
         "type": "document",
         "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()},
     }
+
+
+def test_create_anthropic_image_param_links_an_https_pdf_as_a_document_only_when_format_says_pdf():
+    url = "https://example.com/report.pdf"
+
+    assert create_anthropic_image_param({"url": url, "format": "application/pdf"}) == {
+        "type": "document",
+        "source": {"type": "url", "url": url},
+    }
+    assert create_anthropic_image_param({"url": url, "format": "image/png"}) == {
+        "type": "image",
+        "source": {"type": "url", "url": url},
+    }

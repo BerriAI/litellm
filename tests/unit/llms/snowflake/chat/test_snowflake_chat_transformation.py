@@ -744,6 +744,32 @@ class TestSnowflakeCortexClaudeFixes:
         )
         assert body["system"] == [{"type": "text", "text": "be terse"}]
 
+    _AUDIO_TURN = (
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hear"},
+                {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+            ],
+        },
+    )
+
+    def test_user_part_cortex_claude_cannot_take_is_a_400_naming_it(self):
+        with pytest.raises(SnowflakeException) as exc_info:
+            self._transform(list(self._AUDIO_TURN))
+        assert exc_info.value.status_code == 400
+        assert "input_audio" in str(exc_info.value)
+
+    def test_drop_params_drops_a_user_part_cortex_claude_cannot_take(self):
+        body = SnowflakeConfig().transform_request(
+            model="snowflake/claude-sonnet-4-6",
+            messages=list(self._AUDIO_TURN),
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )
+        assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hear"}]}]
+
     def test_unknown_charset_on_a_text_attachment_is_a_400(self):
         with pytest.raises(SnowflakeException) as exc_info:
             self._transform(
