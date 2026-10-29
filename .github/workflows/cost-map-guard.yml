@@ -46,3 +46,24 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           uv run --no-project python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"
+      - name: Check whether the pull request changes the cost map
+        id: changed
+        env:
+          MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --quiet "$MERGE_BASE" "$HEAD_SHA" -- model_prices_and_context_window.json; then
+            echo "cost_map=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "cost_map=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.cost_map == 'true'
+        run: rustup toolchain install --no-self-update
+      - name: Load the cost map through model-catalog
+        if: steps.changed.outputs.cost_map == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git show "${HEAD_SHA}:model_prices_and_context_window.json" > "$RUNNER_TEMP/model_prices_and_context_window.json"
+          cargo run --locked --quiet --manifest-path litellm-rust/Cargo.toml -p litellm-model-catalog --bin check-registry \
+            -- "$RUNNER_TEMP/model_prices_and_context_window.json"
