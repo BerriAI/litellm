@@ -42,7 +42,7 @@ from .models import (
     SAPUserMessage,
 )
 
-_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR = "AICORE_ORCHESTRATION_DEPLOYMENT_URL"
+_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR: Final = "AICORE_ORCHESTRATION_DEPLOYMENT_URL"
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -263,7 +263,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         stream: bool | None = None,
     ):
         # Per-request override wins; deployment_url handles env var + discovery.
-        base = optional_params.get("deployment_url") or self.deployment_url
+        base: Final = optional_params.get("deployment_url") or self.deployment_url
         return join_api_base(base, "v2/completion")
 
     def _build_prompt_module(

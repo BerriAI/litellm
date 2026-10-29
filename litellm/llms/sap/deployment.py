@@ -17,7 +17,9 @@ from .chat.handler import GenAIHubOrchestrationError
 from .credentials import AICoreDeploymentList
 from litellm.litellm_core_utils.url_utils import join_api_base
 
-_deployment_url_cache: dict[tuple[str, str], str] = {}  # mutable-ok: process-wide cache, guarded by _deployment_url_lock
+_deployment_url_cache: dict[  # mutable-ok: process-wide cache, guarded by _deployment_url_lock # rebind-ok: once initialized
+    tuple[str, str], str
+] = {}
 _deployment_url_lock: Final = threading.Lock()
 
 
@@ -25,19 +27,17 @@ def fetch_deployment_url(
     base_url: str,
     headers: Mapping[str, str],
 ) -> str:
-    deployments: Final[AICoreDeploymentList] = (
-        litellm.module_level_client.get(
-            join_api_base(base_url, "lm/deployments"),
-            headers=headers,
-            params={  # mutable-ok: one-shot query-params dict passed directly to httpx, not stored
-                "scenarioId": "orchestration",
-                "executableIds": ["orchestration"],
-                "status": "RUNNING",
-            },
-        ).json()
-    )
+    deployments: Final[AICoreDeploymentList] = litellm.module_level_client.get(
+        join_api_base(base_url, "lm/deployments"),
+        headers=headers,
+        params={
+            "scenarioId": "orchestration",
+            "executableIds": ["orchestration"],
+            "status": "RUNNING",
+        },
+    ).json()
 
-    candidates: Final[list[tuple[str, str, str]]] = sorted(
+    candidates: Final[list[tuple[str, str, str]]] = sorted(  # mutable-ok: list of deployment candidates
         (
             (resource["deploymentUrl"], resource["createdAt"], resource["configurationName"])
             for resource in deployments.get("resources", [])
@@ -66,11 +66,11 @@ def resolve_deployment_url(
     fetcher: Callable[[], str],
 ) -> str:
     cache_key: Final[tuple[str, str]] = (base_url, resource_group)
-    cached_url = _deployment_url_cache.get(cache_key)
+    cached_url = _deployment_url_cache.get(cache_key)  # rebind-ok: fast-path read before acquiring the lock
     if cached_url is not None:
         return cached_url
     with _deployment_url_lock:
-        rechecked_url = _deployment_url_cache.get(cache_key)
+        rechecked_url = _deployment_url_cache.get(cache_key)  # rebind-ok: double-check under lock after fast-path miss
         if rechecked_url is not None:
             return rechecked_url
         fetched_url: Final[str] = os.environ.get(env_var) or fetcher()
