@@ -12,6 +12,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockUpgrade,
     bundled_codex_models,
     codex_catalog_rows,
+    codex_entry_names_default_reasoning_level,
     codex_model_list_body,
     codex_models_response_json,
     configured_service_tiers,
@@ -554,3 +555,20 @@ def test_catalog_rows_without_a_router_carry_only_the_listing():
     listing = ({"id": "plain", "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"},)
 
     assert codex_catalog_rows(listing, (("plain", "plain"),), None) == (CodexCatalogRow(id="plain", mode="chat"),)
+
+
+def test_entry_names_a_default_reasoning_level_exactly_when_the_served_entry_carries_one():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "open-weights", "litellm_params": {"model": "fireworks_ai/open-weights"}},
+            {"model_name": "coding-model", "litellm_params": {"model": "openai/gpt-5.5"}},
+        ]
+    )
+    names = ("open-weights", "coding-model")
+    listing = tuple({"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names)
+    served = json.loads(codex_model_list_body(listing, tuple((name, name) for name in names), router))["models"]
+
+    assert [codex_entry_names_default_reasoning_level(entry["slug"], router, None) for entry in served] == [
+        "default_reasoning_level" in entry for entry in served
+    ]
+    assert ["default_reasoning_level" in entry for entry in served] == [False, True]

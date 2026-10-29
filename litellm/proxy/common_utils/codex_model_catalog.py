@@ -397,6 +397,10 @@ def _compact_json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"))
 
 
+def _entry_json(entry: CodexCatalogEntry) -> Mapping[str, object]:
+    return _JSON_OBJECT.validate_python(entry.model_dump(mode="json", exclude_unset=isinstance(entry, CodexStockModel)))
+
+
 def merged_codex_catalog(
     upstream_body: bytes,
     rows: Sequence[CodexCatalogRow],
@@ -414,10 +418,7 @@ def merged_codex_catalog(
     added: Final = tuple(row for row in rows if _codex_can_drive(row) and row.id not in slugs)
     first_priority: Final = max((_priority(model) for model in upstream), default=-1) + 1
     entries: Final = _entries(added, stock, instructions, first_priority)
-    added_models: Final = tuple(
-        _JSON_OBJECT.validate_python(entry.model_dump(mode="json", exclude_unset=isinstance(entry, CodexStockModel)))
-        for entry in entries
-    )
+    added_models: Final = tuple(_entry_json(entry) for entry in entries)
     serialized: Final = tuple(_compact_json(model) for model in added_models)
     budget: Final = byte_limit - len(_compact_json({**top, "models": upstream}))
     kept: Final = tuple(sorted(_kept_positions(entries, serialized, budget)))
@@ -478,3 +479,12 @@ def codex_model_list_body(
             ", ".join(body.left_out),
         )
     return body.json
+
+
+def codex_entry_names_default_reasoning_level(model_id: str, llm_router: Router, team_id: str | None) -> bool:
+    """Whether the catalog entry for `model_id` names a `default_reasoning_level`. Codex's model picker
+    sends reasoning effort `none` for a model whose entry names none, while showing that choice as
+    "default"."""
+    listed: Final[ModelInfoResponse] = {"id": model_id, "object": "model", "created": 0, "owned_by": ""}
+    (entry,) = _entries((_catalog_row(listed, model_id, model_id, llm_router, team_id),), None, "", 0)
+    return _entry_json(entry).get("default_reasoning_level") is not None

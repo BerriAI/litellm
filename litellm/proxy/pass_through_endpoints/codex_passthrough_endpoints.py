@@ -1,4 +1,5 @@
 import hmac
+import json
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal
@@ -12,7 +13,11 @@ import litellm
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models, merged_codex_catalog
+from litellm.proxy.common_utils.codex_model_catalog import (
+    bundled_codex_models,
+    codex_entry_names_default_reasoning_level,
+    merged_codex_catalog,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     read_request_body,  # pyright: ignore[reportUnknownVariableType]  # returns a bare dict, validated at the call
 )
@@ -30,6 +35,7 @@ _CHATGPT_CREDENTIAL_HEADERS: Final = frozenset({b"authorization", b"chatgpt-acco
 _MERGED_CATALOG_DROPPED_HEADERS: Final = frozenset({"etag", "content-length", "content-type"})
 _MODELS_ETAG_HEADER: Final = "x-models-etag"
 _LITELLM_RESPONSES_PATH: Final = "/v1/responses"
+_CODEX_NO_DEFAULT_EFFORT: Final = "none"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 _HEADERS: Final = frozenset(
@@ -80,7 +86,7 @@ def _routes_to_litellm(model: object, llm_router: "Router | None", team_id: str 
     return bool(deployments) and all(_serves_by_name(deployment, names) for deployment in deployments)
 
 
-def _as_litellm_responses_request(request: Request, body: bytes) -> Request:
+def _as_litellm_responses_request(request: Request, body: bytes, parsed_body: Mapping[str, object]) -> Request:
     replayed: Final[Iterator[Message]] = iter(({"type": "http.request", "body": body, "more_body": False},))
 
     async def receive() -> Message:
@@ -94,9 +100,28 @@ def _as_litellm_responses_request(request: Request, body: bytes) -> Request:
             "headers": [
                 (name, value) for name, value in request.headers.raw if name not in _CHATGPT_CREDENTIAL_HEADERS
             ],
+            "parsed_body": (tuple(parsed_body), parsed_body),
         },
         receive,
     )
+
+
+def _with_provider_default_reasoning(
+    body: Mapping[str, object], llm_router: "Router | None", team_id: str | None
+) -> Mapping[str, object]:
+    model: Final = body.get("model")
+    try:
+        reasoning: Final = _JSON_OBJECT.validate_python(body.get("reasoning"))
+    except ValidationError:
+        return body
+    if (
+        reasoning.get("effort") != _CODEX_NO_DEFAULT_EFFORT
+        or not isinstance(model, str)
+        or llm_router is None
+        or codex_entry_names_default_reasoning_level(model, llm_router, team_id)
+    ):
+        return body
+    return {**body, "reasoning": {key: value for key, value in reasoning.items() if key != "effort"}}
 
 
 def _input_without_other_provider_reasoning(body: Mapping[str, object]) -> tuple[object, ...] | None:
@@ -145,8 +170,10 @@ async def _responses(
 
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
     if _routes_to_litellm(body.get("model"), llm_router, user_api_key_dict.team_id):
+        litellm_body: Final = _with_provider_default_reasoning(body, llm_router, user_api_key_dict.team_id)
+        raw_body: Final = await request.body() if litellm_body is body else json.dumps(litellm_body).encode()
         return await responses_api(
-            _as_litellm_responses_request(request, await request.body()),
+            _as_litellm_responses_request(request, raw_body, litellm_body),
             fastapi_response,
             user_api_key_dict.model_copy(update={"request_route": _LITELLM_RESPONSES_PATH}),
         )

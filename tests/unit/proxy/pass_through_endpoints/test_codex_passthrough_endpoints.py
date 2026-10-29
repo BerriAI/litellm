@@ -213,10 +213,14 @@ _UPSTREAM_CATALOG: Final = {
 }
 
 
-def _open_weights(model_name: str, mode: str | None = None) -> dict[str, object]:
+def _open_weights(model_name: str, mode: str | None = None, upstream: str | None = None) -> dict[str, object]:
     return {
         "model_name": model_name,
-        "litellm_params": {"model": f"fireworks_ai/{model_name}", "api_base": _PROVIDER_BASE, "api_key": _PROVIDER_KEY},
+        "litellm_params": {
+            "model": f"fireworks_ai/{upstream or model_name}",
+            "api_base": _PROVIDER_BASE,
+            "api_key": _PROVIDER_KEY,
+        },
         "model_info": {"mode": mode} if mode else {},
     }
 
@@ -374,6 +378,43 @@ def test_litellm_model_on_native_route_streams_like_v1_without_chatgpt_credentia
     assert native_route == v1_route == "/v1/responses"
     assert _CHATGPT_JWT not in native_call
     assert "account-a" not in native_call
+
+
+@pytest.mark.parametrize(
+    ("model", "sent", "expected"),
+    [
+        pytest.param("open-weights", "none", None, id="picker fills in none for a model without a default effort"),
+        pytest.param("open-weights", "high", "high", id="effort set for a model without a default effort"),
+        pytest.param("coding-model", "none", "none", id="none on a model whose entry names a default effort"),
+    ],
+)
+def test_litellm_model_on_native_route_gets_the_reasoning_effort_codex_m_would_send(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, sent: str, expected: str | None
+) -> None:
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(model_list=[_open_weights("open-weights"), _open_weights("coding-model", upstream="gpt-5.5")]),
+    )
+    provider: Final = respx_mock.post(f"{_PROVIDER_BASE}/responses").mock(
+        side_effect=lambda _: httpx.Response(
+            200, content=_provider_stream("Hi"), headers={"content-type": "text/event-stream"}
+        )
+    )
+    body: Final = {"model": model, "input": "Say hi", "stream": True, "store": False}
+    expected_reasoning: Final = {"summary": "auto"} if expected is None else {"effort": expected, "summary": "auto"}
+    native: Final = client.post(
+        "/backend-api/codex/responses",
+        json={**body, "reasoning": {"effort": sent, "summary": "auto"}},
+        headers={**_HEADERS, "authorization": f"Bearer {_CHATGPT_JWT}"},
+    )
+    v1: Final = client.post(
+        "/v1/responses", json={**body, "reasoning": expected_reasoning}, headers={"authorization": f"Bearer {MASTER_KEY}"}
+    )
+    assert native.status_code == v1.status_code == 200
+    native_request, v1_request = (json.loads(call.request.content) for call in provider.calls)
+    assert native_request == v1_request
+    print("PROBE", native_request.get("reasoning"), native_request.get("reasoning_effort"), sorted(native_request))
 
 
 @pytest.mark.parametrize(
