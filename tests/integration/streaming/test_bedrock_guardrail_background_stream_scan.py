@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from itertools import product
 from pathlib import Path
 from typing import Final
 
@@ -332,7 +333,7 @@ def test_a_mixed_burst_ends_every_stream_on_its_own_verdict_while_the_scan_peer_
     scans: Final = _Scans()
     scans.release.set()
     rig.scans[0] = scans
-    calls: Final = tuple((kind, route) for kind in ("clean", "leak", "outage") for route in _ROUTES for _ in range(2))
+    calls: Final = tuple(product(("clean", "leak", "outage"), (*_ROUTES, *_ROUTES)))
     with ThreadPoolExecutor(len(calls)) as pool:
         served: Final = tuple(pool.map(lambda call: _read(rig, "background", call[0], call[1], scans, 0), calls))
     for (kind, route), streamed in zip(calls, served, strict=True):
