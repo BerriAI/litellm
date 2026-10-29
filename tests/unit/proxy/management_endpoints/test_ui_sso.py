@@ -4022,14 +4022,14 @@ class TestCLIKeyRegenerationFlow:
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
             return_value=[
                 MagicMock(model_dump=lambda team_id=team_id, alias=alias: {"team_id": team_id, "team_alias": alias})
-                for team_id, alias in (("team-ops", "Ops <eu>"), ("team-claude", None))
+                for team_id, alias in (("team-ops", "Ops <eu>"), ("team-claude", None), ("team-ops-us", "Ops <eu>"))
             ]
         )
         with (
             patch(
                 "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
                 return_value=LiteLLM_UserTable(
-                    user_id="dev-1", user_role="internal_user", teams=["team-claude", "team-ops"]
+                    user_id="dev-1", user_role="internal_user", teams=["team-claude", "team-ops", "team-ops-us"]
                 ),
             ),
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -4047,9 +4047,11 @@ class TestCLIKeyRegenerationFlow:
             assert 'name="team_id"' not in page
             return
         assert (
-            '<select id="team_id" name="team_id">'
-            '<option value="team-ops">Ops &lt;eu&gt;</option>'
+            '<select id="team_id" name="team_id" required>'
+            '<option value="" disabled selected>Choose a team</option>'
+            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
             '<option value="team-claude">team-claude</option>'
+            '<option value="team-ops-us">Ops &lt;eu&gt; (team-ops-us)</option>'
             "</select>"
         ) in page
 

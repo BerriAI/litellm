@@ -261,12 +261,6 @@ async def device_authorization(request: Request) -> JSONResponse:
     return JSONResponse(content=body.model_dump(exclude_none=True))
 
 
-def _session_team_id(chosen_team_id: str | None, teams: tuple[str, ...]) -> str | None:
-    if chosen_team_id in teams:
-        return chosen_team_id
-    return teams[0] if teams else None
-
-
 def _validate_login(flow: Mapping[str, object]) -> _GatewayLogin | _OAuthError:
     from litellm.proxy.management_endpoints.ui_sso import selected_cli_sso_team_detail
 
@@ -278,8 +272,15 @@ def _validate_login(flow: Mapping[str, object]) -> _GatewayLogin | _OAuthError:
             status_code=400, error="invalid_grant", description="The login session is malformed; sign in again"
         )
 
-    chosen_team_id: Final = flow.get(CLI_SSO_CHOSEN_TEAM_ID)
-    team_id: Final = _session_team_id(chosen_team_id if isinstance(chosen_team_id, str) else None, session_data.teams)
+    chosen: Final = flow.get(CLI_SSO_CHOSEN_TEAM_ID)
+    chosen_team_id: Final = chosen if isinstance(chosen, str) else None
+    if chosen_team_id is not None and chosen_team_id not in session_data.teams:
+        return _OAuthError(
+            status_code=400,
+            error="invalid_grant",
+            description="The team picked at sign-in is no longer one of your teams; sign in again",
+        )
+    team_id: Final = chosen_team_id or next(iter(session_data.teams), None)
     selected_team: Final = selected_cli_sso_team_detail(team_details=session_data.team_details, team_id=team_id)
     if selected_team is None:
         return _OAuthError(

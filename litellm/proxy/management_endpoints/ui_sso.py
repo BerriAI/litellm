@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from html import escape
@@ -748,7 +749,7 @@ def _render_cli_sso_verification_page(
           <p>{instructions}</p>
           <form method="post" action="{escaped_verify_url}">
             <input type="hidden" name="browser_complete_token" value="{escaped_browser_complete_token}" />
-            {team_select_field(team_choices)}
+            {team_select_field(team_choices, require_choice=True)}
             <label for="user_code">Verification code</label>
             <input id="user_code" name="user_code" autocomplete="one-time-code"{user_code_value_attr} required autofocus />
             <button type="submit">Continue</button>
@@ -2456,9 +2457,11 @@ def _browser_team_choices(
 ) -> tuple[tuple[str, str], ...]:
     if not flow.browser_team_choice:
         return ()
-    return tuple(
+    labeled: Final = tuple(
         (detail.team_id, detail.team_alias or detail.team_id) for detail in team_details if detail.team_id is not None
     )
+    label_counts: Final = Counter(label for _, label in labeled)
+    return tuple((team_id, label if label_counts[label] == 1 else f"{label} ({team_id})") for team_id, label in labeled)
 
 
 def selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> CliSsoTeamDetail | None:

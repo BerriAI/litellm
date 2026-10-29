@@ -74,7 +74,7 @@ button {{ flex: 1; padding: 10px; border-radius: 6px; font-size: 15px; cursor: p
 """
 
 
-def team_select_field(teams: Sequence[tuple[str, str]]) -> str:
+def team_select_field(teams: Sequence[tuple[str, str]], *, require_choice: bool = False) -> str:
     if not teams:
         return ""
     if len(teams) == 1:
@@ -83,9 +83,12 @@ def team_select_field(teams: Sequence[tuple[str, str]]) -> str:
             f'<input type="hidden" name="team_id" value="{escape(team_id)}">'
             f"<p>Requests are attributed to team <strong>{escape(team_label)}</strong>.</p>"
         )
+    placeholder: Final = '<option value="" disabled selected>Choose a team</option>' if require_choice else ""
     options: Final = "".join(
         f'<option value="{escape(team_id)}">{escape(team_label)}</option>' for team_id, team_label in teams
     )
+    required: Final = " required" if require_choice else ""
     return (
-        f'<label for="team_id">Attribute requests to team</label><select id="team_id" name="team_id">{options}</select>'
+        '<label for="team_id">Attribute requests to team</label>'
+        f'<select id="team_id" name="team_id"{required}>{placeholder}{options}</select>'
     )
