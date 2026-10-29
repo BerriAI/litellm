@@ -6463,7 +6463,11 @@ class TestStrategyRouterWriteValidation:
             assert fake.tx_obj.raw_calls == []
             return
         assert handle is fake.tx_obj.litellm_proxymodeltable
-        published.assert_awaited_once_with(redis_cache=None, object_type="litellm_proxymodeltable")
+        published.assert_awaited_once_with(
+            redis_cache=None,
+            object_type="litellm_proxymodeltable",
+            model_ids=(model_id,) if model_id else (),
+        )
         (lock_sql, lock_params), (count_sql, count_params) = fake.tx_obj.raw_calls
         assert "pg_advisory_xact_lock($1)" in lock_sql and "count" not in lock_sql
         assert lock_params == (AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY,)

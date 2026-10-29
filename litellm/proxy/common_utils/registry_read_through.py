@@ -129,17 +129,35 @@ async def _resync_model_deployments(model_name: str) -> bool:
     rows: Final = await table.find_many(where=name_filter) or await table.find_many(where=id_filter)
     if not rows:
         return False
+    return await _load_model_rows(rows) or _model_is_loaded(model_name)
+
+
+async def resync_model_deployments_by_ids(model_ids: tuple[str, ...]) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.repositories.model_repository import ModelRepository
+
+    if not _db_backed_registries_enabled("models"):
+        return
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    ids_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_id": {"in": list(model_ids)}}
+    rows: Final = await ModelRepository(prisma_client).table.find_many(where=ids_filter)
+    if not rows:
+        return
+    await _load_model_rows(rows)
+
+
+async def _load_model_rows(rows: Sequence["prisma_models.LiteLLM_ProxyModelTable"]) -> bool:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
     router: Final = proxy_server.llm_router
-    if router is None:
+    if router is None or _holds_an_auto_router(rows):
         await proxy_server.proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
         )
-        return proxy_server.llm_router is not None
-    if _holds_an_auto_router(rows):
-        await proxy_server.proxy_config.add_deployment(
-            prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
-        )
-        return _model_is_loaded(model_name)
+        return False
     async with proxy_server.MODEL_RECONCILE_LOCK:
         await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
         proxy_server.proxy_config._add_deployment(db_models=rows)
