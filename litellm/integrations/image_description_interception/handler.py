@@ -212,9 +212,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         self.prompt = prompt
         self.timeout = timeout
         self._prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
-        self._in_flight: dict[
-            str, asyncio.Task[DescriptionResult]
-        ] = {}  # mutable-ok: shares one pending description between concurrent requests
+        self._in_flight: dict[str, asyncio.Task[DescriptionResult]] = {}  # mutable-ok: shared pending descriptions
 
     @staticmethod
     def initialize_from_proxy_config(
