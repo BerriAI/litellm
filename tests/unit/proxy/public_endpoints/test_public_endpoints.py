@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib.resources import files
 from itertools import chain
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -18,11 +20,32 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.public_endpoints import router
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
+from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, ProviderCredentialField
 from litellm.types.utils import LlmProviders
+
+
+def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter() -> None:
+    from litellm.llms.bigmodel.common_utils import BIGMODEL_API_BASE
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = TypeAdapter(list[ProviderCreateInfo]).validate_python(response.json())
+    provider: Final = next(item for item in providers if item.litellm_provider == "bigmodel")
+    fields: Final = {field.key: field for field in provider.credential_fields}
+    assert provider.provider_display_name == "BigModel (Zhipu AI)"
+    assert fields["api_key"].required is True
+    assert fields["api_key"].field_type == "password"
+    assert fields["api_base"].required is False
+    assert fields["api_base"].default_value == BIGMODEL_API_BASE
+    assert fields["api_base"].placeholder == BIGMODEL_API_BASE
+    assert provider.default_model_placeholder is not None
+    assert provider.default_model_placeholder.startswith("bigmodel/")
 
 
 def test_fuse_presets_route_serves_the_shared_catalog_without_authentication() -> None:
@@ -543,6 +566,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "mongodb",
         "nano-gpt",
         "neosantara",
+        "opensearch",
         "parasail",
         "pinstripes",
         "poe",
@@ -1139,6 +1163,25 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert chat["endpoint"] == "/chat/completions"
     assert chat["label"] == "Chat Completions"
     assert len(chat["providers"]) > 0
+
+
+def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses(
+    reset_endpoints_cache: None,
+) -> None:
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+    client: Final[TestClient] = TestClient(app)
+    with client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    streamlake_endpoints: Final = {
+        endpoint["key"]
+        for endpoint in response.json()["endpoints"]
+        if any(provider["slug"] == "streamlake" for provider in endpoint["providers"])
+    }
+    assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
+    assert "embeddings" not in streamlake_endpoints
 
 
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
@@ -1743,3 +1786,72 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference):
     assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
         ("security-review", preference)
     ]
+
+
+_INTERNAL_PLUGIN: Final = SimpleNamespace(
+    id="plugin-id",
+    name="deploy-helper",
+    enabled=True,
+    created_at=None,
+    updated_at=None,
+    manifest_json=json.dumps(
+        {
+            "source": {
+                "source": "git-subdir",
+                "url": "https://gitlab.internal.example.com/platform/claude-skills.git",
+                "path": "plugins/deploy-helper",
+            }
+        }
+    ),
+)
+
+
+def _skill_hub_response(find_many: AsyncMock, general_settings: Mapping[str, object]) -> httpx.Response:
+    table: Final = MagicMock()
+    table.find_many = find_many
+    prisma: Final = MagicMock()
+    prisma.db.litellm_claudecodeplugintable = table
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", dict(general_settings)),
+    ):
+        return TestClient(app).get("/public/skill_hub")
+
+
+def test_public_skill_hub_is_empty_when_marketplace_auth_is_required() -> None:
+    find_many: Final = AsyncMock(return_value=[_INTERNAL_PLUGIN])
+
+    public: Final = _skill_hub_response(find_many, {})
+    gated: Final = _skill_hub_response(find_many, {"claude_code_marketplace_auth_required": True})
+
+    assert [plugin["name"] for plugin in public.json()["plugins"]] == ["deploy-helper"]
+    assert gated.status_code == 200
+    assert gated.json()["plugins"] == []
+    assert "gitlab.internal.example.com" not in gated.text
+
+
+def test_public_skill_hub_500_body_carries_no_exception_text() -> None:
+    response: Final = _skill_hub_response(
+        AsyncMock(side_effect=RuntimeError("could not reach postgres://admin:hunter2@db.internal")), {}
+    )
+
+    assert response.status_code == 500
+    assert "hunter2" not in response.text
+    assert "db.internal" not in response.text
+
+
+def test_public_skill_hub_without_a_database_answers_db_not_connected() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        response: Final = TestClient(app).get("/public/skill_hub")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": CommonProxyErrors.db_not_connected_error.value}

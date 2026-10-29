@@ -2,7 +2,7 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -19,11 +19,9 @@ from litellm.anthropic_interface.exceptions import (
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.tool_fields import first_validation_error
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
-)
-from litellm.llms.base_llm.guardrail_translation.utils import (
-    blocked_response_usage as _blocked_response_usage,
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -44,6 +42,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
     with_litellm_call_id,
@@ -57,6 +56,8 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.router import Router
 
 router: Final = APIRouter()
+
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDetail) -> AnthropicErrorDetail:
@@ -229,44 +230,22 @@ async def anthropic_response(
             request_data=_data,
         )
 
-        # Create Anthropic-formatted response with violation message
-        import uuid
+        block_headers: Final = litellm_call_id_headers(base_llm_response_processor.litellm_call_id) or _NO_HEADERS
+        block_handler: Final = AnthropicMessagesHandler()
 
-        from litellm.types.utils import AnthropicMessagesResponse
+        if data.get("stream") is True:
+            block_chunks: Final = block_handler.build_block_sse_chunks(e)
 
-        # Report the blocked LLM response's real token usage (carried on the
-        # exception) instead of discarding it; zero for pre-call blocks.
-        _usage: Final = _blocked_response_usage(e.original_response)
-
-        _anthropic_response: Final = AnthropicMessagesResponse(
-            id=f"msg_{uuid.uuid4()}",
-            type="message",
-            role="assistant",
-            content=[{"type": "text", "text": e.message}],
-            model=e.model,
-            stop_reason="end_turn",
-            usage=_usage,
-        )
-
-        if data.get("stream", None) is not None and data["stream"] is True:
-            # For streaming, use the standard SSE data generator
-            async def _passthrough_stream_generator():
-                yield _anthropic_response
-
-            selected_data_generator: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                response=_passthrough_stream_generator(),
-                user_api_key_dict=user_api_key_dict,
-                request_data=_data,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            async def _blocked_stream() -> AsyncGenerator[str, None]:
+                for chunk in block_chunks:
+                    yield chunk.decode()
 
             return await create_response(
-                generator=selected_data_generator,
-                media_type="text/event-stream",
-                headers={},
+                generator=_blocked_stream(), media_type="text/event-stream", headers=block_headers
             )
 
-        return _anthropic_response
+        fastapi_response.headers.update(block_headers)
+        return block_handler.build_block_response(e)
     except AnthropicContextManagementError as e:
         if e.status_code >= 500:
             # Server-side polyfill failures hit the failure hook for spend/alert
