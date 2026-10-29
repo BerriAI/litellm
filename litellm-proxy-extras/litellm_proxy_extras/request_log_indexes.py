@@ -17,7 +17,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.migration_data_checks import (
@@ -75,9 +75,9 @@ REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex(
         "LiteLLM_SpendLogs",
         "LiteLLM_SpendLogs_error_code_startTime_idx",
-        "((metadata->'error_information'->>'error_code'), \"startTime\")",
+        "((left(metadata->'error_information'->>'error_code', 128)), \"startTime\")",
         "(metadata->'error_information'->>'error_code') IS NOT NULL",
-        max_rows=5_000_000,
+        max_rows=1_000_000,
     ),
 )
 
@@ -94,7 +94,8 @@ _CREATE_INDEX_STATEMENT: Final = re.compile(
 )
 _TABLE_KIND_SQL: Final = "SELECT c.relkind = 'p' AS partitioned FROM pg_class c WHERE c.oid = to_regclass(%s)"
 _ESTIMATED_ROWS_SQL: Final = (
-    "SELECT COALESCE(SUM(GREATEST(c.reltuples, 0)), 0)::bigint AS rows FROM pg_class c WHERE c.relkind = 'r' "
+    "SELECT COALESCE(SUM(GREATEST(c.reltuples, 0)), 0)::bigint AS rows, COALESCE(BOOL_OR(c.reltuples < 0), false) "
+    "AS unanalyzed FROM pg_class c WHERE c.relkind = 'r' "
     "AND (c.oid = to_regclass(%(table)s) OR c.oid IN (SELECT relid FROM pg_partition_tree(to_regclass(%(table)s))))"
 )
 _CHILDREN_WITHOUT_THE_INDEX_SQL: Final = (
@@ -155,6 +156,10 @@ class _TableKind:
 @dataclass(frozen=True, slots=True)
 class _EstimatedRows:
     rows: int
+    unanalyzed: bool
+
+
+_IndexOutcome = Literal["in_place", "left_for_operator", "not_in_place"]
 
 
 def filter_request_log_index_diff(diff_sql: str, indexes: tuple[RequestLogIndex, ...] = REQUEST_LOG_INDEXES) -> str:
@@ -198,13 +203,21 @@ def ensure_request_log_indexes(
     try:
         with connect(database_url) as connection:
             connection.execute("SET statement_timeout = 0")
-            results: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
+            outcomes: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
     except psycopg.Error as exc:
         logger.warning("Could not build the request-log indexes, leaving them for the next index build: %s", exc)
         return False
-    if not all(results):
+    if "not_in_place" in outcomes:
         logger.warning("Some request-log indexes are not in place yet, leaving them for the next index build")
         return False
+    left_for_operator: Final = tuple(
+        index.name for index, outcome in zip(indexes, outcomes) if outcome == "left_for_operator"
+    )
+    if left_for_operator:
+        logger.warning(
+            "Request-log indexes are in place except %s, left for an operator to build", ", ".join(left_for_operator)
+        )
+        return True
     logger.info("Request-log indexes are all in place")
     return True
 
@@ -245,48 +258,96 @@ def _with_bounded_lock(
     return False
 
 
-def _ensure_index(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex) -> bool:
+def _ensure_index(
+    connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex
+) -> _IndexOutcome:
     from psycopg.rows import class_row
 
     with connection.cursor(row_factory=class_row(_TableKind)) as cursor:
         table: Final = cursor.execute(_TABLE_KIND_SQL, (_regclass_name(connection, schema, index.table),)).fetchone()
     if table is None:
         logger.info("Table %s does not exist yet, skipping index %s", index.table, index.name)
-        return True
-    if _too_large_to_build(connection, schema, index):
-        return True
-    if table.partitioned:
-        return build_index_on_partitioned_table(connection, schema, index)
-    return _build_leaf_index(connection, schema, index.table, index.name, index)
+        return "in_place"
+    if _too_large_to_build(connection, schema, index, partitioned=table.partitioned):
+        return "left_for_operator"
+    built: Final = (
+        build_index_on_partitioned_table(connection, schema, index)
+        if table.partitioned
+        else _build_leaf_index(connection, schema, index.table, index.name, index)
+    )
+    return "in_place" if built else "not_in_place"
 
 
 def _too_large_to_build(
-    connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex
+    connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex, partitioned: bool
 ) -> bool:
-    from psycopg.rows import class_row
-
     if index.max_rows is None:
         return False
     existing: Final = _index_state(connection, schema, index.name)
     if existing is not None and existing.valid:
         return False
-    with connection.cursor(row_factory=class_row(_EstimatedRows)) as cursor:
-        rows: Final = sum(
-            estimate.rows
-            for estimate in cursor.execute(_ESTIMATED_ROWS_SQL, {"table": _regclass_name(connection, schema, index.table)})
-        )
+    rows: Final = _estimated_rows(connection, schema, index.table)
     if rows <= index.max_rows:
         return False
     logger.warning(
         "Not building index %s on %s: it reads about %s rows, more than the %s it builds by itself. Build it off-peak "
-        "under that name as %s, and the next index build finds it in place",
+        "and the next index build finds it in place: %s",
         index.name,
         index.table,
         rows,
         index.max_rows,
-        index.body,
+        _operator_build_statement(
+            connection,
+            schema,
+            index,
+            partitioned,
+            interrupted=existing is not None and existing.table == index.table,
+        ),
     )
     return True
+
+
+def _estimated_rows(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, table: str) -> int:
+    """The planner's row count for the table and its partitions. A table never analyzed counts zero rows however
+    many it holds (a freshly restored database), so it is analyzed first."""
+    from psycopg import sql
+
+    estimate: Final = _planner_estimate(connection, schema, table)
+    if not estimate.unanalyzed:
+        return estimate.rows
+    connection.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(schema, table)))
+    return _planner_estimate(connection, schema, table).rows
+
+
+def _planner_estimate(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, table: str) -> _EstimatedRows:
+    from psycopg.rows import class_row
+
+    with connection.cursor(row_factory=class_row(_EstimatedRows)) as cursor:
+        estimate: Final = cursor.execute(
+            _ESTIMATED_ROWS_SQL, {"table": _regclass_name(connection, schema, table)}
+        ).fetchone()
+    return estimate if estimate is not None else _EstimatedRows(rows=0, unanalyzed=False)
+
+
+def _operator_build_statement(
+    connection: "psycopg.Connection[tuple[object, ...]]",
+    schema: str,
+    index: RequestLogIndex,
+    partitioned: bool,
+    interrupted: bool,
+) -> str:
+    """What an operator runs by hand: CONCURRENTLY wherever Postgres allows it, and a REINDEX of the invalid index an
+    interrupted build left, which a CREATE ... IF NOT EXISTS would silently skip."""
+    from psycopg import sql
+
+    if interrupted:
+        reindex: Final = "REINDEX INDEX {}" if partitioned else "REINDEX INDEX CONCURRENTLY {}"
+        return sql.SQL(reindex).format(sql.Identifier(schema, index.name)).as_string(connection)
+    build: Final = (
+        "CREATE INDEX IF NOT EXISTS {} ON {} " if partitioned else "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} "
+    )
+    prefix: Final = sql.SQL(build).format(sql.Identifier(index.name), sql.Identifier(schema, index.table))
+    return _create_index_statement(connection, prefix, index.body).decode()
 
 
 def _regclass_name(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, name: str) -> str:

@@ -2933,7 +2933,10 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{key_alias}%")
             p += 1
         if error_code is not None:
-            sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
+            sql_conditions.append(
+                f"left(metadata->'error_information'->>'error_code', 128) = left(${p}, 128) "
+                f"AND metadata->'error_information'->>'error_code' = ${p}"
+            )
             sql_params.append(error_code)
             p += 1
         if error_message is not None:
