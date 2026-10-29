@@ -323,6 +323,29 @@ def test_mapped_response_still_bills_the_prompt_the_provider_processed(provider)
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+@pytest.mark.asyncio
+async def test_mapped_response_bills_a_custom_named_deployment_with_its_base_model_only_when_it_is_openai(
+    provider: str, base_model: str, counted_as: str
+) -> None:
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    overrides: Final = {"model": f"{provider}/my-gpt-6", "messages": messages, "base_model": base_model}
+
+    sync_response: Final = litellm.completion(
+        **_completion_kwargs(provider, _sync_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+    async_response: Final = await litellm.acompletion(
+        **_completion_kwargs(provider, _async_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+
+    expected: Final = token_counter(model=counted_as, messages=messages)
+    assert token_counter(model=base_model, messages=messages) != token_counter(model="my-gpt-6", messages=messages)
+    assert (sync_response.usage.prompt_tokens, async_response.usage.prompt_tokens) == (expected, expected)
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.asyncio
 async def test_async_output_limit_400_maps_to_length_truncated_response(provider):
     response = await litellm.acompletion(

@@ -311,7 +311,7 @@ async def test_model_creation_fails_closed_when_authoritative_policy_is_unavaila
             Deployment(model_name="cannot-create", litellm_params={"model": "openai/test-model"}),
             UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER),
         )
-    assert error.value.code == "503"
+    assert (error.value.code, error.value.type) == ("503", "internal_server_error")
     prisma.db.litellm_proxymodeltable.create.assert_not_called()
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
 
@@ -3615,6 +3615,33 @@ class TestDeleteTeamModels:
 
         assert deleted == ["a1"]
         assert any(e[0] == "delete_many" for e in prisma.events)
+
+
+@pytest.mark.parametrize(
+    ("model_info_patch", "expected_gate"),
+    [
+        pytest.param({"tpm": 5}, True, id="unrelated-field"),
+        pytest.param({"supported_endpoints": ["/v1/embeddings", "/v1/rerank"]}, True, id="endpoint-list-only"),
+        pytest.param({"enforce_supported_endpoints": False}, False, id="explicit-false"),
+    ],
+)
+def test_model_info_patch_changes_the_endpoint_gate_only_when_it_sends_the_flag(
+    model_info_patch: dict[str, object], expected_gate: bool
+):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    result: Final = update_db_model(
+        db_model=Deployment(
+            model_name="embedding-only",
+            litellm_params=LiteLLM_Params(model="openai/text-embedding-3-small"),
+            model_info=ModelInfo(
+                id="embedding-only", enforce_supported_endpoints=True, supported_endpoints=["/v1/embeddings"]
+            ),
+        ),
+        updated_patch=updateDeployment.model_validate({"model_info": model_info_patch}),
+    )
+
+    assert json.loads(result["model_info"]).get("enforce_supported_endpoints") is expected_gate
 
 
 def _build_db_model_for_blocked_test():
@@ -10913,3 +10940,76 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
                 user_api_key_dict=admin,
             )
             assert result is created_row
+
+
+@pytest.mark.asyncio
+async def test_delete_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ModelInfoDelete
+    from litellm.proxy.management_endpoints.model_management_endpoints import delete_model
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await delete_model(
+            model_info=ModelInfoDelete(id="no-such-model"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_update_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_model(
+            model_params=updateDeployment(model_info=ModelInfo(id="no-such-model")),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert exc_info.value.message == "model not found"
+
+
+@pytest.mark.asyncio
+async def test_add_new_model_reports_a_database_outage_during_the_insert_as_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import prisma.errors
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    unreachable_db: Final = MagicMock()
+    unreachable_db.db.query_raw = AsyncMock(return_value=[])
+    unreachable_db.db.litellm_proxymodeltable.create = AsyncMock(
+        side_effect=prisma.errors.PrismaError("Can't reach database server at `db:5432`")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", unreachable_db)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-outage-salt")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_new_model(
+            model_params=Deployment(
+                model_name="outage-model",
+                litellm_params=LiteLLM_Params(model="openai/gpt-5.4-mini", api_key="fake-key"),
+                model_info={"id": "outage-model-1"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")

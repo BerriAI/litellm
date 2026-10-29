@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
@@ -39,7 +40,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model, tokenizer_models
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -1599,7 +1600,19 @@ async def count_request_input_tokens(
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    return await count_input_tokens(request_body=request_body, raw_body=raw_body, models=models)
+    counted_as: Final = MappingProxyType({model: tokenizer_models(model, llm_router) for model in models})
+    counts: Final = await count_input_tokens(
+        request_body=request_body,
+        raw_body=raw_body,
+        models=tuple(dict.fromkeys(chain.from_iterable(counted_as.values()))),
+    )
+    return MappingProxyType(
+        {
+            model: count
+            for model, names in counted_as.items()
+            if (count := max((counts[name] for name in names if name in counts), default=None)) is not None
+        }
+    )
 
 
 def _estimate_input_tokens(
