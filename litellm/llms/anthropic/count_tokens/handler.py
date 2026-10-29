@@ -40,6 +40,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
+        drop_params: bool = False,
     ) -> dict[str, JsonValue]:
         """
         Handle a CountTokens request using httpx.
@@ -71,6 +72,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 system=system,
                 optional_params=optional_params,
                 context_management=context_management,
+                drop_params=drop_params,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)

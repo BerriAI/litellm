@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
-from litellm.litellm_core_utils.token_counter import token_counter
+from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
@@ -242,7 +242,7 @@ async def _aiter_once(chunk: ChatCompletionChunk) -> AsyncIterator[ChatCompletio
 
 
 def build_output_token_limit_response(
-    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool
+    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool, base_model: str | None
 ) -> tuple[httpx.Headers, ChatCompletion | Iterator[ChatCompletionChunk] | AsyncIterator[ChatCompletionChunk]]:
     """Synthesize the length-truncated response the provider itself returns for slightly larger output budgets.
 
@@ -251,7 +251,11 @@ def build_output_token_limit_response(
     """
     model: Final[str] = str(data.get("model", ""))
     messages: Final = data.get("messages")
-    prompt_tokens: Final = token_counter(model=model, messages=messages) if isinstance(messages, list) else 0
+    prompt_tokens: Final = (
+        token_counter(model=usage_tokenizer_model(model, base_model), messages=messages)
+        if isinstance(messages, list)
+        else 0
+    )
     if not data.get("stream"):
         return e.response.headers, _output_token_limit_completion(model, prompt_tokens)
     chunk: Final = _output_token_limit_chunk(model)

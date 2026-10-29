@@ -30,7 +30,9 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_context_management,
     carries_signed_compaction_block,
     context_management_betas,
+    is_claude_model_target,
     merge_anthropic_beta_headers,
+    tools_without_custom_field,
 )
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -379,6 +381,7 @@ class AnthropicCountTokensConfig:
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
+        drop_params: bool = False,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -400,7 +403,16 @@ class AnthropicCountTokensConfig:
                             key: value
                             for key, value in (
                                 ("system", counted_system),
-                                ("tools", tools),
+                                (
+                                    "tools",
+                                    None
+                                    if tools is None
+                                    else tools_without_custom_field(
+                                        tools,
+                                        hoist_defer_loading=is_claude_model_target("anthropic", model),
+                                        drop_custom=drop_params,
+                                    ),
+                                ),
                                 ("context_management", anthropic_context_management(context_management)),
                             )
                             if value is not None
