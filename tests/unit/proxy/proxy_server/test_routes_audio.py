@@ -16,6 +16,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from litellm import Router
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -257,9 +258,12 @@ def test_audio_transcription_over_the_file_size_cap_is_rejected_as_a_bad_request
 ):
     from litellm.proxy.common_utils.http_parsing_utils import check_file_size_under_limit
 
-    proxy_server.llm_router.get_deployment_by_model_group_name.return_value = MagicMock(
-        litellm_params=MagicMock(max_file_size_mb=0.000001)
+    capped_router = Router(
+        model_list=[
+            {"model_name": "whisper-1", "litellm_params": {"model": "openai/whisper-1", "max_file_size_mb": 0.000001}}
+        ]
     )
+    monkeypatch.setattr(proxy_server, "llm_router", capped_router)
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "check_file_size_under_limit", check_file_size_under_limit)
     files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
