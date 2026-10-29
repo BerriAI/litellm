@@ -55,6 +55,10 @@ def _rule_covers(entry: StoredFallback, model: str) -> bool:
     return isinstance(entry, dict) and model in entry
 
 
+async def _reload_config_file_ownership(proxy_config: "ProxyConfig") -> None:
+    await proxy_config.get_config()
+
+
 async def _stored_router_settings(prisma_client: PrismaClient) -> Mapping[str, JsonValue]:
     row: Final = await ConfigRepository(prisma_client, use_writer=True).get_param(ROUTER_SETTINGS_PARAM)
     if row is None or row.param_value is None:
@@ -185,6 +189,7 @@ async def create_fallback(
                 },
             )
 
+        await _reload_config_file_ownership(proxy_config)
         router_settings: Final = await _stored_router_settings(prisma_client)
 
         # Get the appropriate fallback list based on type
@@ -338,6 +343,7 @@ async def delete_fallback(
                 },
             )
 
+        await _reload_config_file_ownership(proxy_config)
         router_settings: Final = await _stored_router_settings(prisma_client)
 
         # Get the appropriate fallback list based on type

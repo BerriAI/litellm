@@ -176,7 +176,7 @@ class TestCreateFallbackForTeamScopedModels:
 
     @pytest.fixture
     def proxy_config(self) -> ProxyConfig:
-        return ProxyConfig()
+        return _ConfigFileProxyConfig()
 
     async def _create(
         self, request: FallbackCreateRequest, router: Router, prisma_client: MagicMock, proxy_config: ProxyConfig
@@ -255,6 +255,17 @@ def _config_row(router_settings: RouterSettings) -> SimpleNamespace:
     return SimpleNamespace(param_name="router_settings", param_value=router_settings)
 
 
+class _ConfigFileProxyConfig(ProxyConfig):
+    def __init__(self, config_file: RouterSettings | None = None) -> None:
+        super().__init__()
+        self.config_file: RouterSettings = config_file or {}
+        self.router_settings.load_yaml(_ROUTER_SETTINGS_JSON.validate_python(self.config_file))
+
+    async def get_config(self, config_file_path: str | None = None) -> dict:
+        self.router_settings.load_yaml(_ROUTER_SETTINGS_JSON.validate_python(self.config_file))
+        return {"router_settings": copy.deepcopy(self.config_file)}
+
+
 class _StoredRouterSettings:
     """The LiteLLM_Config router_settings row, with the proxy objects that read it through the config cache"""
 
@@ -275,8 +286,7 @@ class _StoredRouterSettings:
             side_effect=lambda **_: None if lagging_replica else copy.deepcopy(self.row)
         )
         self.prisma_client.db.litellm_config.upsert = AsyncMock(side_effect=self._upsert)
-        self.proxy_config: Final = ProxyConfig()
-        self.proxy_config.router_settings.load_yaml(_ROUTER_SETTINGS_JSON.validate_python(config_file or {}))
+        self.proxy_config: Final = _ConfigFileProxyConfig(config_file)
 
     async def _upsert(self, where: dict[str, str], data: dict[str, dict[str, str]]) -> None:
         self.row = _config_row(json.loads(data["update"]["param_value"]))
@@ -485,6 +495,18 @@ class TestFallbackWritesHonourTheConfigFile:
         stored.prisma_client.db.litellm_config.upsert.assert_not_awaited()
         assert router.fallbacks == [CONFIG_RULE]
 
+    async def test_a_create_after_the_config_file_takes_over_the_key_is_refused(self, router: Router) -> None:
+        stored: Final = _StoredRouterSettings({"fallbacks": [TEAM_RULE]})
+        stored.proxy_config.config_file = {"fallbacks": [CONFIG_RULE]}
+        request: Final = FallbackCreateRequest(model="team-primary", fallback_models=["gpt-5.4-mini"])
+
+        with pytest.raises(HTTPException) as refused:
+            await self._create(request, router, stored)
+
+        assert refused.value.status_code == 400
+        assert "key 'fallbacks' is set in the config file" in str(refused.value.detail)
+        assert stored.stored_fallbacks() == [TEAM_RULE]
+
     async def test_a_delete_of_a_config_owned_rule_is_refused(
         self, router: Router, stored: _StoredRouterSettings
     ) -> None:
@@ -588,7 +610,7 @@ class TestCreateFallback:
     @pytest.fixture
     def mock_proxy_config(self):
         """Create a mock proxy config"""
-        return ProxyConfig()
+        return _ConfigFileProxyConfig()
 
     @pytest.fixture
     def mock_user_api_key_dict(self):
@@ -897,7 +919,7 @@ class TestDeleteFallback:
     @pytest.fixture
     def mock_proxy_config(self):
         """Create a mock proxy config"""
-        return ProxyConfig()
+        return _ConfigFileProxyConfig()
 
     @pytest.fixture
     def mock_user_api_key_dict(self):
