@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
     set_callbacks,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import update_response_metadata
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1133,11 +1134,11 @@ class TestDeploymentPricingOnGenericRoutes:
         finally:
             litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
 
-    def _proxy_logging_obj(self, call_type: str) -> LitellmLogging:
+    def _proxy_logging_obj(self, call_type: str, *, stream: bool = False) -> LitellmLogging:
         logging_obj: Final = LitellmLogging(
             model=self.MODEL_GROUP,
             messages=[{"role": "user", "content": "Say hi in three words"}],
-            stream=False,
+            stream=stream,
             call_type=call_type,
             start_time=time.time(),
             litellm_call_id="per-second-call",
@@ -1195,8 +1196,19 @@ class TestDeploymentPricingOnGenericRoutes:
         assert logging_obj._response_cost_calculator(result=response) == pytest.approx(self.RATE)
         assert logging_obj.litellm_params["litellm_metadata"]["user_api_key_alias"] == "per-second-call"
 
-    def test_messages_route_bills_the_deployment_per_second_rate(self) -> None:
-        logging_obj: Final = self._proxy_logging_obj("anthropic_messages")
+    MESSAGES_RESPONSE: Final = {
+        "id": "msg_per-second-call",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [{"type": "text", "text": "Hi there friend"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+    def _routed_messages_call(self, *, stream: bool) -> LitellmLogging:
+        logging_obj: Final = self._proxy_logging_obj("anthropic_messages", stream=stream)
         logging_obj.update_from_kwargs(
             kwargs=self._routed_kwargs("anthropic/claude-haiku-5-5"),
             model="claude-haiku-5-5",
@@ -1204,22 +1216,46 @@ class TestDeploymentPricingOnGenericRoutes:
             litellm_params={"preset_cache_key": None, "stream_response": {}, "model_info": None, "max_tokens": 32},
             custom_llm_provider="anthropic",
         )
-        self._call_took_one_second(logging_obj)
-        result: Final = logging_obj._handle_anthropic_messages_response_logging(
-            result={
-                "id": "msg_per-second-call",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-haiku-5-5",
-                "content": [{"type": "text", "text": "Hi there friend"}],
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            }
+        return logging_obj
+
+    @staticmethod
+    def _response_handed_back_after(logging_obj: LitellmLogging, seconds: float) -> None:
+        started: Final = datetime.datetime.fromtimestamp(logging_obj.start_time)
+        update_response_metadata(
+            result=dict(TestDeploymentPricingOnGenericRoutes.MESSAGES_RESPONSE),
+            logging_obj=logging_obj,
+            model="claude-haiku-5-5",
+            kwargs={},
+            start_time=started,
+            end_time=started + datetime.timedelta(seconds=seconds),
         )
+
+    def test_messages_route_bills_the_deployment_per_second_rate(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=False)
+        self._call_took_one_second(logging_obj)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
 
         assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
         assert logging_obj.litellm_params["litellm_metadata"]["user_api_key_alias"] == "per-second-call"
+
+    def test_messages_route_prices_the_reported_response_time_however_late_the_cost_is_read(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=False)
+        self._response_handed_back_after(logging_obj, seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+        cost_for_the_response_header: Final = logging_obj._response_cost_calculator(result=result)
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + 1.5
+        cost_for_the_spend_log: Final = logging_obj._response_cost_calculator(result=result)
+
+        assert cost_for_the_response_header == pytest.approx(self.RATE)
+        assert cost_for_the_spend_log == pytest.approx(self.RATE)
+
+    def test_streamed_messages_call_bills_the_whole_stream_not_the_first_byte(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=True)
+        self._response_handed_back_after(logging_obj, seconds=0.25)
+        self._call_took_one_second(logging_obj)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+
+        assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
 
     def test_a_deployment_without_custom_rates_keeps_the_cost_map_price(self) -> None:
         logging_obj: Final = self._proxy_logging_obj("aresponses")

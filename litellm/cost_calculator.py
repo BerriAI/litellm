@@ -1500,9 +1500,12 @@ def _response_time_ms_for_cost(
         return float(stamped)
     if total_time:
         return total_time
-    if litellm_logging_obj is not None:
-        return litellm_logging_obj.get_response_ms()
-    return 0.0
+    if litellm_logging_obj is None:
+        return 0.0
+    reported_ms: Final = litellm_logging_obj.response_timing_metrics.get("_response_ms")
+    if reported_ms is not None and litellm_logging_obj.stream is not True:
+        return reported_ms
+    return litellm_logging_obj.get_response_ms()
 
 
 def completion_cost(
