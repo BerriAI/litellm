@@ -1335,3 +1335,48 @@ def test_native_responses_route_keeps_text_verbosity_nested(
         "input": "Hello",
         "text": {"verbosity": "low"},
     }
+
+
+_CLIENT_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the deferred app tools.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
+
+
+@pytest.mark.parametrize("verbosity", ["low", "high"])
+@pytest.mark.asyncio
+async def test_bridge_sends_text_verbosity_on_a_client_tool_search_follow_up_turn(
+    verbosity: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = _openai_chat_upstream(respx_mock, stream=False)
+
+    await _bridged_responses_call(
+        True,
+        False,
+        model="openai/gpt-5.6",
+        use_chat_completions_api=True,
+        previous_response_id="chatcmpl-earlier-turn",
+        tools=[_CLIENT_TOOL_SEARCH],
+        text={"verbosity": verbosity},
+    )
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read()) == {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool_search",
+                    "description": _CLIENT_TOOL_SEARCH["description"],
+                    "parameters": _CLIENT_TOOL_SEARCH["parameters"],
+                },
+            }
+        ],
+        "verbosity": verbosity,
+    }
