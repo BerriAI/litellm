@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
@@ -8,7 +11,7 @@ use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use serde_with::serde_as;
+use serde_with::{DefaultOnError, serde_as};
 use tokio::time::Instant;
 
 use crate::base_llm::ocr::{
@@ -17,9 +20,10 @@ use crate::base_llm::ocr::{
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
-        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
-        ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
+        BaseOcrConfig, DROP_PARAMS_PARAM, DecodedOcrResponse, OCR_INLINE_MAX_BYTES,
+        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrResponseContext,
+        PreparedOcrRequest, ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
+        drops_unsupported_params, response_format,
     },
 };
 use litellm_llms_types::formats::ocr::{
@@ -32,6 +36,30 @@ const AZURE_DI_DEFAULT_HEIGHT: f64 = 11.0;
 
 const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
 const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
+const OUTPUT_CONTENT_FORMAT_PARAM: &str = "outputContentFormat";
+const OUTPUT_CONTENT_FORMAT_ALIAS: &str = "output_content_format";
+const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
+const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
+const MARKDOWN_MODEL_ID: &str = "prebuilt-layout";
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::Display,
+    strum::VariantArray,
+    serde_with::SerializeDisplay,
+)]
+#[strum(ascii_case_insensitive)]
+pub enum OutputContentFormat {
+    #[strum(serialize = "text")]
+    Text,
+    #[strum(serialize = "markdown")]
+    Markdown,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DocumentIntelligenceParams {
@@ -39,6 +67,13 @@ pub struct DocumentIntelligenceParams {
     pub pages: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<String>,
+    #[serde(
+        rename = "outputContentFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_content_format: Option<OutputContentFormat>,
+    #[serde(rename = "stringIndexType", skip_serializing_if = "Option::is_none")]
+    pub string_index_type: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,6 +115,10 @@ pub struct AzureDocumentIntelligenceOperation {
 #[derive(Clone, Debug, Default, Deserialize)]
 struct AzureDocumentIntelligenceAnalyzeResult {
     pub content: Option<String>,
+    #[serde(rename = "contentFormat")]
+    pub content_format: Option<String>,
+    #[serde(rename = "stringIndexType")]
+    pub string_index_type: Option<String>,
     #[serde(default)]
     pub pages: Vec<AzureDocumentIntelligencePage>,
     pub tables: Option<Vec<Map<String, Value>>>,
@@ -100,11 +139,26 @@ struct AzureDocumentIntelligencePage {
     pub unit: Option<String>,
     #[serde(default)]
     pub lines: Vec<AzureDocumentIntelligenceLine>,
+    #[serde(default)]
+    #[serde_as(deserialize_as = "DefaultOnError")]
+    pub spans: Option<Vec<AzureDocumentIntelligenceSpan>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct AzureDocumentIntelligenceLine {
     pub content: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct AzureDocumentIntelligenceSpan {
+    pub offset: usize,
+    pub length: usize,
+}
+
+impl AzureDocumentIntelligenceSpan {
+    fn end(&self) -> usize {
+        self.offset.saturating_add(self.length)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -116,7 +170,14 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     type Environment = Vec<(String, String)>;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
-        &["pages", "features", "req_format"]
+        &[
+            "pages",
+            "features",
+            OUTPUT_CONTENT_FORMAT_PARAM,
+            OUTPUT_CONTENT_FORMAT_ALIAS,
+            "req_format",
+            DROP_PARAMS_PARAM,
+        ]
     }
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
@@ -154,11 +215,17 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     fn map_ocr_params(
         &self,
         non_default_params: &CallArguments,
-        _model: &str,
+        model: &str,
     ) -> Result<DocumentIntelligenceParams, Error> {
+        let output_content_format = requested_output_content_format(non_default_params)?;
+        let slices_markdown_pages = output_content_format == Some(OutputContentFormat::Markdown)
+            && response_format(non_default_params)? != OcrResponseFormat::Native
+            && model_id(model).is_ok_and(|id| id == MARKDOWN_MODEL_ID);
         Ok(DocumentIntelligenceParams {
             pages: normalize_pages_param(non_default_params.get("pages"))?,
             features: normalize_features_param(non_default_params.get("features"))?,
+            output_content_format,
+            string_index_type: slices_markdown_pages.then_some(CODE_POINT_STRING_INDEX),
         })
     }
 
@@ -337,6 +404,36 @@ fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, 
     Ok(Some(normalized.join(",")))
 }
 
+fn requested_output_content_format(
+    params: &CallArguments,
+) -> Result<Option<OutputContentFormat>, Error> {
+    let requested = [OUTPUT_CONTENT_FORMAT_PARAM, OUTPUT_CONTENT_FORMAT_ALIAS]
+        .into_iter()
+        .filter_map(|name| params.get(name))
+        .find(|format| !is_unset(format));
+    match requested.map(parse_output_content_format).transpose() {
+        Err(Error::OutputContentFormat) if drops_unsupported_params(params) => Ok(None),
+        parsed => parsed,
+    }
+}
+
+fn is_unset(format: &Value) -> bool {
+    match format {
+        Value::Null => true,
+        Value::String(format) => format.trim().is_empty(),
+        _ => false,
+    }
+}
+
+fn parse_output_content_format(format: &Value) -> Result<OutputContentFormat, Error> {
+    format
+        .as_str()
+        .ok_or(Error::OutputContentFormat)?
+        .trim()
+        .parse()
+        .map_err(|_| Error::OutputContentFormat)
+}
+
 fn build_request(document: OcrDocument) -> Result<DocumentIntelligenceRequest, Error> {
     let source = document.source();
     if source.is_empty() {
@@ -367,10 +464,27 @@ fn transform_completed_response(
         ));
     }
     let result = response.analyze_result.unwrap_or_default();
+    let markdown_content = result
+        .content
+        .as_deref()
+        .filter(|_| {
+            result.content_format.as_deref() == Some(<&str>::from(OutputContentFormat::Markdown))
+                && result.string_index_type.as_deref() == Some(CODE_POINT_STRING_INDEX)
+                && result.pages.iter().all(|page| page.spans.is_some())
+        })
+        .map(|content| {
+            CodePointText::new(
+                content,
+                result
+                    .pages
+                    .iter()
+                    .flat_map(|page| page.spans.iter().flatten()),
+            )
+        });
     let pages = result
         .pages
         .into_iter()
-        .map(|page| transform_azure_page(page, dpi))
+        .map(|page| transform_azure_page(page, markdown_content.as_ref(), dpi))
         .collect::<Result<Vec<_>, _>>()?;
     let pages_processed = i64::try_from(pages.len()).map_err(|_| Error::NumericRange("pages"))?;
     Ok(LiteLLMOcrResponse {
@@ -381,11 +495,20 @@ fn transform_completed_response(
             pages_processed: Some(pages_processed),
             ..Default::default()
         }),
+        extra_fields: result
+            .string_index_type
+            .filter(|unit| unit == CODE_POINT_STRING_INDEX)
+            .map(|unit| Map::from_iter([(STRING_INDEX_TYPE_FIELD.to_owned(), Value::String(unit))]))
+            .unwrap_or_default(),
         ..LiteLLMOcrResponse::new(model, pages)
     })
 }
 
-fn transform_azure_page(page: AzureDocumentIntelligencePage, dpi: i64) -> Result<OcrPage, Error> {
+fn transform_azure_page(
+    page: AzureDocumentIntelligencePage,
+    markdown_content: Option<&CodePointText<'_>>,
+    dpi: i64,
+) -> Result<OcrPage, Error> {
     let index = page
         .page_number
         .unwrap_or(1)
@@ -397,18 +520,63 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage, dpi: i64) -> Result
         page.unit.as_deref().unwrap_or("inch"),
         dpi,
     )?;
-    let markdown = page
-        .lines
-        .iter()
-        .map(|line| line.content.as_deref().unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let markdown = match markdown_content {
+        Some(content) => page
+            .spans
+            .iter()
+            .flatten()
+            .map(|span| content.slice(span))
+            .collect::<String>(),
+        None => page
+            .lines
+            .iter()
+            .map(|line| line.content.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
     Ok(OcrPage {
         index,
         markdown,
         dimensions: Some(dimensions),
         ..Default::default()
     })
+}
+
+struct CodePointText<'a> {
+    text: &'a str,
+    byte_offsets: BTreeMap<usize, usize>,
+}
+
+impl<'a> CodePointText<'a> {
+    fn new<'s>(
+        text: &'a str,
+        spans: impl Iterator<Item = &'s AzureDocumentIntelligenceSpan>,
+    ) -> Self {
+        let span_bounds = spans
+            .flat_map(|span| [span.offset, span.end()])
+            .collect::<BTreeSet<_>>();
+        Self {
+            text,
+            byte_offsets: text
+                .char_indices()
+                .map(|(byte_offset, _)| byte_offset)
+                .enumerate()
+                .filter(|(code_point, _)| span_bounds.contains(code_point))
+                .collect(),
+        }
+    }
+
+    fn slice(&self, span: &AzureDocumentIntelligenceSpan) -> &'a str {
+        let byte_offset = |code_point: usize| {
+            self.byte_offsets
+                .get(&code_point)
+                .copied()
+                .unwrap_or(self.text.len())
+        };
+        self.text
+            .get(byte_offset(span.offset)..byte_offset(span.end()))
+            .unwrap_or_default()
+    }
 }
 
 fn convert_dimensions(
@@ -578,6 +746,16 @@ impl AzureDocumentIntelligenceOcrConfig {
                                 .features
                                 .iter()
                                 .map(|features| ("features", features.as_str())),
+                        )
+                        .chain(
+                            params
+                                .output_content_format
+                                .map(|format| (OUTPUT_CONTENT_FORMAT_PARAM, format.into())),
+                        )
+                        .chain(
+                            params
+                                .string_index_type
+                                .map(|index_type| ("stringIndexType", index_type)),
                         ),
                 )
                 .into_string()
@@ -697,8 +875,12 @@ mod tests {
     }
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, Error> {
+        map_for_model(value, "azure_ai/doc-intelligence/prebuilt-layout")
+    }
+
+    fn map_for_model(value: Value, model: &str) -> Result<DocumentIntelligenceParams, Error> {
         let arguments = serde_json::from_value(value).unwrap();
-        AzureDocumentIntelligenceOcrConfig.map_ocr_params(&arguments, "model")
+        AzureDocumentIntelligenceOcrConfig.map_ocr_params(&arguments, model)
     }
 
     #[test]
@@ -826,6 +1008,218 @@ mod tests {
     #[test]
     fn empty_feature_list_is_omitted() {
         assert_eq!(map(json!({"features": []})).unwrap().features, None);
+    }
+
+    #[rstest]
+    #[case::markdown(
+        json!({"outputContentFormat": "markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::markdown_litellm_format(
+        json!({"outputContentFormat": "markdown", "req_format": "litellm"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::markdown_native_format(
+        json!({"outputContentFormat": "markdown", "req_format": "native"}),
+        Some(OutputContentFormat::Markdown),
+        None
+    )]
+    #[case::capitalized_markdown(
+        json!({"outputContentFormat": "Markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::text(json!({"outputContentFormat": "text"}), Some(OutputContentFormat::Text), None)]
+    #[case::upper_case_text(json!({"outputContentFormat": "TEXT"}), Some(OutputContentFormat::Text), None)]
+    #[case::padded_markdown(
+        json!({"outputContentFormat": " markdown\n"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::snake_case_markdown(
+        json!({"output_content_format": "markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::camel_case_wins_over_snake_case(
+        json!({"outputContentFormat": "text", "output_content_format": "markdown"}),
+        Some(OutputContentFormat::Text),
+        None
+    )]
+    #[case::empty_camel_case_falls_back_to_snake_case(
+        json!({"outputContentFormat": "", "output_content_format": "markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::null_camel_case_falls_back_to_snake_case(
+        json!({"outputContentFormat": null, "output_content_format": "markdown"}),
+        Some(OutputContentFormat::Markdown),
+        Some("unicodeCodePoint")
+    )]
+    #[case::empty(json!({"outputContentFormat": ""}), None, None)]
+    #[case::blank(json!({"outputContentFormat": "  "}), None, None)]
+    #[case::null(json!({"outputContentFormat": null}), None, None)]
+    #[case::omitted(json!({}), None, None)]
+    fn output_content_format_maps_to_query_fields(
+        #[case] options: Value,
+        #[case] format: Option<OutputContentFormat>,
+        #[case] string_index_type: Option<&str>,
+    ) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(mapped.output_content_format, format);
+        assert_eq!(mapped.string_index_type, string_index_type);
+    }
+
+    #[rstest]
+    #[case::layout("azure_ai/doc-intelligence/prebuilt-layout", Some("unicodeCodePoint"))]
+    #[case::bare_layout("prebuilt-layout", Some("unicodeCodePoint"))]
+    #[case::read("azure_ai/doc-intelligence/prebuilt-read", None)]
+    #[case::invoice("azure_ai/doc-intelligence/prebuilt-invoice", None)]
+    #[case::custom("azure_ai/doc-intelligence/my-extraction-model", None)]
+    fn only_the_layout_model_asks_for_code_point_offsets(
+        #[case] model: &str,
+        #[case] string_index_type: Option<&str>,
+    ) {
+        let mapped = map_for_model(json!({"outputContentFormat": "markdown"}), model).unwrap();
+
+        assert_eq!(
+            mapped.output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
+        assert_eq!(mapped.string_index_type, string_index_type);
+    }
+
+    #[rstest]
+    #[case::unknown(json!({"outputContentFormat": "html"}))]
+    #[case::number(json!({"outputContentFormat": 1}))]
+    #[case::boolean(json!({"outputContentFormat": true}))]
+    #[case::list(json!({"outputContentFormat": ["markdown"]}))]
+    #[case::snake_case_unknown(json!({"output_content_format": "html"}))]
+    #[case::drop_params_off(json!({"outputContentFormat": "html", "drop_params": false}))]
+    fn invalid_output_content_format_is_a_request_error(#[case] options: Value) {
+        let error = map(options).unwrap_err();
+
+        assert!(matches!(error, Error::OutputContentFormat), "{error:?}");
+        assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[rstest]
+    #[case::unknown(json!({"outputContentFormat": "html", "drop_params": true, "pages": [0]}))]
+    #[case::number(json!({"outputContentFormat": 1, "drop_params": true, "pages": [0]}))]
+    #[case::snake_case_unknown(
+        json!({"output_content_format": "html", "drop_params": true, "pages": [0]})
+    )]
+    fn drop_params_drops_an_invalid_output_content_format(#[case] options: Value) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), json!({"pages": "1"}));
+    }
+
+    #[rstest]
+    #[case::camel_case(json!({"outputContentFormat": "markdown", "drop_params": true}))]
+    #[case::snake_case(json!({"output_content_format": "markdown", "drop_params": true}))]
+    fn drop_params_keeps_a_valid_output_content_format(#[case] options: Value) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(
+            mapped.output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
+    }
+
+    fn markdown_pages(analyze_result: Value) -> Vec<String> {
+        let raw =
+            serde_json::to_vec(&json!({"status": "succeeded", "analyzeResult": analyze_result}))
+                .unwrap();
+        AzureDocumentIntelligenceOcrConfig
+            .transform_ocr_response("model", &raw, OcrResponseFormat::Litellm)
+            .unwrap()
+            .pages
+            .into_iter()
+            .map(|page| page.markdown)
+            .collect()
+    }
+
+    #[rstest]
+    fn markdown_pages_are_code_point_slices_of_the_content() {
+        let content = "# Ünïcode क्ष\n\n<!-- PageBreak -->\n\n## Två 🙂\n\n|a|\n\n> tail";
+        let second_page_start = "# Ünïcode क्ष\n\n<!-- PageBreak -->\n\n".chars().count();
+        let pages = markdown_pages(json!({
+            "content": content,
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [
+                {"pageNumber": 1, "spans": [{"offset": 0, "length": second_page_start}],
+                 "lines": [{"content": "Ünïcode क्ष"}]},
+                {"pageNumber": 2, "spans": [
+                    {"offset": second_page_start, "length": 8},
+                    {"offset": second_page_start + 10, "length": 3}
+                ], "lines": [{"content": "Två"}]}
+            ]
+        }));
+
+        assert_eq!(
+            pages,
+            ["# Ünïcode क्ष\n\n<!-- PageBreak -->\n\n", "## Två 🙂|a|"]
+        );
+    }
+
+    #[rstest]
+    fn spans_past_the_content_end_are_clamped() {
+        let pages = markdown_pages(json!({
+            "content": "ab",
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [{"spans": [{"offset": 1, "length": 9}, {"offset": 7, "length": 1}]}]
+        }));
+
+        assert_eq!(pages, ["b"]);
+    }
+
+    #[rstest]
+    #[case::text_content(json!("text"), json!("unicodeCodePoint"))]
+    #[case::grapheme_offsets(json!("markdown"), json!("textElements"))]
+    #[case::no_index_type(json!("markdown"), Value::Null)]
+    #[case::no_content_format(Value::Null, json!("unicodeCodePoint"))]
+    fn other_responses_keep_line_joined_pages(
+        #[case] content_format: Value,
+        #[case] string_index_type: Value,
+    ) {
+        let pages = markdown_pages(json!({
+            "content": "# A\n\nB",
+            "contentFormat": content_format,
+            "stringIndexType": string_index_type,
+            "pages": [{"spans": [{"offset": 0, "length": 6}],
+                       "lines": [{"content": "A"}, {"content": "B"}]}]
+        }));
+
+        assert_eq!(pages, ["A\nB"]);
+    }
+
+    #[rstest]
+    #[case::null_spans(json!("markdown"), json!(null))]
+    #[case::fractional_offset(json!("markdown"), json!([{"offset": 0.5, "length": 1}]))]
+    #[case::missing_length(json!("markdown"), json!([{"offset": 0}]))]
+    #[case::negative_offset(json!("markdown"), json!([{"offset": -1, "length": 1}]))]
+    #[case::text_content(json!("text"), json!([{"offset": "0", "length": 1}]))]
+    fn unusable_page_spans_keep_line_joined_pages(
+        #[case] content_format: Value,
+        #[case] broken_spans: Value,
+    ) {
+        let pages = markdown_pages(json!({
+            "content": "# A\n\nB",
+            "contentFormat": content_format,
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [
+                {"spans": [{"offset": 0, "length": 5}], "lines": [{"content": "A"}]},
+                {"spans": broken_spans, "lines": [{"content": "B"}]}
+            ]
+        }));
+
+        assert_eq!(pages, ["A", "B"]);
     }
 
     #[tokio::test]
