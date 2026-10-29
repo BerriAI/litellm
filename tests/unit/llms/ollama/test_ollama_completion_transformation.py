@@ -1053,7 +1053,9 @@ def test_ollama_drop_params_keeps_a_hosted_mcp_tool_out_of_the_prompt(
         drop_params=True,
     )
 
-    prompt: Final = json.loads(route.calls.last.request.content)["prompt"]
+    body: Final = json.loads(route.calls.last.request.content)
+    prompt: Final = body["prompt"]
+    assert (body.get("format") == "json") is prompt_names_weather
     assert "deepwiki" not in prompt
     assert ("get_weather" in prompt) is prompt_names_weather
     assert prompt.startswith("### User:\nweather in Paris?")
