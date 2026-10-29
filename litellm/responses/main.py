@@ -1817,22 +1817,23 @@ def responses(
             reentry_kwargs=reentry_kwargs,
             _is_async=_is_async,
         )
-        if _file_search_dispatch is not None:
-            return _file_search_dispatch
-
-        _tool_search_dispatch: Final = _responses_try_dispatch_lowered_tool_search(
-            tools=tools,
-            input=input,
-            model=model,
-            tool_choice=tool_choice,
-            responses_api_provider_config=responses_api_provider_config,
-            use_chat_completions_api=use_chat_completions_api,
-            model_info=deployment_model_info,
-            reentry_kwargs=reentry_kwargs,
-            _is_async=_is_async,
+        _emulated_dispatch: Final = (
+            _file_search_dispatch
+            if _file_search_dispatch is not None
+            else _responses_try_dispatch_lowered_tool_search(
+                tools=tools,
+                input=input,
+                model=model,
+                tool_choice=tool_choice,
+                responses_api_provider_config=responses_api_provider_config,
+                use_chat_completions_api=use_chat_completions_api,
+                model_info=deployment_model_info,
+                reentry_kwargs=reentry_kwargs,
+                _is_async=_is_async,
+            )
         )
-        if _tool_search_dispatch is not None:
-            return _tool_search_dispatch
+        if _emulated_dispatch is not None:
+            return _emulated_dispatch
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
