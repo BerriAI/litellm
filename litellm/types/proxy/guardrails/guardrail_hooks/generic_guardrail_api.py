@@ -197,6 +197,7 @@ class GenericGuardrailAPIResponse:
     structured_messages: Sequence[AllMessageValues] | None
     action: str
     blocked_reason: str | None
+    intervention_reason: str | None
     stream_holdback_chars: list[int] | None
 
     def __init__(
@@ -208,9 +209,11 @@ class GenericGuardrailAPIResponse:
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
         structured_messages: Sequence[AllMessageValues] | None = None,
+        intervention_reason: str | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
+        self.intervention_reason = intervention_reason
         self.texts = texts
         self.images = images
         self.tools = tools
@@ -221,14 +224,16 @@ class GenericGuardrailAPIResponse:
         self.stream_holdback_chars = stream_holdback_chars
 
     @classmethod
-    def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
+    def from_dict(cls, data: dict[str, Any]) -> "GenericGuardrailAPIResponse":
         raw_holdback: Final = data.get("stream_holdback_chars")
         stream_holdback_chars: Final = (
             [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
         )
+        raw_intervention_reason: Final = data.get("intervention_reason")
         return cls(
             action=data.get("action", "NONE"),
             blocked_reason=data.get("blocked_reason"),
+            intervention_reason=raw_intervention_reason if isinstance(raw_intervention_reason, str) else None,
             texts=data.get("texts"),
             images=data.get("images"),
             tools=data.get("tools"),

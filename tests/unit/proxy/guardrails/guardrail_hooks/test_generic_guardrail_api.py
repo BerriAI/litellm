@@ -29,7 +29,7 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
-from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message
+from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message, StandardLoggingGuardrailInformation
 
 
 @pytest.fixture
@@ -1783,6 +1783,24 @@ class TestGenericGuardrailAPIStreamingConfig:
 class TestGenericGuardrailAPIResponseParsing:
     """GenericGuardrailAPIResponse.from_dict handling of the streaming holdback field."""
 
+    def test_intervention_reason_parsed(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        with_reason = GenericGuardrailAPIResponse.from_dict(
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["a"], "intervention_reason": "why"}
+        )
+        without_reason = GenericGuardrailAPIResponse.from_dict({"action": "GUARDRAIL_INTERVENED", "texts": ["a"]})
+
+        non_string_reason = GenericGuardrailAPIResponse.from_dict(
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["a"], "intervention_reason": {"why": 1}}
+        )
+
+        assert with_reason.intervention_reason == "why"
+        assert without_reason.intervention_reason is None
+        assert non_string_reason.intervention_reason is None
+
     def test_from_dict_parses_stream_holdback_chars(self):
         from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             GenericGuardrailAPIResponse,
@@ -2621,3 +2639,89 @@ class TestNumRetries:
 
         assert sent.qsize() == num_retries + 1
         assert result == {"texts": ["hi"]}
+
+
+def _mock_api_response(payload: dict[str, object]) -> MagicMock:
+    response: Final = MagicMock()
+    response.json.return_value = payload
+    response.raise_for_status = MagicMock()
+    return response
+
+
+TIMING_FIELDS: Final = frozenset({"start_time", "end_time", "duration"})
+
+
+def _without_timing(entry: StandardLoggingGuardrailInformation) -> dict[str, object]:
+    return {key: value for key, value in entry.items() if key not in TIMING_FIELDS}
+
+
+def _assert_timed(entry: StandardLoggingGuardrailInformation) -> None:
+    start_time: Final = entry.get("start_time")
+    end_time: Final = entry.get("end_time")
+    duration: Final = entry.get("duration")
+    assert isinstance(start_time, float)
+    assert isinstance(end_time, float)
+    assert isinstance(duration, float)
+    assert end_time >= start_time
+    assert duration >= 0
+
+
+@pytest.mark.asyncio
+async def test_intervened_with_reason_logs_and_records(
+    generic_guardrail: GenericGuardrailAPI, caplog: pytest.LogCaptureFixture
+):
+    """An intervention_reason must be warned about and recorded as one timed guardrail_intervened entry."""
+    response: Final = _mock_api_response(
+        {"action": "GUARDRAIL_INTERVENED", "texts": ["a"], "intervention_reason": "why"}
+    )
+    metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+    request_data: Final[dict[str, object]] = {"metadata": metadata}
+
+    with patch.object(generic_guardrail.async_handler, "post", return_value=response), caplog.at_level(logging.WARNING):
+        await generic_guardrail.apply_guardrail(
+            inputs={"texts": ["b"]}, request_data=request_data, input_type="request"
+        )
+
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        ("WARNING", "Generic Guardrail API intervened: why")
+    ]
+    entries: Final = metadata["standard_logging_guardrail_information"]
+    assert [_without_timing(entry) for entry in entries] == [
+        {
+            "guardrail_name": "test-generic-guardrail",
+            "guardrail_provider": "generic_guardrail_api",
+            "guardrail_mode": "pre_call",
+            "guardrail_response": {"action": "GUARDRAIL_INTERVENED", "intervention_reason": "why"},
+            "guardrail_status": "guardrail_intervened",
+            "masked_entity_count": None,
+            "guardrail_action": "GUARDRAIL_INTERVENED",
+        }
+    ]
+    _assert_timed(entries[0])
+
+
+@pytest.mark.asyncio
+async def test_intervened_without_reason_unchanged(
+    generic_guardrail: GenericGuardrailAPI, caplog: pytest.LogCaptureFixture
+):
+    """Without an intervention_reason the decorator's success entry must be the only record, with no warning."""
+    response: Final = _mock_api_response({"action": "GUARDRAIL_INTERVENED", "texts": ["a"]})
+    metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+    request_data: Final[dict[str, object]] = {"metadata": metadata}
+
+    with patch.object(generic_guardrail.async_handler, "post", return_value=response), caplog.at_level(logging.WARNING):
+        await generic_guardrail.apply_guardrail(
+            inputs={"texts": ["b"]}, request_data=request_data, input_type="request"
+        )
+
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == []
+    assert [_without_timing(entry) for entry in metadata["standard_logging_guardrail_information"]] == [
+        {
+            "guardrail_name": "test-generic-guardrail",
+            "guardrail_provider": None,
+            "guardrail_mode": "pre_call",
+            "guardrail_response": "mask",
+            "guardrail_status": "success",
+            "masked_entity_count": None,
+        }
+    ]
