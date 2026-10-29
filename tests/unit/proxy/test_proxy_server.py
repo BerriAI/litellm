@@ -3,6 +3,7 @@ import sys
 import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Final, Literal, NoReturn, cast
 from unittest import mock
 
@@ -3983,6 +3984,48 @@ def test_live_session_preserves_pretty_printed_start_frame(
     assert routed_data["live_session_start"] == expected_start
 
 
+@pytest.mark.asyncio
+async def test_update_config_reports_an_unsupported_router_setting_as_a_request_error_not_an_auth_error() -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ConfigYAML, ProxyException
+    from litellm.proxy.proxy_server import update_config
+
+    body: Final = {"router_settings": {"not_a_router_setting": True}}
+    request: Final = MagicMock(spec=Request)
+    request.json = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_config(
+            config_info=ConfigYAML(**body),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_get_config_callbacks_reports_an_unreadable_config_as_a_server_error_not_an_auth_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import get_config
+
+    empty_config: Final = tmp_path / "config.yaml"
+    empty_config.write_text("")
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(empty_config))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await get_config(user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN))
+
+    assert (exc_info.value.code, exc_info.value.type) == ("500", "internal_server_error")
+    assert exc_info.value.message == "Config cannot be None or Empty."
+
+
 @pytest.mark.parametrize("scope", [None, "expand"])
 @pytest.mark.parametrize(
     "general_settings, wildcard_query, wildcard_listed",
@@ -4025,6 +4068,62 @@ async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
 
     assert "gpt-6.1-sol" in listed, listed
     assert ("openai/*" in listed) is wildcard_listed, listed
+
+
+@pytest.mark.asyncio
+async def test_queue_request_labels_an_upstream_failure_a_server_error_not_an_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import async_queue_request
+
+    body: Final = json.dumps(
+        {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], "priority": 0}
+    ).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/queue/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await async_queue_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("500", "internal_server_error")
 
 
 _DEBUG_LOG_SENTINEL: Final = "sentinel-request-body-7f3a"
