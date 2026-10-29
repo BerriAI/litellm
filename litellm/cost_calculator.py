@@ -73,10 +73,6 @@ from litellm.llms.deepseek.cost_calculator import (
     cost_per_token as deepseek_cost_per_token,
 )
 from litellm.llms.fireworks_ai.cost_calculator import (
-    FIREWORKS_AI_DEFAULT_PRICING_MODEL,
-    get_base_model_for_pricing,
-)
-from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
 from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
@@ -1054,26 +1050,6 @@ def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
     return _cost_map_entry_prices_anything(entry if fill_missing is None else {**fill_missing, **entry})
 
 
-def _size_pricing_bucket(model: str, custom_llm_provider: str | None) -> str | None:
-    match custom_llm_provider:
-        case "fireworks_ai":
-            bucket: Final = get_base_model_for_pricing(model)
-            return None if bucket == FIREWORKS_AI_DEFAULT_PRICING_MODEL else bucket
-        case "together_ai":
-            return get_model_params_and_category(model, call_type=CallTypes.completion)
-        case _:
-            return None
-
-
-def _size_bucket_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
-    bucket: Final = _size_pricing_bucket(model, custom_llm_provider)
-    return bucket is not None and cost_map_key_prices_anything(bucket)
-
-
-def _served_model_has_rates(model: str, custom_llm_provider: str | None) -> bool:
-    return _resolves_to_rates(model, custom_llm_provider) or _size_bucket_declares_rates(model, custom_llm_provider)
-
-
 def _served_or_priced_requested_model(
     served_model: str, requested_model: str | None, custom_llm_provider: str | None, priced_region: str | None
 ) -> str:
@@ -1084,7 +1060,7 @@ def _served_or_priced_requested_model(
     if served in (requested, requested.partition("/")[2]):
         return served
     pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
-    if _served_model_has_rates(served, pricing_provider):
+    if _resolves_to_rates(served, pricing_provider):
         return served
     return requested if _resolves_to_rates(requested, pricing_provider) else served
 

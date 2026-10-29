@@ -15,8 +15,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
-FIREWORKS_AI_DEFAULT_PRICING_MODEL: Final = "fireworks-ai-default"
-
 
 # Extract the number of billion parameters from the model name
 # only used for together_computer LLMs
@@ -55,7 +53,7 @@ def get_base_model_for_pricing(model_name: str) -> str:
             return "fireworks-ai-above-16b"
 
     # If no matches, return the original model_name
-    return FIREWORKS_AI_DEFAULT_PRICING_MODEL
+    return "fireworks-ai-default"
 
 
 def _resolve_model_info(model: str) -> ModelInfo:

@@ -637,19 +637,35 @@ def test_completion_cost_keeps_served_row_rates_filled_by_a_rule_over_the_reques
     assert cost == pytest.approx(_token_rates_cost(filled_rates, usage))
 
 
-@pytest.mark.parametrize(
-    ("custom_llm_provider", "requested_model", "served_model", "bucket"),
-    [
-        (
-            "fireworks_ai",
-            "fireworks_ai/accounts/fireworks/models/sol-bucket-requested-test",
-            "accounts/fireworks/models/sol-bucket-405b-test",
-            "fireworks-ai-above-16b",
-        ),
-        ("together_ai", "together_ai/sol-bucket-requested-test", "meta-llama/Sol-Bucket-8B-Test", "together-ai-4.1b-8b"),
-    ],
+_SIZE_BUCKET_CASES: Final = (
+    pytest.param(
+        "fireworks_ai",
+        "fireworks_ai/accounts/fireworks/models/sol-bucket-requested-test",
+        "Sol Bucket 405B Display",
+        "fireworks-ai-above-16b",
+        id="fireworks_ai",
+    ),
+    pytest.param(
+        "together_ai",
+        "together_ai/sol-bucket-requested-test",
+        "meta-llama/Sol-Bucket-8B-Test",
+        "together-ai-4.1b-8b",
+        id="together_ai",
+    ),
 )
-def test_completion_cost_keeps_served_size_bucket_rates_over_the_requested_model(
+
+
+def _size_bucket_response(served_model: str, requested_model: str, custom_llm_provider: str) -> ModelResponse:
+    response: Final = ModelResponse(model=served_model, choices=[], usage=_SIZE_BUCKET_USAGE)
+    response._hidden_params.update({"litellm_model_name": requested_model, "custom_llm_provider": custom_llm_provider})
+    return response
+
+
+_SIZE_BUCKET_USAGE: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+
+@pytest.mark.parametrize(("custom_llm_provider", "requested_model", "served_model", "bucket"), _SIZE_BUCKET_CASES)
+def test_completion_cost_bills_requested_listed_rates_over_a_served_size_bucket(
     _local_model_cost_map: None,
     monkeypatch: pytest.MonkeyPatch,
     custom_llm_provider: str,
@@ -667,13 +683,28 @@ def test_completion_cost_keeps_served_size_bucket_rates_over_the_requested_model
             "output_cost_per_token": 7e-6,
         },
     )
-    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
-    response: Final = ModelResponse(model=served_model, choices=[], usage=usage)
-    response._hidden_params.update({"litellm_model_name": requested_model, "custom_llm_provider": custom_llm_provider})
 
-    cost: Final = completion_cost(completion_response=response)
+    cost: Final = completion_cost(
+        completion_response=_size_bucket_response(served_model, requested_model, custom_llm_provider)
+    )
 
-    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[bucket], usage))
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], _SIZE_BUCKET_USAGE))
+    assert cost != pytest.approx(_token_rates_cost(litellm.model_cost[bucket], _SIZE_BUCKET_USAGE))
+
+
+@pytest.mark.parametrize(("custom_llm_provider", "requested_model", "served_model", "bucket"), _SIZE_BUCKET_CASES)
+def test_completion_cost_keeps_served_size_bucket_rates_when_the_requested_model_is_unpriced(
+    _local_model_cost_map: None,
+    custom_llm_provider: str,
+    requested_model: str,
+    served_model: str,
+    bucket: str,
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=_size_bucket_response(served_model, requested_model, custom_llm_provider)
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[bucket], _SIZE_BUCKET_USAGE))
 
 
 def test_completion_cost_bills_a_requested_model_priced_after_an_unpriced_lookup(
