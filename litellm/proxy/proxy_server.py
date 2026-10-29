@@ -8509,10 +8509,15 @@ class ProxyConfig:
                 "is ignored. %s",
                 key,
                 "The config file's value applies. Remove the stored copy with POST /config/field/delete."
-                if self.settings.owned_by_config(key)
+                if self._config_sets_ignored_db_key(key)
                 else "Set it in the config file to use it, or remove it with POST /config/field/delete.",
             )
         self._warned_unmanaged_keys = unmanaged
+
+    def _config_sets_ignored_db_key(self, key: str) -> bool:
+        return self.settings.owned_by_config(key) or (
+            key in _GENERAL_SETTINGS_UI_LITELLM_FIELDS and self.config_owns(section_name="litellm_settings", key=key)
+        )
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)

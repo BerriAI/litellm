@@ -3757,7 +3757,9 @@ async def test_db_reload_keeps_the_resolved_value_of_a_config_owned_env_referenc
 
 
 @pytest.mark.asyncio
-async def test_db_reload_of_a_json_string_general_settings_row_reports_no_ignored_keys(monkeypatch):
+async def test_db_reload_of_a_json_string_general_settings_row_reports_no_ignored_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy import proxy_server as proxy_server_module
     from litellm.proxy.proxy_server import ProxyConfig
 

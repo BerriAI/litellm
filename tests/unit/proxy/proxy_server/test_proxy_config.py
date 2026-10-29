@@ -4403,6 +4403,25 @@ async def test_ProxyConfig__update_general_settings_warns_about_an_ignored_store
     ]
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_says_the_config_file_applies_for_a_stored_ui_field_it_sets(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}, "litellm_settings": {"budget_rollover": True}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings({"budget_rollover": False})
+
+    warnings: Final = [record.getMessage() for record in caplog.records if "budget_rollover" in record.getMessage()]
+    assert warnings == [
+        "general_settings.budget_rollover is stored in the database, but the proxy does not apply that stored "
+        "value, so it is ignored. The config file's value applies. Remove the stored copy with POST "
+        "/config/field/delete."
+    ]
+
+
 def _paused_scheduler(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -5011,8 +5030,8 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
 async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
-    monkeypatch, ui_settings_already_synced
-):
+    monkeypatch: pytest.MonkeyPatch, ui_settings_already_synced: bool
+) -> None:
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
