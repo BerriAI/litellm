@@ -69,7 +69,27 @@ async def test_allm_passthrough_route_hosted_vllm_sends_deployment_api_key(respx
     )
     assert response.status_code == 200
     assert route.calls[0].request.headers["authorization"] == "Bearer sk-upstream"
-    assert route.calls[0].request.headers["x-api-key"] == "sk-upstream"
+    assert "x-api-key" not in route.calls[0].request.headers
+
+
+@pytest.mark.asyncio
+async def test_allm_passthrough_route_hosted_vllm_reaches_v1_paths_under_an_api_base_ending_in_v1(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+    response: Final = await allm_passthrough_route(
+        method="POST",
+        endpoint="v1/chat/completions",
+        model="hosted_vllm/my-deployment",
+        api_base=f"{_API_BASE}/v1",
+        api_key="sk-upstream",
+        json={"model": "anything", "messages": [{"role": "user", "content": "Hello"}]},
+        client=AsyncHTTPHandler(),
+    )
+    assert response.status_code == 200
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio

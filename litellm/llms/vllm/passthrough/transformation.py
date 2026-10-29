@@ -21,10 +21,17 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
 
 
+def _endpoint_under_api_base(endpoint: str, api_base: str) -> str:
+    return endpoint.lstrip("/").removeprefix("v1/") if api_base.rstrip("/").endswith("/v1") else endpoint
+
+
 class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
         return api_key
+
+    def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
+        return {"Authorization": f"Bearer {api_key}"}
 
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in request_data
@@ -44,7 +51,7 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
             raise Exception("VLLM api base not found")
 
         return (
-            self.format_url(endpoint, base_target_url, request_query_params),
+            self.format_url(_endpoint_under_api_base(endpoint, base_target_url), base_target_url, request_query_params),
             base_target_url,
         )
 

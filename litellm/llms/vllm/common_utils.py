@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -39,7 +40,10 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        return headers if api_key is None else {**headers, "Authorization": f"Bearer {api_key}", "x-api-key": api_key}
+        return headers if api_key is None else {**headers, **self.upstream_auth_headers(api_key)}
+
+    def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
+        return {"Authorization": f"Bearer {api_key}", "x-api-key": api_key}
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
