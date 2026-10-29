@@ -50,7 +50,11 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    qualify_agentic_followup_model,
+    set_provider_response_headers_in_hidden_params,
+)
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
@@ -367,10 +371,35 @@ class _SignedBodyKwargs(TypedDict, total=False):
     json: ReadOnly[dict[str, object]]
 
 
+def _is_sized_json_body(response: httpx.Response) -> bool:
+    headers: Final = httpx.Headers(response.headers)
+    media_types: Final = (value.split(";")[0].strip().lower() for value in headers.get_list("content-type"))
+    return "content-length" in headers and "application/json" in media_types
+
+
+def _is_json_document(content: bytes) -> bool:
+    try:
+        return isinstance(json.loads(content), dict)
+    except ValueError:
+        return False
+
+
 def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -> _SignedBodyKwargs:
     if signed_body is not None:
         return {"data": signed_body}
     return {"json": data}
+
+
+def _answered_json(response: httpx.Response) -> bool:
+    return "application/json" in response.headers.get("content-type", "").lower()
+
+
+def _stream_query_params(stream: bool, starting_after: int | None) -> Mapping[str, object]:
+    if not stream:
+        return {}
+    if starting_after is None:
+        return {"stream": "true"}
+    return {"stream": "true", "starting_after": starting_after}
 
 
 def _google_genai_streaming_hidden_params(
@@ -2552,6 +2581,7 @@ class BaseLLMHTTPHandler:
                 "preset_cache_key": None,
                 "stream_response": {},
                 "model_info": kwargs.get("model_info"),
+                **litellm_params.per_second_pricing(),
                 **vertex_location_params,
                 **anthropic_messages_optional_request_params,
             },
@@ -3025,6 +3055,17 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        replay_as_stream: Final = partial(
+            MockResponsesAPIStreamingIterator,
+            model=model,
+            logging_obj=logging_obj,
+            responses_api_provider_config=responses_api_provider_config,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
+            request_data=request_context,
+            call_type=CallTypes.responses.value,
+        )
+
         try:
             if is_stream_request:
                 response = sync_httpx_client.post(
@@ -3036,7 +3077,13 @@ class BaseLLMHTTPHandler:
                 )
                 if caller_requested_stream:
                     if fake_stream is True:
-                        return MockResponsesAPIStreamingIterator(
+                        return replay_as_stream(response=response)
+                    if not (
+                        responses_api_provider_config.may_answer_stream_with_json()
+                        and _is_sized_json_body(response)
+                        and _is_json_document(response.read())
+                    ):
+                        return SyncResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
                             logging_obj=logging_obj,
@@ -3046,17 +3093,6 @@ class BaseLLMHTTPHandler:
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
                         )
-
-                    return SyncResponsesAPIStreamingIterator(
-                        response=response,
-                        model=model,
-                        logging_obj=logging_obj,
-                        responses_api_provider_config=responses_api_provider_config,
-                        litellm_metadata=litellm_metadata,
-                        custom_llm_provider=custom_llm_provider,
-                        request_data=request_context,
-                        call_type=CallTypes.responses.value,
-                    )
                 response.read()
             else:
                 response = sync_httpx_client.post(
@@ -3070,6 +3106,9 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=responses_api_provider_config,
             )
+
+        if is_stream_request and caller_requested_stream:
+            return replay_as_stream(response=response)
 
         initial_response: Final = responses_api_provider_config.transform_response_api_response(
             model=model,
@@ -3226,6 +3265,17 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        replay_as_stream: Final = partial(
+            MockResponsesAPIStreamingIterator,
+            model=model,
+            logging_obj=logging_obj,
+            responses_api_provider_config=responses_api_provider_config,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
+            request_data=request_context,
+            call_type=CallTypes.responses.value,
+        )
+
         try:
             if is_stream_request:
                 response = await async_httpx_client.post(
@@ -3239,7 +3289,13 @@ class BaseLLMHTTPHandler:
 
                 if caller_requested_stream:
                     if fake_stream is True:
-                        return MockResponsesAPIStreamingIterator(
+                        return replay_as_stream(response=response)
+                    if not (
+                        responses_api_provider_config.may_answer_stream_with_json()
+                        and _is_sized_json_body(response)
+                        and _is_json_document(await response.aread())
+                    ):
+                        return ResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
                             logging_obj=logging_obj,
@@ -3249,17 +3305,6 @@ class BaseLLMHTTPHandler:
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
                         )
-
-                    return ResponsesAPIStreamingIterator(
-                        response=response,
-                        model=model,
-                        logging_obj=logging_obj,
-                        responses_api_provider_config=responses_api_provider_config,
-                        litellm_metadata=litellm_metadata,
-                        custom_llm_provider=custom_llm_provider,
-                        request_data=request_context,
-                        call_type=CallTypes.responses.value,
-                    )
                 await response.aread()
             else:
                 response = await async_httpx_client.post(
@@ -3275,6 +3320,9 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=responses_api_provider_config,
             )
+
+        if is_stream_request and caller_requested_stream:
+            return replay_as_stream(response=response)
 
         initial_response: Final = responses_api_provider_config.transform_response_api_response(
             model=model,
@@ -3493,12 +3541,20 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
         extra_headers: dict[str, object] | None = None,
+        extra_query: Mapping[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
+        stream: bool = False,
+        starting_after: int | None = None,
+        litellm_metadata: Mapping[str, object] = MappingProxyType({}),
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
+    ) -> (
+        ResponsesAPIResponse
+        | SyncResponsesAPIStreamingIterator
+        | Coroutine[object, object, ResponsesAPIResponse | ResponsesAPIStreamingIterator]
+    ):
         """
         Get a response by ID
         Uses GET /v1/responses/{response_id} endpoint in the responses API
@@ -3511,7 +3567,11 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=extra_headers,
+                extra_query=extra_query,
                 extra_body=extra_body,
+                stream=stream,
+                starting_after=starting_after,
+                litellm_metadata=litellm_metadata,
                 timeout=timeout,
                 client=client,
                 shared_session=shared_session,
@@ -3540,20 +3600,23 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        query: Final = {**data, **(extra_query or {}), **_stream_query_params(stream, starting_after)}
 
         ## LOGGING
         logging_obj.pre_call(
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": data,
+                "complete_input_dict": query,
                 "api_base": api_base,
                 "headers": headers,
             },
         )
 
         try:
-            response: Final = sync_httpx_client.get(url=url, headers=headers, params=data)
+            response: Final = sync_httpx_client.get(
+                url=url, headers=headers, params=query, stream=stream, timeout=timeout if stream else None
+            )
             response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
@@ -3561,6 +3624,20 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
+        if stream and not _answered_json(response):
+            return SyncResponsesAPIStreamingIterator(
+                response=response,
+                model="",
+                logging_obj=logging_obj,
+                responses_api_provider_config=responses_api_provider_config,
+                litellm_metadata=dict(litellm_metadata),
+                custom_llm_provider=custom_llm_provider,
+                request_data={"litellm_params": dict(litellm_params)},
+                replays_stored_stream=True,
+            )
+
+        if stream:
+            response.read()
         return responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -3574,11 +3651,15 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
         extra_headers: dict[str, object] | None = None,
+        extra_query: Mapping[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
+        stream: bool = False,
+        starting_after: int | None = None,
+        litellm_metadata: Mapping[str, object] = MappingProxyType({}),
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> ResponsesAPIResponse:
+    ) -> ResponsesAPIResponse | ResponsesAPIStreamingIterator:
         """
         Async version of get_responses
         """
@@ -3616,20 +3697,23 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        query: Final = {**data, **(extra_query or {}), **_stream_query_params(stream, starting_after)}
 
         ## LOGGING
         logging_obj.pre_call(
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": data,
+                "complete_input_dict": query,
                 "api_base": api_base,
                 "headers": headers,
             },
         )
 
         try:
-            response: Final = await async_httpx_client.get(url=url, headers=headers, params=data)
+            response: Final = await async_httpx_client.get(
+                url=url, headers=headers, params=query, stream=stream, timeout=timeout if stream else None
+            )
             response.raise_for_status()
         except Exception as e:
             verbose_logger.debug("Error retrieving response: %s", e)
@@ -3638,6 +3722,20 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
+        if stream and not _answered_json(response):
+            return ResponsesAPIStreamingIterator(
+                response=response,
+                model="",
+                logging_obj=logging_obj,
+                responses_api_provider_config=responses_api_provider_config,
+                litellm_metadata=dict(litellm_metadata),
+                custom_llm_provider=custom_llm_provider,
+                request_data={"litellm_params": dict(litellm_params)},
+                replays_stored_stream=True,
+            )
+
+        if stream:
+            await response.aread()
         return responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -6182,9 +6280,7 @@ class BaseLLMHTTPHandler:
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
 
-        full_model_name = patch.model or model
-        if "/" not in full_model_name:
-            full_model_name = f"{custom_llm_provider}/{full_model_name}"
+        full_model_name: Final = qualify_agentic_followup_model(patch.model, model, custom_llm_provider)
 
         optional_params_for_followup: Final = dict(optional_params)
         optional_params_for_followup.update(patch.optional_params)
@@ -6827,7 +6923,7 @@ class BaseLLMHTTPHandler:
         try:
             ssl_context: Final = realtime_ssl_for_url(url)
             provider_backend: Final = await provider_config.open_backend(url, headers)
-            backend_ws: Final = (
+            backend_ws: Final = provider_config.wrap_backend(
                 provider_backend
                 if provider_backend is not None
                 else await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
@@ -6865,9 +6961,7 @@ class BaseLLMHTTPHandler:
                         await backend_ws.send(_session_config)
                         realtime_streaming.session_configuration_request = _session_config
 
-                # For providers that defer setup until client session.update, optionally
-                # send synthetic session.created to unblock clients waiting on connect.
-                if not provider_config.requires_session_configuration():
+                if not _session_config:
                     synthetic_session: Final = provider_config.transform_session_created_event(
                         model=model,
                         logging_session_id=logging_obj.litellm_trace_id,
@@ -11056,7 +11150,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url: Final = api_base
+        url: Final = vector_store_provider_config.get_vector_store_list_url(api_base)
 
         params: Final[dict[str, object]] = {}
         if after is not None:
@@ -11135,7 +11229,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url: Final = api_base
+        url: Final = vector_store_provider_config.get_vector_store_list_url(api_base)
 
         params: Final[dict[str, object]] = {}
         if after is not None:

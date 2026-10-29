@@ -15,7 +15,11 @@ from litellm.integrations.anthropic_cache_control_hook import (
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    cache_control_as_prompt_cache_breakpoint,
+    prompt_cache_breakpoint_for_wire,
+    with_prompt_cache_breakpoint,
+)
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -90,14 +94,28 @@ def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str
     return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
 
 
+def _cache_control_as_wire_safe_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str, object]:
+    if "prompt_cache_breakpoint" not in block:
+        return cache_control_as_prompt_cache_breakpoint(block)
+    wire_marker: Final = prompt_cache_breakpoint_for_wire(block["prompt_cache_breakpoint"], drop_params=True)
+    return cache_control_as_prompt_cache_breakpoint(
+        with_prompt_cache_breakpoint(_without_prompt_cache_breakpoint(block), wire_marker)
+    )
+
+
 def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, object]) -> BlockRewrite | None:
     """Client cache marks become breakpoints for a deployment that reads them, and a model that takes no breakpoints
     drops raw ones under drop_params."""
+    drops_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     if _reads_prompt_cache_breakpoint(model, forwarded_kwargs):
-        return cache_control_as_prompt_cache_breakpoint
+        return (
+            _cache_control_as_wire_safe_prompt_cache_breakpoint
+            if drops_params
+            else cache_control_as_prompt_cache_breakpoint
+        )
     if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
         return None
-    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
+    if drops_params:
         return _without_prompt_cache_breakpoint
     return None
 
