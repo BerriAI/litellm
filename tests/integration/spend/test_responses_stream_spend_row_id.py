@@ -348,6 +348,37 @@ def test_a_reader_other_than_the_creator_continues_through_the_id_its_retrieve_r
 
 
 @pytest.mark.timeout(180)
+def test_reads_and_cancels_sent_with_a_session_header_add_no_replayed_turns(gateway: Gateway, tmp_path: Path) -> None:
+    first_prompt: Final = f"first turn {uuid4().hex}"
+    session: Final = {"x-litellm-session-id": f"session-{uuid4().hex}"}
+    with (
+        wire_server(_respond) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storing_config(tmp_path)) as storing,
+        storing.scenario() as scenario,
+    ):
+        native: Final = scenario.model(model=_NATIVE_MODEL, api_base=f"{wire.url}/v1", api_key="synthetic-key")
+        bridged: Final = scenario.model(model=_BRIDGED_MODEL, api_base=f"{wire.url}/v1", api_key="synthetic-key")
+        key: Final = scenario.key(models=[native, bridged])
+        first_id: Final = _created_response_id(storing, key, {"model": native, "input": first_prompt}, session)
+
+        _read_and_cancel(storing, key, first_id, session)
+
+        assert len(_request_ids_for_key(storing, key, 4)) == 4
+        wire.drain()
+        _terminal_response_id(
+            storing,
+            key,
+            {"model": bridged, "input": "second turn", "previous_response_id": first_id, "stream": True},
+            session,
+        )
+        assert _replayed_turns(wire.drain()[-1].body) == [
+            ("user", first_prompt),
+            ("assistant", _ANSWER),
+            ("user", "second turn"),
+        ]
+
+
+@pytest.mark.timeout(180)
 def test_each_read_and_cancel_reaches_callbacks_and_spend_logs_under_an_id_of_its_own(
     gateway: Gateway, tmp_path: Path
 ) -> None:

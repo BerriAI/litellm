@@ -1081,6 +1081,58 @@ async def test_previous_response_history_starts_at_a_compaction_item_in_a_stored
     ]
 
 
+def _stored_response_turn(
+    request_id: str, call_type: str, status: str, output: list[dict[str, object]], prompt: str | None = None
+) -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": call_type,
+        "session_id": "session-with-reads",
+        "proxy_server_request": json.dumps({} if prompt is None else {"input": [{"role": "user", "content": prompt}]}),
+        "response": {"id": request_id, "object": "response", "status": status, "output": output},
+    }
+
+
+def _identified_output_message(item_id: str, text: str) -> dict[str, object]:
+    return {**_output_message(text), "id": item_id}
+
+
+def _replayed_roles_and_texts(session: ChatCompletionSession) -> list[tuple[object, object]]:
+    return [
+        (role, _text_of(content)) for role, content in (_role_and_content(message) for message in session["messages"])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reads_and_cancels_of_a_response_the_session_already_holds_replay_no_turns():
+    answer: Final = [_identified_output_message("msg_answer", "OK")]
+    spend_logs: Final = (
+        _stored_response_turn("resp_create", "aresponses", "completed", answer, prompt="Reply with OK"),
+        _stored_response_turn("resp_read", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_streamed_read", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_cancel", "acancel_responses", "completed", answer),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_create")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Reply with OK"), ("assistant", "OK")]
+
+
+@pytest.mark.asyncio
+async def test_a_polled_background_response_replays_its_finished_output_once():
+    answer: Final = [_identified_output_message("msg_answer", "One, two, three")]
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to three"),
+        _stored_response_turn("resp_poll_running", "aget_responses", "in_progress", []),
+        _stored_response_turn("resp_poll_done", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_poll_again", "aget_responses", "completed", answer),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Count to three"), ("assistant", "One, two, three")]
+
+
 def _tool_call_ids(message: object) -> tuple[str, ...]:
     tool_calls: Final = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
     return tuple(call["id"] if isinstance(call, dict) else call.id for call in tool_calls or ())

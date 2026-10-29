@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -69,6 +70,51 @@ def _is_a_conversation_turn(spend_log: "SpendLogsPayload") -> bool:
     return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES and not _is_a_failed_turn(spend_log)
 
 
+_RESPONSE_READ_CALL_TYPES: Final = frozenset(("aget_responses", "acancel_responses"))
+
+
+def _output_item_id(item: object) -> str | None:
+    match item:
+        case {"id": str() as item_id}:
+            return item_id
+        case _:
+            return None
+
+
+def _is_a_response_read(spend_log: "SpendLogsPayload") -> bool:
+    return "call_type" in spend_log and spend_log["call_type"] in _RESPONSE_READ_CALL_TYPES
+
+
+def _stored_response(spend_log: "SpendLogsPayload") -> object:
+    return spend_log.get("response")
+
+
+def _output_item_ids(spend_log: "SpendLogsPayload") -> frozenset[str]:
+    output: Final = _stored_responses_api_output(_stored_response(spend_log)) or []
+    return frozenset(item_id for item_id in map(_output_item_id, output) if item_id is not None)
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionTurns:
+    spend_logs: tuple["SpendLogsPayload", ...] = ()
+    output_item_ids: frozenset[str] = frozenset()
+
+
+def _with_conversation_turn(turns: _SessionTurns, spend_log: "SpendLogsPayload") -> _SessionTurns:
+    if not _is_a_conversation_turn(spend_log):
+        return turns
+    output_item_ids: Final = _output_item_ids(spend_log)
+    if _is_a_response_read(spend_log) and output_item_ids <= turns.output_item_ids:
+        return turns
+    return _SessionTurns(
+        spend_logs=(*turns.spend_logs, spend_log), output_item_ids=turns.output_item_ids | output_item_ids
+    )
+
+
+def _conversation_turns(spend_logs: Sequence["SpendLogsPayload"]) -> tuple["SpendLogsPayload", ...]:
+    return reduce(_with_conversation_turn, spend_logs, _SessionTurns()).spend_logs
+
+
 _MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))
 
 
@@ -101,7 +147,7 @@ class StoredTurns:
 def _compaction_point(
     index: int, spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
 ) -> _ReplayStart | None:
-    if response_holds_compaction_block(spend_log.get("response")):
+    if response_holds_compaction_block(_stored_response(spend_log)):
         return _ReplayStart(index=index, at_output=True)
     if proxy_server_request is not None and holds_compaction_summary(proxy_server_request.get("input")):
         return _ReplayStart(index=index, at_output=False)
@@ -266,12 +312,10 @@ class ResponsesSessionHandler:
         previous_response_id: str,
         client_response_ids: tuple[str, ...] = (),
     ) -> StoredTurns:
-        spend_logs: Final = tuple(
-            spend_log
-            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        spend_logs: Final = _conversation_turns(
+            await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
                 previous_response_id, client_response_ids
             )
-            if _is_a_conversation_turn(spend_log)
         )
         return StoredTurns(
             spend_logs=spend_logs,
@@ -369,7 +413,7 @@ class ResponsesSessionHandler:
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output: Final[object] = spend_log.get("response", "{}")
+        _response_output: Final = _stored_response(spend_log)
         if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
