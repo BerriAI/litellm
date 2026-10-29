@@ -393,4 +393,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: ["pre_call", "post_call"],
     defaultOn: false,
   },
+  collieai: {
+    provider: "CollieAi",
+    guardrailNameSuggestion: "CollieAi",
+    // CollieAi checks both halves of every call. Block mode also needs the package's readiness
+    // guard in the proxy config file, so a guardrail added here observes.
+    mode: ["pre_call", "post_call"],
+    defaultOn: true,
+  },
 };

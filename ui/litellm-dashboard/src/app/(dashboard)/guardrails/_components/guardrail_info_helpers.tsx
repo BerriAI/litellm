@@ -7,6 +7,7 @@ import conductLogo from "../../../../../public/assets/logos/conduct.png";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
 import catoNetworksLogo from "../../../../../public/assets/logos/cato_networks.svg";
+import collieaiLogo from "../../../../../public/assets/logos/collieai.svg";
 import ciscoLogo from "../../../../../public/assets/logos/cisco.png";
 import deepkeepLogo from "../../../../../public/assets/logos/deepkeep.svg";
 import enkryptAiLogo from "../../../../../public/assets/logos/enkrypt_ai.avif";
@@ -92,6 +93,7 @@ export const guardrail_provider_map: Record<string, string> = {
   "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
   DecisionModel: "decision_model",
+  CollieAi: "collieai",
 };
 
 // Search aliases matched alongside the provider label in the add-guardrail provider combobox
@@ -327,6 +329,7 @@ export const guardrailLogoMap = {
   "Conduct Guard": conductLogo.src,
   Wingback: wingbackLogo.src,
   "Airia Guardrail": airiaLogo.src,
+  CollieAi: collieaiLogo.src,
   "Decision Model": litellmLogo.src,
 } satisfies Record<string, string>;
 
