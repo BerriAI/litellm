@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -11,6 +12,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import REASONING_SUMMARY_VALUES, ReasoningFieldValues
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -42,6 +44,9 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+_CHATGPT_REASONING_FIELD_VALUES: Final = MappingProxyType(
+    {"summary": REASONING_SUMMARY_VALUES, "mode": frozenset({"standard"}), "context": None}
+)
 
 
 def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItemParam:
@@ -295,3 +300,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         """ChatGPT does not support native WebSocket for Responses API"""
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return _CHATGPT_REASONING_FIELD_VALUES

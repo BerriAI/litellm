@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, Final, Optional, TypeVar, Union, cast, get_args, get_type_hints, overload
+from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
@@ -15,7 +15,12 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
+from litellm.llms.base_llm.responses.transformation import (
+    REASONING_SUMMARY_VALUES,
+    BaseResponsesAPIConfig,
+    ReasoningFieldValues,
+    ReasoningSummaryLevel,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1411,9 +1416,6 @@ def reasoning_with_summary_default(
     return {**reasoning} if summary is None else {**reasoning, "summary": summary}
 
 
-_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
-
-
 def _openai_model_info(model: str) -> ModelInfo | None:
     from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
 
@@ -1425,24 +1427,29 @@ def _declared_values(values: Sequence[str] | None) -> frozenset[str | None] | No
     return None if values is None else frozenset(values)
 
 
-def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None] | None]:
+def _openai_reasoning_field_values(model: str) -> ReasoningFieldValues:
     model_info: Final = _openai_model_info(model)
     if model_info is None:
-        return MappingProxyType({"summary": _SUMMARY_VALUES, "mode": None, "context": None})
+        return MappingProxyType({"summary": REASONING_SUMMARY_VALUES, "mode": None, "context": None})
     if not model_info.get("supports_reasoning"):
         return MappingProxyType({})
     return MappingProxyType(
         {
-            "summary": _SUMMARY_VALUES,
+            "summary": REASONING_SUMMARY_VALUES,
             "mode": _declared_values(model_info.get("reasoning_modes")),
             "context": _declared_values(model_info.get("reasoning_contexts")),
         }
     )
 
 
-def _openai_accepts_reasoning_field(
-    key: str, value: object, values_by_field: Mapping[str, frozenset[str | None] | None]
-) -> bool:
+def _reasoning_field_values(model: str, responses_config: BaseResponsesAPIConfig | None) -> ReasoningFieldValues | None:
+    declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
+    if declared is not None:
+        return declared
+    return _openai_reasoning_field_values(model) if OpenAIGPTConfig.is_openai_catalog_model(model) else None
+
+
+def _accepts_reasoning_field(key: str, value: object, values_by_field: ReasoningFieldValues) -> bool:
     if key == "effort":
         return True
     if key not in values_by_field:
@@ -1451,11 +1458,8 @@ def _openai_accepts_reasoning_field(
     return allowed is None or (isinstance(value, str | None) and value in allowed)
 
 
-def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
-    values_by_field: Final = _openai_reasoning_field_values(model)
-    return {
-        key: value for key, value in reasoning.items() if _openai_accepts_reasoning_field(key, value, values_by_field)
-    }
+def _accepted_reasoning(reasoning: Mapping[str, object], values_by_field: ReasoningFieldValues) -> Mapping[str, object]:
+    return {key: value for key, value in reasoning.items() if _accepts_reasoning_field(key, value, values_by_field)}
 
 
 def _additional_drop_paths(additional_drop_params: object) -> tuple[str, ...]:
@@ -1464,26 +1468,45 @@ def _additional_drop_paths(additional_drop_params: object) -> tuple[str, ...]:
     return tuple(path for path in iter_items(additional_drop_params) if isinstance(path, str))
 
 
-def openai_bridge_reasoning(
+def bridge_reasoning(
     *,
     requested: Mapping[str, object],
     effort_kept: bool,
     summary_alias: object,
     model: str,
+    custom_llm_provider: str,
     drop_params: bool,
     additional_drop_params: object,
 ) -> Mapping[str, object] | None:
+    from litellm.utils import ProviderConfigManager
+
     drop_paths: Final = _additional_drop_paths(additional_drop_params)
     if "reasoning_effort" in drop_paths:
         return None
     kept: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
-    with_summary: Final = reasoning_with_summary_default(kept, summary_alias, model, "openai")
-    accepted: Final = (
-        _openai_accepted_reasoning(with_summary, model)
-        if drop_params and OpenAIGPTConfig.is_openai_catalog_model(model)
-        else {**with_summary}
-    )
+    with_summary: Final = reasoning_with_summary_default(kept, summary_alias, model, custom_llm_provider)
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(custom_llm_provider, model)
+    values_by_field: Final = _reasoning_field_values(model, responses_config)
+    accepted: Final = with_summary if values_by_field is None else _accepted_reasoning(with_summary, values_by_field)
+    refused: Final = tuple(key for key in with_summary if key not in accepted)
+    if (
+        refused
+        and not drop_params
+        and responses_config is not None
+        and responses_config.ignores_unsupported_reasoning_fields()
+    ):
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{custom_llm_provider} does not support parameters: "
+                f"{[f'reasoning_effort.{key}' for key in refused]}, for model={model}. "
+                "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=custom_llm_provider,
+            model=model,
+        )
     remaining: Final = as_str_mapping(
-        _apply_nested_drop_params({"reasoning_effort": accepted}, list(drop_paths)).get("reasoning_effort")
+        _apply_nested_drop_params(
+            {"reasoning_effort": accepted if drop_params else with_summary}, list(drop_paths)
+        ).get("reasoning_effort")
     )
     return remaining or None

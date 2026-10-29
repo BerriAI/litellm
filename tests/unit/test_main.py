@@ -2456,6 +2456,154 @@ _BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
 ).encode()
 
 
+@pytest.fixture
+def non_openai_responses_bridge(
+    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[[str], tuple[str, Mapping[str, str], respx.Route]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    for chatgpt_env in ("CHATGPT_AUTH_FILE", "CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"):
+        monkeypatch.delenv(chatgpt_env, raising=False)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
+    )
+    litellm.register_model(
+        {
+            "gpt-6.1-standard-only": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "reasoning_modes": ["standard"],
+                "reasoning_contexts": ["auto", "current_turn", "all_turns"],
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+            **{
+                f"{provider}/{model_name}": {
+                    "litellm_provider": provider,
+                    "mode": "responses",
+                    "supports_reasoning": True,
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                }
+                for provider, model_name in (("chatgpt", "gpt-6.1-bridge-test"), ("perplexity", "bridge-test-model"))
+            },
+        },
+        persist_across_reloads=False,
+    )
+    backends: Final = {
+        "azure": (
+            "azure/responses/gpt-6.1-standard-only",
+            "https://test.openai.azure.com/",
+            {"api_base": "https://test.openai.azure.com", "api_key": "fake-key"},
+        ),
+        "chatgpt": ("chatgpt/gpt-6.1-bridge-test", "https://chatgpt.com/backend-api/codex/responses", {}),
+        "databricks": (
+            "databricks/responses/databricks-gpt-bridge-test",
+            "https://dbx.example/serving-endpoints/responses",
+            {"api_base": "https://dbx.example/serving-endpoints", "api_key": "fake-key"},
+        ),
+        "perplexity": (
+            "perplexity/bridge-test-model",
+            "https://api.perplexity.ai/v1/responses",
+            {"api_key": "fake-key"},
+        ),
+    }
+
+    def route_backend(backend: str) -> tuple[str, Mapping[str, str], respx.Route]:
+        model, url, kwargs = backends[backend]
+        route: Final = respx_mock.post(url__startswith=url).respond(
+            content=_BRIDGED_RESPONSE_ANSWER, headers={"content-type": "application/json"}
+        )
+        return model, kwargs, route
+
+    return route_backend
+
+
+@pytest.mark.parametrize(
+    ("backend", "reasoning_effort"),
+    [
+        ("azure", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("chatgpt", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("databricks", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("perplexity", {"effort": "low"}),
+    ],
+)
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_non_openai_responses_bridge_sends_the_whole_reasoning_effort_dict_with_or_without_summary(
+    backend: str,
+    reasoning_effort: dict[str, str],
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+    requested: Final = {**reasoning_effort, **summary}
+
+    litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], reasoning_effort=requested, **kwargs
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == requested
+
+
+@pytest.mark.parametrize(
+    ("backend", "reasoning_effort", "expected_reasoning"),
+    [
+        ("azure", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low", "context": "all_turns"}),
+        (
+            "chatgpt",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+            {"effort": "low", "context": "all_turns"},
+        ),
+        (
+            "chatgpt",
+            {"effort": "low", "mode": "standard", "context": "current_turn"},
+            {"effort": "low", "mode": "standard", "context": "current_turn"},
+        ),
+        ("perplexity", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
+    ],
+)
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_non_openai_responses_bridge_drops_reasoning_fields_the_backend_refuses_under_drop_params(
+    backend: str,
+    reasoning_effort: dict[str, str],
+    expected_reasoning: dict[str, str],
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={**reasoning_effort, **summary},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {**expected_reasoning, **summary}
+
+
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_perplexity_responses_bridge_rejects_reasoning_fields_perplexity_ignores_without_drop_params(
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge("perplexity")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"reasoning_effort\.context") as raised:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort={"effort": "low", "context": "all_turns", **summary},
+            **kwargs,
+        )
+
+    assert raised.value.status_code == 400
+    assert route.called is False
+
+
 def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
     restore_model_registry: None,
 ) -> None:

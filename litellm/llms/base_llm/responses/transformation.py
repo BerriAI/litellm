@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast, get_args
 
 import httpx
 
@@ -27,6 +27,8 @@ else:
     BaseLLMException = Any
 
 ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
+ReasoningFieldValues: TypeAlias = Mapping[str, frozenset[str | None] | None]
+REASONING_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -99,6 +101,12 @@ class BaseResponsesAPIConfig(ABC):
     def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
         """The ``reasoning.summary`` LiteLLM's opt-in auto summary asks this provider for."""
         return "detailed"
+
+    def reasoning_field_values(self) -> ReasoningFieldValues | None:
+        return None
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return False
 
     @abstractmethod
     def map_openai_params(
