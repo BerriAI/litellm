@@ -4,7 +4,9 @@ Support for gpt model family
 
 import json
 import os
+from asyncio import to_thread
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
@@ -136,6 +138,14 @@ def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | Non
     return extra_body.get("prompt_cache_options")
 
 
+def _attached_files(message: AllMessageValues) -> Iterator[ChatCompletionFileObjectFile]:
+    match message:
+        case {"role": "user", "content": list() as content}:
+            return (part["file"] for part in content if part.get("type") == "file" and "file" in part)
+        case _:
+            return iter(())
+
+
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
@@ -162,9 +172,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling.
     """
-
-    # Add a class variable to track if this is the base class
-    _is_base_class = True
 
     frequency_penalty: int | None = None
     function_call: str | dict | None = None
@@ -196,8 +203,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
-
-        self.__class__._is_base_class = False
 
     @classmethod
     def get_config(cls):
@@ -646,29 +651,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
-            model=model,
-            messages=await self._transform_messages(
-                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
-            ),
-            tools=optional_params.get("tools", []),
-            prompt_cache_options=_prompt_cache_options(optional_params),
-            litellm_params=litellm_params,
-        )
-        if tools is not None and len(tools) > 0:
-            optional_params["tools"] = tools
-        if self.__class__._is_base_class:
-            if not optional_params.get("tools") and not optional_params.get("functions"):
-                optional_params.pop("tool_choice", None)
-            return {
-                "model": model,
-                "messages": transformed_messages,
-                **optional_params,
-                **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
-            }
-        else:
-            ## allow for any object specific behaviour to be handled
+        if not self._downloads_pdf_url(messages):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
+        return await to_thread(self.transform_request, model, messages, optional_params, litellm_params, headers)
+
+    def _downloads_pdf_url(self, messages: Sequence[AllMessageValues]) -> bool:
+        return any(self.contains_pdf_url(file) for file in chain.from_iterable(map(_attached_files, messages)))
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None

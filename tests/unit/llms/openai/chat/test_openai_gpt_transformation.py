@@ -1,10 +1,12 @@
 """
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
+import asyncio
 import base64
 import copy
 import json
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Coroutine
 from typing import Final
 
 import pytest
@@ -1349,6 +1351,82 @@ async def test_openai_media_download_preserves_supported_chat_fields(
 
 
 @pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_codestral_file_request_still_works_after_an_openai_config_is_built(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chat: Final = respx_mock.post("https://codestral.example.test/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+    OpenAIGPTConfig()
+
+    await litellm.acompletion(
+        model="codestral/codestral-latest",
+        api_base="https://codestral.example.test/v1",
+        api_key="mistral-test-key",
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": "What is in the file?"},
+            {"type": "file", "file": {"file_id": "uploaded-file-id"}},
+        ]}],
+    )
+
+    assert json.loads(chat.calls[0].request.content)["messages"][0]["content"][1] == {
+        "type": "file", "file_id": "uploaded-file-id",
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_async_transform_request_downloads_pdf_urls_without_blocking_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    pdf_url: Final = "https://files.example.test/off-event-loop.pdf"
+    pdf_content: Final = b"%PDF-1.7\nmock-pdf"
+    in_memory_cache.delete_cache(pdf_url)
+    event_loop_thread: Final = threading.current_thread()
+    event_loop_ran: Final = threading.Event()
+    loop_ran_during_download: Final[list[bool]] = []
+
+    def pdf_response() -> Response:
+        return Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
+
+    async def serve_pdf_on_event_loop() -> Response:
+        loop_ran_during_download.append(await asyncio.to_thread(event_loop_ran.wait, 5))
+        return pdf_response()
+
+    def serve_pdf(request: object) -> Response | Coroutine[object, object, Response]:
+        if threading.current_thread() is event_loop_thread:
+            return serve_pdf_on_event_loop()
+        loop_ran_during_download.append(event_loop_ran.wait(timeout=5))
+        return pdf_response()
+
+    respx_mock.get(pdf_url).mock(side_effect=serve_pdf)
+
+    async def mark_event_loop_ran() -> None:
+        event_loop_ran.set()
+
+    request, _ = await asyncio.gather(
+        OpenAIGPTConfig().async_transform_request(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": [{"type": "file", "file": {"file_id": pdf_url}}]}],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai"},
+            headers={},
+        ),
+        mark_event_loop_ran(),
+    )
+
+    assert loop_ran_during_download == [True]
+    assert request["messages"][0]["content"][0]["file"] == {
+        "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
+        "filename": "my_file.pdf",
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
 def test_vision_with_custom_model_preserves_base64_image_in_request(respx_mock: respx.MockRouter) -> None:
     image_uri: Final = f"data:image/png;base64,{base64.b64encode(b'test-image').decode('utf-8')}"
     messages: Final = [
@@ -1560,14 +1638,8 @@ class TestSystemMessagesFirst:
 
     @pytest.mark.asyncio
     async def test_async_transform_request_moves_system_messages_first(self, monkeypatch):
-        class UninstantiatedOpenAIGPTConfig(OpenAIGPTConfig):
-            _is_base_class = True
-
-            def __init__(self) -> None:
-                pass
-
         monkeypatch.setattr(litellm, "openai_system_messages_first", True)
-        request = await UninstantiatedOpenAIGPTConfig().async_transform_request(
+        request = await self.config.async_transform_request(
             model="gpt-4.1",
             messages=self._messages(),
             optional_params={},
