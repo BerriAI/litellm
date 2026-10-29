@@ -2,6 +2,8 @@ import asyncio
 import base64
 import importlib
 import os
+import shutil
+import tempfile
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -215,6 +217,19 @@ def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     _reset_aws_auth_caches()
+
+
+@pytest.fixture
+def socket_dir() -> Iterator[Path]:
+    """A directory whose unix socket paths fit the kernel's sun_path limit, which pytest's tmp_path exceeds on macOS."""
+    directory: Final = Path(tempfile.mkdtemp(prefix="sock"))
+    yield directory
+    shutil.rmtree(directory)
+
+
+@pytest.fixture
+def socket_path(socket_dir: Path) -> Path:
+    return socket_dir / "spend.sock"
 
 
 @pytest.fixture(autouse=True, scope="session")

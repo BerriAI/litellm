@@ -277,7 +277,7 @@ def _free_port() -> int:
 
 
 def _fake_pooler(
-    tmp_path: Path,
+    directory: Path,
     port: int,
     exit_immediately: bool = False,
     port_file: Path | None = None,
@@ -288,13 +288,13 @@ def _fake_pooler(
     """An executable that listens like PgBouncer: on the TCP port first, then on ``.s.PGSQL.<port>`` in the socket dir.
 
     Port and socket dir come from the ini it is given, else from ``port`` and
-    ``tmp_path``. With ``port_file`` each start reads the port from that file
+    ``directory``. With ``port_file`` each start reads the port from that file
     instead. ``bind_delay_seconds`` holds the bind back, like a slow start.
     ``--version`` prints ``version_banner``. With ``auth_log`` it appends the
     ``auth_file`` it reads at startup and on every SIGHUP, one line per read,
     like PgBouncer loading its credentials.
     """
-    script: Final = tmp_path / "fake-pgbouncer"
+    script: Final = directory / "fake-pgbouncer"
     script.write_text(
         textwrap.dedent(
             f"""\
@@ -316,7 +316,7 @@ def _fake_pooler(
             port = ini.getint("pgbouncer", "listen_port", fallback={port})
             if not {port_file is None!r}:
                 port = int(pathlib.Path({str(port_file)!r}).read_text())
-            socket_dir = ini.get("pgbouncer", "unix_socket_dir", fallback={str(tmp_path)!r})
+            socket_dir = ini.get("pgbouncer", "unix_socket_dir", fallback={str(directory)!r})
             socket_path = f"{{socket_dir}}/.s.PGSQL.{{port}}"
             time.sleep({bind_delay_seconds!r})
             listener = socket.socket()
