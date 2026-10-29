@@ -9,7 +9,7 @@ import gc
 import json
 import threading
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -29,6 +29,8 @@ from litellm.responses.streaming_iterator import (
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+    _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT,
+    _UPSTREAM_RELEASE_TIMEOUT_SECONDS,
     _estimate_usage_from_text,
 )
 from litellm.types.llms.openai import (
@@ -272,34 +274,38 @@ def test_sync_transport_error_before_completed_event_raises():
 
 _UPSTREAM_TAILS_AFTER_COMPLETED: Final = [
     pytest.param(None, id="eof"),
-    pytest.param(b": keep-alive\n\n", id="endless-heartbeats"),
     *(pytest.param(error, id=type(error).__name__) for error in _TRAILING_ERRORS_AFTER_COMPLETED),
 ]
 
+_HEARTBEATS_SENT: Final = 1000
 
-async def _async_upstream(trailing: Exception | bytes | None, release: asyncio.Event | None = None):
+
+async def _async_upstream(
+    trailing: Exception | None, release: asyncio.Event | None = None, heartbeats: Iterator[bytes] = iter(())
+):
     for event in _COMPLETE_STREAM_EVENTS:
         yield event
+    for heartbeat in heartbeats:
+        yield heartbeat
     if release is not None:
         await release.wait()
-    if isinstance(trailing, Exception):
+    if trailing is not None:
         raise trailing
-    if isinstance(trailing, bytes):
-        for _ in range(1000):
-            yield trailing
-        raise AssertionError("the client stream read the upstream past its terminal event")
 
 
-def _sync_upstream(trailing: Exception | bytes | None, release: threading.Event | None = None):
+def _sync_upstream(
+    trailing: Exception | None, release: threading.Event | None = None, heartbeats: Iterator[bytes] = iter(())
+):
     yield from _COMPLETE_STREAM_EVENTS
+    yield from heartbeats
     if release is not None and not release.wait(timeout=5):
         raise AssertionError("the client stream read the upstream past its terminal event")
-    if isinstance(trailing, Exception):
+    if trailing is not None:
         raise trailing
-    if isinstance(trailing, bytes):
-        for _ in range(1000):
-            yield trailing
-        raise AssertionError("the client stream read the upstream past its terminal event")
+
+
+def _heartbeats() -> Iterator[bytes]:
+    return iter([b": keep-alive\n\n"] * _HEARTBEATS_SENT)
 
 
 def _async_stream_over(upstream) -> tuple[ResponsesAPIStreamingIterator, asyncio.Event]:
@@ -386,6 +392,51 @@ def test_sync_upstream_is_closed_after_the_stream_ends_at_completed_event(traili
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert closed.wait(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_upstream_that_stays_open_after_completed_event_is_closed_in_the_background():
+    iterator, closed = _async_stream_over(_async_upstream(None, asyncio.Event()))
+
+    seen: Final = await asyncio.wait_for(_event_types(iterator), timeout=5)
+    await iterator.aclose()
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    await asyncio.wait_for(closed.wait(), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_closing_the_stream_at_its_completed_event_closes_the_upstream_at_once():
+    iterator, closed = _async_stream_over(_async_upstream(None, asyncio.Event()))
+
+    seen: Final = [(await iterator.__anext__()).type for _ in _COMPLETE_STREAM_EVENTS]
+    await asyncio.wait_for(iterator.aclose(), timeout=_UPSTREAM_RELEASE_TIMEOUT_SECONDS / 2)
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_upstream_heartbeats_after_completed_event_are_cut_off_and_closed():
+    heartbeats: Final = _heartbeats()
+    iterator, closed = _async_stream_over(_async_upstream(None, asyncio.Event(), heartbeats))
+
+    seen: Final = await asyncio.wait_for(_event_types(iterator), timeout=5)
+    await asyncio.wait_for(closed.wait(), timeout=5)
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert _HEARTBEATS_SENT - len(list(heartbeats)) <= _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT
+
+
+def test_sync_upstream_heartbeats_after_completed_event_are_cut_off_and_closed():
+    heartbeats: Final = _heartbeats()
+    iterator, closed = _sync_stream_over(_sync_upstream(None, heartbeats=heartbeats))
+
+    seen: Final = [event.type for event in iterator]
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert closed.wait(timeout=5)
+    assert _HEARTBEATS_SENT - len(list(heartbeats)) <= _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT
 
 
 async def _async_events(events: list[bytes]):

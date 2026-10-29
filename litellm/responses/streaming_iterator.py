@@ -242,21 +242,28 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
 
 
 _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT: Final = 8
+_UPSTREAM_RELEASE_TIMEOUT_SECONDS: Final = 1.0
 _UPSTREAM_RELEASE_TASKS: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: strong refs to upstream release tasks
+
+
+async def _drain_after_terminal_event(upstream_bytes: AsyncIterator[bytes]) -> None:
+    try:
+        for _ in range(_MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT):
+            await upstream_bytes.__anext__()
+    except StopAsyncIteration:
+        return
+    verbose_logger.debug("Upstream Responses stream kept sending after its terminal event, closing it")
 
 
 async def _release_upstream_after_terminal_event(
     upstream_bytes: AsyncIterator[bytes], response: httpx.Response
 ) -> None:
     try:
-        for _ in range(_MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT):
-            await upstream_bytes.__anext__()
-    except StopAsyncIteration:
-        pass
+        await asyncio.wait_for(_drain_after_terminal_event(upstream_bytes), timeout=_UPSTREAM_RELEASE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        verbose_logger.debug("Upstream Responses stream stayed open after its terminal event, closing it")
     except (httpx.HTTPError, httpx.StreamError) as e:
         verbose_logger.debug("Upstream Responses stream failed after its terminal event: %s", e)
-    else:
-        verbose_logger.debug("Upstream Responses stream kept sending after its terminal event, closing it")
     finally:
         with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
             await response.aclose()
@@ -277,7 +284,7 @@ def _release_upstream_after_terminal_event_sync(upstream_bytes: Iterator[bytes],
             response.close()
 
 
-def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: httpx.Response) -> None:
+def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: httpx.Response) -> asyncio.Task[None]:
     task: Final = asyncio.get_running_loop().create_task(
         _release_upstream_after_terminal_event(upstream_bytes, response)
     )
@@ -286,6 +293,7 @@ def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: http
     task.add_done_callback(
         lambda done: _log_background_task_failure(done, task_name="Upstream Responses stream release")
     )
+    return task
 
 
 def _start_upstream_release_sync(upstream_bytes: Iterator[bytes], response: httpx.Response) -> None:
@@ -1270,7 +1278,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     Async iterator for processing streaming responses from the Responses API.
     """
 
-    _releasing_upstream: bool = False
+    _upstream_release: asyncio.Task[None] | None = None
 
     def __init__(
         self,
@@ -1309,11 +1317,16 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise
 
     async def aclose(self) -> None:
-        if not self._releasing_upstream:
-            await self.response.aclose()
+        release: Final = self._upstream_release
+        if release is not None and self.finished:
+            return
+        if release is not None:
+            release.cancel()
+            await asyncio.wait((release,))
+        await self.response.aclose()
 
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
-        if self._releasing_upstream:
+        if self._upstream_release is not None:
             self.finished = True
             raise StopAsyncIteration
         try:
@@ -1330,8 +1343,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
                 if self.completed_response is not None:
-                    self._releasing_upstream = True
-                    _spawn_upstream_release(self._upstream_bytes, self.response)
+                    self._upstream_release = _spawn_upstream_release(self._upstream_bytes, self.response)
 
                 if self.finished:
                     self._raise_if_ended_without_terminal_event()
