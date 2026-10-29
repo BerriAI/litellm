@@ -179,12 +179,11 @@ FAKE_VECTORS: dict[str, Vector] = {
 }
 
 
-
-
 def _paged_params():
     from mcp.types import PaginatedRequestParams
 
     return PaginatedRequestParams()
+
 
 class RecordingEmbedder:
     def __init__(self) -> None:
@@ -1058,11 +1057,9 @@ class TestDispatchVirtualMcpTool:
 
     @pytest.mark.asyncio
     async def test_routes_search_with_client_ip(self) -> None:
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
-            "litellm.proxy.mcp_server.tool_search.handle_mcp_tool_search",
+            "litellm.proxy.mcp_server.operations._dispatch_mcp_tool_search",
             new_callable=AsyncMock,
             return_value="SEARCH_RESULT",
         ) as mock_search:
@@ -1080,8 +1077,6 @@ class TestDispatchVirtualMcpTool:
 
     @pytest.mark.asyncio
     async def test_routes_agent_search_to_its_handler(self) -> None:
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(  # test-quality-ok: dispatch routing is the subject; the handler is faked like its siblings here
             "litellm.proxy.mcp_server.tool_search.handle_agent_search",
@@ -1115,8 +1110,6 @@ class TestDispatchVirtualMcpTool:
 
     @pytest.mark.asyncio
     async def test_routes_call_with_client_ip(self) -> None:
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
             "litellm.proxy.mcp_server.tool_search.handle_mcp_tool_call",
@@ -1148,13 +1141,12 @@ class TestDispatchVirtualMcpTool:
         """Regression: the SSE dispatch must run the pre-call pipeline and forward
         the resulting logging object to handle_mcp_tool_call, otherwise mcp_tool_call
         over /mcp/ skips spend logging and guardrails (unlike the REST path)."""
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         sentinel_logging_obj = object()
         with (
             patch.object(
-                mcp_operations, "_build_virtual_call_logging_obj",
+                mcp_operations,
+                "_build_virtual_call_logging_obj",
                 new_callable=AsyncMock,
                 return_value=sentinel_logging_obj,
             ) as mock_build,
@@ -1178,11 +1170,9 @@ class TestDispatchVirtualMcpTool:
     async def test_search_coerces_non_int_top_k(self) -> None:
         """Regression: a non-integer top_k from an MCP client must not raise; it
         falls back to the default instead of ValueError propagating out."""
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
-            "litellm.proxy.mcp_server.tool_search.handle_mcp_tool_search",
+            "litellm.proxy.mcp_server.operations._dispatch_mcp_tool_search",
             new_callable=AsyncMock,
             return_value="SEARCH_RESULT",
         ) as mock_search:
@@ -1194,6 +1184,163 @@ class TestDispatchVirtualMcpTool:
             )
 
         assert mock_search.await_args.kwargs["top_k"] == 5
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_runs_admission_and_completed_logging(self, monkeypatch) -> None:
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.mcp_server.tool_search import (
+            MCP_TOOL_SEARCH_TOOL_NAME,
+        )
+
+        monkeypatch.setattr(litellm, "mcp_tool_search", {})
+        uak = UserAPIKeyAuth(api_key="k")
+        sentinel_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        processors = []
+
+        class FakeProcessor:
+            def __init__(self, data):
+                self.data = data
+                processors.append(self)
+
+            async def common_processing_pre_call_logic(self, **kwargs):
+                return self.data, sentinel_logging_obj
+
+        with (
+            patch(
+                "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+                FakeProcessor,
+            ),
+            patch(
+                "litellm.proxy.mcp_server.tool_search.handle_mcp_tool_search",
+                new_callable=AsyncMock,
+                return_value="SEARCH_RESULT",
+            ),
+            patch.object(
+                mcp_operations,
+                "_fire_mcp_tool_call_logging",
+                new_callable=AsyncMock,
+                return_value="LOGGED_SEARCH_RESULT",
+            ) as mock_fire,
+        ):
+            result = await mcp_operations._dispatch_mcp_tool_search(
+                query="ping",
+                top_k=3,
+                user_api_key_auth=uak,
+            )
+
+        assert processors[0].data["name"] == MCP_TOOL_SEARCH_TOOL_NAME
+        assert processors[0].data["arguments"] == {
+            "query": "ping",
+            "top_k": 3,
+        }
+        assert mock_fire.await_count == 1
+        assert result == "LOGGED_SEARCH_RESULT"
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_logs_admission_failure(self, monkeypatch) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "mcp_tool_search", {})
+        uak = UserAPIKeyAuth(api_key="k")
+        failure = RuntimeError("rate limited")
+
+        with (
+            patch.object(
+                mcp_operations,
+                "_build_keyword_search_logging_obj",
+                new_callable=AsyncMock,
+                side_effect=failure,
+            ),
+            patch.object(
+                mcp_operations,
+                "fire_mcp_tool_call_failure_logging",
+                new_callable=AsyncMock,
+            ) as mock_failure_log,
+        ):
+            with pytest.raises(RuntimeError, match="rate limited"):
+                await mcp_operations._dispatch_mcp_tool_search(
+                    query="ping",
+                    top_k=3,
+                    user_api_key_auth=uak,
+                )
+
+        mock_failure_log.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_keyword_search_admission_is_independent_of_mcp_tool_call_logger(self, monkeypatch) -> None:
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        monkeypatch.setattr(litellm, "mcp_tool_search", {})
+        sentinel_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+
+        class FakeProcessor:
+            def __init__(self, data):
+                self.data = data
+
+            async def common_processing_pre_call_logic(self, **kwargs):
+                return kwargs, sentinel_logging_obj
+
+        with (
+            patch(
+                "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+                FakeProcessor,
+            ),
+            patch.object(
+                mcp_operations,
+                "_build_virtual_call_logging_obj",
+                side_effect=AssertionError("mcp_tool_call logger must not own keyword search admission"),
+            ),
+            patch(
+                "litellm.proxy.mcp_server.tool_search.handle_mcp_tool_search",
+                new_callable=AsyncMock,
+                return_value="SEARCH_RESULT",
+            ),
+            patch.object(
+                mcp_operations,
+                "_fire_mcp_tool_call_logging",
+                new_callable=AsyncMock,
+                return_value="LOGGED_SEARCH_RESULT",
+            ),
+        ):
+            result = await mcp_operations._dispatch_mcp_tool_search(
+                query="ping",
+                top_k=3,
+                user_api_key_auth=UserAPIKeyAuth(api_key="k"),
+            )
+
+        assert result == "LOGGED_SEARCH_RESULT"
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_keeps_embedding_request_accounting(self, monkeypatch) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"embedding_model": "embedding-model"})
+        uak = UserAPIKeyAuth(api_key="k")
+        with (
+            patch(
+                "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+                side_effect=AssertionError("semantic path must not add another request"),
+            ),
+            patch(
+                "litellm.proxy.mcp_server.tool_search.handle_mcp_tool_search",
+                new_callable=AsyncMock,
+                return_value="SEARCH_RESULT",
+            ) as mock_search,
+        ):
+            result = await mcp_operations._dispatch_mcp_tool_search(
+                query="ping",
+                top_k=3,
+                user_api_key_auth=uak,
+            )
+
+        assert mock_search.await_count == 1
+        assert result == "SEARCH_RESULT"
 
     @pytest.mark.asyncio
     async def test_call_handler_forwards_auth_headers_to_execute(self) -> None:
@@ -1287,7 +1434,9 @@ class TestCaptureHostProgressCallback:
     @pytest.mark.parametrize("token", ["tok12345", 12345, 0])
     @pytest.mark.parametrize("message", [None, "halfway"])
     @pytest.mark.parametrize("delivery_error", [None, RuntimeError("request stream closed")])
-    async def test_forwards_progress_on_originating_request(self, _mcp_request_ctx, token, message, delivery_error) -> None:
+    async def test_forwards_progress_on_originating_request(
+        self, _mcp_request_ctx, token, message, delivery_error
+    ) -> None:
         from mcp.server.connection import Connection
         from mcp.server.session import ServerSession
         from mcp.shared.dispatcher import DispatchContext
@@ -1467,5 +1616,3 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
     finally:
         if original_affinity is not None:
             os.sched_setaffinity(0, original_affinity)
-
-
