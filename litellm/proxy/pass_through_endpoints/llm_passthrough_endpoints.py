@@ -68,6 +68,7 @@ from litellm.llms.deepgram.common_utils import (
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
+from litellm.llms.openai.common_utils import is_openai_agents_api_path, openai_api_resource
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -3530,6 +3531,10 @@ async def deepgram_listen_websocket_route(
     )
 
 
+_OPENAI_BETA_HEADER: Final = "openai-beta"
+_CLIENT_OPENAI_BETA_RESOURCES: Final = frozenset({"agents", "vaults", "chatkit"})
+
+
 class BaseOpenAIPassThroughHandler:
     @staticmethod
     async def base_openai_pass_through_handler(
@@ -3540,7 +3545,7 @@ class BaseOpenAIPassThroughHandler:
         base_target_url: str,
         api_key: str | None,
         custom_llm_provider: litellm.LlmProviders,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ):
         encoded_endpoint = httpx.URL(endpoint).path
         # Ensure endpoint starts with '/' for proper URL construction
@@ -3565,7 +3570,11 @@ class BaseOpenAIPassThroughHandler:
             endpoint=endpoint,
             target=str(updated_url),
             custom_headers=BaseOpenAIPassThroughHandler._assemble_headers(
-                api_key=api_key, request=request, extra_headers=extra_headers
+                api_key=api_key,
+                endpoint=endpoint,
+                request=request,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
             ),
             is_streaming_request=is_streaming_request,
             custom_llm_provider=(
@@ -3587,27 +3596,41 @@ class BaseOpenAIPassThroughHandler:
     _base_openai_pass_through_handler = base_openai_pass_through_handler
 
     @staticmethod
-    def _append_openai_beta_header(headers: dict, request: Request) -> dict:
-        """
-        Appends the OpenAI-Beta header to the headers if the request is an OpenAI Assistants API request
-        """
-        if RouteChecks.is_assistants_api_request(request) is True and "OpenAI-Beta" not in headers:
-            headers["OpenAI-Beta"] = "assistants=v2"
-        return headers
+    def _openai_beta(endpoint: str, request: Request, custom_llm_provider: litellm.LlmProviders) -> str | None:
+        if (
+            custom_llm_provider == litellm.LlmProviders.OPENAI
+            and openai_api_resource(endpoint) in _CLIENT_OPENAI_BETA_RESOURCES
+        ):
+            return request.headers.get(_OPENAI_BETA_HEADER) or (
+                "agents=v1" if is_openai_agents_api_path(endpoint) else None
+            )
+        return "assistants=v2" if RouteChecks.is_assistants_api_request(request) else None
 
     @staticmethod
-    def _assemble_headers(api_key: str | None, request: Request, extra_headers: dict | None = None) -> dict:
-        base_headers = {}
-        if api_key is not None:
-            base_headers = {
-                "authorization": f"Bearer {api_key}",
-                "api-key": f"{api_key}",
-            }
-        if extra_headers is not None:
-            base_headers.update(extra_headers)
+    def _append_openai_beta_header(
+        headers: Mapping[str, str], endpoint: str, request: Request, custom_llm_provider: litellm.LlmProviders
+    ) -> dict[str, str]:
+        if any(name.lower() == _OPENAI_BETA_HEADER for name in headers):
+            return {**headers}
+        openai_beta: Final = BaseOpenAIPassThroughHandler._openai_beta(endpoint, request, custom_llm_provider)
+        return {**headers} if openai_beta is None else {**headers, _OPENAI_BETA_HEADER: openai_beta}
+
+    @staticmethod
+    def _assemble_headers(
+        api_key: str | None,
+        endpoint: str,
+        request: Request,
+        custom_llm_provider: litellm.LlmProviders,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> dict[str, str]:
+        api_key_headers: Final[Mapping[str, str]] = (
+            {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
+        )
         return BaseOpenAIPassThroughHandler._append_openai_beta_header(
-            headers=base_headers,
+            headers={**api_key_headers, **(extra_headers or {})},
+            endpoint=endpoint,
             request=request,
+            custom_llm_provider=custom_llm_provider,
         )
 
 
