@@ -233,6 +233,15 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return response_id if billing == "background_settlement" and isinstance(response_id, str) else None
 
     @staticmethod
+    def stream_may_settle_background_response(url_route: str, request_body: Mapping[str, object]) -> bool:
+        sub_route: Final = _responses_sub_route(urlparse(url_route).path)
+        creates_in_background: Final = sub_route == () and request_body.get("background") is True
+        resumes_a_response: Final = sub_route is not None and len(sub_route) == 1
+        return OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route) and (
+            creates_in_background or resumes_a_response
+        )
+
+    @staticmethod
     def background_response_settled_by_stream(all_chunks: Sequence[str]) -> str | None:
         terminal_response: Final = OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks)
         if terminal_response is None or not _settles_background_response(terminal_response):
@@ -700,10 +709,15 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         try:
             is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-            terminal_response: Final = (
+            parsed_terminal_response: Final = (
                 OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(all_chunks=all_chunks)
                 if is_responses
                 else None
+            )
+            terminal_response: Final = (
+                parsed_terminal_response.model_copy(update={"usage": None})
+                if background_response_settled_before and parsed_terminal_response is not None
+                else parsed_terminal_response
             )
             requested_model: Final[object] = request_body.get("model")
             model: Final = (

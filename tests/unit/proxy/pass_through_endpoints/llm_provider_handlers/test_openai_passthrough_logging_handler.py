@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import asyncio
 import json
 import logging
+import sys
 from collections.abc import Mapping
 from datetime import datetime
 from types import SimpleNamespace
@@ -2438,9 +2439,28 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         later: Final = await self._logged_call(method, sub_route, {}, response_body, later_call_id, passthrough_logging)
 
         assert first.spend_row["spend"] > 0
+        assert first.spend_row["total_tokens"] > 0
         assert first.spend_row["request_id"].startswith(STORED_RESPONSE_ID)
         assert not later.spend_row["spend"]
+        assert not later.spend_row["total_tokens"]
         assert later.spend_row["request_id"] == later_call_id
+
+    @pytest.mark.asyncio
+    async def test_a_proxy_without_the_prisma_package_still_bills_a_finished_background_read(
+        self, local_model_cost_map, monkeypatch
+    ):
+        monkeypatch.setitem(sys.modules, "prisma.errors", None)
+
+        read: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            _stored_response("completed", True, RESPONSES_USAGE),
+            "c7d2e9a4-1b6f-4e83-9a50-2f8d4b7c1e36",
+            _settling_passthrough_logging(None),
+        )
+
+        assert read.spend_row["spend"] > 0
 
     @pytest.mark.asyncio
     async def test_the_proxy_database_keeps_a_background_response_billed_once(self, local_model_cost_map, monkeypatch):
@@ -2484,6 +2504,35 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not retrieve.spend_row["spend"]
 
     @pytest.mark.asyncio
+    async def test_a_background_create_stream_cut_before_it_finishes_leaves_the_bill_to_the_finished_retrieve(
+        self, local_model_cost_map
+    ):
+        passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
+        created: Final = {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": _stored_response("in_progress", True, None),
+        }
+
+        await self._streamed_call(
+            "",
+            {**CREATE_REQUEST, "background": True, "stream": True},
+            [f"event: response.created\ndata: {json.dumps(created)}\n\n".encode()],
+            "d4b8e2f6-9a1c-4573-8e6d-1f7c3a5b9e20",
+            passthrough_logging,
+        )
+        retrieve: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            _stored_response("completed", True, RESPONSES_USAGE),
+            "f1a6c3e8-4d2b-4b97-a5e0-7c9d2f4b6a13",
+            passthrough_logging,
+        )
+
+        assert retrieve.spend_row["spend"] > 0
+
+    @pytest.mark.asyncio
     async def test_a_streamed_foreground_create_bills_without_recording_a_settlement(self, local_model_cost_map):
         settlement_table: Final = _SettlementTable()
 
@@ -2515,7 +2564,9 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         )
 
         assert retrieve.spend_row["spend"] > 0
+        assert retrieve.spend_row["total_tokens"] > 0
         assert not resumed_stream.spend_row["spend"]
+        assert not resumed_stream.spend_row["total_tokens"]
         assert resumed_stream.spend_row["request_id"] != retrieve.spend_row["request_id"]
 
     @pytest.mark.asyncio

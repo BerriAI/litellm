@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -37,6 +38,8 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
 from .success_handler import PassThroughEndpointLogging
+
+_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 class RouteStreamingLogging(Protocol):
@@ -394,7 +397,9 @@ class PassThroughStreamingHandler:
                 return
             background_response_settled_before: Final = (
                 endpoint_type == EndpointType.OPENAI
-                and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+                and OpenAIPassthroughLoggingHandler.stream_may_settle_background_response(
+                    url_route, _REQUEST_FIELDS.validate_python(request_body)
+                )
                 and await passthrough_success_handler_obj.background_response_settled_before(
                     await asyncify(PassThroughStreamingHandler._background_response_settled_by_stream)(raw_bytes)
                 )

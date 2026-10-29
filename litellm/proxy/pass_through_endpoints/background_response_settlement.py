@@ -5,6 +5,7 @@ from typing import Final, Protocol
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.table_repositories import BackgroundResponseSettlementRepository
 
 
@@ -38,16 +39,14 @@ class PrismaBackgroundResponseSettlementStore:
     table: Callable[[], BackgroundResponseSettlementTable | None] = _proxy_settlement_table
 
     async def claim(self, response_id: str) -> bool:
-        from prisma.errors import UniqueViolationError  # noqa: PLC0415  # prisma may be ungenerated at load
-
         try:
             table: Final = self.table()
             if table is None:
                 return True
             await table.create(data=_NewSettlementRow(response_id=response_id))
-        except UniqueViolationError:
-            return False
         except Exception as e:  # noqa: BLE001  # any DB failure must bill as before rather than drop the charge
+            if is_unique_violation(e):
+                return False
             verbose_proxy_logger.warning(
                 "Could not record the settlement of background response %s, billing it anyway: %s", response_id, e
             )
