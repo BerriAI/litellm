@@ -64,7 +64,6 @@ def _content_hits(location: str, data: bytes, forms: Forms, depth: int) -> Itera
         for member in archive.infolist():
             if member.is_dir():
                 continue
-            yield from _name_hits(f"{location}!{member.filename}", member.filename, forms)
             yield from _content_hits(f"{location}!{member.filename}", archive.read(member), forms, depth + 1)
 
 

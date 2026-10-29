@@ -24,9 +24,9 @@ PREFIXES: Final = ("", "x", "xy")
 ENCODERS: Final = (base64.b64encode, base64.urlsafe_b64encode)
 
 
-def _zip(members: Mapping[str, bytes]) -> bytes:
+def _zip(members: Mapping[str, bytes], compression: int = zipfile.ZIP_DEFLATED) -> bytes:
     buffer: Final = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+    with zipfile.ZipFile(buffer, "w", compression) as archive:
         for name, data in members.items():
             archive.writestr(name, data)
     return buffer.getvalue()
@@ -69,7 +69,9 @@ PLACEMENTS: Final = MappingProxyType(
         "base64url two bytes in": {"a.json": _encoded_blob("xy", base64.urlsafe_b64encode)},
         "inside a zip member": {"trace.zip": _zip({"network.json": f'{{"auth": "{SECRET}"}}'.encode()})},
         "inside a nested zip": {"outer.zip": _zip({"inner.zip": _zip({"env.txt": SECRET.encode()})})},
-        "in a zip member name": {"trace.zip": _zip({f"dump-{QUOTED}.txt": b"x"})},
+        "named after it in a nested zip": {
+            "outer.zip": _zip({"inner.zip": _zip({f"dump-{QUOTED}.txt": SECRET.encode()})})
+        },
         "in a file name": {f"run-{QUOTED}.log": b"nothing inside"},
     }
 )
@@ -113,7 +115,7 @@ def test_a_symlinked_directory_fails_closed(tmp_path: Path) -> None:
 
 
 def test_an_unreadable_archive_fails_without_echoing_its_contents(tmp_path: Path) -> None:
-    archive: Final = _zip({"env.txt": f"LITELLM_LICENSE={SECRET}".encode()})
+    archive: Final = _zip({"env.txt": f"LITELLM_LICENSE={SECRET}".encode()}, zipfile.ZIP_STORED)
     at: Final = archive.index(SECRET.encode())
     (tmp_path / "trace.zip").write_bytes(archive[:at] + bytes([archive[at] ^ 0xFF]) + archive[at + 1 :])
     code, output = _run(tmp_path)
