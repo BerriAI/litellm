@@ -147,14 +147,15 @@ lint-install:
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
 # Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
-# only the litellm Python files changed vs the base are checked, so a pre-existing
+# only the litellm Python files changed vs the base and still on disk are checked, so a pre-existing
 # format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
 # recursively, so 'litellm/*.py' covers top-level files and nested modules alike,
 # the same set CI's ':(glob)litellm/**/*.py' selects.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	@base_ref=$$($(RESOLVE_BASE)) && \
 	changed=$$(git diff --name-only --diff-filter=ACMR "$$base_ref...HEAD" -- 'litellm/*.py') && \
-	files=$$(printf '%s\n' "$$changed" | grep -v '^litellm/enterprise/' || true) || exit $$?; \
+	files=$$(printf '%s\n' "$$changed" | grep -v '^litellm/enterprise/' | \
+		while IFS= read -r f; do if [ -f "$$f" ]; then printf '%s\n' "$$f"; fi; done) || exit $$?; \
 	if [ -z "$$files" ]; then \
 		echo "No changed litellm Python files to format-check."; \
 	else \
@@ -173,14 +174,11 @@ lint-ruff: $(LINT_DEP_INSTALL)
 # https://github.com/astral-sh/ruff/discussions/4049
 lint-format-changed: install-dev
 	@base_ref=$$($(RESOLVE_BASE)) && \
-	diff=$$(git diff "$$base_ref" --unified=0 --no-color -- '*.py') && \
+	diff=$$(git diff "$$base_ref" --unified=0 --no-color --diff-filter=d -- '*.py') && \
 	printf '%s\n' "$$diff" | \
-	perl -ne '\
-		if (/^diff --git a\/(.*) b\//) { $$file = $$1; } \
-		if (/^@@ .* \+(\d+)(?:,(\d+))? @@/) { \
-			$$start = $$1; $$count = $$2 || 1; $$end = $$start + $$count - 1; \
-			print "$$file:$$start:1-$$end:999\n"; \
-		}' | \
+	perl -ne 'if (/^\+\+\+ b\/(.*)/) { $$file = $$1; }' \
+		-e 'if (/^@@ .* \+(\d+)(?:,(\d+))? @@/) { $$start = $$1; $$count = $$2 || 1; $$end = $$start + $$count - 1;' \
+		-e 'print "$$file:$$start:1-$$end:999\n"; }' | \
 		while read range; do \
 			file="$${range%%:*}"; \
 			lines="$${range#*:}"; \
@@ -199,7 +197,7 @@ lint-ruff-dev: install-dev
 
 lint-ruff-FULL-dev: install-dev
 	@base_ref=$$($(RESOLVE_BASE)) && \
-	files=$$(git diff --name-only "$$base_ref" -- '*.py') || exit $$?; \
+	files=$$(git diff --name-only --diff-filter=d "$$base_ref" -- '*.py') || exit $$?; \
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
