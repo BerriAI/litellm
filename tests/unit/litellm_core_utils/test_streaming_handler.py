@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import itertools
 import json
 import queue
 import sys
@@ -13,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
 import litellm
@@ -28,6 +30,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -501,6 +504,118 @@ def test_multi_chunk_reasoning_and_content(
     # Verify final state
     assert initialized_custom_stream_wrapper.sent_first_thinking_block is True
     assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
+
+
+def _stream_chunk(delta: dict[str, object], finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason}])
+
+
+def _content_through_first_call(deltas: Sequence[Delta]) -> str:
+    first_call: Final = next(
+        (index for index, delta in enumerate(deltas) if delta.tool_calls or delta.function_call), len(deltas)
+    )
+    return "".join(delta.content or "" for delta in deltas[: first_call + 1])
+
+
+_GET_WEATHER_CALL: Final = {
+    "index": 0,
+    "id": "call_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize(
+    "chunks,expected_content,expected_tool_calls",
+    [
+        (
+            (
+                _stream_chunk({"reasoning_content": "Check the weather"}),
+                _stream_chunk({"tool_calls": [_GET_WEATHER_CALL]}),
+                _stream_chunk({}, "tool_calls"),
+            ),
+            "<think>Check the weather</think>",
+            1,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "Pick a function"}),
+                _stream_chunk({"function_call": {"name": "get_weather", "arguments": "{}"}}),
+                _stream_chunk({}, "function_call"),
+            ),
+            "<think>Pick a function</think>",
+            0,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "Step one"}),
+                _stream_chunk({"reasoning_content": ", step two"}),
+                _stream_chunk({}, "length"),
+            ),
+            "<think>Step one, step two</think>",
+            0,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "a"}),
+                _stream_chunk({"content": "b"}),
+                _stream_chunk({"reasoning_content": "c"}),
+                _stream_chunk({"content": "d"}),
+                _stream_chunk({}, "stop"),
+            ),
+            "<think>a</think>b<think>c</think>d",
+            0,
+        ),
+        (
+            (_stream_chunk({"reasoning_content": "Still thinking"}),),
+            "<think>Still thinking</think>",
+            0,
+        ),
+        (
+            (_stream_chunk({"content": "hi"}), _stream_chunk({}, "stop")),
+            "hi",
+            0,
+        ),
+    ],
+    ids=[
+        "reasoning_then_tool_call",
+        "reasoning_then_function_call",
+        "reasoning_cut_by_length",
+        "reasoning_after_answer",
+        "stream_ends_mid_reasoning",
+        "answer_without_reasoning",
+    ],
+)
+async def test_merged_reasoning_stream_keeps_think_tags_balanced(
+    logging_obj: Logging,
+    is_async: bool,
+    chunks: tuple[ModelResponseStream, ...],
+    expected_content: str,
+    expected_tool_calls: int,
+) -> None:
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=[chunk.model_copy(deep=True) for chunk in chunks]),
+        model="deepseek-reasoner",
+        logging_obj=logging_obj,
+    )
+    response.merge_reasoning_content_in_choices = True
+
+    deltas: Final = (
+        tuple([chunk.choices[0].delta async for chunk in response])
+        if is_async
+        else tuple(chunk.choices[0].delta for chunk in response)
+    )
+    logged: Final = litellm.stream_chunk_builder(chunks=response.chunks)
+
+    assert "".join(delta.content or "" for delta in deltas) == expected_content
+    assert _content_through_first_call(deltas) == expected_content
+    assert sum(len(delta.tool_calls or ()) for delta in deltas) == expected_tool_calls
+    assert logged.choices[0].message.content == (expected_content or None)
+    assert any(chunk.choices[0].finish_reason for chunk in response.chunks if chunk.choices) == any(
+        chunk.choices[0].finish_reason for chunk in chunks
+    )
 
 
 def test_strip_sse_data_from_chunk():
@@ -1365,6 +1480,148 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
         await response.__anext__()
     assert not isinstance(excinfo.value, MidStreamFallbackError)
     assert getattr(excinfo.value, "status_code", None) == 400
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("prefix", ["", "Partial answer"])
+@pytest.mark.parametrize("abort_index", [0, 1])
+@pytest.mark.parametrize("abort_content", ["", "unfinished"])
+async def test_aborted_stream_raises_instead_of_finishing_successfully(
+    async_stream: bool, transport: str, prefix: str, abort_index: int, abort_content: str, logging_obj: Logging
+) -> None:
+    initial: Final = (
+        (({"index": 0, "delta": {"role": "assistant", "content": prefix}, "finish_reason": None},),) if prefix else ()
+    )
+    final: Final = tuple(
+        {
+            "index": index,
+            "delta": {"content": abort_content},
+            "finish_reason": "abort" if index == abort_index else "stop",
+        }
+        for index in range(abort_index + 1)
+    )
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-aborted",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": choices,
+                }
+            )
+            + "\n\n"
+            for choices in (*initial, final)
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        with pytest.raises(MidStreamFallbackError, match="abort") as excinfo:
+            _chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+
+        assert excinfo.value.is_pre_first_chunk is (not prefix)
+        assert excinfo.value.generated_content == prefix
+        assert getattr(excinfo.value.original_exception, "status_code", None) == 500
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+async def test_stream_with_null_choices_chunk_finishes_normally(
+    async_stream: bool, transport: str, logging_obj: Logging
+) -> None:
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-null-choices",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": choices,
+                    **extra,
+                }
+            )
+            + "\n\n"
+            for choices, extra in (
+                ([{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}], {}),
+                ([{"index": 0, "delta": {}, "finish_reason": "stop"}], {}),
+                (None, {"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}),
+            )
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    streamed_choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
+    assert "".join(choice.delta.content or "" for choice in streamed_choices) == "hi"
+    assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
 
 
 def _hosted_vllm_stream_wrapper(logging_obj: Logging, error_payload: dict) -> CustomStreamWrapper:
@@ -6059,6 +6316,22 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
     assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
 
 
+def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row() -> None:
+    from litellm.litellm_core_utils.streaming_handler import (
+        _stamp_usage_cost,  # pyright: ignore[reportPrivateUsage]  # the helper under test
+    )
+
+    complete: Final = ModelResponse(model="omni-model", usage=Usage(prompt_tokens=100, completion_tokens=20))
+    complete.hidden_params = {"response_cost": 0.00032}
+    chunk_usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    setattr(chunk_usage, "cost", 0.037)
+    usage_chunk: Final = ModelResponseStream(id="chunk-1", model="omni-model", choices=[], usage=chunk_usage)
+
+    _stamp_usage_cost(usage_chunk, complete)
+
+    assert usage_chunk.usage is not None and usage_chunk.usage.cost == 0.00032, "the client sees what the row bills"
+
+
 def test_chunk_creator_keeps_provider_model_private_across_stream():
     from litellm.router_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,
@@ -7704,7 +7977,7 @@ def gemini_mock_post_streaming(url, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "text/event-stream"}
-    mock_response.iter_lines = MagicMock(return_value=stream_response())
+    mock_response.iter_text = MagicMock(return_value=stream_response())
 
     return mock_response
 

@@ -6,6 +6,7 @@ import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -62,7 +63,7 @@ from litellm.litellm_core_utils.realtime_errors import (
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -117,6 +118,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
     header_value,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -365,6 +367,19 @@ class _SignedBodyKwargs(TypedDict, total=False):
     json: ReadOnly[dict[str, object]]
 
 
+def _is_sized_json_body(response: httpx.Response) -> bool:
+    headers: Final = httpx.Headers(response.headers)
+    media_types: Final = (value.split(";")[0].strip().lower() for value in headers.get_list("content-type"))
+    return "content-length" in headers and "application/json" in media_types
+
+
+def _is_json_document(content: bytes) -> bool:
+    try:
+        return isinstance(json.loads(content), dict)
+    except ValueError:
+        return False
+
+
 def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -> _SignedBodyKwargs:
     if signed_body is not None:
         return {"data": signed_body}
@@ -570,6 +585,22 @@ def _unwrap_provider_error(error: Exception) -> Exception:
             return current
         current = current.__cause__
     return error
+
+
+def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Mapping[str, object]:
+    """Later sources win per header, except ``anthropic-beta``, which unions every source so client betas
+    never drop a deployment's configured ones."""
+    entries: Final = tuple(chain.from_iterable((source or {}).items() for source in sources))
+    beta_values: Final = tuple(
+        cast("str | Sequence[str]", value)  # cast-ok: the merge helper skips non-str list entries
+        for name, value in entries
+        if name.lower() == "anthropic-beta" and isinstance(value, str | Sequence)
+    )
+    merged_beta: Final = reduce(merge_anthropic_beta_headers, beta_values, "")
+    return MappingProxyType(
+        {name: value for name, value in entries if name.lower() != "anthropic-beta"}
+        | ({"anthropic-beta": merged_beta} if merged_beta else {})
+    )
 
 
 class BaseLLMHTTPHandler:
@@ -1069,7 +1100,7 @@ class BaseLLMHTTPHandler:
             completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         else:
             completion_stream = provider_config.get_model_response_iterator_for_request(
-                streaming_response=response.iter_lines(),
+                streaming_response=iter_sse_lines(response.iter_text()),
                 sync_stream=True,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
@@ -1212,7 +1243,7 @@ class BaseLLMHTTPHandler:
             completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         else:
             completion_stream = provider_config.get_model_response_iterator_for_request(
-                streaming_response=response.aiter_lines(),
+                streaming_response=aiter_sse_lines(response.aiter_text()),
                 sync_stream=False,
                 json_mode=json_mode,
                 optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
@@ -2481,13 +2512,8 @@ class BaseLLMHTTPHandler:
         forwarded_headers: Final = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
-        # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers: Final[Mapping[str, object]] = MappingProxyType(
-            {
-                **(forwarded_headers or {}),
-                **(extra_headers_from_kwargs or {}),
-                **(provider_specific_headers or {}),
-            }
+        merged_headers: Final = _merge_messages_header_sources(
+            forwarded_headers, extra_headers_from_kwargs, provider_specific_headers
         )
         request_params: Final = reduce(
             delete_nested_value,
@@ -3012,6 +3038,17 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        replay_as_stream: Final = partial(
+            MockResponsesAPIStreamingIterator,
+            model=model,
+            logging_obj=logging_obj,
+            responses_api_provider_config=responses_api_provider_config,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
+            request_data=request_context,
+            call_type=CallTypes.responses.value,
+        )
+
         try:
             if is_stream_request:
                 response = sync_httpx_client.post(
@@ -3023,7 +3060,13 @@ class BaseLLMHTTPHandler:
                 )
                 if caller_requested_stream:
                     if fake_stream is True:
-                        return MockResponsesAPIStreamingIterator(
+                        return replay_as_stream(response=response)
+                    if not (
+                        responses_api_provider_config.may_answer_stream_with_json()
+                        and _is_sized_json_body(response)
+                        and _is_json_document(response.read())
+                    ):
+                        return SyncResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
                             logging_obj=logging_obj,
@@ -3033,17 +3076,6 @@ class BaseLLMHTTPHandler:
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
                         )
-
-                    return SyncResponsesAPIStreamingIterator(
-                        response=response,
-                        model=model,
-                        logging_obj=logging_obj,
-                        responses_api_provider_config=responses_api_provider_config,
-                        litellm_metadata=litellm_metadata,
-                        custom_llm_provider=custom_llm_provider,
-                        request_data=request_context,
-                        call_type=CallTypes.responses.value,
-                    )
                 response.read()
             else:
                 response = sync_httpx_client.post(
@@ -3057,6 +3089,9 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=responses_api_provider_config,
             )
+
+        if is_stream_request and caller_requested_stream:
+            return replay_as_stream(response=response)
 
         initial_response: Final = responses_api_provider_config.transform_response_api_response(
             model=model,
@@ -3213,6 +3248,17 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        replay_as_stream: Final = partial(
+            MockResponsesAPIStreamingIterator,
+            model=model,
+            logging_obj=logging_obj,
+            responses_api_provider_config=responses_api_provider_config,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
+            request_data=request_context,
+            call_type=CallTypes.responses.value,
+        )
+
         try:
             if is_stream_request:
                 response = await async_httpx_client.post(
@@ -3226,7 +3272,13 @@ class BaseLLMHTTPHandler:
 
                 if caller_requested_stream:
                     if fake_stream is True:
-                        return MockResponsesAPIStreamingIterator(
+                        return replay_as_stream(response=response)
+                    if not (
+                        responses_api_provider_config.may_answer_stream_with_json()
+                        and _is_sized_json_body(response)
+                        and _is_json_document(await response.aread())
+                    ):
+                        return ResponsesAPIStreamingIterator(
                             response=response,
                             model=model,
                             logging_obj=logging_obj,
@@ -3236,17 +3288,6 @@ class BaseLLMHTTPHandler:
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
                         )
-
-                    return ResponsesAPIStreamingIterator(
-                        response=response,
-                        model=model,
-                        logging_obj=logging_obj,
-                        responses_api_provider_config=responses_api_provider_config,
-                        litellm_metadata=litellm_metadata,
-                        custom_llm_provider=custom_llm_provider,
-                        request_data=request_context,
-                        call_type=CallTypes.responses.value,
-                    )
                 await response.aread()
             else:
                 response = await async_httpx_client.post(
@@ -3262,6 +3303,9 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=responses_api_provider_config,
             )
+
+        if is_stream_request and caller_requested_stream:
+            return replay_as_stream(response=response)
 
         initial_response: Final = responses_api_provider_config.transform_response_api_response(
             model=model,

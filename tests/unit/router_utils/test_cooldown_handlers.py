@@ -1,10 +1,12 @@
 import asyncio
 import copy
+import datetime
 import importlib
 import itertools
 import random
 import time
-from collections.abc import Mapping
+import uuid
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +25,7 @@ from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callba
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
+    _has_fallback_group,
     _increment_allowed_fails,
     _is_cooldown_required,
     _resolve_allowed_fails_from_policy,
@@ -33,6 +36,7 @@ from litellm.router_utils.cooldown_handlers import (
     cast_exception_status_to_int,
     get_cooldown_deployments,
     mark_advisor_orchestration_failure,
+    set_cooldown_deployments,
     should_cooldown_based_on_allowed_fails_policy,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -51,6 +55,40 @@ from litellm.types.router import (
 )
 from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "expected_cooldown"),
+    (
+        (litellm.APIConnectionError, False),
+        (litellm.UnsupportedEndpointError, False),
+        (litellm.BadRequestError, True),
+    ),
+)
+async def test_unsupported_endpoint_preserves_cooldown_exclusion_with_bad_request_policy(
+    exception_type: type[litellm.APIConnectionError | litellm.BadRequestError], expected_cooldown: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "not-needed"},
+                "model_info": {"id": "deployment", "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}},
+            }
+        ],
+    )
+    exception: Final = exception_type(message="Request failed", model="claude-sonnet-5-5", llm_provider="anthropic")
+    set_cooldown_deployments(
+        litellm_router_instance=router,
+        original_exception=exception,
+        exception_status=exception.status_code,
+        deployment="deployment",
+        time_to_cooldown=60,
+    )
+    assert await async_get_cooldown_deployments(router, parent_otel_span=None) == (
+        ["deployment"] if expected_cooldown else []
+    )
 
 
 class TestGetDeploymentCooldownPolicy:
@@ -680,6 +718,45 @@ class TestDeploymentLevelAllowedFails:
         assert should_cooldown is False, (
             "secondary has no deployment-level policy; with allowed_fails=10 it should not cool down on first failure"
         )
+
+
+def _gpt_4_group_with_a_sibling() -> Sequence[Mapping[str, object]]:
+    return (
+        {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}},
+        {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "secondary"}},
+    )
+
+
+def _primary_cooldown_decisions_on_repeated_503s(router: Router) -> tuple[bool, ...]:
+    exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+    return tuple(
+        _should_cooldown_deployment(
+            litellm_router_instance=router,
+            deployment="primary",
+            exception_status=503,
+            original_exception=exception,
+        )
+        for _ in range(litellm.allowed_fails + 1)
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestRouterLevelAllowedFailsEqualToDefault:
+    def test_allowed_fails_equal_to_the_default_cools_down_after_that_many_fails(self):
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()), allowed_fails=litellm.allowed_fails)
+
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * litellm.allowed_fails + (True,)
+
+    def test_unset_allowed_fails_keeps_the_rate_based_default(self):
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()))
+
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * (litellm.allowed_fails + 1)
+
+    def test_default_allowed_fails_saved_through_update_settings_keeps_the_rate_based_default(self):
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()))
+        router.update_settings(allowed_fails=litellm.allowed_fails)
+
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * (litellm.allowed_fails + 1)
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -2931,6 +3008,104 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
     assert tuple(cooldown_deployments) == ()
 
 
+async def _complete_like_the_proxy(router: Router, model: str) -> str:
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime(2026, 1, 1),
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id=str(uuid.uuid4()),
+    )
+    response: Final = await router.acompletion(**request, litellm_logging_obj=logging_obj)
+    model_id: Final = response._hidden_params["model_id"]
+    assert isinstance(model_id, str)
+    return model_id
+
+
+_CHAT_COMPLETION_OK: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _openai_deployment(model_name: str, host: str, deployment_id: str) -> Mapping[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": f"https://{host}/v1"},
+        "model_info": {"id": deployment_id},
+    }
+
+
+@pytest.mark.asyncio
+async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}})
+    )
+    backup_route: Final = respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            _openai_deployment("primary", "primary.test", "primary-dep"),
+            _openai_deployment("backup", "backup.test", "backup-dep"),
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        allowed_fails=litellm.allowed_fails,
+        num_retries=0,
+    )
+
+    served_by: Final = [await _complete_like_the_proxy(router, "primary") for _ in range(20)]
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    assert served_by == ["backup-dep"] * 20
+    assert len(backup_route.calls) == 20
+    assert tuple(cooldown_deployments) == ("primary-dep",)
+
+
+@pytest.mark.asyncio
+async def test_fallback_group_stays_up_after_a_bad_key_cools_the_primary_under_the_rate_based_default(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+    )
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            _openai_deployment("primary", "primary.test", "primary-dep"),
+            _openai_deployment("backup", "backup.test", "backup-1"),
+            _openai_deployment("backup", "backup.test", "backup-2"),
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    served_by: Final = [await _complete_like_the_proxy(router, "primary") for _ in range(12)]
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    assert set(served_by) <= {"backup-1", "backup-2"}
+    assert tuple(cooldown_deployments) == ("primary-dep",)
+
+
 TIMED_OUT_DEPLOYMENT: Final = {
     "model_name": "test-model",
     "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
@@ -3004,6 +3179,34 @@ async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_poli
 
     assert seen == outcomes
     assert len(route.calls) == outcomes.count(litellm.Timeout)
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "expected"),
+    [
+        ([{"test-model": "backup-model"}], True),
+        ([{"*": "backup-model"}], True),
+        ([{"test-model": ["backup-model"]}], True),
+        ([{"test-model": 5}, {"*": "backup-model"}], True),
+        ([{"test-model": 5}], False),
+        ([{"other-model": ["backup-model"]}], False),
+    ],
+    ids=[
+        "string_target",
+        "string_catch_all_from_default_fallbacks",
+        "list_target",
+        "unparseable_entry_does_not_hide_the_catch_all",
+        "unparseable_entry_alone",
+        "another_groups_chain",
+    ],
+)
+def test_has_fallback_group_reads_string_targets_and_skips_unparseable_entries(
+    fallbacks: Sequence[Mapping[str, object]], expected: bool
+) -> None:
+    router: Final = Router(model_list=[TIMED_OUT_DEPLOYMENT])
+    router.fallbacks = list(fallbacks)
+
+    assert _has_fallback_group(router, "test-model") is expected
 
 
 async def _group_call_outcome(router: Router) -> str:

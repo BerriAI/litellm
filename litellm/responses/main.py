@@ -2335,6 +2335,7 @@ async def acancel_responses(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    litellm_metadata: Mapping[str, object] | None = None,
     **kwargs,
 ) -> ResponsesAPIResponse:
     """
@@ -2359,6 +2360,7 @@ async def acancel_responses(
             cancel_responses,
             response_id=response_id,
             custom_llm_provider=custom_llm_provider,
+            litellm_metadata=litellm_metadata,
             extra_headers=extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
@@ -2374,7 +2376,12 @@ async def acancel_responses(
             response = await init_response
         else:
             response = init_response
-        return response
+
+        return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=response,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
+        )
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -2396,6 +2403,7 @@ def cancel_responses(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    litellm_metadata: Mapping[str, object] | None = None,
     **kwargs,
 ) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
     """
@@ -2465,7 +2473,13 @@ def cancel_responses(
             shared_session=kwargs.get("shared_session"),
         )
 
-        return response
+        if not isinstance(response, ResponsesAPIResponse):
+            return response
+        return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=response,
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
+        )
     except Exception as e:
         raise litellm.exception_type(
             model=None,

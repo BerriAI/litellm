@@ -4,10 +4,12 @@ import httpx
 import pytest
 
 from litellm.constants import MAX_SPEND_LOG_MODEL_NAME_LENGTH
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.upstream_usage_headers import (
     UpstreamReportedUsage,
     apply_upstream_reported_model,
+    apply_upstream_reported_operation,
     apply_upstream_reported_usage,
     has_upstream_reported_usage,
     parse_upstream_reported_model,
@@ -211,3 +213,24 @@ def test_model_header_alone_does_not_make_the_upstream_own_the_cost():
 
     assert has_upstream_reported_usage(logging_obj) is False
     assert "response_cost" not in logging_obj.model_call_details
+
+
+@pytest.mark.parametrize("operation", [GenAIOperation.RETRIEVAL, GenAIOperation.EMBEDDINGS])
+def test_apply_operation_records_the_operation_the_upstream_named(operation: GenAIOperation) -> None:
+    logging_obj: Final = _logging_obj()
+
+    apply_upstream_reported_operation(logging_obj, _headers(**{"x-litellm-operation-name": operation.value}))
+
+    assert logging_obj.model_call_details[PASSTHROUGH_OPERATION_KEY] is operation
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"x-litellm-operation-name": "summarize"}, {"x-litellm-operation-name": "Retrieval"}],
+)
+def test_apply_operation_ignores_a_missing_or_unknown_name(headers: dict[str, str]) -> None:
+    logging_obj: Final = _logging_obj()
+
+    apply_upstream_reported_operation(logging_obj, _headers(**headers))
+
+    assert PASSTHROUGH_OPERATION_KEY not in logging_obj.model_call_details
