@@ -287,6 +287,11 @@ from litellm.router_utils.embedding_batch_size_check import (
     embedding_deployment_selection,
     log_rejection_before_provider_call,
 )
+from litellm.router_utils.endpoint_eligibility import (
+    eligible_deployments,
+    endpoint_selection,
+    warn_on_unenforced_endpoint_flag,
+)
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
@@ -482,6 +487,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Rules,
     TextCompletionResponse,
+    aresolve_api_key_secret_reference,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -492,7 +498,6 @@ from litellm.utils import (
     lookup_model_info_for_registration,
     model_info_with_pricing_overrides,
     provider_rejectable_params,
-    resolve_api_key_secret_reference,
     set_live_deployment_replay,
     token_counter,
 )
@@ -1449,7 +1454,7 @@ class Router:
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
         self.guardrail_list = guardrail_list or []
-        self.deployment_names: list = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
+        self.deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
@@ -6054,12 +6059,13 @@ class Router:
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
-            deployment: Final = self.get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with endpoint_selection("text_completion", model=model):
+                deployment: Final = self.get_available_deployment(
+                    model=model,
+                    messages=messages,
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
 
             data: Final = deployment["litellm_params"].copy()
             for k, v in self.default_litellm_params.items():
@@ -6915,6 +6921,7 @@ class Router:
         """
         model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
         retry_kwargs: Final = mid_stream_retry_kwargs(initial_kwargs)
+        handler: Final = retry_kwargs.get("original_generic_function")
         healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
             model=model_group,
             parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs),
@@ -6945,7 +6952,10 @@ class Router:
             )
             carry_superseded_attempt_usage(retry_kwargs)
             try:
-                response = await attempt_function(**retry_kwargs)
+                with endpoint_selection(
+                    getattr(handler, "__name__", None), getattr(handler, "__module__", None), model=model_group
+                ):
+                    response = await attempt_function(**retry_kwargs)
             except Exception as retry_error:  # noqa: BLE001  # the fallback chain judges the failed retry
                 wrapped = _stream_fallback_error_for_raised(retry_error, model_group, False, e.llm_provider)
                 if wrapped is None:
@@ -9315,9 +9325,18 @@ class Router:
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
         model_group: Final = kwargs.get("model")
-        response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-            response = await response
+        generic_function: Final = _OPAQUE_VALUE_ADAPTER.validate_python(kwargs.get("original_generic_function"))
+        endpoint_function: Final = (
+            generic_function if callable(generic_function) else _OPAQUE_VALUE_ADAPTER.validate_python(original_function)
+        )
+        with endpoint_selection(
+            getattr(endpoint_function, "__name__", None),
+            getattr(endpoint_function, "__module__", None),
+            model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
+        ):
+            response = original_function(*args, **kwargs)
+            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                response = await response
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
@@ -10638,6 +10657,7 @@ class Router:
             declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
             warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)
+            warn_on_unenforced_endpoint_flag(model_name=_model_name, model_info=_model_info)
             deployment = without_model_capability_flags(
                 Deployment(
                     **deployment_info,
@@ -11441,6 +11461,9 @@ class Router:
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
         warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
+        warn_on_unenforced_endpoint_flag(
+            model_name=deployment.model_name, model_info=deployment.model_info.model_dump()
+        )
         served: Final = with_admin_api_key_secret_reference(without_model_capability_flags(deployment))
 
         # add to model list
@@ -12056,7 +12079,7 @@ class Router:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
-        api_key: Final = resolve_api_key_secret_reference(
+        api_key: Final = await aresolve_api_key_secret_reference(
             params.api_key or dynamic_api_key,
             model=model,
             llm_provider=provider,
@@ -14797,9 +14820,15 @@ class Router:
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
-    def get_routable_deployments(self, model: str) -> tuple[DeploymentTypedDict, ...]:
+    def get_routable_deployments(
+        self,
+        model: str,
+        request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        call_type: str | None = None,
+    ) -> tuple[DeploymentTypedDict, ...]:
         try:
-            _, candidates = self._common_checks_available_deployment(model=model, request_kwargs={})  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # its signature leaves input and the result untyped
+            with endpoint_selection(call_type, model=model):
+                _, candidates = self._common_checks_available_deployment(model=model, request_kwargs=request_kwargs)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # its signature leaves input and the result untyped
         except (litellm.BadRequestError, ValueError):
             return ()
         if isinstance(candidates, dict):
@@ -15075,7 +15104,10 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return selectable
+        eligible: Final = eligible_deployments(model, selectable)
+        if isinstance(eligible, tuple):
+            return list(eligible)
+        raise eligible
 
     def _filter_reserved_deployments(
         self,
