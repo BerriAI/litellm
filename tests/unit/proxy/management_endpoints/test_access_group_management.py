@@ -713,7 +713,7 @@ class _FakeModelTable:
 
 
 class _FakeModelTableBatch:
-    """Queues model-table updates and applies them all or none on commit, like a Prisma batch."""
+    """Queues model-table updates and applies them all or none when the batch closes, like a Prisma batch."""
 
     def __init__(self, model_table: _FakeModelTable) -> None:
         self.model_table = model_table
@@ -723,12 +723,44 @@ class _FakeModelTableBatch:
     def _queue_update(self, where, data):
         self.queued.append((dict(where), dict(data)))
 
-    async def commit(self):
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            return False
         failing = [where["model_id"] for where, _ in self.queued if where["model_id"] in self.model_table.failing_model_ids]
         if failing:
             raise RuntimeError(f"batch write to {failing} failed, nothing applied")
         for where, data in self.queued:
             await self.model_table.update(where=where, data=data)
+        return False
+
+
+class _FakeModelTableTx:
+    """An interactive transaction on the primary that journals the row lock and the read it guards."""
+
+    def __init__(self, journal: list[str], model_table: _FakeModelTable) -> None:
+        self.journal = journal
+        self.model_table = model_table
+        self.litellm_proxymodeltable = SimpleNamespace(find_many=self._find_many)
+
+    async def query_raw(self, query):
+        self.journal.append("model_table.lock" if "FOR UPDATE" in query else f"model_table.query:{query}")
+        return []
+
+    async def _find_many(self):
+        self.journal.append("model_table.read")
+        return await self.model_table.find_many()
+
+    def batch_(self):
+        return _FakeModelTableBatch(self.model_table)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
 
 
 class _FakePrismaClient:
@@ -740,7 +772,7 @@ class _FakePrismaClient:
             litellm_budgettable=self.budget_table,
             litellm_modelaccessgroupbudgettable=self.access_group_budget_table,
             litellm_proxymodeltable=self.model_table,
-            batch_=lambda: _FakeModelTableBatch(self.model_table),
+            tx=lambda timeout=None: _FakeModelTableTx(journal, self.model_table),
         )
 
     def jsonify_object(self, data):
@@ -1505,7 +1537,7 @@ async def test_an_access_group_update_keeps_a_model_info_field_another_admin_set
 
 
 @pytest.mark.asyncio
-async def test_an_access_group_update_tells_other_workers_only_after_every_row_is_committed():
+async def test_an_access_group_update_locks_the_rows_it_reads_and_tells_other_workers_after_the_commit():
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
         update_access_group,
     )
@@ -1540,6 +1572,8 @@ async def test_an_access_group_update_tells_other_workers_only_after_every_row_i
         )
 
     assert journal == [
+        "model_table.lock",
+        "model_table.read",
         "model_table.update:leaves",
         "model_table.update:joins",
         "publish:joins,leaves",
@@ -1582,7 +1616,7 @@ async def test_an_access_group_update_that_changes_no_membership_writes_and_anno
         )
 
     assert response.models_updated == 2
-    assert journal == []
+    assert journal == ["model_table.lock", "model_table.read"]
 
 
 @pytest.mark.asyncio

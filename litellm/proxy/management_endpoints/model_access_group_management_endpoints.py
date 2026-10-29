@@ -12,9 +12,10 @@ Endpoints here:
 - DELETE /access_group/{access_group}/budget - Clear an access group's shared budget
 """
 
+import contextlib
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
@@ -126,7 +127,18 @@ class _ModelTableBatch(Protocol):
     @property
     def litellm_proxymodeltable(self) -> _ModelTableBatchActions: ...
 
-    async def commit(self) -> None: ...
+
+class _ModelTableTxActions(Protocol):
+    async def find_many(self) -> Sequence[_DeploymentRow]: ...
+
+
+class _ModelTableTx(Protocol):
+    @property
+    def litellm_proxymodeltable(self) -> _ModelTableTxActions: ...
+
+    async def query_raw(self, query: str) -> object: ...
+
+    def batch_(self) -> contextlib.AbstractAsyncContextManager[_ModelTableBatch]: ...
 
 
 class _BudgetRow(Protocol):
@@ -184,8 +196,12 @@ def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
     return ModelRepository(WriterPinnedClient(prisma_client.db)).table
 
 
-def _model_table_batch(prisma_client: PrismaClient) -> _ModelTableBatch:
-    return writer_wrapper(prisma_client.db).batch_()
+_LOCK_EVERY_MODEL_ROW: Final = 'SELECT model_id FROM "LiteLLM_ProxyModelTable" ORDER BY model_id FOR UPDATE'
+_MEMBERSHIP_TX_TIMEOUT: Final = timedelta(seconds=30)
+
+
+def _model_table_tx(prisma_client: PrismaClient) -> contextlib.AbstractAsyncContextManager[_ModelTableTx]:
+    return writer_wrapper(prisma_client.db).tx(timeout=_MEMBERSHIP_TX_TIMEOUT)
 
 
 def _model_access_group_budget_table(prisma_client: PrismaClient) -> _ModelAccessGroupBudgetTableClient:
@@ -454,16 +470,30 @@ def _membership_rewrites(
     return tuple((model_id, model_info) for model_id, model_info in rewrites if model_info is not None)
 
 
-async def _commit_model_infos_together(
-    prisma_client: PrismaClient, rewrites: Sequence[tuple[str, Mapping[str, object]]]
-) -> None:
-    if not rewrites:
-        return
-    batch: Final = _model_table_batch(prisma_client)
-    for model_id, model_info in rewrites:
-        batch.litellm_proxymodeltable.update(where={"model_id": model_id}, data={"model_info": json.dumps(model_info)})
-    await batch.commit()
-    await publish_model_rows_written(tuple(model_id for model_id, _ in rewrites))
+async def _rewrite_membership_under_row_locks(
+    prisma_client: PrismaClient, access_group: str, data: UpdateModelGroupRequest
+) -> tuple[tuple[_DeploymentRow, ...], tuple[tuple[str, Mapping[str, object]], ...]]:
+    async with _model_table_tx(prisma_client) as tx:
+        await tx.query_raw(_LOCK_EVERY_MODEL_ROW)
+        deployments: Final = await tx.litellm_proxymodeltable.find_many()
+        if access_group not in _access_groups_of_deployments(deployments):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Access group '{access_group}' not found"},
+            )
+        selected_deployments: Final = _selected_deployments_or_400(deployments=deployments, data=data)
+        rewrites: Final = _membership_rewrites(
+            deployments=deployments,
+            selected_model_ids=frozenset(deployment.model_id for deployment in selected_deployments),
+            access_group=access_group,
+        )
+        if rewrites:
+            async with tx.batch_() as batch:
+                for model_id, model_info in rewrites:
+                    batch.litellm_proxymodeltable.update(
+                        where={"model_id": model_id}, data={"model_info": json.dumps(model_info)}
+                    )
+    return selected_deployments, rewrites
 
 
 def _readable_model_info_or_raise(model_id: str, model_info: object) -> Mapping[str, object]:
@@ -994,27 +1024,11 @@ async def update_access_group(
             )
 
     try:
-        all_deployments: Final = await _model_table(prisma_client).find_many()
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Failed to check access group existence: {e}"},
+        selected_deployments, rewrites = await _rewrite_membership_under_row_locks(
+            prisma_client=prisma_client, access_group=access_group, data=data
         )
-    if access_group not in _access_groups_of_deployments(all_deployments):
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Access group '{access_group}' not found"},
-        )
-
-    selected_deployments: Final = _selected_deployments_or_400(deployments=all_deployments, data=data)
-
-    try:
-        rewrites: Final = _membership_rewrites(
-            deployments=all_deployments,
-            selected_model_ids=frozenset(deployment.model_id for deployment in selected_deployments),
-            access_group=access_group,
-        )
-        await _commit_model_infos_together(prisma_client=prisma_client, rewrites=rewrites)
+        if rewrites:
+            await publish_model_rows_written(tuple(model_id for model_id, _ in rewrites))
         models_updated: Final = len(selected_deployments)
 
         # Clear cache and reload models to pick up the access group changes
