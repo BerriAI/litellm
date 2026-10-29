@@ -1343,8 +1343,8 @@ def test_reservation_uses_most_expensive_deployment_in_group():
             return_value={"max_output_tokens": 200000},
         ),
         patch(
-            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_tiered_pricing_tables",
-            return_value=[cheap, expensive],
+            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_model_infos",
+            return_value=[{"tiered_pricing": cheap}, {"tiered_pricing": expensive}],
         ),
         patch(
             "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
