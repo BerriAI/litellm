@@ -715,34 +715,64 @@ async def test_responses_websocket_turns_do_not_reserve_deployment_otpm():
         await admit_turn()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["itpm", "otpm"])
-async def test_responses_websocket_turn_is_refused_once_the_minutes_tokens_reach_deployment_io_limit(kind: str):
-    from datetime import timedelta
-
-    from litellm.utils import get_utc_datetime
-
-    router = Router(
+def _io_limited_router(kind: str, **litellm_params: object) -> Router:
+    return Router(
         model_list=[
             {
                 "model_name": "ws-io",
-                "litellm_params": {"model": "openai/ws-io-unpriced", "api_key": "sk-fake", kind: 10_000},
+                "litellm_params": {
+                    "model": "openai/ws-io-unpriced",
+                    "api_key": "sk-fake",
+                    kind: 10_000,
+                    **litellm_params,
+                },
                 "model_info": {"id": "ws-io-dep"},
             }
         ],
         optional_pre_call_checks=["enforce_model_rate_limits"],
     )
-    admit_turn: Final = (await _kwargs_routed_to(router, "ws-io", "_aresponses_websocket"))["turn_admission"]
-    assert callable(admit_turn)
+
+
+async def _count_this_and_next_minutes_tokens(router: Router, kind: str, tokens: int) -> None:
+    from datetime import timedelta
+
+    from litellm.utils import get_utc_datetime
+
     now: Final = get_utc_datetime()
     for minute in (now, now + timedelta(minutes=1)):
         await router.cache.async_increment_cache(
             key=f"global_router:ws-io-dep:openai/ws-io-unpriced:{kind}:{minute.strftime('%H-%M')}",
-            value=10_000,
+            value=tokens,
             ttl=120,
         )
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+async def test_responses_websocket_turn_is_refused_once_the_minutes_tokens_reach_deployment_io_limit(kind: str):
+    router: Final = _io_limited_router(kind)
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-io", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+    await _count_this_and_next_minutes_tokens(router, kind, 10_000)
+
     with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=10000, current usage="):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+async def test_responses_websocket_turn_refused_for_tokens_leaves_the_daily_request_limit_unused(kind: str):
+    router: Final = _io_limited_router(kind, rpd=2)
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-io", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+    await _count_this_and_next_minutes_tokens(router, kind, 10_000)
+    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=10000"):
+        await admit_turn()
+    await _count_this_and_next_minutes_tokens(router, kind, -10_000)
+
+    await admit_turn()
+
+    with pytest.raises(litellm.RateLimitError, match="RPD"):
         await admit_turn()
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 from collections.abc import Mapping, MutableMapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -574,30 +575,45 @@ async def async_current_usage(
         return local_usage
 
 
+def _held_on(held_reservation: Mapping[str, object], reserved_key: str, cache_key_key: str, cache_key: str) -> int:
+    held: Final = held_reservation.get(reserved_key)
+    if held_reservation.get(cache_key_key) != cache_key or not isinstance(held, int):
+        return 0
+    return held
+
+
 async def _raise_if_at_limit(
-    dual_cache: DualCache, key: str, limit: int | None, limit_label: str, parent_otel_span: Span | None
+    dual_cache: DualCache, key: str, limit: int | None, held: int, limit_label: str, parent_otel_span: Span | None
 ) -> None:
     if limit is None:
         return
-    usage: Final = await async_current_usage(dual_cache, key, limit, parent_otel_span)
-    if usage is not None and usage >= limit:
-        raise _rate_limit_error(limit_label, limit, usage)
+    usage: Final = await async_current_usage(dual_cache, key, limit + held, parent_otel_span)
+    if usage is not None and usage - held >= limit:
+        raise _rate_limit_error(limit_label, limit, usage - held)
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_admit_io_token_turn(
-    dual_cache: DualCache, deployment: Mapping[str, object], parent_otel_span: Span | None = None
+    dual_cache: DualCache,
+    deployment: Mapping[str, object],
+    held_reservation: Mapping[str, object],
+    now: datetime,
+    parent_otel_span: Span | None = None,
 ) -> Mapping[str, object]:
     configured: Final = dict(deployment)
     itpm_limit, otpm_limit = get_deployment_io_token_limits(configured)
     if itpm_limit is None and otpm_limit is None:
         return MappingProxyType({})
-    cache_keys: Final = _get_cache_keys(configured, get_utc_datetime().strftime("%H-%M"))
+    cache_keys: Final = _get_cache_keys(configured, now.strftime("%H-%M"))
     if cache_keys is None:
         return MappingProxyType({})
     itpm_key, otpm_key = cache_keys
-    await _raise_if_at_limit(dual_cache, itpm_key, itpm_limit, "ITPM", parent_otel_span)
-    await _raise_if_at_limit(dual_cache, otpm_key, otpm_limit, "OTPM", parent_otel_span)
+    itpm_held: Final = _held_on(held_reservation, ITPM_RESERVED_KEY, ITPM_CACHE_KEY, itpm_key)
+    otpm_held: Final = _held_on(held_reservation, OTPM_RESERVED_KEY, OTPM_CACHE_KEY, otpm_key)
+    await _raise_if_at_limit(dual_cache, itpm_key, itpm_limit, itpm_held, "ITPM", parent_otel_span)
+    await _raise_if_at_limit(dual_cache, otpm_key, otpm_limit, otpm_held, "OTPM", parent_otel_span)
+    if held_reservation:
+        return MappingProxyType({})
     return MappingProxyType(
         {
             ITPM_RESERVED_KEY: 0,

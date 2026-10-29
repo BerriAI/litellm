@@ -10243,9 +10243,23 @@ class Router:
         return deployment if current is None else current.model_dump(exclude_none=True)
 
     async def async_admit_deployment_turn(
-        self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
+        self,
+        model_group: str,
+        opened_on: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+        held_reservation: Mapping[str, object] = MappingProxyType({}),
     ) -> Mapping[str, object]:
         deployment: Final = self._deployment_as_configured_now(opened_on)
+        rate_limit_check: Final = next(
+            (callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck)), None
+        )
+        io_token_admission: Final = (
+            MappingProxyType({})
+            if rate_limit_check is None
+            else await async_admit_io_token_turn(
+                rate_limit_check.dual_cache, deployment, held_reservation, get_utc_datetime()
+            )
+        )
         budget_limiter: Final = self.get_router_deployment_budget_limiter()
         if budget_limiter is not None:
             try:
@@ -10266,12 +10280,7 @@ class Router:
         await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
             deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
         )
-        rate_limit_check: Final = next(
-            (callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck)), None
-        )
-        if rate_limit_check is None:
-            return MappingProxyType({})
-        return await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment)
+        return io_token_admission
 
     async def _admit_turn_through_routing_strategy(
         self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]

@@ -178,6 +178,10 @@ def without_io_token_reservation(metadata: Mapping[str, object]) -> Mapping[str,
     return {key: value for key, value in metadata.items() if key not in IO_TOKEN_RESERVATION_KEYS}
 
 
+def io_token_reservation(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in metadata.items() if key in IO_TOKEN_RESERVATION_KEYS})
+
+
 def forwarded_internal_call_metadata(
     parent_metadata: Mapping[str, object] | None,
     call_origin: InternalCallOrigin,

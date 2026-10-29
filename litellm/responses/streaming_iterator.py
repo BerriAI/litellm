@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import (
+    io_token_reservation,
     is_background_response,
     requests_background,
     without_budget_reservation,
@@ -2141,17 +2142,17 @@ class _RefusedTurn:
     rejection: Exception
 
 
-ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
+ResponsesWsTurnAdmission: TypeAlias = Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]
 
 
 async def _admit_frame_turn(
-    turn_admission: ResponsesWsTurnAdmission | None, raw_message: str
+    turn_admission: ResponsesWsTurnAdmission | None, raw_message: str, held_reservation: Mapping[str, object]
 ) -> _AdmittedTurn | _RefusedTurn:
     frame: Final = _json_object_or_none(raw_message)
     if turn_admission is None or frame is None or frame.get("type") != "response.create":
         return _AdmittedTurn()
     try:
-        return _AdmittedTurn(await turn_admission())
+        return _AdmittedTurn(await turn_admission(held_reservation))
     except RateLimitError as refusal:
         return _RefusedTurn(refusal)
     except Exception as e:
@@ -2510,6 +2511,16 @@ class ResponsesWebSocketStreaming:
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
+
+    def _held_admission_reservation(self) -> Mapping[str, object]:
+        litellm_params: Final = _json_object_or_none(
+            self.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
+        buckets: Final = (
+            () if litellm_params is None else (litellm_params.get(key) for key in ("metadata", "litellm_metadata"))
+        )
+        held: Final = (io_token_reservation(bucket) for bucket in buckets if _is_json_object(bucket))
+        return next((reservation for reservation in held if reservation), _NO_IO_TOKEN_RESERVATION)
 
     def _detach_admission_reservations(self) -> None:
         """Only the first turn settles the connection's admission reservations; later turns charge their own usage."""
@@ -2965,7 +2976,7 @@ class ResponsesWebSocketStreaming:
     async def _admit_or_reject_turn(
         self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: ResponsesWsTurnAdmission | None
     ) -> _AdmittedTurn | None:
-        verdict: Final = await _admit_frame_turn(turn_admission, message)
+        verdict: Final = await _admit_frame_turn(turn_admission, message, self._held_admission_reservation())
         match verdict:
             case _AdmittedTurn():
                 return verdict
@@ -3394,6 +3405,15 @@ class ManagedResponsesWebSocketHandler:
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
+    def _held_io_token_reservation(self) -> Mapping[str, object]:
+        connection_metadata: Final = self.extra_kwargs.get("metadata")
+        held_on_connection: Final = (
+            io_token_reservation(connection_metadata)
+            if _is_json_object(connection_metadata)
+            else _NO_IO_TOKEN_RESERVATION
+        )
+        return held_on_connection or io_token_reservation(self.litellm_metadata)
+
     def _detach_io_token_reservation(self) -> None:
         connection_metadata: Final = self.extra_kwargs.get("metadata")
         self.litellm_metadata = without_io_token_reservation(self.litellm_metadata)
@@ -3550,7 +3570,7 @@ class ManagedResponsesWebSocketHandler:
         guarded: Final = await self._guard_frame(raw_message)
         if guarded is None:
             return
-        verdict: Final = await _admit_frame_turn(turn_admission, raw_message)
+        verdict: Final = await _admit_frame_turn(turn_admission, raw_message, self._held_io_token_reservation())
         if isinstance(verdict, _RefusedTurn):
             if self._failure is None:
                 self._failure = verdict.rejection
