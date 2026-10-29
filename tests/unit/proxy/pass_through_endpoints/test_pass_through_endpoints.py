@@ -7368,7 +7368,7 @@ async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
     websocket.close.assert_awaited_once_with()
 
 
-async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
+async def _run_setup_rewrite_passthrough(setup_model: str, llm_router, keeps_caller_resource_path: bool = False) -> str:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         _build_vertex_live_setup_model_rewriter,
     )
@@ -7397,6 +7397,7 @@ async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
                 vertex_project="proj-db",
                 vertex_location="global",
                 llm_router=llm_router,
+                keeps_caller_resource_path=keeps_caller_resource_path,
             ),
         )
 
@@ -7455,7 +7456,7 @@ def test_vertex_live_setup_model_resolves_before_extraction(setup_model):
     )
 
     rewriter = _build_vertex_live_setup_model_rewriter(
-        vertex_project="proj-db", vertex_location="global", llm_router=None
+        vertex_project="proj-db", vertex_location="global", llm_router=None, keeps_caller_resource_path=False
     )
     setup_data = {"model": setup_model}
 
@@ -7505,7 +7506,10 @@ async def test_websocket_passthrough_logs_a_bare_alias_setup_model():
                 endpoint="/vertex_ai/live",
                 accept_websocket=False,
                 setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
-                    vertex_project="proj-db", vertex_location="global", llm_router=None
+                    vertex_project="proj-db",
+                    vertex_location="global",
+                    llm_router=None,
+                    keeps_caller_resource_path=False,
                 ),
             )
 
@@ -7570,14 +7574,24 @@ async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_mod
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched():
-    full_resource = "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09"
+@pytest.mark.parametrize(
+    "keeps_caller_resource_path, expected_prefix",
+    [(True, "projects/other/locations/us-central1/"), (False, "projects/proj-db/locations/global/")],
+    ids=["caller_path_kept", "moved_onto_session_target"],
+)
+async def test_websocket_passthrough_full_resource_setup_model(
+    keeps_caller_resource_path: bool, expected_prefix: str
+) -> None:
+    model_suffix = "publishers/google/models/gemini-2.0-flash-live-preview-04-09"
 
-    sent_frame = await _run_setup_rewrite_passthrough(full_resource, llm_router=None)
+    sent_frame = await _run_setup_rewrite_passthrough(
+        f"projects/other/locations/us-central1/{model_suffix}",
+        llm_router=None,
+        keeps_caller_resource_path=keeps_caller_resource_path,
+    )
 
-    assert json.loads(sent_frame)["setup"]["model"] == full_resource
     assert sent_frame == json.dumps(
-        {"setup": {"model": full_resource, "generationConfig": {"responseModalities": ["TEXT"]}}}
+        {"setup": {"model": f"{expected_prefix}{model_suffix}", "generationConfig": {"responseModalities": ["TEXT"]}}}
     )
 
 

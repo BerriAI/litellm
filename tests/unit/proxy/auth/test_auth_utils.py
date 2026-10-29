@@ -5107,6 +5107,88 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
             is True
         )
 
+    @pytest.mark.parametrize(
+        "model, is_allowed", [("public-alias", False), ("public-gemini-2.5-flash", True)], ids=["alias", "direct"]
+    )
+    def test_alias_opt_in_comes_from_the_group_the_alias_routes_to(self, model: str, is_allowed: bool) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gemini-eu/*",
+                    "litellm_params": {"model": "vertex_ai/*", "vertex_location": "europe-west4"},
+                },
+                {
+                    "model_name": "public-*",
+                    "litellm_params": {
+                        "model": "vertex_ai/*",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": ["vertex_location"],
+                    },
+                },
+            ],
+            model_group_alias={"public-alias": "gemini-eu/gemini-2.5-flash"},
+        )
+        request_body: Final = {"model": model, "vertex_location": "us-central1"}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+
+    @staticmethod
+    def _opted_in_and_pinned_router(router_fallbacks: list[dict[str, list[str]]]) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.5-flash",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": opt_in,
+                    },
+                }
+                for name, opt_in in (
+                    ("gemini-optin", ["vertex_location"]),
+                    ("gemini-optin-other", ["vertex_location"]),
+                    ("gemini-pinned", []),
+                )
+            ],
+            fallbacks=router_fallbacks,
+        )
+
+    @pytest.mark.parametrize(
+        "fields, is_allowed",
+        [
+            ({"vertex_location": "us-central1", "fallbacks": ["gemini-pinned"]}, False),
+            ({"fallbacks": [{"model": "gemini-pinned", "vertex_location": "us-central1"}]}, False),
+            ({"vertex_location": "us-central1", "fallbacks": ["gemini-optin-other"]}, True),
+            ({"fallbacks": [{"model": "gemini-optin-other", "vertex_location": "us-central1"}]}, True),
+        ],
+        ids=["pinned", "pinned_entry_with_field", "opted_in", "opted_in_entry_with_field"],
+    )
+    def test_request_fallback_needs_the_same_opt_in(self, fields: dict[str, object], is_allowed: bool) -> None:
+        router: Final = self._opted_in_and_pinned_router([])
+        request_body: Final = {"model": "gemini-optin", **fields}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions")
+
+    @pytest.mark.parametrize(
+        "fallback_group, is_allowed",
+        [("gemini-pinned", False), ("gemini-optin-other", True)],
+        ids=["pinned", "opted_in"],
+    )
+    def test_router_fallback_needs_the_same_opt_in(self, fallback_group: str, is_allowed: bool) -> None:
+        router: Final = self._opted_in_and_pinned_router([{"gemini-optin": [fallback_group]}])
+        request_body: Final = {"model": "gemini-optin", "vertex_location": "us-central1"}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions")
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("opted_in", [True, False])
     async def test_opt_in_of_the_model_named_in_a_google_route_decides(self, monkeypatch, opted_in: bool) -> None:

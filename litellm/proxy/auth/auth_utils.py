@@ -226,9 +226,10 @@ def _allow_model_level_clientside_configurable_parameters(
     """
     if llm_router is None:
         return False
-    provider_group: Final = model.split("/", 1)[0]
+    routed_group: Final = llm_router.get_model_from_alias(model) or model
+    provider_group: Final = routed_group.split("/", 1)[0]
     deployments: Final = (
-        llm_router.get_model_list(model_name=model)
+        llm_router.get_model_list_of_routed_group(routed_group)
         or (llm_router.get_model_list(model_name=provider_group) if provider_group in provider_list else None)
         or ()
     )
@@ -506,6 +507,16 @@ _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
 )
 
 
+def _opt_in_model_groups(
+    model: str, request_fallback_models: tuple[str, ...], llm_router: Router | None
+) -> frozenset[str]:
+    requested: Final = frozenset((model, *request_fallback_models))
+    if llm_router is None:
+        return requested
+    routed: Final = frozenset(target for name in requested if (target := llm_router.get_model_from_alias(name)))
+    return (requested | routed).union(*(router_fallback_model_names(name, llm_router) for name in requested | routed))
+
+
 def _check_banned_params(
     body: Mapping[str, object],
     general_settings: dict,
@@ -515,6 +526,7 @@ def _check_banned_params(
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
     banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
+    request_fallback_models: tuple[str, ...] = (),
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
@@ -536,14 +548,15 @@ def _check_banned_params(
             # Proxy-wide opt-in: every banned param is permitted, exit
             # entirely so the rest of the loop doesn't waste work.
             return
-        if (
+        if all(
             _allow_model_level_clientside_configurable_parameters(
-                model=model,
+                model=model_group,
                 param=param,
                 request_body_value=body[param],
                 llm_router=llm_router,
             )
             is True
+            for model_group in _opt_in_model_groups(model, request_fallback_models, llm_router)
         ):
             # Per-param opt-in: only THIS param is permitted by the
             # deployment's ``configurable_clientside_auth_params``. Skip
@@ -719,18 +732,28 @@ def is_request_body_safe(
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
+    root_body: Final = _without_route_named_vertex_target(request_body, route)
+    request_fallback_models: Final = request_fallback_model_names(root_body)
     _check_banned_params(
-        _without_route_named_vertex_target(request_body, route),
+        root_body,
         general_settings,
         llm_router,
         model,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
+        request_fallback_models=request_fallback_models,
     )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
-            _check_banned_params(nested, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                nested,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                request_fallback_models=request_fallback_models,
+            )
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
@@ -741,6 +764,7 @@ def is_request_body_safe(
                 model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
+                request_fallback_models=request_fallback_models,
             )
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
@@ -750,10 +774,18 @@ def is_request_body_safe(
                 model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
+                request_fallback_models=request_fallback_models,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
-            _check_banned_params(target, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                target,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                request_fallback_models=request_fallback_models,
+            )
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -773,6 +805,7 @@ def is_request_body_safe(
                 model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
+                request_fallback_models=request_fallback_models,
             )
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
         reject_api_key_secret_reference(user_config_params)
