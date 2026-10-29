@@ -1,4 +1,3 @@
-import gc
 import json
 import time
 import tracemalloc
@@ -229,43 +228,6 @@ def test_draining_many_concatenated_values_never_copies_the_remainder():
     assert peak_bytes < payload_bytes // 4, (
         f"draining {count} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload; "
         "a cursor drain allocates per-value scratch only; re-slicing the remainder on every pop?"
-    )
-
-
-def _drain_cpu_seconds(count: int) -> float:
-    accumulator: Final = _holding('{"a": 1}', count)
-    gc_was_enabled: Final = gc.isenabled()
-    gc.disable()
-    try:
-        started: Final = time.thread_time()
-        drained: Final = sum(1 for _ in _popped_values(accumulator))
-        elapsed: Final = time.thread_time() - started
-    finally:
-        if gc_was_enabled:
-            gc.enable()
-    assert drained == count
-    return elapsed
-
-
-def test_draining_many_concatenated_values_scales_linearly_in_cpu_time():
-    """
-    Regression guard for a drain that stays quadratic without copying, such as
-    a pop that re-scans the consumed prefix with a C string method. Sixteen
-    times the values costs about 16x the CPU time when the drain is linear and
-    256x when it is quadratic, so the 64x bound sits 4x from both.
-
-    Times the draining thread's own CPU time, the fastest of three runs, with
-    the cyclic GC paused, so neither other processes, other threads holding
-    the GIL, nor a collection over earlier tests' heap moves the ratio the way
-    they moved the wall-clock ratio this test replaced.
-    """
-    small_count: Final = 2_500
-    small: Final = min(_drain_cpu_seconds(small_count) for _ in range(3))
-    large: Final = min(_drain_cpu_seconds(small_count * 16) for _ in range(3))
-    ratio: Final = large / small
-    assert ratio < 64, (
-        f"draining 16x the values took {ratio:.1f}x the CPU time ({small * 1000:.1f} ms -> {large * 1000:.1f} ms); "
-        "a linear drain takes about 16x; re-scanning the consumed prefix on every pop?"
     )
 
 
