@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Protocol
 
 import httpx
 import pytest
@@ -340,6 +341,14 @@ OPERATOR_COST_MAP_URL: Final = "https://costs.invalid/model_prices_and_context_w
 OPERATOR_FLAT_PRICE: Final = 0.003
 OPERATOR_TIER_PRICE: Final = 0.0045
 ServedExaEntry = Callable[[Mapping[str, object]], Mapping[str, object]]
+NO_MODE_PRICES: Final[Mapping[str, float]] = MappingProxyType({})
+OWN_MAP_DEEP_PRICE: Final[Mapping[str, float]] = MappingProxyType({"exa_ai/search-deep": OPERATOR_TIER_PRICE})
+
+
+class _ServeCostMap(Protocol):
+    def __call__(
+        self, url: str, exa_entry: ServedExaEntry, mode_prices: Mapping[str, float] = NO_MODE_PRICES
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,11 +360,16 @@ class _ServedCostMap:
 
 
 @pytest.fixture
-def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str, ServedExaEntry], None]]:
-    def serve(url: str, exa_entry: ServedExaEntry) -> None:
+def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ServeCostMap]:
+    def serve(url: str, exa_entry: ServedExaEntry, mode_prices: Mapping[str, float] = NO_MODE_PRICES) -> None:
         monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP")
         shipped: Final = GetModelCostMap.load_local_model_cost_map()
-        body: Final = json.dumps({**shipped, "exa_ai/search": exa_entry(shipped["exa_ai/search"])}).encode()
+        repriced_modes: Final = {
+            entry: {**shipped[entry], "input_cost_per_query": price} for entry, price in mode_prices.items()
+        }
+        body: Final = json.dumps(
+            {**shipped, "exa_ai/search": exa_entry(shipped["exa_ai/search"]), **repriced_modes}
+        ).encode()
         monkeypatch.setattr(
             litellm, "model_cost", litellm.get_model_cost_map(url=url, max_attempts=1, client=_ServedCostMap(body))
         )
@@ -409,7 +423,7 @@ def _remote_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str,
 )
 def test_an_exa_price_from_the_operators_own_cost_map_wins_over_the_cost_exa_reports(
     respx_mock: respx.MockRouter,
-    _remote_cost_map: Callable[[str, ServedExaEntry], None],
+    _remote_cost_map: _ServeCostMap,
     url: str,
     exa_entry: ServedExaEntry,
     expected: float,
@@ -418,6 +432,34 @@ def test_an_exa_price_from_the_operators_own_cost_map_wins_over_the_cost_exa_rep
     respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_TOTAL}})
 
     response: Final = litellm.search(query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("search_type", "mode_prices", "expected"),
+    [
+        pytest.param("deep", NO_MODE_PRICES, OPERATOR_FLAT_PRICE, id="deep"),
+        pytest.param("lite", NO_MODE_PRICES, OPERATOR_FLAT_PRICE, id="lite"),
+        pytest.param("deep", OWN_MAP_DEEP_PRICE, OPERATOR_TIER_PRICE, id="own-map-prices-deep"),
+        pytest.param("lite", OWN_MAP_DEEP_PRICE, OPERATOR_FLAT_PRICE, id="other-mode-repriced"),
+    ],
+)
+def test_an_exa_price_from_the_operators_own_cost_map_covers_every_search_type_it_leaves_as_shipped(
+    respx_mock: respx.MockRouter,
+    _remote_cost_map: _ServeCostMap,
+    search_type: str,
+    mode_prices: Mapping[str, float],
+    expected: float,
+) -> None:
+    _remote_cost_map(
+        OPERATOR_COST_MAP_URL, lambda shipped: {**shipped, "input_cost_per_query": OPERATOR_FLAT_PRICE}, mode_prices
+    )
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_TOTAL}})
+
+    response: Final = litellm.search(
+        query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key", type=search_type
+    )
 
     assert response._hidden_params["response_cost"] == pytest.approx(expected)
 
@@ -489,7 +531,7 @@ REGISTERED_TIER_PRICE: Final = 0.0456
 )
 def test_a_price_registered_over_the_operators_own_cost_map_bills_the_registered_price(
     respx_mock: respx.MockRouter,
-    _remote_cost_map: Callable[[str, ServedExaEntry], None],
+    _remote_cost_map: _ServeCostMap,
     own_map_price: Mapping[str, object],
     registration: Mapping[str, object],
     expected: float,

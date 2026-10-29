@@ -120,10 +120,6 @@ def _operator_price_fields(entry: str) -> frozenset[str]:
     return _runtime_price_fields(entry) | _own_cost_map_price_fields(entry)
 
 
-def _registered_at_runtime(entry: str) -> bool:
-    return bool(_runtime_price_fields(entry))
-
-
 def _operator_priced(entry: str) -> bool:
     """Whether an operator set a price on `entry`, with `register_model` or their own cost map."""
     return bool(_operator_price_fields(entry))
@@ -149,8 +145,8 @@ def _pricing_model(
     optional_params: Mapping[str, object] | None,
 ) -> str:
     """`<provider>/search-<mode>` when `model` is the generic `<provider>/search` entry (bare or provider-prefixed) and
-    the request's mode parameter names a priced entry, else `model`. A price registered at runtime on the generic entry
-    keeps applying until the mode entry is registered too."""
+    the request's mode parameter names a priced entry, else `model`. An operator price on the generic entry keeps
+    applying until the operator prices the mode entry too."""
     mode_param: Final = SEARCH_MODE_PARAM_BY_PROVIDER.get(custom_llm_provider or "")
     generic_model: Final = f"{custom_llm_provider}/search"
     if mode_param is None or model not in (generic_model, f"{custom_llm_provider}/{generic_model}"):
@@ -158,7 +154,7 @@ def _pricing_model(
     mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
     mode_model: Final = f"{custom_llm_provider}/search-{mode}"
     priced: Final = mode_model in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
-    if not priced or (_registered_at_runtime(generic_model) and not _registered_at_runtime(mode_model)):
+    if not priced or (_operator_priced(generic_model) and not _operator_priced(mode_model)):
         return model
     return mode_model
 
