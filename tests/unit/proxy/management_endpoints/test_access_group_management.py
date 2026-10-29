@@ -693,10 +693,25 @@ class _FakeModelTable:
         self.deployments = list(deployments)
         self.failing_model_ids = failing_model_ids
         self.updates: list[tuple[dict, dict]] = []
+        self.rows_locked_by_another_session: frozenset[str] = frozenset()
+        self.edits_committed_while_waiting_for_the_lock: dict[str, dict] = {}
 
     async def find_many(self, where=None, **kwargs):
         model_names = (where or {}).get("model_name", {}).get("in")
         return [d for d in self.deployments if model_names is None or d.model_name in model_names]
+
+    def lock_rows(self, model_ids):
+        held = sorted(self.rows_locked_by_another_session.intersection(model_ids))
+        if held:
+            raise TimeoutError(f"timed out waiting for the row lock on {held}")
+        self.deployments = [
+            _FakeDeployment(
+                model_id=d.model_id,
+                model_name=d.model_name,
+                model_info=self.edits_committed_while_waiting_for_the_lock.get(d.model_id, d.model_info),
+            )
+            for d in self.deployments
+        ]
 
     async def find_unique(self, where, include=None):
         return next((d for d in self.deployments if d.model_id == where["model_id"]), None)
@@ -745,8 +760,16 @@ class _FakeModelTableTx:
         self.model_table = model_table
         self.litellm_proxymodeltable = SimpleNamespace(find_many=self._find_many)
 
-    async def query_raw(self, query):
-        self.journal.append("model_table.lock" if "FOR UPDATE" in query else f"model_table.query:{query}")
+    async def query_raw(self, query, *args):
+        if "pg_advisory_xact_lock" in query:
+            self.journal.append(f"access_group.lock:{args[0]}")
+            return [{"locked": 1}]
+        if "FOR UPDATE" in query:
+            model_ids = sorted(args[0] if args else (d.model_id for d in self.model_table.deployments))
+            self.journal.append(f"model_table.lock:{','.join(model_ids)}")
+            self.model_table.lock_rows(model_ids)
+            return [{"model_id": model_id} for model_id in model_ids]
+        self.journal.append(f"model_table.query:{query}")
         return []
 
     async def _find_many(self):
@@ -1572,7 +1595,9 @@ async def test_an_access_group_update_locks_the_rows_it_reads_and_tells_other_wo
         )
 
     assert journal == [
-        "model_table.lock",
+        "access_group.lock:model_access_group:prod-models",
+        "model_table.read",
+        "model_table.lock:joins,leaves,stays",
         "model_table.read",
         "model_table.update:leaves",
         "model_table.update:joins",
@@ -1616,7 +1641,142 @@ async def test_an_access_group_update_that_changes_no_membership_writes_and_anno
         )
 
     assert response.models_updated == 2
-    assert journal == ["model_table.lock", "model_table.read"]
+    assert journal == [
+        "access_group.lock:model_access_group:prod-models",
+        "model_table.read",
+        "model_table.lock:also-stays,stays",
+        "model_table.read",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_access_group_update_goes_through_while_another_session_holds_a_model_row_outside_the_group():
+    import json
+
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        update_access_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    prisma = _FakePrismaClient(
+        [],
+        deployments=[
+            _deployment(model_id="stays", model_name="gpt-stays"),
+            _deployment(model_id="leaves", model_name="gpt-leaves"),
+            _deployment(model_id="joins", model_name="gpt-joins", access_groups=()),
+            _deployment(model_id="unrelated", model_name="gpt-unrelated", access_groups=("other-group",)),
+        ],
+    )
+    prisma.model_table.rows_locked_by_another_session = frozenset({"unrelated"})
+
+    with _proxy_with_stubbed_reload(prisma):
+        response = await update_access_group(
+            access_group="prod-models",
+            data=UpdateModelGroupRequest(model_ids=["stays", "joins"]),
+            user_api_key_dict=_admin(),
+        )
+
+    written_access_groups = {
+        where["model_id"]: json.loads(data["model_info"])["access_groups"]
+        for where, data in prisma.model_table.updates
+    }
+    assert written_access_groups == {"joins": ["prod-models"], "leaves": []}
+    assert response.models_updated == 2
+
+
+@pytest.mark.asyncio
+async def test_an_access_group_update_keeps_an_edit_committed_while_it_waited_for_the_row_lock():
+    import json
+
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        update_access_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    prisma = _FakePrismaClient(
+        [],
+        deployments=[
+            _deployment(model_id="stays", model_name="gpt-stays"),
+            _deployment(model_id="joins", model_name="gpt-joins", access_groups=()),
+        ],
+    )
+    prisma.model_table.edits_committed_while_waiting_for_the_lock = {
+        "joins": {"access_groups": [], "description": "saved while the update waited"}
+    }
+
+    with _proxy_with_stubbed_reload(prisma):
+        await update_access_group(
+            access_group="prod-models",
+            data=UpdateModelGroupRequest(model_ids=["stays", "joins"]),
+            user_api_key_dict=_admin(),
+        )
+
+    written = {where["model_id"]: json.loads(data["model_info"]) for where, data in prisma.model_table.updates}
+    assert written == {"joins": {"access_groups": ["prod-models"], "description": "saved while the update waited"}}
+
+
+@pytest.mark.asyncio
+async def test_an_access_group_emptied_while_the_update_waited_for_the_row_lock_answers_404_and_writes_nothing():
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        update_access_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    prisma = _FakePrismaClient(
+        [],
+        deployments=[
+            _deployment(model_id="leaves", model_name="gpt-leaves"),
+            _deployment(model_id="joins", model_name="gpt-joins", access_groups=()),
+        ],
+    )
+    prisma.model_table.edits_committed_while_waiting_for_the_lock = {"leaves": {"access_groups": []}}
+
+    with _proxy_with_stubbed_reload(prisma), pytest.raises(HTTPException) as raised:
+        await update_access_group(
+            access_group="prod-models",
+            data=UpdateModelGroupRequest(model_ids=["joins"]),
+            user_api_key_dict=_admin(),
+        )
+
+    assert raised.value.status_code == 404
+    assert prisma.model_table.updates == []
+
+
+@pytest.mark.asyncio
+async def test_updating_a_missing_access_group_answers_404_before_checking_the_model_names():
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        update_access_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    prisma = _FakePrismaClient(
+        [], deployments=[_deployment(model_id="other", model_name="gpt-other", access_groups=("other-group",))]
+    )
+
+    with _proxy_with_stubbed_reload(prisma):
+        _serve_model_groups(proxy_server.llm_router, ["gpt-other"])
+        with pytest.raises(HTTPException) as raised:
+            await update_access_group(
+                access_group="prod-models",
+                data=UpdateModelGroupRequest(model_names=["no-such-model"]),
+                user_api_key_dict=_admin(),
+            )
+
+    assert raised.value.status_code == 404
+    assert prisma.model_table.updates == []
 
 
 @pytest.mark.asyncio

@@ -136,7 +136,7 @@ class _ModelTableTx(Protocol):
     @property
     def litellm_proxymodeltable(self) -> _ModelTableTxActions: ...
 
-    async def query_raw(self, query: str) -> object: ...
+    async def query_raw(self, query: str, *args: object) -> object: ...
 
     def batch_(self) -> contextlib.AbstractAsyncContextManager[_ModelTableBatch]: ...
 
@@ -196,7 +196,10 @@ def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
     return ModelRepository(WriterPinnedClient(prisma_client.db)).table
 
 
-_LOCK_EVERY_MODEL_ROW: Final = 'SELECT model_id FROM "LiteLLM_ProxyModelTable" ORDER BY model_id FOR UPDATE'
+_SERIALIZE_ACCESS_GROUP_WRITES: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
+_LOCK_MODEL_ROWS: Final = (
+    'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = ANY($1::text[]) ORDER BY model_id FOR UPDATE'
+)
 _MEMBERSHIP_TX_TIMEOUT: Final = timedelta(seconds=30)
 
 
@@ -470,12 +473,44 @@ def _membership_rewrites(
     return tuple((model_id, model_info) for model_id, model_info in rewrites if model_info is not None)
 
 
+def _carries_access_group(model_info: object, access_group: str) -> bool:
+    access_groups: Final = (model_info_as_mapping(model_info) or {}).get("access_groups")
+    return isinstance(access_groups, list) and access_group in access_groups
+
+
+def _model_ids_to_lock(
+    deployments: Sequence[_DeploymentRow], access_group: str, data: UpdateModelGroupRequest
+) -> frozenset[str]:
+    selected_model_ids: Final = frozenset(data.model_ids or ())
+    selected_model_names: Final = frozenset(data.model_names or ())
+    return frozenset(
+        deployment.model_id
+        for deployment in deployments
+        if deployment.model_id in selected_model_ids
+        or deployment.model_name in selected_model_names
+        or _carries_access_group(deployment.model_info, access_group)
+    )
+
+
+async def _raise_404_unless_the_primary_carries(access_group: str, prisma_client: PrismaClient) -> None:
+    if access_group not in _access_groups_of_deployments(await _model_table(prisma_client).find_many()):
+        raise _http_error(404, f"Access group '{access_group}' not found")
+
+
 async def _rewrite_membership_under_row_locks(
     prisma_client: PrismaClient, access_group: str, data: UpdateModelGroupRequest
 ) -> tuple[tuple[_DeploymentRow, ...], tuple[tuple[str, Mapping[str, object]], ...]]:
     async with _model_table_tx(prisma_client) as tx:
-        await tx.query_raw(_LOCK_EVERY_MODEL_ROW)
-        deployments: Final = await tx.litellm_proxymodeltable.find_many()
+        await tx.query_raw(_SERIALIZE_ACCESS_GROUP_WRITES, f"model_access_group:{access_group}")
+        model_ids_to_lock: Final = _model_ids_to_lock(
+            deployments=await tx.litellm_proxymodeltable.find_many(), access_group=access_group, data=data
+        )
+        await tx.query_raw(_LOCK_MODEL_ROWS, sorted(model_ids_to_lock))
+        deployments: Final = tuple(
+            deployment
+            for deployment in await tx.litellm_proxymodeltable.find_many()
+            if deployment.model_id in model_ids_to_lock
+        )
         if access_group not in _access_groups_of_deployments(deployments):
             raise HTTPException(
                 status_code=404,
@@ -1009,6 +1044,13 @@ async def update_access_group(
             status_code=400,
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
+
+    try:
+        await _raise_404_unless_the_primary_carries(access_group=access_group, prisma_client=prisma_client)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _http_error(500, f"Failed to check access group existence: {e}")
 
     if not has_model_ids and has_model_names:
         assert data.model_names is not None
