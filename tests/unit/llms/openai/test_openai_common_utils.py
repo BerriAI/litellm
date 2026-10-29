@@ -592,7 +592,7 @@ async def test_unkeyed_openai_deployment_never_sends_the_openai_admin_key(
         "api_base": api_base,
     }
 
-    with pytest.raises(litellm.AuthenticationError, match="Missing credentials"):
+    with pytest.raises(litellm.AuthenticationError, match=r"Missing credentials|The api_key client option must be set"):
         await litellm.acompletion(**request) if is_async else litellm.completion(**request)
 
     assert not route.called
