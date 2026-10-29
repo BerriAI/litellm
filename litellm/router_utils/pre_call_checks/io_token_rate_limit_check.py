@@ -22,7 +22,7 @@ from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import deployment_openai_model, offload_token_count
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterCacheEnum, RouterErrors
@@ -127,6 +127,12 @@ def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | 
     return itpm_key, otpm_key
 
 
+def _tokenizer_model(deployment: object) -> str:
+    params: Final = deployment.get("litellm_params") if is_str_keyed_mapping(deployment) else None
+    served: Final = params.get("model") if is_str_keyed_mapping(params) else None
+    return deployment_openai_model(deployment) or (served if isinstance(served, str) else "")
+
+
 def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "") -> int:
     if not request_kwargs:
         return 0
@@ -148,7 +154,7 @@ def _model_max_output_tokens(model_name: str) -> int | None:
     # this lookup is a fallback default and must never fail the request.
     with contextlib.suppress(Exception):
         info: Final = litellm.get_model_info(model=model_name)
-        model_max: Final = info.get("max_output_tokens") or info.get("max_tokens")
+        model_max: Final = info.get("max_output_tokens")
         if model_max is not None:
             return max(0, int(model_max))
     return None
@@ -427,7 +433,7 @@ def io_token_pre_call_check(
         return deployment
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
-    _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
+    _model: Final = _tokenizer_model(deployment)
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
     max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 
@@ -491,7 +497,7 @@ async def async_io_token_pre_call_check(
         return deployment
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
-    _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
+    _model: Final = _tokenizer_model(deployment)
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
     max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 

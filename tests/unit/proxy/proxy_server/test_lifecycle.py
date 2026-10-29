@@ -33,9 +33,10 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
+    _proxy_startup_event,
     ProxyStartupEvent,
-    initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
     cleanup_router_config_variables,
@@ -43,14 +44,13 @@ from litellm.proxy.proxy_server import (
     get_litellm_model_info,
     initialize,
     initialize_from_worker_config,
+    initialize_shared_aiohttp_session,
     load_from_azure_key_vault,
     proxy_shutdown_event,
     proxy_startup_event,
     run_ollama_serve,
     save_worker_config,
 )
-
-from litellm.proxy.management_helpers.audit_logs import track_audit_task
 
 from .conftest import normalize
 
@@ -1060,7 +1060,7 @@ def test_otel_global_provider_published_after_callback_init():
     span was orphaned. The publish (``publish_global_otel_v2_provider``) must
     therefore appear after ``_initialize_startup_logging`` in the lifespan source.
     """
-    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    wrapped = getattr(_proxy_startup_event, "__wrapped__", _proxy_startup_event)
     source = inspect.getsource(wrapped)
     init_pos = source.find("ProxyStartupEvent.initialize_startup_logging(")
     publish_pos = source.find("publish_global_otel_v2_provider(")
@@ -1146,7 +1146,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     The call must follow Prisma setup so DB-backed deployments do not false-positive.
     Direct ``_warn_budget_without_db`` tests cover the warning behavior itself.
     """
-    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    wrapped = getattr(_proxy_startup_event, "__wrapped__", _proxy_startup_event)
     source = inspect.getsource(wrapped)
     budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
     warn_pos = source.find("warn_budget_without_db(")
@@ -1165,7 +1165,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
 
 @pytest.mark.asyncio
 async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
-    from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
+    from litellm.router_strategy.auto_router.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -1186,7 +1186,10 @@ async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
 
 @pytest.mark.asyncio
 async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_refreshed_on_restart():
-    from litellm.router_utils.auto_router_tuning_baseline import mutable_tuned_identities, snapshot_tuning_baselines
+    from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
+        mutable_tuned_identities,
+        snapshot_tuning_baselines,
+    )
 
     deployments = [
         {

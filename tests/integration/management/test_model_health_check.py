@@ -26,6 +26,20 @@ _DECISIONS_PROBE_REPLY: Final = JsonResponse(
         "usage": {"input_tokens": 10, "output_tokens": 1},
     },
 )
+_EXTRACTION_PROBE_REPLY: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "result": {
+            "model": "clairic",
+            "answers": {"reachable": {"type": "text", "value": "health", "confidence": 0.9}},
+            "truncated": False,
+            "usage": {"input_tokens": 10, "output_tokens": 0},
+        },
+        "success": True,
+        "errors": [],
+        "messages": [],
+    },
+)
 _CONFIGURED_PROBE_REPLY: Final = JsonResponse(
     content_type="application/json",
     body={
@@ -282,6 +296,29 @@ def test_decisions_mode_health_check_resolves_the_mode_from_the_cost_map_and_sen
                     "model": "pplx-decider-v1-27b",
                     "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
                     "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                },
+            )
+        ]
+
+
+def test_extraction_mode_health_check_resolves_the_mode_from_the_cost_map_and_sends_the_extraction_probe(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = register_scenario(f"health-extraction-{uuid.uuid4().hex[:12]}", _EXTRACTION_PROBE_REPLY)
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="cloudflare/@cf/cloudflare/clairic", api_base=handle.api_base(), api_key="synthetic-cloudflare-key"
+        )
+        report: Final = _health_report(gateway, model)
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+        assert _probes_sent_to(gateway, handle) == [
+            (
+                f"/{handle.scenario_id}/ai/run/@cf/cloudflare/clairic",
+                {
+                    "model": "clairic",
+                    "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
+                    "fields": {"reachable": {"type": "text", "instructions": "Any word from the text"}},
                 },
             )
         ]

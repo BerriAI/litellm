@@ -48,6 +48,16 @@ from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange
 from litellm.types.videos.main import DecodedVideoId
 
 
+def is_unauthorized_error(exception: BaseException | None) -> bool:
+    """True when the proxy itself rejected the caller's credentials with a 401."""
+    if not isinstance(exception, (HTTPException, ProxyException)):
+        return False
+
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    return str(status_code) == str(status.HTTP_401_UNAUTHORIZED)
+
+
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     """True when an authentication error rejects a malformed virtual key.
 
@@ -57,15 +67,7 @@ def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     match would let a request body demote an authorization failure to the
     quiet log path.
     """
-    if not isinstance(exception, (HTTPException, ProxyException)):
-        return False
-
-    code: Final[object] = getattr(exception, "code", None)
-    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
-    if str(status_code) != str(status.HTTP_401_UNAUTHORIZED):
-        return False
-
-    return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
+    return is_unauthorized_error(exception) and getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
 
 
 def log_model_access_denial(exc: BaseException) -> None:
@@ -220,11 +222,12 @@ def _allow_model_level_clientside_configurable_parameters(
     if llm_router is None:
         return False
     # check if model is set
-    model_info = llm_router.get_model_group_info(model_group=model)
+    registry: Final = llm_router.registry()
+    model_info = registry.group(model)
     if model_info is None:
         # check if wildcard model is set
         if model.split("/", 1)[0] in provider_list:
-            model_info = llm_router.get_model_group_info(model_group=model.split("/", 1)[0])
+            model_info = registry.group(model.split("/", 1)[0])
 
     if model_info is None:
         return False
@@ -736,7 +739,9 @@ def is_request_body_safe(
 
 def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
     if manages_deployments:
-        reject_server_owned_wif_fields(litellm_params)
+        reject_server_owned_wif_fields(
+            MappingProxyType({key: value for key, value in litellm_params.items() if key != "chatgpt_auth_file"})
+        )
     else:
         reject_server_owned_wif_params(litellm_params)
         reject_federated_credential_reference(litellm_params)
@@ -1204,7 +1209,7 @@ def _get_deployment_default_limit(model_name: str, field: str) -> int | None:
 
     if llm_router is None:
         return None
-    deployments: Final = llm_router.get_model_list(model_name=model_name)
+    deployments: Final = llm_router.registry().deployments(model_name)
     if not deployments:
         return None
     limits: Final = []
@@ -2120,7 +2125,7 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
     if model_id is None or llm_router is None:
         return model_id
     try:
-        return llm_router.resolve_model_name_from_model_id(model_id) or model_id
+        return llm_router.registry().resolve(model_id, kind="from_id") or model_id
     except Exception as e:
         verbose_proxy_logger.debug("Unable to resolve model_id from managed resource ID: %s", str(e))
         return model_id
@@ -2129,8 +2134,9 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
 def get_cache_prediction_deployments(
     *, current_deployment_id: str, candidate_deployment_id: str, llm_router: Router, team_id: str | None
 ) -> tuple[Deployment, Deployment] | None:
-    current: Final = llm_router.get_deployment(current_deployment_id)
-    candidate: Final = llm_router.get_deployment(candidate_deployment_id)
+    registry: Final = llm_router.registry()
+    current: Final = registry.deployment(current_deployment_id)
+    candidate: Final = registry.deployment(candidate_deployment_id)
     if current is None or candidate is None:
         return None
     if any(deployment.model_info.team_id not in (None, team_id) for deployment in (current, candidate)):
@@ -2342,7 +2348,7 @@ def get_model_from_request(
 
     if route.lower().startswith("/nvidia_nim/"):
         nvidia_nim_model: Final = (
-            nvidia_nim_model_group_in_path(route, llm_router.get_model_list()) if llm_router else None
+            nvidia_nim_model_group_in_path(route, llm_router.registry().deployments()) if llm_router else None
         )
         return model if nvidia_nim_model is None else nvidia_nim_model
 
@@ -2353,7 +2359,7 @@ def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str
     if llm_router is None:
         return None
     endpoint: Final = re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE)
-    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.get_model_names()))
+    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.registry().names()))
 
 
 def _model_from_bedrock_route(route: str) -> str | None:

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import json
 import os
@@ -16,8 +17,10 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
+    COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     SERVER_STREAMING_CLASSIFICATION_KEY,
     SERVER_STREAMING_CLASSIFICATION_MARKER,
@@ -36,7 +39,6 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -53,11 +55,13 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    forwarded_anthropic_oauth_token,
     get_dynamic_logging_metadata,
     get_metadata_variable_name,
     move_guardrails_to_metadata,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
 
 
@@ -926,6 +930,222 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     assert snapshot_body["messages"] == [{"role": "user", "content": "hello"}]
 
 
+FORWARD_PROVIDER_AUTH_HEADERS: Final = {
+    "forward_llm_provider_auth_headers": True,
+    "forward_client_headers_to_llm_api": True,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,expected",
+    [
+        ({"headers": {"Authorization": "Bearer sk-caller"}}, {}, {}, ("headers",)),
+        ({"headers": {"X-Trace-Id": "trace-1"}}, {}, {}, ("headers",)),
+        ({"headers": {}}, {}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, {}, ("extra_headers",)),
+        ({"extra_headers": {"OpenAI-Project": "proj_caller"}}, {}, {}, ("extra_headers",)),
+        (
+            {"provider_specific_header": {"custom_llm_provider": "openai", "extra_headers": {"x-api-key": "caller"}}},
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": [
+                    {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-beta": "tools"}},
+                    {"custom_llm_provider": "gemini", "extra_headers": {"X-Goog-Api-Key": "caller"}},
+                ]
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"x-caller-trace": "x"},
+                }
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"},
+                }
+            },
+            {},
+            {},
+            (),
+        ),
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ()),
+        ({"organization": "org-caller"}, {}, {}, ("organization",)),
+        ({"headers": "authorization", "provider_specific_header": "x-api-key"}, {}, {}, ()),
+        (
+            {"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}},
+            {},
+            {},
+            ("api_key", "headers"),
+        ),
+        ({}, {"anthropic-beta": "tools-2024-04-04"}, {}, ()),
+        ({}, {"anthropic-version": "2023-06-01", "anthropic-beta": "tools-2024-04-04"}, {}, ()),
+        ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ("organization",)),
+        (
+            {},
+            {"x-litellm-api-key": "sk-virtual", "authorization": "Bearer sk-ant-oat01-caller"},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-goog-api-key": "AIza-caller"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            ("headers",),
+        ),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-portkey-api-key": "caller-gateway-key"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            ("headers",),
+        ),
+        ({}, {"authorization": "Bearer sk-virtual"}, FORWARD_PROVIDER_AUTH_HEADERS, ()),
+    ],
+    ids=[
+        "authorization-in-headers",
+        "plain-headers",
+        "empty-headers",
+        "api-key-in-extra-headers",
+        "openai-project-in-extra-headers",
+        "credential-in-provider-specific-header",
+        "credential-in-one-provider-specific-header-entry",
+        "plain-provider-specific-header",
+        "anthropic-version-and-beta-in-provider-specific-header",
+        "anthropic-version-in-headers",
+        "organization",
+        "malformed-header-fields",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-anthropic-beta",
+        "proxy-forwarded-anthropic-sdk-headers",
+        "proxy-forwarded-openai-organization",
+        "proxy-forwarded-anthropic-oauth-token",
+        "proxy-forwarded-provider-auth-header",
+        "proxy-forwarded-gateway-key",
+        "proxy-forwarding-nothing",
+    ],
+)
+async def test_caller_credential_fields_name_every_field_that_carries_a_caller_header_or_credential(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    expected: tuple[str, ...],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_headers,expected",
+    [({}, ()), ({"x-caller-trace": "trace-1"}, ("headers",))],
+    ids=["user-information-only", "user-information-and-caller-header"],
+)
+async def test_caller_credential_fields_ignore_the_user_information_the_proxy_adds_to_forwarded_headers(
+    monkeypatch: pytest.MonkeyPatch, request_headers: dict[str, str], expected: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "add_user_information_to_llm_headers", True)
+
+    updated: Final = await _request_data_added_by_the_proxy({}, request_headers, FORWARD_PROVIDER_AUTH_HEADERS)
+
+    assert updated["headers"]["x-litellm-user_api_key_user_id"] == "test-user"
+    assert updated["proxy_server_request"]["caller_credential_fields"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,general_settings,expected",
+    [
+        ({"headers": {"Anthropic-Version": "2023-06-01"}}, {}, {}, ("headers",)),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-version": "2023-06-01"},
+                }
+            },
+            {},
+            {},
+            ("provider_specific_header",),
+        ),
+        ({"organization": "org-caller"}, {}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, {}, ()),
+        (
+            {"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}},
+            {},
+            {},
+            ("api_key", "headers"),
+        ),
+        ({}, {"openai-organization": "org-caller"}, {"forward_openai_org_id": True}, ()),
+        (
+            {},
+            {"authorization": "Bearer sk-virtual", "x-goog-api-key": "AIza-caller"},
+            FORWARD_PROVIDER_AUTH_HEADERS,
+            (),
+        ),
+    ],
+    ids=[
+        "anthropic-version-in-headers",
+        "anthropic-version-in-provider-specific-header",
+        "organization",
+        "api-key-in-extra-headers",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-openai-organization",
+        "proxy-forwarded-provider-auth-header",
+    ],
+)
+async def test_credential_fields_name_the_stripped_fields_the_caller_sent(
+    sent: dict[str, object],
+    request_headers: dict[str, str],
+    general_settings: dict[str, object],
+    expected: tuple[str, ...],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(sent, request_headers, general_settings)
+
+    assert updated["proxy_server_request"]["credential_fields"] == expected
+
+
+async def _request_data_added_by_the_proxy(
+    sent: dict[str, object], request_headers: dict[str, str], general_settings: dict[str, object]
+) -> dict:
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock: Final = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"content-type": "application/json", **request_headers}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    data: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], **sent}
+
+    return await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
+        proxy_config=MagicMock(),
+        general_settings=dict(general_settings),
+        version="test-version",
+    )
+
+
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1176,6 +1396,8 @@ async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection
         ("fallback_depth", True),
         ("_target_order", 2),
         ("attempted_targets", ["forged"]),
+        ("_excluded_deployment_ids", ["pinned-deployment"]),
+        ("_retry_skipped_deployment_ids", ["pinned-deployment"]),
     ],
 )
 async def test_add_litellm_data_to_request_strips_forged_fallback_hop_state(
@@ -1260,6 +1482,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_managed_background_response": True,
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
+        "_failover_excluded_ids": ["pinned-deployment"],
         "safe_user_metadata": "kept",
     }
     data = {
@@ -1320,6 +1543,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_managed_background_response",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
+        "_failover_excluded_ids",
     }
     assert "litellm_metadata" not in updated
     for stripped_key in stripped_keys:
@@ -3460,6 +3684,110 @@ async def test_spend_log_caller_session_stays_out_of_requester_metadata(monkeypa
     assert updated["metadata"][CALLER_SESSION_ID_METADATA_KEY] == "convo-1"
     assert updated["metadata"]["requester_metadata"]["team_label"] == "kept"
     assert CALLER_SESSION_ID_METADATA_KEY not in updated["metadata"]["requester_metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "surface,headers,body,child_id,trace_id",
+    [
+        (
+            "chat/completions", {"X-Session-Id": "child-01"}, {"metadata": {"session_id": "body-001"}},
+            "child-01", "parent-01",
+        ),
+        ("responses", {"x-vendor-session-id": "child-01"}, {}, "child-01", "parent-01"),
+        ("messages", {"session-id": "child-01", "user-agent": "codex_cli_rs/1.0"}, {}, "child-01", "parent-01"),
+        ("chat/completions", {"x-litellm-session-id": "short", "x-session-id": "child-01"}, {}, "short", "short"),
+        ("responses", {"x-litellm-trace-id": "trace-01", "x-session-id": "child-01"}, {}, "child-01", "trace-01"),
+        (
+            "messages", {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
+            {}, "child-01", "trace-01",
+        ),
+        ("responses", {}, {"metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
+        ("messages", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
+        ("chat/completions", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
+        ("messages", {"baggage": "session.id=child-01"}, {}, "child-01", "parent-01"),
+        (
+            "responses", {"baggage": "session.id=child-01"}, {"metadata": {"session_id": "body-001"}},
+            "body-001", "parent-01",
+        ),
+        (
+            "chat/completions", {}, {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
+            "root-001", "parent-01",
+        ),
+        (
+            "responses", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
+            "active-1", "parent-01",
+        ),
+        (
+            "chat/completions", {},
+            {"metadata": {"session_id": "active-1"}, "litellm_metadata": {"session_id": "body-001"}},
+            "active-1", "parent-01",
+        ),
+        (
+            "chat/completions", {}, {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
+            None, "parent-01",
+        ),
+        (
+            "messages", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
+            None, "parent-01",
+        ),
+        (
+            "messages", {}, {"litellm_session_id": "root-001", "litellm_metadata": {"session_id": "active-1"},
+            "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"}},
+            "anthro-1", "parent-01",
+        ),
+        ("messages", {"x-session-id": "child-01"}, {"metadata": {"user_id": {"session_id": "body-001"}}},
+         "child-01", "parent-01"),
+        ("chat/completions", {}, {}, None, "parent-01"),
+        ("responses", {"x-session-id": "bad"}, {}, None, "parent-01"),
+        ("messages", {}, {"metadata": {"session_id": 123}}, None, "parent-01"),
+        ("chat/completions", {"x-session-id": "parent-01"}, {}, None, "parent-01"),
+    ],
+)
+async def test_child_tier_identity_preserves_trace_and_body_session_precedence(
+    surface: str, headers: dict[str, str], body: dict[str, object], child_id: str | None, trace_id: str
+) -> None:
+    request: Final = _make_request_mock(f"/v1/{surface}", {"x-parent-session-id": "parent-01", **headers})
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "test-router", "messages": [], **copy.deepcopy(body)},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    metadata: Final = updated[get_metadata_variable_name(request)]
+    assert metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY] == child_id
+    assert metadata["session_id"] == metadata["trace_id"] == trace_id
+    assert updated["litellm_session_id"] == updated["litellm_trace_id"] == trace_id
+    expected_caller: Final = (
+        headers.get("x-litellm-session-id", "parent-01") if "x-litellm-trace-id" in headers else None
+    )
+    assert metadata.get(CALLER_SESSION_ID_METADATA_KEY) == expected_caller
+    assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface,parent_id", [("chat/completions", None), ("responses", None), ("messages", "bad")])
+async def test_non_child_requests_cannot_forge_a_child_tier_identity(surface: str, parent_id: str | None) -> None:
+    headers: Final = {"x-session-id": "child-01", **({"x-parent-session-id": parent_id} if parent_id else {})}
+    request: Final = _make_request_mock(f"/v1/{surface}", headers)
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "test-router",
+            "messages": [],
+            "metadata": {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: "forged-1"},
+            "litellm_metadata": {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: "forged-2"},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    for bucket in ("metadata", "litellm_metadata"):
+        metadata: Final = updated.get(bucket, {})
+        assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata
+        assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
+    assert updated[get_metadata_variable_name(request)]["session_id"] == "child-01"
 
 
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
@@ -5745,6 +6073,25 @@ def test_clean_headers_strips_x_api_key_when_byok_disabled():
     assert "x-api-key" not in result
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected_token"),
+    [
+        (
+            {"authorization": "Bearer sk-ant-oat01-caller", "x-litellm-api-key": "Bearer sk-proxy"},
+            "sk-ant-oat01-caller",
+        ),
+        ({"authorization": "Bearer sk-ant-oat01-caller"}, None),
+        ({"authorization": "Bearer sk-ant-api03-caller", "x-litellm-api-key": "Bearer sk-proxy"}, None),
+        ({"x-litellm-api-key": "Bearer sk-proxy"}, None),
+    ],
+    ids=["oauth-beside-proxy-key", "oauth-used-as-proxy-key", "non-oauth-authorization", "no-authorization"],
+)
+def test_forwarded_anthropic_oauth_token_follows_chats_forwarding_rule(
+    headers: dict[str, str], expected_token: str | None
+) -> None:
+    assert forwarded_anthropic_oauth_token(Headers(headers)) == expected_token
+
+
 def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth_header():
     """
     Anti-replay regression: even when forward_llm_provider_auth_headers=True,
@@ -6515,7 +6862,7 @@ class TestApplyKeyTagsPreAuth:
 
 def test_resolve_provider_from_deployment_uses_litellm_params_model():
     """When custom_llm_provider is unset, fall back to the prefix of model."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = None
@@ -6526,7 +6873,7 @@ def test_resolve_provider_from_deployment_uses_litellm_params_model():
 
 def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
     """Explicit custom_llm_provider on the deployment wins over model prefix."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = "bedrock"
@@ -6537,21 +6884,21 @@ def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
 
 def test_resolve_provider_from_deployment_no_match():
     """No deployment for the model group -> None."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_by_model_group_name.return_value = None
     assert _resolve_provider_from_deployment(router, "unknown-model") is None
 
 
 def test_resolve_provider_from_deployment_router_raises():
     """Router exceptions must not propagate — fall back to None."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_by_model_group_name.side_effect = RuntimeError("boom")
     assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") is None
 
 
 def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
     """If post-alias lookup fails, the pre-alias name is also tried."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "bedrock/anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = None
@@ -6604,7 +6951,7 @@ def test_apply_overrides_multi_provider_default_picks_correct_provider(
         },
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = "bedrock"
@@ -6655,7 +7002,7 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
         },
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     _apply_credential_overrides_from_model_config(data=data, user_api_key_dict=user_api_key_dict, llm_router=router)
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
@@ -6677,24 +7024,30 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "user_agent, request_drop_params, operator_drop_params, expected_drop_params",
+    "user_agent, request_drop_params, operator_settings, expected_drop_params",
     [
-        ("claude-cli/2.0.69 (external, cli)", None, None, True),
-        ("claude-cli/1.0.44 (external, sdk-py)", None, None, True),
-        ("claude-cli/2.0.69 (external, cli)", False, None, False),
-        ("claude-cli/2.0.69 (external, cli)", None, False, None),
-        ("claude-cli/2.0.69 (external, cli)", None, True, None),
-        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, None, True),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, None, True),
-        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, None, True),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, None, False),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, True, None),
-        ("PostmanRuntime/7.53.0", None, None, None),
-        (None, None, None, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {}, True),
+        ("claude-cli/1.0.44 (external, sdk-py)", None, {}, True),
+        ("claude-cli/2.0.69 (external, cli)", False, {}, False),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": False}, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": True}, True),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": None}, True),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": "false"}, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": "maybe"}, True),
+        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, {}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, {}, True),
+        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, {}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, {}, False),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": False}, None),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": True}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": " False "}, None),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": "true"}, True),
+        ("PostmanRuntime/7.53.0", None, {}, None),
+        (None, None, {}, None),
     ],
 )
 async def test_add_litellm_data_to_request_agentic_cli_drop_params(
-    user_agent, request_drop_params, operator_drop_params, expected_drop_params
+    user_agent, request_drop_params, operator_settings, expected_drop_params
 ):
     """Claude Code sends Anthropic-specific params and Codex sends
     service_tier, both of which fail on providers that reject them, so those
@@ -6711,12 +7064,10 @@ async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     if request_drop_params is not None:
         data["drop_params"] = request_drop_params
 
-    proxy_config = MagicMock()
-    proxy_config.config = (
-        {"litellm_settings": {"drop_params": operator_drop_params}}
-        if operator_drop_params is not None
-        else {"litellm_settings": {}}
-    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config.update_config_state(config={"litellm_settings": operator_settings})
 
     updated = await add_litellm_data_to_request(
         data=data,
@@ -7063,9 +7414,9 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"gpt-4": [0]}
-        team_model_to_deployment_indices = {}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"gpt-4": [0]}
+    mock_router.team_model_to_deployment_indices = {}
 
     test_data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -7074,7 +7425,7 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
         team_model_aliases={"gpt-4": "model_name_team-1_dead-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
     assert test_data.get("model") == "gpt-4"
@@ -7087,9 +7438,9 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
-        team_model_to_deployment_indices = {}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {}
 
     test_data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -7098,7 +7449,7 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
         team_model_aliases={"gpt-4": "model_name_team-1_live-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
     assert test_data.get("model") == "model_name_team-1_live-uuid"
@@ -9208,6 +9559,97 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
     )
 
 
+def _fake_chatgpt_oauth_token(account_id: str) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(
+            json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}, "exp": 4102444800}).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
+    return f"{header}.{payload}.fake-signature"
+
+
+CHATGPT_OAUTH_TOKEN = f"Bearer {_fake_chatgpt_oauth_token('acct-alice')}"
+CHATGPT_ACCOUNT_ID_HEADER_NAME = "ChatGPT-Account-Id"
+PLATFORM_API_KEY_BEARER = "Bearer sk-proj-fake-platform-key-0123456789"
+CHATGPT_LEAK_TARGET_PROVIDERS = ["openai", "azure", "anthropic", "bedrock", "vertex_ai"]
+
+
+def _codex_client_headers(
+    authorization_header_name: str = "authorization", account_id: str | None = "acct-alice"
+) -> dict:
+    return {
+        "content-type": "application/json",
+        "originator": "codex_cli_rs",
+        authorization_header_name: CHATGPT_OAUTH_TOKEN,
+        **({CHATGPT_ACCOUNT_ID_HEADER_NAME: account_id} if account_id is not None else {}),
+    }
+
+
+def test_clean_headers_keeps_chatgpt_oauth_bearer_when_gateway_key_is_separate():
+    result = clean_headers(
+        headers=Headers({**_codex_client_headers(), "x-litellm-api-key": "sk-proxy-virtual-key"}),
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert result["authorization"] == CHATGPT_OAUTH_TOKEN
+    assert "x-litellm-api-key" not in result
+
+
+def test_clean_headers_drops_bearer_that_authenticated_to_the_gateway():
+    result = clean_headers(
+        headers=Headers({"authorization": CHATGPT_OAUTH_TOKEN, "content-type": "application/json"}),
+        litellm_key_header_name=None,
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="authorization",
+    )
+
+    assert _authorization_values(result) == []
+
+
+@pytest.mark.parametrize("bearer", [PLATFORM_API_KEY_BEARER, "Bearer not.a-jwt", "Bearer a.bm90LWpzb24.c"])
+def test_clean_headers_drops_non_chatgpt_bearers(bearer):
+    result = clean_headers(
+        headers=Headers({"authorization": bearer, "x-litellm-api-key": "sk-proxy-virtual-key"}),
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert _authorization_values(result) == []
+
+
+@pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
+def test_chatgpt_oauth_credential_and_account_reach_chatgpt_provider(authorization_header_name):
+    forwarded = _headers_forwarded_to(_codex_client_headers(authorization_header_name), "chatgpt")
+
+    assert _authorization_values(forwarded) == [CHATGPT_OAUTH_TOKEN]
+    assert forwarded[CHATGPT_ACCOUNT_ID_HEADER_NAME] == "acct-alice"
+
+
+@pytest.mark.parametrize("custom_llm_provider", CHATGPT_LEAK_TARGET_PROVIDERS)
+def test_chatgpt_oauth_credential_is_never_forwarded_to_other_providers(custom_llm_provider):
+    forwarded = _headers_forwarded_to(_codex_client_headers(), custom_llm_provider)
+
+    assert _authorization_values(forwarded) == []
+    assert CHATGPT_OAUTH_TOKEN not in forwarded.values()
+    assert CHATGPT_ACCOUNT_ID_HEADER_NAME not in forwarded
+
+
+def test_chatgpt_account_header_is_not_forwarded_without_chatgpt_oauth_bearer():
+    headers = {**_codex_client_headers(), "authorization": PLATFORM_API_KEY_BEARER}
+
+    assert _headers_forwarded_to(headers, "chatgpt") == {}
+
+
+def test_anthropic_oauth_bearer_does_not_reach_chatgpt_provider():
+    assert _authorization_values(_headers_forwarded_to(_client_headers(), "chatgpt")) == []
+
+
 def test_add_user_api_key_auth_to_request_metadata_attributes_a_cli_session_to_its_alias():
     data = {"model": "gpt-5.4-nano", "messages": [{"role": "user", "content": "hi"}], "litellm_metadata": {}}
     session = UserAPIKeyAuth(
@@ -9268,7 +9710,7 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     with (
         patch("litellm.proxy.proxy_server.general_settings", settings),
         patch.dict(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
             {"header-test": server},
             clear=True,
         ),
@@ -9495,7 +9937,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9527,7 +9969,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9558,7 +10000,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9599,7 +10041,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9640,7 +10082,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9688,7 +10130,7 @@ class TestResolveUserProviderCredentials:
             return real_matcher(fallbacks=fallbacks, model_group=model_group)
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"unmatched-%d" % i: ["x"]} for i in range(30_000)] + [{"*": ["generic-x"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9714,7 +10156,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"gpt-4o": ["copilot-chat"]}, {"gpt-4o": ["other-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9752,7 +10194,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         entries: Final = [{"azure/unmatched-%d" % i: ["x"]} for i in range(300)]
         entries.insert(290, {"*": ["copilot-chat"]})
         router.fallbacks = entries
@@ -9804,7 +10246,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9833,7 +10275,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9870,7 +10312,7 @@ class TestResolveUserProviderCredentials:
             return real_matcher(fallbacks=fallbacks, model_group=model_group)
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"gpt-4o": ["copilot-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9916,7 +10358,7 @@ class TestResolveUserProviderCredentials:
         table.find_many = AsyncMock(
             return_value=[SimpleNamespace(user_id="user-a", credential_name="copilot-cred", credential_b64=ciphertext)]
         )
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9947,7 +10389,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9988,7 +10430,7 @@ class TestResolveUserProviderCredentials:
             return result
 
         monkeypatch.setattr(lpc, "_fallback_edges", _counting_edges)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"*": ["target-%d" % i for i in range(4999)] + ["copilot-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10027,7 +10469,7 @@ class TestResolveUserProviderCredentials:
 
         table = self._env(monkeypatch)
         monkeypatch.setattr(litellm, "model_alias_map", {"chat-alias": "copilot-chat"})
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10063,8 +10505,8 @@ class TestResolveUserProviderCredentials:
         _get_hierarchical_router_settings) must be part of discovery."""
         from types import SimpleNamespace
 
-        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
         import litellm.proxy.auth.auth_checks as auth_checks
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
         monkeypatch.setattr(
@@ -10072,7 +10514,7 @@ class TestResolveUserProviderCredentials:
             "get_team_object",
             AsyncMock(return_value=SimpleNamespace(router_settings={"fallbacks": [{"gpt-4o": ["copilot-chat"]}]})),
         )
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10251,7 +10693,7 @@ class TestResolveUserProviderCredentials:
         from litellm.types.router import LiteLLM_Params
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_list = MagicMock(
             return_value=[
                 {

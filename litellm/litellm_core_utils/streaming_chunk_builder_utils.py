@@ -12,10 +12,18 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import (
+    USAGE_COST_BILLED_PROVIDERS,
+    chunk_usage,
+    provider_reported_usage_cost,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
+from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantContentValue,
@@ -49,7 +57,7 @@ from litellm.types.utils import (
     UnreportedUsage,
     Usage,
 )
-from litellm.utils import print_verbose, token_counter
+from litellm.utils import get_base_model_from_metadata, print_verbose, token_counter
 
 if TYPE_CHECKING:
     from openai.types.completion_usage import CompletionUsage
@@ -1349,17 +1357,30 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value}) | USAGE_COST_BILLED_PROVIDERS
+
+
+def _logged_provider(logging_obj: Optional["Logging"]) -> object:
+    if logging_obj is None:
+        return None
+    provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
+    return provider
 
 
 def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
-    if logging_obj is None:
-        return False
-    provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
-    return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+    return _logged_provider(logging_obj) in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
 
 
-def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
+def _stream_builder_response_cost(
+    response: ModelResponse, logging_obj: Optional["Logging"], chunks: Sequence[object]
+) -> float | None:
+    if _logged_provider(logging_obj) == LlmProviders.OPENCODE_GO.value:
+        # usage.opencode only survives on the chunks, the assembled Usage keeps declared fields
+        reported: Final = (
+            provider_reported_usage_cost(chunk_usage(chunk), LlmProviders.OPENCODE_GO.value)
+            for chunk in reversed(chunks)
+        )
+        return next((cost for cost in reported if cost is not None), None)
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
     if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
         return float(usage_cost)
@@ -1397,8 +1418,10 @@ def _set_hidden_response_cost(response: ModelResponse, response_cost: float) -> 
     hidden_params["response_cost"] = response_cost
 
 
-def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
-    response_cost: Final = _stream_builder_response_cost(response, logging_obj)
+def _set_stream_builder_response_cost(
+    response: ModelResponse, logging_obj: Optional["Logging"], chunks: Sequence[object]
+) -> None:
+    response_cost: Final = _stream_builder_response_cost(response, logging_obj, chunks)
     if response_cost is None:
         return
     _set_hidden_response_cost(response, response_cost)
@@ -1468,6 +1491,35 @@ def _simple_text_part(choices: Sequence[object]) -> str | None:
     return content if isinstance(content, str) else ""
 
 
+_NO_TRACE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _carry_bedrock_guardrail_trace(chunks: Sequence[object], response: ModelResponse) -> None:
+    """Bedrock reports a guardrail trace once per stream, on the final metadata chunk, so the built response carries it
+    under the same field as the non-streaming response (``trace`` on Converse, ``amazon-bedrock-trace`` on Invoke)."""
+    traced: Final = map(_bedrock_trace_fields, reversed(chunks))
+    carried: Final = next((fields for fields in traced if fields), _NO_TRACE_FIELDS)
+    for field, trace in carried.items():
+        setattr(response, field, trace)
+
+
+def _record_bedrock_guardrail_trace(
+    chunks: Sequence[object], response: ModelResponse, logging_obj: Optional["Logging"]
+) -> None:
+    _carry_bedrock_guardrail_trace(chunks, response)
+    if logging_obj is not None:
+        logging_obj.record_native_bedrock_guardrail(response)
+
+
+def _bedrock_trace_fields(chunk: object) -> Mapping[str, object]:
+    as_mapping: Final = object_mapping(chunk)
+    raw: Final = (
+        as_mapping.get("provider_specific_fields") if as_mapping else getattr(chunk, "provider_specific_fields", None)
+    )
+    fields: Final[Mapping[str, object]] = object_mapping(raw) or {}
+    return {field: fields[field] for field in BEDROCK_TRACE_FIELDS if field in fields}
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
@@ -1506,6 +1558,9 @@ def stream_chunk_builder(
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
+        usage_model: Final = usage_tokenizer_model(
+            model, get_base_model_from_metadata(logging_obj.model_call_details) if logging_obj is not None else None
+        )
         # Initialize the response dictionary
         response: Final = processor.build_base_response(chunks)
 
@@ -1529,7 +1584,7 @@ def stream_chunk_builder(
             completion_output = get_content_from_model_response(response)
             usage = processor.calculate_usage(
                 chunks=chunks,
-                model=model,
+                model=usage_model,
                 completion_output=completion_output,
                 messages=messages,
                 reasoning_tokens=0,
@@ -1549,8 +1604,17 @@ def stream_chunk_builder(
                     )
                     break
 
+            _record_bedrock_guardrail_trace(
+                object_items(chunks),  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
+                response,
+                logging_obj,
+            )
             _stamp_streaming_usage_cost(usage, response, logging_obj)
-            _set_stream_builder_response_cost(response, logging_obj)
+            _set_stream_builder_response_cost(
+                response,
+                logging_obj,
+                chunks,  # pyright: ignore[reportUnknownArgumentType]  # legacy chunk list is untyped
+            )
 
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
             return response
@@ -1637,10 +1701,17 @@ def stream_chunk_builder(
             # Merge annotations from ALL chunks — providers may spread
             # them across multiple streaming chunks or send them only in
             # the final chunk.
-            all_annotations: Final[list] = []
+            all_annotations: Final[list[object]] = []
             for ac in annotation_chunks:
                 all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
-            response["choices"][0]["message"]["annotations"] = all_annotations
+            message_annotations, provider_annotations = partition_annotations(all_annotations)
+            if message_annotations is not None:
+                response["choices"][0]["message"]["annotations"] = message_annotations
+            if provider_annotations:
+                response.choices[0].message.provider_specific_fields = {
+                    **(response.choices[0].message.provider_specific_fields or {}),
+                    "annotations": list(provider_annotations),
+                }
 
         audio_chunks: Final = [
             chunk
@@ -1703,7 +1774,10 @@ def stream_chunk_builder(
 
             if combined_provider_fields:
                 _choice = response.choices[0]
-                _choice.message.provider_specific_fields = combined_provider_fields
+                _choice.message.provider_specific_fields = {
+                    **(_choice.message.provider_specific_fields or {}),
+                    **combined_provider_fields,
+                }
 
         completion_output = get_content_from_model_response(response)
 
@@ -1711,7 +1785,7 @@ def stream_chunk_builder(
 
         usage = processor.calculate_usage(
             chunks=chunks,
-            model=model,
+            model=usage_model,
             completion_output=completion_output,
             messages=messages,
             reasoning_tokens=reasoning_tokens,
@@ -1734,8 +1808,17 @@ def stream_chunk_builder(
                 break
 
         _stamp_streaming_usage_cost(usage, response, logging_obj)
-        _set_stream_builder_response_cost(response, logging_obj)
+        _set_stream_builder_response_cost(
+            response,
+            logging_obj,
+            chunks,  # pyright: ignore[reportUnknownArgumentType]  # legacy chunk list is untyped
+        )
 
+        _record_bedrock_guardrail_trace(
+            object_items(chunks),  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
+            response,
+            logging_obj,
+        )
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
         return response
     except Exception as e:

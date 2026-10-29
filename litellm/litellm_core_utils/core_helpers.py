@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
@@ -32,6 +33,49 @@ _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """Put the provider prefix back on a provider-stripped model."""
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    if _already_routes_to(model, custom_llm_provider):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def _already_routes_to(model: str, custom_llm_provider: str) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+
+    return _leads_with_provider(model) and inferred_provider(model) == custom_llm_provider
+
+
+def _leads_with_provider(model: str) -> bool:
+    leading_segment, separator, _ = model.partition("/")
+    return bool(separator) and names_a_provider(leading_segment)
+
+
+def names_a_provider(candidate: str) -> bool:
+    """Whether a model name's leading segment is a provider rather than part of the model."""
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_names: Final = {getattr(provider, "value", provider) for provider in litellm.provider_list}
+    return (
+        candidate in provider_names
+        or JSONProviderRegistry.exists(candidate)
+        or is_registered_custom_provider(candidate)
+    )
+
+
+def qualify_agentic_followup_model(patch_model: str | None, model: str, custom_llm_provider: str) -> str:
+    """Resolve the model an agentic follow-up re-dispatches, keeping a hook's own provider."""
+    if not patch_model or patch_model == model:
+        return qualify_provider_stripped_model(model, custom_llm_provider)
+    if _leads_with_provider(patch_model):
+        return patch_model
+    return qualify_provider_stripped_model(patch_model, custom_llm_provider)
 
 
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
@@ -266,6 +310,7 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "tool_use": "tool_calls",
     "refusal": "content_filter",
     "compaction": "length",
+    "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
     "ERROR_TOXIC": "content_filter",
@@ -926,6 +971,81 @@ class _CarriesHiddenParams(Protocol):
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+
+
+_USAGE_BLOCK_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _usage_field(usage: object, name: str) -> object:
+    if isinstance(usage, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(usage).get(name)
+    return getattr(usage, name, None)
+
+
+def _cost_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _reported_cost_value(value: object) -> float | None:
+    """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
+    raw: Final[object] = value
+    if isinstance(value, Mapping):
+        return _cost_number(_usage_field(raw, "total_cost"))
+    return _cost_number(value)
+
+
+def response_cost_in_hidden_params(response: _CarriesHiddenParams) -> float | None:
+    additional_headers: Final[object] = response.hidden_params.get("additional_headers")
+    if not isinstance(additional_headers, Mapping):
+        return None
+    return _cost_number(_USAGE_BLOCK_ADAPTER.validate_python(additional_headers).get(RESPONSE_COST_HEADER))
+
+
+def override_stamped_response_cost(response: _CarriesHiddenParams, cost: float) -> None:
+    """Replace the cost an earlier builder stamped so every reader of the hidden params agrees with the header."""
+    set_response_cost_in_hidden_params(response, cost)
+    hidden_params: Final = response.hidden_params
+    hidden_params["response_cost"] = cost
+
+
+def chunk_usage(chunk: object) -> object:
+    """Stream chunks reach the builders both as mappings and as ModelResponseStream objects."""
+    if isinstance(chunk, Mapping):
+        return _USAGE_BLOCK_ADAPTER.validate_python(chunk).get("usage")
+    return getattr(chunk, "usage", None)
+
+
+USAGE_COST_BILLED_PROVIDERS: Final = frozenset({"kyma"})
+
+
+def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
+    if custom_llm_provider not in USAGE_COST_BILLED_PROVIDERS:
+        return None
+    cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
+
+
+_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
+
+
+def native_messages_reported_cost(usage: object, custom_llm_provider: object) -> float | None:
+    """Only a Messages upstream known to price its own responses is trusted, every other one keeps the price map."""
+    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _MESSAGES_REPORTED_COST_PROVIDERS:
+        return None
+    return provider_reported_usage_cost(usage, custom_llm_provider)
+
+
+def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None) -> float | None:
+    """The request cost a provider states on its usage block, as a number or a breakdown with ``total_cost``.
+
+    OpenCode Go reports the model's list price (peak hours and long-context tiers included) under
+    ``usage.opencode.list_cost``, while its ``usage.cost`` is what hit the prepaid balance, 0 inside the plan.
+    """
+    if custom_llm_provider == "opencode_go":
+        return _reported_cost_value(_usage_field(_usage_field(usage, "opencode"), "list_cost"))
+    return _reported_cost_value(_usage_field(usage, "cost"))
 
 
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:
