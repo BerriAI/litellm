@@ -25,7 +25,7 @@ from datetime import datetime
 from importlib import import_module
 from collections.abc import Mapping
 from typing import Final, cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -281,6 +281,7 @@ def _make_async_iterator_with_events(events: list) -> ResponsesAPIStreamingItera
     mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
     mock_logging_obj.model_call_details = {"litellm_params": {}}
     mock_logging_obj.completion_start_time = None
+    mock_logging_obj.dispatch_attempt_failure_handlers = AsyncMock()
     mock_config = Mock(spec=BaseResponsesAPIConfig)
 
     def transform(model, parsed_chunk, logging_obj):

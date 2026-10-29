@@ -208,7 +208,7 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
 
 
 def spawn_logging_task(
-    running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
+    running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, None, object], *, task_name: str
 ) -> asyncio.Task[object]:
     task: Final = running_loop.create_task(coroutine)
     _PENDING_LOGGING_TASKS.add(task)
@@ -1037,7 +1037,7 @@ class BaseResponsesAPIStreamingIterator:
             self._record_pending_logging_task(
                 spawn_logging_task(
                     running_loop,
-                    self._run_failure_handlers_in_order(exception, traceback_exception, end_time),
+                    self._failure_logging(exception, traceback_exception, end_time),
                     task_name="Responses stream failure logging",
                 )
             )
@@ -1053,6 +1053,11 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             pass
         self._submit_sync_failure_handler(exception, traceback_exception, end_time)
+
+    def _failure_logging(
+        self, exception: Exception, traceback_exception: str, end_time: datetime
+    ) -> Coroutine[None, None, None]:
+        return self._run_failure_handlers_in_order(exception, traceback_exception, end_time)
 
     async def _run_failure_handlers_in_order(
         self, exception: Exception, traceback_exception: str, end_time: datetime
@@ -1282,6 +1287,11 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context"""
         self._log_completed_response(is_async=True)
+
+    def _failure_logging(
+        self, exception: Exception, traceback_exception: str, end_time: datetime
+    ) -> Coroutine[None, None, None]:
+        return self.logging_obj.dispatch_attempt_failure_handlers(exception, traceback_exception)
 
 
 class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):

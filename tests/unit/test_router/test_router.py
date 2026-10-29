@@ -6699,6 +6699,7 @@ async def test_aresponses_streaming_content_policy_error_event_routes_to_content
     logging_obj = MagicMock(spec=LiteLLMLogging)
     logging_obj.model_call_details = {"litellm_params": {}}
     logging_obj.completion_start_time = None
+    logging_obj.dispatch_attempt_failure_handlers = AsyncMock()
     source = ResponsesAPIStreamingIterator(
         response=raw_response,
         model="gpt-5.4",
@@ -6919,6 +6920,7 @@ def _make_native_responses_iterator(*, sse_payloads: tuple[dict[str, str], ...],
     logging_obj: Final = MagicMock(spec=LiteLLMLogging)
     logging_obj.completion_start_time = None
     logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.dispatch_attempt_failure_handlers = AsyncMock()
     return ResponsesAPIStreamingIterator(
         response=response,
         model="gpt-4",

@@ -1186,6 +1186,7 @@ async def test_aresponses_fallback_on_in_stream_error_event():
     mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
     mock_logging_obj.model_call_details = {"litellm_params": {}}
     mock_logging_obj.completion_start_time = None
+    mock_logging_obj.dispatch_attempt_failure_handlers = AsyncMock()
     mock_config = Mock(spec=BaseResponsesAPIConfig)
     mock_config.transform_streaming_response.return_value = ErrorEvent(
         type=ResponsesAPIStreamEvents.ERROR,
@@ -1268,6 +1269,7 @@ async def test_aresponses_fallback_uses_continuation_input_after_partial_content
     mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
     mock_logging_obj.model_call_details = {"litellm_params": {}}
     mock_logging_obj.completion_start_time = None
+    mock_logging_obj.dispatch_attempt_failure_handlers = AsyncMock()
     mock_config = Mock(spec=BaseResponsesAPIConfig)
 
     def transform(model, parsed_chunk, logging_obj):

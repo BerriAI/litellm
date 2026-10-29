@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 import websockets.exceptions
 from pydantic_core import PydanticSerializationError
 
@@ -40,7 +41,7 @@ from litellm.types.llms.openai import (
 )
 from contextlib import suppress
 from litellm.responses import streaming_iterator as streaming_module
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from types import SimpleNamespace
 
@@ -135,6 +136,7 @@ def _logging_obj_stub() -> Mock:
     logging_obj = Mock(spec=LiteLLMLoggingObj)
     logging_obj.completion_start_time = None
     logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.dispatch_attempt_failure_handlers = AsyncMock()
     return logging_obj
 
 
@@ -292,6 +294,11 @@ def _assert_failure_logged_once(logging_obj: Mock, exception: Exception) -> None
     assert logging_obj.async_failure_handler.await_args.kwargs["exception"] is exception
 
 
+def _assert_attempt_failure_dispatched_once(logging_obj: Mock, exception: Exception) -> None:
+    assert logging_obj.dispatch_attempt_failure_handlers.await_count == 1
+    assert logging_obj.dispatch_attempt_failure_handlers.await_args.args[0] is exception
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix, pre_first_chunk", _PRE_OUTPUT_PREFIXES)
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
@@ -299,7 +306,7 @@ async def test_transport_error_before_any_output_raises_fallback_error(prefix, p
     """A connection lost while only lifecycle events (response.created / response.in_progress)
     have streamed is fallback-eligible, so it must surface as the MidStreamFallbackError the
     router re-routes, carrying the raw transport error and no generated content."""
-    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj: Final = _logging_obj_stub()
     iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=trailing_error)
 
     with pytest.raises(MidStreamFallbackError) as exc_info:
@@ -309,12 +316,12 @@ async def test_transport_error_before_any_output_raises_fallback_error(prefix, p
     assert exc_info.value.original_exception is trailing_error
     assert exc_info.value.is_pre_first_chunk is pre_first_chunk
     assert exc_info.value.generated_content == ""
-    _assert_failure_logged_once(logging_obj, trailing_error)
+    _assert_attempt_failure_dispatched_once(logging_obj, trailing_error)
 
 
 @pytest.mark.asyncio
 async def test_transport_error_after_output_started_is_not_fallback_eligible():
-    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj: Final = _logging_obj_stub()
     trailing_error: Final = httpx.ReadError("Response payload is not completed")
     iterator: Final = _make_iterator(
         sse_events=_PARTIAL_OUTPUT_EVENTS, logging_obj=logging_obj, trailing_error=trailing_error
@@ -325,7 +332,7 @@ async def test_transport_error_after_output_started_is_not_fallback_eligible():
             pass
 
     assert exc_info.value is trailing_error
-    _assert_failure_logged_once(logging_obj, trailing_error)
+    _assert_attempt_failure_dispatched_once(logging_obj, trailing_error)
 
 
 _READ_TIMEOUT_PREFIXES: Final = [
@@ -337,7 +344,7 @@ _READ_TIMEOUT_PREFIXES: Final = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
 async def test_transport_read_timeout_raises_litellm_timeout(prefix):
-    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj: Final = _logging_obj_stub()
     stall: Final = httpx.ReadTimeout("")
     iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=stall)
 
@@ -348,7 +355,7 @@ async def test_transport_read_timeout_raises_litellm_timeout(prefix):
     assert exc_info.value.status_code == 408
     assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
     assert exc_info.value.__cause__ is stall
-    _assert_failure_logged_once(logging_obj, stall)
+    _assert_attempt_failure_dispatched_once(logging_obj, stall)
 
 
 @pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
@@ -371,7 +378,7 @@ async def test_stream_ending_after_partial_output_without_terminal_event_raises(
     """A clean EOF or `[DONE]` after output text but with no response.completed /
     response.incomplete / response.failed is a truncated answer: the partial events still
     reach the caller, then an explicit error follows instead of a normal end of stream."""
-    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj: Final = _logging_obj_stub()
     iterator: Final = _make_iterator(sse_events=[*_PARTIAL_OUTPUT_EVENTS, *trailer], logging_obj=logging_obj)
 
     created: Final = await iterator.__anext__()
@@ -382,14 +389,14 @@ async def test_stream_ending_after_partial_output_without_terminal_event_raises(
     assert (created.type, delta.type) == ("response.created", "response.output_text.delta")
     assert not isinstance(exc_info.value, MidStreamFallbackError)
     assert exc_info.value.llm_provider == "openai"
-    _assert_failure_logged_once(logging_obj, exc_info.value)
+    _assert_attempt_failure_dispatched_once(logging_obj, exc_info.value)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix, pre_first_chunk", _PRE_OUTPUT_PREFIXES)
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_stream_ending_before_any_output_raises_fallback_error(prefix, pre_first_chunk, trailer):
-    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj: Final = _logging_obj_stub()
     iterator: Final = _make_iterator(sse_events=[*prefix, *trailer], logging_obj=logging_obj)
 
     with pytest.raises(MidStreamFallbackError) as exc_info:
@@ -399,19 +406,19 @@ async def test_stream_ending_before_any_output_raises_fallback_error(prefix, pre
     assert isinstance(exc_info.value.original_exception, litellm.APIConnectionError)
     assert exc_info.value.is_pre_first_chunk is pre_first_chunk
     assert exc_info.value.generated_content == ""
-    _assert_failure_logged_once(logging_obj, exc_info.value.original_exception)
+    _assert_attempt_failure_dispatched_once(logging_obj, exc_info.value.original_exception)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_complete_stream_still_ends_normally(trailer):
-    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj: Final = _logging_obj_stub()
     iterator: Final = _make_iterator(sse_events=[*_COMPLETE_STREAM_EVENTS, *trailer], logging_obj=logging_obj)
 
     seen: Final = [event.type async for event in iterator]
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-    assert logging_obj.async_failure_handler.await_count == 0
+    assert logging_obj.dispatch_attempt_failure_handlers.await_count == 0
 
 
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
@@ -591,6 +598,112 @@ async def test_failure_logging_finishes_before_the_error_reaches_the_consumer(mo
     await _wait_until(lambda: recorder.failure_finished)
 
     assert recorder.failure_deployment_id == "primary-deployment"
+
+
+class _FailureRowRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: tuple[StandardLoggingPayload, ...] = ()
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.rows = (*self.rows, kwargs["standard_logging_object"])
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_also_fails_logs_its_own_failure_after_the_primary_stream_dropped(monkeypatch):
+    recorder: Final = _FailureRowRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    relayed: Final = ("The sea ", "is wide ", "and deep.")
+    prompt: Final = "Write a 300 word story about the sea."
+    opened: Final = {
+        "id": "resp_primary",
+        "object": "response",
+        "created_at": 1790000000,
+        "status": "in_progress",
+        "model": "gpt-5.6",
+        "output": [],
+    }
+    primary_events: Final = (
+        {"type": "response.created", "sequence_number": 0, "response": opened},
+        *(
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_primary",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+                "sequence_number": number,
+            }
+            for number, delta in enumerate(relayed, start=1)
+        ),
+        {
+            "type": "error",
+            "sequence_number": len(relayed) + 1,
+            "error": {"type": "server_error", "code": "server_error", "message": "The server had an error"},
+        },
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "primary-key",
+                    "api_base": "https://primary.example/v1",
+                },
+                "model_info": {"id": "primary-deployment"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-luna",
+                    "api_key": "backup-key",
+                    "api_base": "https://backup.example/v1",
+                },
+                "model_info": {"id": "backup-deployment"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    shared_logging_obj, _ = litellm.utils.function_setup(
+        "aresponses",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="primary",
+        input=prompt,
+        stream=True,
+        litellm_call_id="responses-fallback-hop-failure",
+    )
+
+    with respx.mock() as upstream:
+        upstream.post("https://primary.example/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b"".join(_sse_event(event) for event in primary_events),
+            )
+        )
+        upstream.post("https://backup.example/v1/responses").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "backup is down", "type": "server_error"}})
+        )
+        stream: Final = await router.aresponses(
+            model="primary", input=prompt, stream=True, litellm_logging_obj=shared_logging_obj
+        )
+        with pytest.raises(litellm.InternalServerError):
+            async for _ in stream:
+                pass
+
+    assert [(row["model_id"], row["model"]) for row in recorder.rows] == [
+        ("primary-deployment", "openai/gpt-5.6"),
+        ("backup-deployment", "openai/gpt-5.6-luna"),
+    ]
+    dropped_attempt: Final = recorder.rows[0]
+    assert dropped_attempt["completion_tokens"] == litellm.token_counter(
+        model="gpt-5.6", text="".join(relayed), count_response_tokens=True
+    )
+    assert dropped_attempt["response_cost"] > 0
 
 
 @pytest.mark.asyncio
@@ -1420,6 +1533,10 @@ class _FakeLoggingObj:
     async def async_success_handler(self, *args, **kwargs):
         self.async_success_calls += 1
         self.last_async_success_kwargs = kwargs
+
+    async def dispatch_attempt_failure_handlers(self, exception, traceback_exception):
+        await self.async_failure_handler(exception, traceback_exception)
+        self.failure_handler(exception, traceback_exception)
 
     def failure_handler(self, *args, **kwargs):
         self.failure_calls += 1
