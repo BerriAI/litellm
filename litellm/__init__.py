@@ -246,6 +246,7 @@ anthropic_messages_estimate_initial_input_tokens: bool = False
 # Or via `litellm_settings.strip_anthropic_total_tokens: true` in
 # config.yaml.
 strip_anthropic_total_tokens: bool = False
+custom_pricing: bool = False
 anthropic_sse_ping_interval_seconds: float = 15.0
 sse_keepalive_ping_interval_seconds: float | None = None
 route_all_chat_openai_to_responses: bool = (

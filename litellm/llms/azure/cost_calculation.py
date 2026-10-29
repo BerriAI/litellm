@@ -4,7 +4,7 @@ Helper util for handling azure openai-specific cost calculation
 """
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 
 
 def cost_per_token(
@@ -12,6 +12,7 @@ def cost_per_token(
     usage: Usage,
     response_time_ms: float | None = 0.0,
     service_tier: str | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -19,6 +20,7 @@ def cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing caching and audio token information
+        - model_info: optional pre-resolved ModelInfo dictionary
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -30,4 +32,5 @@ def cost_per_token(
         usage=usage,
         custom_llm_provider="azure",
         service_tier=service_tier,
+        model_info=model_info,
     )
