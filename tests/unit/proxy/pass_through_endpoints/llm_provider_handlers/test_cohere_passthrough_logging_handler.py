@@ -301,5 +301,24 @@ def test_unpriceable_cohere_embed_passthrough_falls_back_to_the_plain_passthroug
         if record.levelno == logging.WARNING
     )
 
+
+@pytest.mark.parametrize(
+    ("url_route", "body"),
+    [
+        ("https://api.cohere.com/v1/embed-jobs", {"job_id": "job-1", "meta": {"api_version": {"version": "1"}}}),
+        (
+            "https://api.cohere.com/v1/embed-jobs/job-1",
+            {"job_id": "job-1", "status": "processing", "model": "embed-english-v3.0"},
+        ),
+    ],
+)
+def test_cohere_embed_job_passthrough_logs_the_plain_passthrough_row(
+    url_route: str, body: Mapping[str, object]
+) -> None:
+    logged: Final = _normalize_cohere_embed(url_route, body, "embed-english-v3.0")
+
+    assert logged["standard_logging_response_object"] is None
+    assert "response_cost" not in logged["kwargs"]
+
 if __name__ == "__main__":
     pytest.main([__file__])
