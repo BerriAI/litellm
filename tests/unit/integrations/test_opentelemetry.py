@@ -28,6 +28,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF, ALWAYS_ON
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -54,7 +55,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import ManagementEndpointLoggingPayload, ProxyException, SpanAttributes
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
@@ -416,6 +417,65 @@ def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: 
     (finished,) = exporter.get_finished_spans()
     assert finished.attributes["gen_ai.request.model"] == "answer"
     assert not any(key.startswith("litellm.routing.") for key in finished.attributes)
+
+
+class _ReadCountingKwargs(Mapping[str, object]):
+    def __init__(self, data: Mapping[str, object]) -> None:
+        self._data: Final = data
+        self.reads = 0
+
+    def __getitem__(self, key: str) -> object:
+        self.reads += 1
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+
+def _set_request_attributes_on_new_span(provider: TracerProvider) -> _ReadCountingKwargs:
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    kwargs: Final = _ReadCountingKwargs(
+        {
+            "model": "answer",
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "additional_args": {"complete_input_dict": {"model": "answer"}},
+            "standard_logging_object": {
+                "id": "sampling-call",
+                "call_type": "acompletion",
+                "metadata": {"user_api_key_alias": "reader"},
+            },
+        }
+    )
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(span, kwargs, {"model": "answer", "choices": [], "usage": {}})
+        otel.set_raw_request_attributes(span, kwargs, None)
+    return kwargs
+
+
+def test_unsampled_span_never_reads_the_request_to_build_attributes() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider(sampler=ALWAYS_OFF)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    kwargs: Final = _set_request_attributes_on_new_span(provider)
+
+    assert kwargs.reads == 0
+    assert exporter.get_finished_spans() == ()
+
+
+def test_sampled_span_still_gets_request_and_raw_request_attributes() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider(sampler=ALWAYS_ON)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    _set_request_attributes_on_new_span(provider)
+
+    (finished,) = exporter.get_finished_spans()
+    assert finished.attributes["metadata.user_api_key_alias"] == "reader"
+    assert finished.attributes["llm.openai.model"] == "answer"
 
 
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):

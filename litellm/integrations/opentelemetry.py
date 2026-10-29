@@ -2423,6 +2423,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         return kv_pairs
 
     def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
+        if hasattr(span, "is_recording") and not span.is_recording():
+            return
         try:
             if self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes
@@ -2953,6 +2955,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         return transformed
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
+        if hasattr(span, "is_recording") and not span.is_recording():
+            return
         try:
             # Only set provider-specific raw payload attributes on this span.
             # The parent litellm_request span already carries the standard
