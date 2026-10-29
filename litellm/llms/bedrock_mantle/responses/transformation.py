@@ -31,6 +31,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
+    strip_unsupported_web_search_tool_keys,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -54,7 +55,15 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
 
 # Per Bedrock Mantle Responses API validation errors.
 _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
-    {"function", "mcp", "custom", "namespace", "tool_search", "web_search"}
+    {
+        "function",
+        "mcp",
+        "custom",
+        "namespace",
+        "tool_search",
+        "web_search",
+        "web_search_preview",
+    }
 )
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
@@ -120,7 +129,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     @staticmethod
     def _filter_unsupported_tools(tools: "Sequence[object]") -> "list[object]":
-        """Keep only tool types Mantle's Responses API accepts."""
+        """Keep only tool types Mantle's Responses API accepts and strip rejected fields."""
         kept, dropped_types = drop_unsupported_tools(tools, _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES)
         if dropped_types:
             verbose_logger.warning(
@@ -128,7 +137,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 list(dropped_types),
                 sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
             )
-        return list(kept)
+        return [strip_unsupported_web_search_tool_keys(tool) for tool in kept]
 
     @staticmethod
     def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:
