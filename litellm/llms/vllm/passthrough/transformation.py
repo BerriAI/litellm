@@ -22,6 +22,10 @@ if TYPE_CHECKING:
 
 
 class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
+    @staticmethod
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return api_key
+
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in request_data
 

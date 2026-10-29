@@ -39,9 +39,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
-        return headers
+        return headers if api_key is None else {**headers, "Authorization": f"Bearer {api_key}", "x-api-key": api_key}
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
@@ -54,7 +52,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        return api_key or get_secret_str("VLLM_API_KEY")
+        return None
 
     @staticmethod
     def get_base_model(model: str) -> str | None:
