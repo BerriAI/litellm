@@ -746,14 +746,15 @@ def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) 
     return "/v1/realtime/transcription_sessions" in (model_info.get("supported_endpoints") or ())
 
 
-_REALTIME_SERVED_MODES: Final = frozenset({"realtime", "audio_transcription"})
+_REALTIME_SERVED_ENDPOINTS: Final = ("/v1/realtime", "/v1/audio/transcriptions")
 
 
 def _cost_map_lists_outside_realtime(model: str) -> bool:
     model_info: Final = lookup_model_info_for_registration(model, "openai")
-    if isinstance(model_info, ModelInfoLookupMiss) or model_info["mode"] in _REALTIME_SERVED_MODES:
-        return False
-    return not any(endpoint.startswith("/v1/realtime") for endpoint in model_info.get("supported_endpoints") or ())
+    endpoints: Final = (
+        () if isinstance(model_info, ModelInfoLookupMiss) else model_info.get("supported_endpoints") or ()
+    )
+    return bool(endpoints) and not any(endpoint.startswith(_REALTIME_SERVED_ENDPOINTS) for endpoint in endpoints)
 
 
 _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcription"}
@@ -819,8 +820,9 @@ async def realtime_health_check(
         bool - True once the connection is open, and on OpenAI's own hosts once the first server event is not an
             error, since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
             the failure in its first server event. An `invalid_model` error also counts as healthy unless litellm's
-            cost map lists the model under a mode realtime never serves: OpenAI checks the key first, and Live and
-            transcription models are served through other endpoints
+            cost map lists only endpoints realtime never serves for the model: OpenAI checks the key first, and Live
+            and transcription models are served through other endpoints. The listed `mode` is not read, since a
+            deployment's own `mode: realtime` replaces it when the router registers the deployment
     Raises:
         Exception - if the connection is not successful or if OpenAI's first server event is any other error
     """

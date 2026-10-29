@@ -504,6 +504,18 @@ _OPENAI_SESSION_CREATED_EVENT: Final = (
 )
 
 
+def _register_as_realtime_deployment(model: str) -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "realtime-deployment",
+                "litellm_params": {"model": f"openai/{model}", "api_key": "sk-real"},
+                "model_info": {"mode": "realtime"},
+            }
+        ]
+    )
+
+
 class _CapturingConnect:
     def __init__(self, connection: _ServerEvents | None = None) -> None:
         self.url: str | None = None
@@ -791,6 +803,7 @@ async def test_openai_health_check_is_healthy_for_a_model_served_outside_realtim
 async def test_openai_health_check_is_unhealthy_for_a_model_name_every_session_would_fail_on(
     local_model_cost_map, model: str, first_event: str, expected_exception: type[Exception], expected_message: str
 ):
+    _register_as_realtime_deployment(model)
     connect: Final = _CapturingConnect(_ScriptedConnection(first_event))
     with patch("websockets.connect", connect), pytest.raises(expected_exception) as raised:
         await realtime_main.realtime_health_check(model=model, custom_llm_provider="openai", api_key="sk-real")
