@@ -14,7 +14,7 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import Gateway, object_value
+from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
@@ -63,9 +63,7 @@ def _scanner(request: Request) -> Reply:
     contents: Final = json.loads(request.body)["contents"][0]
     if "response" in contents:
         return Reply(body=json.dumps(_block_scan()).encode())
-    return Reply(
-        body=json.dumps({"action": "allow", "category": "benign", "response_detected": {}}).encode()
-    )
+    return Reply(body=json.dumps({"action": "allow", "category": "benign", "response_detected": {}}).encode())
 
 
 def _scanner_without_masked_data(request: Request) -> Reply:
@@ -73,9 +71,7 @@ def _scanner_without_masked_data(request: Request) -> Reply:
     contents: Final = json.loads(request.body)["contents"][0]
     if "response" in contents:
         return Reply(body=json.dumps(_block_scan(with_masked_data=False)).encode())
-    return Reply(
-        body=json.dumps({"action": "allow", "category": "benign", "response_detected": {}}).encode()
-    )
+    return Reply(body=json.dumps({"action": "allow", "category": "benign", "response_detected": {}}).encode())
 
 
 def _provider(request: Request) -> Reply:
@@ -179,10 +175,7 @@ def _block_detail(node: JsonValue) -> Mapping[str, JsonValue] | None:
 
 def _response_scans(requests: tuple[Request, ...]) -> list[dict[str, JsonValue]]:
     return [
-        contents
-        for request in requests
-        for contents in json.loads(request.body)["contents"]
-        if "response" in contents
+        contents for request in requests for contents in json.loads(request.body)["contents"] if "response" in contents
     ]
 
 
@@ -192,6 +185,32 @@ def _request_body(model: str, target: str) -> dict[str, JsonValue]:
     if target == "/v1/messages":
         return {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "say hi"}]}
     return {"model": model, "messages": [{"role": "user", "content": "say hi"}]}
+
+
+def _db_guardrail(scenario: Scenario, name: str, policy_url: str, include_masked_response_on_block: JsonValue) -> None:
+    created: Final = scenario.gateway.post(
+        "/guardrails",
+        {
+            "guardrail": {
+                "guardrail_name": name,
+                "litellm_params": {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "post_call",
+                    "api_base": policy_url,
+                    "api_key": "synthetic-panw-key",
+                    "profile_name": "synthetic-profile",
+                    "include_masked_response_on_block": include_masked_response_on_block,
+                },
+            }
+        },
+    )
+    guardrail_id: Final = string_value(created["guardrail_id"])
+    scenario.cleanups.callback(_delete_guardrail, scenario.gateway, guardrail_id)
+
+
+def _delete_guardrail(gateway: Gateway, guardrail_id: str) -> None:
+    deleted: Final = gateway.request("DELETE", f"/guardrails/{guardrail_id}")
+    assert deleted.status_code == 200, deleted.text
 
 
 @pytest.mark.parametrize("target", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
@@ -280,23 +299,8 @@ def test_db_created_guardrail_string_false_withholds_response_masked_data_on_blo
     """The dashboard persists some litellm_params as strings; "false" must not turn the flag on."""
     name: Final = f"panw-string-false-{uuid.uuid4().hex[:8]}"
     with wire_server(_scanner) as policy, wire_server(_provider) as upstream:
-        gateway.post(
-            "/guardrails",
-            {
-                "guardrail": {
-                    "guardrail_name": name,
-                    "litellm_params": {
-                        "guardrail": "panw_prisma_airs",
-                        "mode": "post_call",
-                        "api_base": policy.url,
-                        "api_key": "synthetic-panw-key",
-                        "profile_name": "synthetic-profile",
-                        "include_masked_response_on_block": "false",
-                    },
-                }
-            },
-        )
         with gateway.scenario() as scenario:
+            _db_guardrail(scenario, name, policy.url, "false")
             model: Final = scenario.model(
                 model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
             )
@@ -316,23 +320,8 @@ def test_db_created_guardrail_string_false_withholds_response_masked_data_on_blo
 def test_db_created_guardrail_includes_response_masked_data_on_block(gateway: Gateway, tmp_path: Path) -> None:
     name: Final = f"panw-block-details-{uuid.uuid4().hex[:8]}"
     with wire_server(_scanner) as policy, wire_server(_provider) as upstream:
-        gateway.post(
-            "/guardrails",
-            {
-                "guardrail": {
-                    "guardrail_name": name,
-                    "litellm_params": {
-                        "guardrail": "panw_prisma_airs",
-                        "mode": "post_call",
-                        "api_base": policy.url,
-                        "api_key": "synthetic-panw-key",
-                        "profile_name": "synthetic-profile",
-                        "include_masked_response_on_block": True,
-                    },
-                }
-            },
-        )
         with gateway.scenario() as scenario:
+            _db_guardrail(scenario, name, policy.url, True)
             model: Final = scenario.model(
                 model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
             )
