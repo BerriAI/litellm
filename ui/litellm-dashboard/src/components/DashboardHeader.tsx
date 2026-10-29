@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -40,6 +41,7 @@ export function DashboardHeader({
   navigationTrigger?: ReactNode;
   deploymentHealth?: ReactNode;
 }) {
+  const term = useTerminology();
   const { title } = getBreadcrumb(usePathname());
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
@@ -66,50 +68,53 @@ export function DashboardHeader({
           </BreadcrumbItem>
           <BreadcrumbSeparator className="max-md:hidden" />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
+            <BreadcrumbPage className="truncate">{term(title)}</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
 
       <CommandPaletteTrigger />
 
-      <div className="flex flex-none items-center gap-1 max-md:hidden">
-        {showWorkerSwitch && (
-          <>
-            <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-            <ToolbarSeparator />
-          </>
-        )}
+      <div className="flex shrink-0 items-center gap-1">
         <LiteAdmin />
-        <DocsLink />
-        <BlogDropdown />
-        {!hideCommunityLinks && <CommunityEngagementButtons />}
-        <ToolbarSeparator />
-        <ThemeToggle />
-        {deploymentHealth}
-        <NotificationsBell accessToken={accessToken} />
-      </div>
-      <div className="flex shrink-0 items-center gap-1 md:hidden">
-        <CommandPaletteTrigger mobile />
-        {deploymentHealth}
-        <NotificationsBell accessToken={accessToken} />
-        <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
-          <PopoverTrigger render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}>
-            <Ellipsis />
-          </PopoverTrigger>
-          <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
-            <PopoverTitle>Gateway tools</PopoverTitle>
-            <ViewSwitcher />
-            {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
-            <div className="flex flex-wrap items-center gap-2">
-              <LiteAdmin />
-              <ThemeToggle />
-              <DocsLink />
-              <BlogDropdown />
-              {!hideCommunityLinks && <CommunityEngagementButtons />}
-            </div>
-          </PopoverContent>
-        </Popover>
+        <div className="flex flex-none items-center gap-1 max-md:hidden">
+          {showWorkerSwitch && (
+            <>
+              <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+              <ToolbarSeparator />
+            </>
+          )}
+          <DocsLink />
+          <BlogDropdown />
+          {!hideCommunityLinks && <CommunityEngagementButtons />}
+          <ToolbarSeparator />
+          <ThemeToggle />
+          {deploymentHealth}
+          <NotificationsBell accessToken={accessToken} />
+        </div>
+        <div className="flex shrink-0 items-center gap-1 md:hidden">
+          <CommandPaletteTrigger mobile />
+          {deploymentHealth}
+          <NotificationsBell accessToken={accessToken} />
+          <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
+            <PopoverTrigger
+              render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}
+            >
+              <Ellipsis />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
+              <PopoverTitle>Gateway tools</PopoverTitle>
+              <ViewSwitcher />
+              {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
+              <div className="flex flex-wrap items-center gap-2">
+                <ThemeToggle />
+                <DocsLink />
+                <BlogDropdown />
+                {!hideCommunityLinks && <CommunityEngagementButtons />}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
     </header>
   );
