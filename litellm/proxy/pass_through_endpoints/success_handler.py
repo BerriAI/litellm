@@ -22,6 +22,7 @@ from .llm_provider_handlers.assembly_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.cohere_passthrough_logging_handler import (
     CoherePassthroughLoggingHandler,
+    is_cohere_embed_route,
 )
 from .llm_provider_handlers.cursor_passthrough_logging_handler import (
     CursorPassthroughLoggingHandler,
@@ -91,7 +92,7 @@ class PassThroughEndpointLogging:
         self.TRACKED_ANTHROPIC_ROUTES = ["/messages", "/v1/messages/batches"]
 
         # Cohere
-        self.TRACKED_COHERE_ROUTES = ["/v2/chat", "/v1/embed"]
+        self.TRACKED_COHERE_ROUTES = ["/v2/chat"]
         self.assemblyai_passthrough_logging_handler = AssemblyAIPassthroughLoggingHandler()
 
         # Langfuse
@@ -536,13 +537,7 @@ class PassThroughEndpointLogging:
         return False
 
     def is_cohere_route(self, url_route: str) -> bool:
-        for route in self.TRACKED_COHERE_ROUTES:
-            if route not in url_route:
-                continue
-            if route == "/v1/embed" and "/v1/embeddings" in url_route:
-                continue
-            return True
-        return False
+        return is_cohere_embed_route(url_route) or any(route in url_route for route in self.TRACKED_COHERE_ROUTES)
 
     def is_assemblyai_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)
@@ -645,6 +640,7 @@ class PassThroughEndpointLogging:
             or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_agents_route(url_route)
         )
 
     def _set_cost_per_request(
