@@ -1195,6 +1195,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
                 "type": "array",
                 "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
             },
+            "reasoning_modes": {"type": "array", "items": {"type": "string"}},
+            "reasoning_contexts": {"type": "array", "items": {"type": "string"}},
             "default_reasoning_effort": {
                 "type": "string",
                 "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
@@ -10880,3 +10882,23 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_warnings"),
+    (("streamlake", 1), ("veniceai", 1), ("my-own-llm", 0)),
+)
+def test_custom_provider_named_like_a_built_in_warns_once(
+    provider: str, expected_warnings: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": provider, "custom_handler": litellm.CustomLLM()}])
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", [])
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        litellm.utils.custom_llm_setup()
+        litellm.utils.custom_llm_setup()
+
+    warnings: Final = [r for r in caplog.records if f"provider '{provider}'" in r.getMessage()]
+    assert len(warnings) == expected_warnings
+    assert provider in litellm._custom_providers

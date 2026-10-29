@@ -207,8 +207,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             _NON_DEFAULT_PARAMS.validate_python(data).get("anthropic_beta"), "anthropic_beta", drop_params
         )
 
-        header_only_betas: Final = get_header_only_betas("vertex_ai")
-        body_betas: Final = (injected_betas | client_body_betas) - header_only_betas
+        requested_betas: Final = injected_betas | client_body_betas
+        header_only_betas: Final = get_header_only_betas("vertex_ai") if requested_betas else frozenset[str]()
+        body_betas: Final = requested_betas - header_only_betas
         if body_betas:
             data["anthropic_beta"] = sorted(body_betas)
         elif "anthropic_beta" in data:
