@@ -7034,6 +7034,7 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, None, True),
         ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, None, True),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, None, False),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, False, None),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, True, None),
         ("PostmanRuntime/7.53.0", None, None, None),
         (None, None, None, None),
@@ -7057,11 +7058,11 @@ async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     if request_drop_params is not None:
         data["drop_params"] = request_drop_params
 
-    proxy_config = MagicMock()
-    proxy_config.config = (
-        {"litellm_settings": {"drop_params": operator_drop_params}}
-        if operator_drop_params is not None
-        else {"litellm_settings": {}}
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config.update_config_state(
+        config={"litellm_settings": {} if operator_drop_params is None else {"drop_params": operator_drop_params}}
     )
 
     updated = await add_litellm_data_to_request(

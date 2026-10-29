@@ -1111,9 +1111,8 @@ def should_auto_drop_params_for_agentic_cli(
         return False
     if caller_set_drop_params:
         return False
-    config: Final = getattr(proxy_config, "config", None)
-    litellm_settings: Final = config.get("litellm_settings") if isinstance(config, dict) else None
-    return not (isinstance(litellm_settings, dict) and "drop_params" in litellm_settings)
+    litellm_settings: Final = proxy_config.config.get("litellm_settings")
+    return not (isinstance(litellm_settings, Mapping) and "drop_params" in litellm_settings)
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):

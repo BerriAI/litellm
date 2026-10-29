@@ -581,6 +581,32 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
 
 
 @pytest.mark.asyncio
+async def test_count_tokens_keeps_claude_code_malformed_tools_when_operator_sets_drop_params_false() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    operator_config: Final = proxy_server.ProxyConfig()
+    operator_config.update_config_state(config={"litellm_settings": {"drop_params": False}})
+    request: Final = MagicMock()
+    request.headers = {"user-agent": "claude-cli/2.1.0 (external, cli)"}
+    counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
+    body: Final = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
+        patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
+        patch.object(proxy_server, "proxy_config", new=operator_config),  # test-quality-ok: module global imported at call time; no injection seam on this route
+    ):
+        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
+    counter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_even_with_fallbacks() -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
     import litellm.proxy.proxy_server as proxy_server
