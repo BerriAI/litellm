@@ -7,8 +7,7 @@ from typing import Final
 
 import pytest
 
-from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
-from litellm.router_utils.auto_router_tuning_baseline import (
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     DEFAULT_TUNING_FINGERPRINT,
     HEURISTIC_V1_TUNING_FIELDS,
     heuristic_v1_router_fingerprint,
@@ -19,6 +18,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     tuning_limit_violation,
     tuning_quota_violation,
 )
+from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 
 _TIERS = {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"}
 _ALT_TIERS = {**_TIERS, "COMPLEX": "other-strong"}
