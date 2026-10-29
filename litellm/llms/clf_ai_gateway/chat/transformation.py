@@ -2,12 +2,11 @@ from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.secret_managers.main import get_secret_str
 
-# Narrower than the generic OpenAI surface on purpose: the gateway rejects legacy
-# top-level fields (``functions``, ``function_call``) and unknown ones with a 400.
 SUPPORTED_OPENAI_PARAMS: Final = (
     "stream",
     "stream_options",
@@ -34,20 +33,6 @@ SUPPORTED_OPENAI_PARAMS: Final = (
 
 
 class ClfAiGatewayConfig(OpenAIGPTConfig):
-    """
-    Reference: https://clfaigateway.dev/docs
-
-    CLF AI Gateway is an OpenAI-compatible gateway (chat completions, streaming, tool
-    calling, structured output, ``reasoning_effort``) serving open-weight models
-    (GLM, Kimi, DeepSeek, Qwen) on Cloudflare Workers AI upstream. Model ids are the
-    gateway's canonical names, e.g. ``clf_ai_gateway/glm-5.3``.
-
-    The gateway validates request bodies strictly and rejects unknown or legacy
-    top-level fields with a 400 (``functions``, ``function_call``), so the
-    supported-params list below is deliberately narrower than the generic OpenAI
-    surface. It also rejects a ``reasoning_effort`` level the model does not take.
-    """
-
     @property
     def custom_llm_provider(self) -> str | None:
         return "clf_ai_gateway"
@@ -67,7 +52,9 @@ class ClfAiGatewayConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        effort: Final = non_default_params.get("reasoning_effort")
+        requested: Final = non_default_params.get("reasoning_effort")
+        requested_mapping: Final = as_str_mapping(requested)
+        effort: Final = requested_mapping.get("effort") if requested_mapping is not None else requested
         declared: Final = declared_reasoning_efforts_for_model(model, "clf_ai_gateway")
         drops_effort: Final = (
             (drop_params or litellm.drop_params is True)
@@ -82,11 +69,9 @@ class ClfAiGatewayConfig(OpenAIGPTConfig):
                 model,
                 declared,
             )
-        forwarded: Final = (
-            {param: value for param, value in non_default_params.items() if param != "reasoning_effort"}
-            if drops_effort
-            else non_default_params
-        )
+        others: Final = {param: value for param, value in non_default_params.items() if param != "reasoning_effort"}
+        normalized: Final = {**others, "reasoning_effort": effort} if effort is not None else non_default_params
+        forwarded: Final = others if drops_effort else normalized
         mapped: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAIGPTConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
             non_default_params=forwarded,
             optional_params=optional_params,

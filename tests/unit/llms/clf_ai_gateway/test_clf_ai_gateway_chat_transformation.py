@@ -157,10 +157,13 @@ def test_params_the_gateway_accepts_are_forwarded_without_drop_params(
         ("high", True, None),
         ("high", False, "high"),
         ("xhigh", True, "xhigh"),
+        ({"effort": "low", "summary": "auto"}, True, "low"),
+        ({"effort": "low", "summary": "auto"}, False, "low"),
+        ({"effort": "high", "summary": "auto"}, True, None),
     ],
 )
 def test_drop_params_drops_a_reasoning_effort_level_the_model_does_not_declare(
-    local_model_cost_map: None, effort: str, drop_params: bool, forwarded: str | None
+    local_model_cost_map: None, effort: str | dict[str, str], drop_params: bool, forwarded: str | None
 ) -> None:
     assert "high" not in litellm.model_cost["clf_ai_gateway/qwen3.8-27b"]["reasoning_effort_levels"]
     with respx.mock() as upstream:
