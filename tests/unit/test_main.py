@@ -5605,16 +5605,14 @@ def test_speech_azure_ai_keeps_the_deployments_entra_token_over_the_provider_sco
         ({"AZURE_TENANT_ID": "t", "AZURE_CLIENT_ID": "c", "AZURE_CLIENT_SECRET": "s"}, {}, False),
         ({"AZURE_CLIENT_SECRET": "s"}, {"tenant_id": "t", "client_id": "c"}, False),
         ({}, {}, True),
-        ({"AZURE_AD_TOKEN": "env-entra-token"}, {}, False),
-        ({}, {"extra_body": {"azure_ad_token": "request-entra-token"}}, False),
     ],
-    ids=["service-principal-in-env", "ids-in-config-secret-in-env", "token-refresh", "ad-token-in-env", "ad-token-in-extra-body"],
+    ids=["service-principal-in-env", "ids-in-config-secret-in-env", "token-refresh"],
 )
 def test_speech_azure_ai_entra_id_setups_keep_the_key_chain_they_had_before_the_provider_key(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     entra_env: dict[str, str],
-    deployment_params: Mapping[str, object],
+    deployment_params: dict[str, str],
     token_refresh: bool,
 ):
     _clear_global_tts_keys(monkeypatch)
@@ -5625,7 +5623,6 @@ def test_speech_azure_ai_entra_id_setups_keep_the_key_chain_they_had_before_the_
             "AZURE_TENANT_ID": None,
             "AZURE_CLIENT_ID": None,
             "AZURE_CLIENT_SECRET": None,
-            "AZURE_AD_TOKEN": None,
             "AZURE_OPENAI_API_KEY": None,
             "AZURE_AI_API_KEY": "key-for-another-resource",
             "AZURE_API_KEY": "generic-azure-key",
@@ -5646,6 +5643,49 @@ def test_speech_azure_ai_entra_id_setups_keep_the_key_chain_they_had_before_the_
     )
 
     assert route.calls.last.request.headers["authorization"] == "Bearer generic-azure-key"
+
+
+@pytest.mark.parametrize(
+    ("unsent_env", "request_params"),
+    [
+        ({"AZURE_AD_TOKEN": "token-tts-never-sends"}, {}),
+        ({}, {"extra_body": {"azure_ad_token": "token-tts-never-sends"}}),
+        ({}, {"extra_body": ["not", "an", "object"]}),
+    ],
+    ids=["ad-token-in-env", "ad-token-in-extra-body", "non-object-extra-body"],
+)
+def test_speech_azure_ai_sends_the_provider_scoped_key_next_to_an_ad_token_tts_never_sends(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    unsent_env: dict[str, str],
+    request_params: Mapping[str, object],
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(
+        monkeypatch,
+        {
+            "AZURE_AD_TOKEN": None,
+            "AZURE_OPENAI_API_KEY": None,
+            "AZURE_API_KEY": None,
+            "AZURE_AI_API_KEY": "azure-ai-scoped-key",
+            **unsent_env,
+        },
+    )
+    route: Final = respx_mock.post(
+        url__regex=r"https://foundry\.internal/openai/deployments/tts-1/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"}))
+
+    response: Final = litellm.speech(
+        model="azure_ai/tts-1",
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://foundry.internal",
+        api_version="2024-05-01-preview",
+        **request_params,
+    )
+
+    assert response.content == TTS_AUDIO
+    assert route.calls.last.request.headers["api-key"] == "azure-ai-scoped-key"
 
 
 def test_speech_docker_model_runner_placeholder_does_not_beat_a_real_key(
