@@ -4356,6 +4356,19 @@ def test_a_declared_base_model_decides_whether_a_valid_marker_survives_drop_para
     assert _single_part(dropped) == _PARTS["input_text"]
 
 
+def test_a_deployment_that_marks_cache_control_keeps_the_callers_own_marker_whatever_its_base_model_says(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    cached: Final = {"type": "input_text", "text": "a", "cache_control": {"type": "ephemeral"}}
+    marked: Final = {"type": "input_text", "text": "b", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    input: Final = [{"type": "message", "role": "user", "content": [cached, marked]}]
+    transformed: Final = _transformed_input_for("gpt-6.1-sol", input, _declaring_base_model("model_info", "gpt-5.5"))
+    (item,) = cast(list[Mapping[str, object]], transformed)
+    parts: Final = cast(list[Mapping[str, object]], item["content"])
+    assert [part.get("prompt_cache_breakpoint") for part in parts] == [{"mode": "explicit"}, {"mode": "explicit"}]
+
+
 @pytest.mark.parametrize("content", ("Say ok", [{"type": "input_text", "text": "Say ok"}]), ids=("string", "parts"))
 @pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "string"))
 def test_a_prompt_cache_breakpoint_on_the_message_item_is_dropped_under_drop_params(

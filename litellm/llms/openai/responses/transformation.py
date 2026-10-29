@@ -218,16 +218,19 @@ def _item_with_wire_safe_prompt_cache_breakpoints(item: object, keeps_markers: b
     fields: Final = _json_object_or_none(item)
     if fields is None or not _carries_prompt_cache_breakpoint(fields):
         return item
-    return {
+    wire_safe_fields: Final = {
         key: _parts_with_wire_safe_prompt_cache_breakpoints(key, value, keeps_markers)
         for key, value in fields.items()
         if key != "prompt_cache_breakpoint"
     }
+    unchanged: Final = "prompt_cache_breakpoint" not in fields and _same_objects(
+        wire_safe_fields.values(), fields.values()
+    )
+    return item if unchanged else wire_safe_fields
 
 
-def _input_carries_marker(items: Iterable[object]) -> bool:
-    item_fields: Final = (_json_object_or_none(item) for item in items)
-    return any(_carries_prompt_cache_breakpoint(fields) for fields in item_fields if fields is not None)
+def _same_objects(rebuilt: Iterable[object], originals: Iterable[object]) -> bool:
+    return all(new is old for new, old in zip(rebuilt, originals, strict=True))
 
 
 def _carries_prompt_cache_breakpoint(fields: Mapping[str, object]) -> bool:
@@ -237,29 +240,27 @@ def _carries_prompt_cache_breakpoint(fields: Mapping[str, object]) -> bool:
 
 
 def _parts_carry_prompt_cache_breakpoint(parts: object) -> bool:
-    return any(_has_own_prompt_cache_breakpoint(part) for part in _json_array_or_empty(parts))
-
-
-def _has_own_prompt_cache_breakpoint(part: object) -> bool:
-    fields: Final = _json_object_or_none(part)
-    return fields is not None and "prompt_cache_breakpoint" in fields
+    return any(isinstance(part, Mapping) and "prompt_cache_breakpoint" in part for part in _json_array_or_empty(parts))
 
 
 def _parts_with_wire_safe_prompt_cache_breakpoints(key: str, value: object, keeps_markers: bool) -> object:
     if key not in _INPUT_PART_LIST_KEYS or not _parts_carry_prompt_cache_breakpoint(value):
         return value
-    return [_part_with_wire_safe_prompt_cache_breakpoint(part, keeps_markers) for part in _json_array_or_empty(value)]
+    parts: Final = _json_array_or_empty(value)
+    wire_safe_parts: Final = tuple(_part_with_wire_safe_prompt_cache_breakpoint(part, keeps_markers) for part in parts)
+    return value if _same_objects(wire_safe_parts, parts) else list(wire_safe_parts)
 
 
 def _part_with_wire_safe_prompt_cache_breakpoint(part: object, keeps_markers: bool) -> object:
     fields: Final = _json_object_or_none(part)
     if fields is None or "prompt_cache_breakpoint" not in fields:
         return part
+    marker: Final = fields["prompt_cache_breakpoint"]
+    wire_marker: Final = prompt_cache_breakpoint_for_wire(marker, drop_params=True) if keeps_markers else None
+    if keeps_markers and wire_marker == marker:
+        return part
     unmarked: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
-    if not keeps_markers:
-        return unmarked
-    marker: Final = prompt_cache_breakpoint_for_wire(fields["prompt_cache_breakpoint"], drop_params=True)
-    return with_prompt_cache_breakpoint(unmarked, marker)
+    return with_prompt_cache_breakpoint(unmarked, wire_marker)
 
 
 class _ReasoningSupportEntry(LiteLLMBaseModel):
@@ -588,11 +589,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         prompt_cache_options: object = None,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
         validated_input: Final = self._validate_input_param(self._drop_bridge_minted_reasoning_items(input))
-        marker_safe_input: Final = self._input_with_wire_safe_prompt_cache_breakpoints(
-            model=model, input=validated_input, litellm_params=litellm_params
-        )
         reads_breakpoints: Final = self._reads_prompt_cache_breakpoints(
             model=model, litellm_params=litellm_params, prompt_cache_options=prompt_cache_options
+        )
+        marker_safe_input: Final = self._input_with_wire_safe_prompt_cache_breakpoints(
+            model=model, input=validated_input, litellm_params=litellm_params, reads_breakpoints=reads_breakpoints
         )
         maps_anthropic_tool_search: Final = self._targets_openai_api(litellm_params) and any(
             is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()
@@ -640,13 +641,24 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
 
     def _input_with_wire_safe_prompt_cache_breakpoints(
-        self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        litellm_params: GenericLiteLLMParams,
+        reads_breakpoints: bool,
     ) -> str | ResponseInputParam:
-        if not isinstance(input, list) or not _drops_params(litellm_params) or not _input_carries_marker(input):
+        if not isinstance(input, list) or not _drops_params(litellm_params):
             return input
-        keeps_markers: Final = self._keeps_prompt_cache_breakpoints(model=model, litellm_params=litellm_params)
-        wire_safe_items: Final = [_item_with_wire_safe_prompt_cache_breakpoints(item, keeps_markers) for item in input]
-        return cast("ResponseInputParam", wire_safe_items)  # cast-ok: items keep their shape, minus a rejected marker
+        keeps_markers: Final = reads_breakpoints or self._keeps_prompt_cache_breakpoints(
+            model=model, litellm_params=litellm_params
+        )
+        wire_safe_items: Final = tuple(
+            _item_with_wire_safe_prompt_cache_breakpoints(item, keeps_markers) for item in input
+        )
+        if _same_objects(wire_safe_items, input):
+            return input
+        wire_safe_input: Final = list(wire_safe_items)
+        return cast("ResponseInputParam", wire_safe_input)  # cast-ok: items keep their shape, minus a rejected marker
 
     def _keeps_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
         provider: Final = _provider_name(self.custom_llm_provider)
