@@ -37,6 +37,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
             .map(|value| value.expose().to_owned())
             .or_else(|| std::env::var(name).ok())
     };
+    let router = ModelRouter::from_config(config, &lookup);
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -64,12 +65,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(
-        resources,
-        http,
-        secrets,
-        ModelRouter::from_model_list(&config.model_list),
-    )?))
+    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
 }
 
 pub async fn build_redis(config: &Config) -> Result<RedisClients, Error> {
