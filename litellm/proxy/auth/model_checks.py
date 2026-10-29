@@ -17,6 +17,7 @@ from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
+from litellm.router_api import RouterRegistry
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
@@ -552,12 +553,10 @@ def _litellm_model(deployment: Mapping[str, object]) -> object:
     return litellm_params.get("model") if is_str_keyed_mapping(litellm_params) else None
 
 
-def _router_deployment(llm_router: Router | None, model_id: object) -> Mapping[str, object] | None:
-    if llm_router is None or not isinstance(model_id, str):
+def _router_deployment(registry: RouterRegistry, model_id: object) -> Mapping[str, object] | None:
+    if not isinstance(model_id, str):
         return None
-    deployment: Final = _ROUTER_DEPLOYMENT.validate_python(
-        llm_router.get_model_info(id=model_id)  # pyright: ignore[reportUnknownMemberType]  # narrowed below
-    )
+    deployment: Final = _ROUTER_DEPLOYMENT.validate_python(registry.deployment_dict(model_id))
     return deployment if is_str_keyed_mapping(deployment) else None
 
 
@@ -583,17 +582,20 @@ def _deployment_routed_model(source: Mapping[str, object], listed_name: str) -> 
 
 
 def wildcard_routed_model(row: Mapping[str, object], llm_router: Router | None) -> str | None:
-    source: Final = _router_deployment(llm_router, _model_info_field(row, "id"))
-    listed_name: Final = row.get("model_name")
-    if llm_router is None or source is None or not isinstance(listed_name, str):
+    if llm_router is None:
         return None
-    if _litellm_model(row) == _litellm_model(source) or listed_name in llm_router.model_names:
+    registry: Final = llm_router.registry()
+    source: Final = _router_deployment(registry, _model_info_field(row, "id"))
+    listed_name: Final = row.get("model_name")
+    if source is None or not isinstance(listed_name, str):
+        return None
+    if _litellm_model(row) == _litellm_model(source) or listed_name in registry.names(kind="group_set"):
         return None
     routed_model: Final = _deployment_routed_model(source, listed_name)
     return (
         routed_model
         if routed_model is not None
-        and routed_model in llm_router.wildcard_routed_models(listed_name, _deployment_team_id(row))
+        and routed_model in registry.names(listed_name, kind="wildcard", team_id=_deployment_team_id(row))
         else None
     )
 
