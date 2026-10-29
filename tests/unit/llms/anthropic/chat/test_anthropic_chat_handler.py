@@ -15,7 +15,7 @@ import litellm
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -27,24 +27,34 @@ from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
+def _text_delta_stream(text: str) -> bytes:
+    events: Final = (
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+    )
+    return "".join(
+        f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
+    ).encode()
+
+
+def _streamed_text(chunks: list[object]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks if isinstance(chunk, ModelResponseStream))
+
+
 @pytest.mark.asyncio
 async def test_make_call_passes_logging_obj_to_client_post():
     """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
     mock_client = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.aiter_lines = MagicMock(
-        return_value=iter([b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n'])
-    )
-    mock_client.post.return_value = mock_response
+    mock_client.post.return_value = httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream("Hi there")))
 
     logging_obj = MagicMock()
 
-    await make_call(
+    completion_stream, _ = await make_call(
         client=mock_client,
         api_base="https://api.anthropic.com/v1/messages",
         headers={},
         data="{}",
-        model="claude-3-5-haiku",
+        model="claude-haiku-5-5",
         messages=[{"role": "user", "content": "Hi"}],
         logging_obj=logging_obj,
         timeout=60.0,
@@ -54,6 +64,39 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+    assert _streamed_text([chunk async for chunk in completion_stream]) == "Hi there"
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+async def _streamed_chunks(sync_stream: bool, text: str) -> list[object]:
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=httpx.ByteStream(_text_delta_stream(text)))
+    )
+    call_args: Final = {
+        "api_base": "https://api.anthropic.com/v1/messages",
+        "headers": {},
+        "data": "{}",
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "logging_obj": MagicMock(),
+        "timeout": 60.0,
+        "json_mode": False,
+    }
+    if sync_stream:
+        sync_iterator, _ = make_sync_call(client=HTTPHandler(client=httpx.Client(transport=transport)), **call_args)
+        return list(sync_iterator)
+    async_iterator, _ = await make_call(client=AsyncHTTPHandler(transport=transport), **call_args)
+    return [chunk async for chunk in async_iterator]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_stream", [True, False])
+async def test_streamed_text_keeps_unicode_line_separators(sync_stream: bool) -> None:
+    chunks: Final = await _streamed_chunks(sync_stream, _LINE_SEPARATED_TEXT)
+
+    assert _streamed_text(chunks) == _LINE_SEPARATED_TEXT
 
 
 def test_anthropic_completion_does_not_send_deployment_default_limits():
