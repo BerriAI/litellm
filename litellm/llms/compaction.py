@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
 
 CompactionProtocol: TypeAlias = Literal["chat", "messages"]
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -32,7 +32,9 @@ def get_native_compaction_provider(params: Mapping[str, object]) -> NativeCompac
     return compaction if compaction.supports_native_compaction(params) else None
 
 
-async def dispatch(router: Router, protocol: CompactionProtocol, payload: Mapping[str, object]) -> Mapping[str, object]:
+async def dispatch(
+    router: RoutingContext, protocol: CompactionProtocol, payload: Mapping[str, object]
+) -> Mapping[str, object]:
     if protocol == "messages":
         return _MAPPING.validate_python(
             await router.aanthropic_messages(custom_llm_provider=None, client=None, **payload)
