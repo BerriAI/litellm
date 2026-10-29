@@ -257,10 +257,11 @@ A good proof looks like this:
 
 1. Start the proxy from your branch with a config that has the model you changed, `uv run litellm --config your_config.yaml --detailed_debug`
 2. Send the request a user would send with `curl`, and paste both the command and the response. When cost or routing is involved, include the response headers, since `x-litellm-response-cost` is what the user sees
-3. For a bug fix, do this twice, once at the commit you branched from to show the bug and once on your branch to show the fix. Name both commit hashes
+3. For a bug fix, do this twice, once at the merge base with main (`git merge-base origin/main HEAD`) to show the bug and once at your branch's latest commit to show the fix. Name both commit hashes
 4. If your change is reachable from more than one endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`), show each one
 5. If the request can stream, show a `"stream": true` run too, because streaming builds usage and cost on a different path. A stream sends its headers before its usage exists, so show a streamed request's cost from its row on the Admin UI's Logs page or `GET /spend/logs` instead of the header
 6. For UI changes, add before and after screenshots and name the page
+7. If users reach your change through a coding tool such as Claude Code or Codex, drive that tool the way a user does and add before and after screenshots of it, because a `curl` or a headless run alone does not show what the user sees
 
 ```bash
 curl -sD - http://localhost:4000/v1/chat/completions \
@@ -273,13 +274,15 @@ When the provider reports its own usage or spend numbers, compare the proxy's nu
 
 ## Contributing an LLM Provider Integration
 
-Provider work (a new provider, a new parameter, a new usage or cost field) is the most common kind of contribution, and it is where PRs get reworked most often. Follow these two rules
+Provider work (a new provider, a new parameter, a new usage or cost field) is the most common kind of contribution, and it is where PRs get reworked most often. Follow these rules
 
-**Find the existing machinery before you add plumbing.** LiteLLM already has generic paths that move data between the endpoints, the provider transformations, and cost tracking. A second, hand-rolled path for the same data is a common reason a provider PR gets rewritten before merge. [`ARCHITECTURE.md`](ARCHITECTURE.md) shows where the layers live, and the decision records in [`docs/adrs/`](docs/adrs/) explain why they are shaped that way. For example, [the ADR on provider usage fields](docs/adrs/adr_001_provider_usage_fields_ride_as_usage_extras.md) covers how provider-specific usage fields reach cost tracking. If you cannot find a mechanism for what you need, say so in the PR or ask in [#pr-review on Slack](https://join.slack.com/t/litellmossslack/shared_invite/zt-3o7nkuyfr-p_kbNJj8taRfXGgQI1~YyA) before you build one
+**Find the existing machinery before you add plumbing.** LiteLLM already has generic paths that move data between the endpoints, the provider transformations, and cost tracking. A second, hand-rolled path for the same data is a common reason a provider PR gets rewritten before merge. [`ARCHITECTURE.md`](ARCHITECTURE.md) shows where the layers live, and the decision records in [`docs/adrs/`](docs/adrs/AGENTS.md) explain why they are shaped that way. For example, [the ADR on provider usage fields](docs/adrs/adr_001_provider_usage_fields_ride_as_usage_extras.md) covers how provider-specific usage fields reach cost tracking. If you cannot find a mechanism for what you need, say so in the PR or ask in [#pr-review on Slack](https://join.slack.com/t/litellmossslack/shared_invite/zt-3o7nkuyfr-p_kbNJj8taRfXGgQI1~YyA) before you build one
+
+**Bill a new provider usage field from the usage object.** Leave the field on the usage object as an extra and read it in that provider's `cost_calculator.py`. If the provider's transform builds `Usage` from named fields, as the Anthropic, Gemini, and Bedrock Converse ones do, pass the new field there too. When the field counts a built-in tool such as web search, add the provider to `get_cost_for_web_search_request` in `litellm/llms/__init__.py`, and add a gate to `litellm/litellm_core_utils/llm_cost_calc/tool_call_cost_tracking.py` only when no existing gate fires. Then show the field's cost in your proof on every endpoint it reaches, streaming included
 
 **Do not change what a caller sees to make internals easier.** Each endpoint keeps the schema of the API it emulates. A `/v1/responses` caller gets `input_tokens` and a `/v1/chat/completions` caller gets `prompt_tokens`, whatever the provider sent and whatever cost tracking needs. Reshaping a public response to feed an internal consumer breaks every user of that endpoint
 
-If your change makes an architecture decision, such as a new cross-cutting mechanism or a deliberate difference from a provider's API shape, add an ADR to [`docs/adrs/`](docs/adrs/) in the same PR
+If your change makes an architecture decision, such as a new cross-cutting mechanism or a deliberate difference from a provider's API shape, add an ADR to [`docs/adrs/`](docs/adrs/AGENTS.md) in the same PR
 
 ## Building and Running Locally
 

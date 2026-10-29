@@ -2,7 +2,7 @@
 
 This document helps contributors understand where to make changes in LiteLLM.
 
-For why a layer is shaped the way it is, read the architecture decision records in [`docs/adrs/`](docs/adrs/) (Python SDK and proxy) and [`litellm-rust/docs/adrs/`](litellm-rust/docs/adrs/) (Rust core)
+For why a layer is shaped the way it is, read the architecture decision records in [`docs/adrs/`](docs/adrs/AGENTS.md) (Python SDK and proxy) and [`litellm-rust/docs/adrs/`](litellm-rust/docs/adrs/AGENTS.md) (Rust core)
 
 ---
 
