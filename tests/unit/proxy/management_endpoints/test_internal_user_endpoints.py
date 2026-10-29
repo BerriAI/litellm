@@ -5123,11 +5123,11 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     mocker.patch("litellm.store_audit_logs", True)
     captured: Final[list] = []
 
-    async def _capture(request_data):
-        captured.append(request_data)
+    async def _capture(rows):
+        captured.extend(rows)
 
     mocker.patch(
-        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
         new=_capture,
     )
 
@@ -5211,3 +5211,18 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(_admin_prisma: MagicMock) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_update(
+            data=UpdateUserRequest(user_id="target-user", budget_duration="not-a-duration"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Invalid budget_duration" in exc_info.value.message
+    assert "Authentication Error" not in exc_info.value.message

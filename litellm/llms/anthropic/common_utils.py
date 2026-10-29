@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     parts_of,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import non_numeric_thinking_budget_error
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.wif import (
     aget_anthropic_wif_token,
     anthropic_base_without_chat_suffix,
@@ -50,6 +51,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
@@ -118,6 +120,54 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
+def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
+    if custom_llm_provider == "anthropic":
+        return True
+    model_lower: Final = model.lower()
+    if custom_llm_provider == "bedrock":
+        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
+    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
+        return "claude" in model_lower
+    return False
+
+
+def is_claude_model_target(custom_llm_provider: str | None, model: str) -> bool:
+    return "claude" in model.lower() and is_claude_tool_target(custom_llm_provider, model)
+
+
+def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
+    if not isinstance(custom, dict) or "defer_loading" in tool_dict:
+        return None
+    defer_loading: Final = OBJECT_MAPPING_ADAPTER.validate_python(custom).get("defer_loading")
+    return defer_loading if isinstance(defer_loading, bool) else None
+
+
+def _tool_without_custom_field(tool: object, hoist_defer_loading: bool, drop_custom: bool) -> object:
+    if not isinstance(tool, dict):
+        return tool
+
+    if "custom" not in tool:
+        return tool
+
+    tool_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(tool)
+
+    custom: Final = tool_dict["custom"]
+    without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
+    defer_loading: Final = _hoistable_defer_loading(tool_dict, custom) if hoist_defer_loading else None
+    if defer_loading is None:
+        return without_custom if drop_custom else tool_dict
+
+    unhoisted: Final = {
+        key: value for key, value in OBJECT_MAPPING_ADAPTER.validate_python(custom).items() if key != "defer_loading"
+    }
+    kept_custom: Final = {"custom": unhoisted} if unhoisted and not drop_custom else {}
+    return {**without_custom, "defer_loading": defer_loading, **kept_custom}
+
+
+def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: bool, drop_custom: bool) -> list[object]:
+    return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
 
 
 def is_anthropic_messages_url(url: str) -> bool:
@@ -468,7 +518,7 @@ def _fetch_anthropic_models_page(
     # which a read-only one cannot support
     query: Final = f"?after_id={quote(after_id)}" if after_id else ""
     response: Final = litellm.module_level_client.get(
-        url=f"{api_base}/v1/models{query}",
+        url=f"{join_api_base(api_base, 'v1/models')}{query}",
         headers=headers,
         follow_redirects=False,
     )
@@ -550,6 +600,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if not isinstance(thinking, dict):
             return False
         return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+
+    def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
+        return (
+            *(
+                (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
+                if self.is_thinking_display_updates_used(thinking)
+                else ()
+            ),
+            *(
+                (ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,)
+                if isinstance(thinking, dict) and "block_binding" in thinking
+                else ()
+            ),
+        )
 
     def is_mid_conversation_tool_change_used(self, messages: Sequence[object]) -> bool:
         for message in messages:
@@ -712,7 +776,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         optional_params: dict,
         model: str,
         param: str,
-        value: Any,
+        value: object,
         drop_params: bool,
         output_key: str,
     ) -> None:
@@ -1131,7 +1195,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         *,
         custom_llm_provider: str,
         is_mid_conversation_output_config_used: bool = False,
-        is_thinking_display_updates_used: bool = False,
+        thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
     ) -> list[str]:
         """
@@ -1168,13 +1232,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_mid_conversation_output_config_used:
             betas.append(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
-        thinking_display_betas: Final = (
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else ()
-        )
         tool_change_betas: Final = (
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else ()
         )
-        return list(set(betas).union(thinking_display_betas, tool_change_betas))
+        return list(set(betas).union(self.thinking_betas(thinking), tool_change_betas))
 
     @staticmethod
     def _make_api_key_auth_header(
@@ -1236,7 +1297,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
         is_mid_conversation_output_config_used: bool = False,
-        is_thinking_display_updates_used: bool = False,
+        thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
         wif_minted: bool = False,
     ) -> dict:
@@ -1297,7 +1358,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.update(user_anthropic_beta_headers)
 
         all_betas: Final = betas.union(
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else (),
+            self.thinking_betas(thinking),
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else (),
         )
 
@@ -1384,7 +1445,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             auth_token=auth_token,
             file_id_used=file_id_used,
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
-            is_thinking_display_updates_used=self.is_thinking_display_updates_used(optional_params.get("thinking")),
+            thinking=optional_params.get("thinking"),
             is_mid_conversation_tool_change_used=self.is_mid_conversation_tool_change_used(messages),
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
@@ -1406,7 +1467,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return {**caller_headers, **anthropic_headers}
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def resolve_anthropic_api_base(api_base: str | None = None) -> str:
         from litellm.secret_managers.main import get_secret_str
 
         return (
@@ -1415,6 +1476,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             or get_secret_str("ANTHROPIC_BASE_URL")
             or "https://api.anthropic.com"
         )
+
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str | None:
+        return AnthropicModelInfo.resolve_anthropic_api_base(api_base)
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -1533,14 +1598,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None,
         litellm_params: Mapping[str, object] | None,
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        resolved_api_base: Final = AnthropicModelInfo.get_api_base(api_base)
+        resolved_api_base: Final = AnthropicModelInfo.resolve_anthropic_api_base(api_base)
         auth_header: Final = AnthropicModelInfo.get_auth_header(
             api_key,
             resolved_api_base,
             litellm_params=litellm_params,
             allow_workload_identity=config_allows_workload_identity(self),
         )
-        if resolved_api_base is None or auth_header is None:
+        if auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN (or workload "
                 "identity federation via ANTHROPIC_FEDERATION_RULE_ID/ANTHROPIC_ORGANIZATION_ID/"
@@ -1788,6 +1853,21 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
+_DROP_ANTHROPIC_MESSAGE: Final = object()
+
+
+def _strip_empty_content_blocks_from_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = message["content"]
+    filtered: Final = [
+        block for block in content if not _is_empty_text_block(block) and not is_empty_unsigned_thinking_block(block)
+    ]
+    if len(filtered) == len(content):
+        return message
+    return {**message, "content": filtered} if filtered else _DROP_ANTHROPIC_MESSAGE
+
+
 def strip_empty_content_blocks_from_anthropic_messages(
     messages: Sequence[object],
 ) -> list[Any]:
@@ -1822,18 +1902,11 @@ def strip_empty_content_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_unsigned_thinking_block(b)]
-        if len(filtered) == len(content):
-            out.append(m)
-        elif filtered:
-            out.append({**m, "content": filtered})
-    return out
+    return [
+        stripped_message
+        for message in messages
+        if (stripped_message := _strip_empty_content_blocks_from_message(message)) is not _DROP_ANTHROPIC_MESSAGE
+    ]
 
 
 def _is_empty_text_block(block: object) -> bool:
@@ -1921,18 +1994,15 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> l
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
-        if new_content == content:
-            out.append(m)
-        else:
-            out.append({**m, "content": new_content})
-    return out
+    return [_sanitize_tool_use_ids_in_message(message) for message in messages]
+
+
+def _sanitize_tool_use_ids_in_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = message["content"]
+    new_content: Final = [_sanitize_tool_use_id_content_block(block) for block in content]
+    return message if new_content == content else {**message, "content": new_content}
 
 
 class _ReplayedSearchQuery(LiteLLMBaseModel):

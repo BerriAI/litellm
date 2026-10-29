@@ -25,7 +25,12 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     anthropic_system_blocks,
     split_leading_system_run,
 )
-from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import (
+    is_claude_model_target,
+    merge_anthropic_beta_headers,
+    tools_without_custom_field,
+)
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
@@ -160,11 +165,58 @@ def _has_non_chat_user_block(message: Mapping[str, object]) -> bool:
     return any(isinstance(block, dict) and block.get("type") not in ValidUserMessageContentTypes for block in blocks)
 
 
+_OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES: Final = frozenset(
+    (
+        "apply_patch",
+        "code_interpreter",
+        "computer",
+        "computer_use_preview",
+        "file_search",
+        "image_generation",
+        "local_shell",
+        "mcp",
+        "shell",
+        "web_search",
+        "web_search_2025_08_26",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+    )
+)
+
+
+_CHAT_INFERENCE_TRANSLATED_TOOL_TYPES: Final = frozenset(("namespace", "tool_search"))
+
+
+def _is_responses_built_in_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return isinstance(tool_type, str) and tool_type in _OPENAI_RESPONSES_BUILT_IN_TOOL_TYPES
+
+
+def _is_chat_inference_translated_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return isinstance(tool_type, str) and tool_type in _CHAT_INFERENCE_TRANSLATED_TOOL_TYPES
+
+
+def _needs_tool_translation(tool: Mapping[str, object]) -> bool:
+    return _is_chat_tool(tool) or _is_chat_inference_translated_tool(tool) or _is_responses_built_in_tool(tool)
+
+
 def _gets_placeholder_name(tool: Mapping[str, object]) -> bool:
-    from litellm.llms.anthropic.pass_through.adapters.transformation import is_provider_native_tool_dict
+    from litellm.llms.anthropic.messages.adapters.transformation import is_provider_native_tool_dict
 
     name: Final = tool.get("name")
-    return not (_is_chat_tool(tool) or is_provider_native_tool_dict(tool) or (isinstance(name, str) and name.strip()))
+    return not (
+        _is_chat_tool(tool)
+        or _is_chat_inference_translated_tool(tool)
+        or is_provider_native_tool_dict(tool)
+        or (isinstance(name, str) and name.strip())
+    )
+
+
+def _chat_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
+
+    return (tool,) if _is_chat_inference_translated_tool(tool) else chat_completion_tools_for(tool)
 
 
 def _untranslatable_input(
@@ -181,8 +233,8 @@ def _untranslatable_input(
     unnamed_tool: Final = next(filter(_gets_placeholder_name, tools), None)
     if unnamed_tool is not None:
         return ChatCountTranslationError(
-            message=f"Invalid request for token counting: tool type {unnamed_tool.get('type')!r} "
-            "has no Chat Completions equivalent"
+            message=f"Invalid request for token counting: LiteLLM cannot count a tool of type "
+            f"{unnamed_tool.get('type')!r} for this model"
         )
     return None
 
@@ -222,9 +274,7 @@ def _translated_chat_request(
     chat_params: Mapping[str, object],
     translator: _ChatRequestTranslator,
 ) -> _ChatParams:
-    from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
-
-    chat_tools: Final = [dict(chat_tool) for chat_tool in chain.from_iterable(map(chat_completion_tools_for, tools))]
+    chat_tools: Final = [dict(chat_tool) for chat_tool in chain.from_iterable(map(_chat_tools_for, tools))]
     openai_params: Final = {name: value for name, value in chat_params.items() if name != "drop_params"}
     mapped_params: Final = {**openai_params, **({"tools": chat_tools} if chat_tools else {})}
     chat_messages: Final = cast(  # cast-ok: chat-shaped request messages, read the way chat inference reads them
@@ -254,7 +304,7 @@ def anthropic_fields_for_chat_tool_use(
     counted_tools: Final = tools or ()
     if (
         not chat_params
-        and not any(map(_is_chat_tool, counted_tools))
+        and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(_needs_chat_translation, messages))
     ):
         return None
@@ -317,7 +367,7 @@ class AnthropicCountTokensConfig:
         Returns:
             The endpoint URL for the CountTokens API
         """
-        return resolve_anthropic_base(api_base) + "/v1/messages/count_tokens"
+        return join_api_base(resolve_anthropic_base(api_base), "v1/messages/count_tokens")
 
     def transform_request_to_count_tokens(
         self,
@@ -326,6 +376,7 @@ class AnthropicCountTokensConfig:
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        drop_params: bool = False,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -345,7 +396,19 @@ class AnthropicCountTokensConfig:
                     **MappingProxyType(
                         {
                             key: value
-                            for key, value in (("system", counted_system), ("tools", tools))
+                            for key, value in (
+                                ("system", counted_system),
+                                (
+                                    "tools",
+                                    None
+                                    if tools is None
+                                    else tools_without_custom_field(
+                                        tools,
+                                        hoist_defer_loading=is_claude_model_target("anthropic", model),
+                                        drop_custom=drop_params,
+                                    ),
+                                ),
+                            )
                             if value is not None
                         }
                     ),

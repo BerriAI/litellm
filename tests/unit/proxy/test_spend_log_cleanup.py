@@ -8,6 +8,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -32,6 +33,17 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
 )
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+
+
+@dataclass(slots=True)
+class _ManualClock:
+    now: float = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 def _far_deadline() -> float:
@@ -948,26 +960,31 @@ async def test_run_budget_stops_the_loop_and_leaves_the_backlog_for_the_next_run
     _wire_tx(mock_prisma_client.db)
     mock_db = MagicMock()
     _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(return_value=1000)
+    clock: Final = _ManualClock()
+
+    async def _delete_batch(_query: str, *_args: object) -> int:
+        clock.advance(0.1)
+        return 1000
+
+    mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
     mock_prisma_client.db = mock_db
 
     cleaner = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
             # Comfortably more batches than a sub-second budget can reach (each
-            # batch sleeps 0.1s), but small enough that a broken deadline fails
-            # this test in seconds instead of hanging it
+            # batch advances the clock 0.1s), but small enough that a broken
+            # deadline still ends the loop
             "maximum_spend_logs_cleanup_max_batches": 50,
-        }
+        },
+        clock=clock,
     )
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
-    started_at = time.monotonic()
-    result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, time.monotonic() + 1.0)
-    elapsed = time.monotonic() - started_at
+    result = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date, clock() + 1.0)
 
     assert result.stop_reason == "budget_exhausted"
-    assert elapsed < 3, f"budgeted run overran its deadline: {elapsed}s"
+    assert clock.now < 1.15, f"budgeted run overran its deadline: {clock.now}s"
     assert mock_db.execute_raw.call_count < 50
     assert result.rows_deleted > 0
 
@@ -983,7 +1000,13 @@ async def test_run_budget_is_shared_across_tables_not_granted_per_table():
     _wire_tx(mock_prisma_client.db)
     mock_db = MagicMock()
     _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(return_value=1000)
+    clock: Final = _ManualClock()
+
+    async def _delete_batch(_query: str, *_args: object) -> int:
+        clock.advance(0.1)
+        return 1000
+
+    mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
     mock_prisma_client.db = mock_db
 
     cleaner = SpendLogCleanup(
@@ -991,20 +1014,19 @@ async def test_run_budget_is_shared_across_tables_not_granted_per_table():
             "maximum_spend_logs_retention_period": "7d",
             "maximum_autorouter_session_retention_period": "365d",
             # Comfortably more batches than a sub-second budget can reach (each
-            # batch sleeps 0.1s), but small enough that a broken deadline fails
-            # this test in seconds instead of hanging it
+            # batch advances the clock 0.1s), but small enough that a broken
+            # deadline still ends the loop
             "maximum_spend_logs_cleanup_max_batches": 50,
             "maximum_spend_logs_cleanup_run_budget": "1s",
-        }
+        },
+        clock=clock,
     )
     cleaner.pod_lock_manager = None
 
-    started_at = time.monotonic()
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
-    elapsed = time.monotonic() - started_at
 
     # three tables are eligible; a per-table budget would push this past 3s
-    assert elapsed < 2.5, f"budget was granted per table, not per run: {elapsed}s"
+    assert clock.now < 1.15, f"budget was granted per table, not per run: {clock.now}s"
     tables_touched = {call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list}
     assert "LiteLLM_SpendLogs" in tables_touched
 
@@ -1012,10 +1034,15 @@ async def test_run_budget_is_shared_across_tables_not_granted_per_table():
 @pytest.mark.asyncio
 async def test_cleanup_groups_share_budget_so_health_checks_still_get_a_delete():
     mock_prisma_client = MagicMock()
-    _wire_tx(mock_prisma_client.db)
     mock_db = MagicMock()
     _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(return_value=1000)
+    clock: Final = _ManualClock()
+
+    async def _delete_batch(_query: str, *_args: object) -> int:
+        clock.advance(0.1)
+        return 1000
+
+    mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
     mock_prisma_client.db = mock_db
 
     cleaner = SpendLogCleanup(
@@ -1024,7 +1051,8 @@ async def test_cleanup_groups_share_budget_so_health_checks_still_get_a_delete()
             "maximum_health_check_retention_period": "30d",
             "maximum_spend_logs_cleanup_max_batches": 50,
             "maximum_spend_logs_cleanup_run_budget": "1s",
-        }
+        },
+        clock=clock,
     )
     cleaner.pod_lock_manager = None
 
@@ -1638,7 +1666,13 @@ async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
     _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(return_value=1000)
+    clock: Final = _ManualClock()
+
+    async def _delete_batch(_query: str, *_args: object) -> int:
+        clock.advance(0.1)
+        return 1000
+
+    mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
     mock_prisma_client.db = mock_db
 
     cleaner = SpendLogCleanup(
@@ -1646,19 +1680,18 @@ async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
             "maximum_spend_logs_retention_period": "7d",
             "maximum_spend_logs_cleanup_max_batches": 500,
             "maximum_spend_logs_cleanup_run_budget": "1s",
-        }
+        },
+        clock=clock,
     )
     cleaner.pod_lock_manager = None
 
-    started_at = time.monotonic()
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
-    elapsed = time.monotonic() - started_at
 
     tables = [call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list]
     assert tables.count("LiteLLM_SpendLogs") > 0
     assert tables.count("LiteLLM_SpendLogToolIndex") > 0, "tool index cleanup was starved by the spend-log backlog"
     assert tables.count("LiteLLM_SpendLogGuardrailIndex") > 0, "guardrail index cleanup was starved by the backlog"
-    assert elapsed < 2.5, f"splitting the budget must not extend the run: {elapsed}s"
+    assert clock.now < 1.15, f"splitting the budget must not extend the run: {clock.now}s"
 
 
 @pytest.mark.asyncio
@@ -1941,19 +1974,41 @@ async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_th
 
 
 @pytest.mark.asyncio
-async def test_size_pass_skips_on_stale_row_statistics_instead_of_trusting_an_estimate_of_zero(caplog):
+async def test_size_pass_analyzes_and_measures_again_when_the_row_statistics_were_reset(caplog):
+    """A crash zeroes pg_stat_user_tables under a full file; the pass rebuilds the counters instead of skipping.
+    The first read after ANALYZE still shows zeros, as the stats collector publishes them a moment later"""
     db = MagicMock()
     _wire_tx(db)
-    db.execute_raw = AsyncMock(return_value=1000)
-    _wire_size_probes(db, [_storage(allocated=5 * 1024**3, live=0, dead=0)], cutoff=datetime.now(timezone.utc))
+    statements = AsyncMock(return_value=0)
+    db.execute_raw = statements
+    saves = _wire_size_probes(
+        db,
+        [
+            _storage(allocated=10 * 1024**3, live=0, dead=0, inserted=0, deleted=0),
+            _storage(allocated=10 * 1024**3, live=0, dead=0, inserted=0, deleted=0),
+            _storage(10 * 1024**3, 1000, 0, 0, 0),
+        ],
+        cutoff=datetime.now(timezone.utc),
+        saved_state=SizeCleanupState(
+            allocated_bytes=10 * 1024**3,
+            reclaimable_bytes=9 * 1024**3 + 512 * 1024**2,
+            bytes_per_row=1024.0,
+            inserted_total=50_000,
+            deleted_total=49_000,
+        ),
+    )
     client = MagicMock()
     client.db = db
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await _size_cleaner({}).cleanup_spend_logs_by_size(client)
 
-    assert db.deletes.await_count == 0
+    issued = [call.args[0] for call in statements.await_args_list]
+    assert issued == ['ANALYZE "LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"'], (
+        "the only statement is the ANALYZE: no DELETE, the carried count puts the table under 1GB"
+    )
     assert any("row statistics are stale" in record.getMessage() for record in caplog.records)
+    assert saves[0].reclaimable_bytes == 9 * 1024**3 + 512 * 1024**2
 
 
 @pytest.mark.asyncio
@@ -2021,9 +2076,19 @@ _RUN_STATE = SizeCleanupState(
         ),
         ("the retention job deleted 2000 more rows", _storage(32_030_720, 3000, 2000, 20_000, 17_000), 27_217_000),
         (
-            "statistics reset: counters restart from the dead rows",
+            "statistics reset (a crash, then ANALYZE): the count is carried forward, not restarted from the dead rows",
             _storage(32_030_720, 5000, 1000, 5000, 1000),
-            5_338_453,
+            24_015_000,
+        ),
+        (
+            "statistics reset on a file VACUUM FULL shrank meanwhile: the carried count loses the shrink",
+            _storage(8_015_720, 5000, 0, 5000, 0),
+            0,
+        ),
+        (
+            "statistics reset with more dead rows than the carried count explains: the dead rows win",
+            _storage(32_030_720, 1000, 19_000, 1000, 19_000),
+            30_429_184,
         ),
     ],
 )

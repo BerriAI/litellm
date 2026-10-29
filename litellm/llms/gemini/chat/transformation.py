@@ -82,9 +82,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         return "tts" in model
 
     def get_supported_openai_params(self, model: str) -> list[str]:
+        sampling_params: Final = ("temperature", "top_p") if self.supports_sampling_params(model) else ()
         supported_params: Final = [
-            "temperature",
-            "top_p",
+            *sampling_params,
             "max_tokens",
             "max_completion_tokens",
             "stream",

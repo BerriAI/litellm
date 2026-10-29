@@ -1,5 +1,6 @@
 """Tests for the per-user provider credentials DB/cache module."""
 
+import json
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -7,9 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.credential_endpoints.user_provider_credentials import (
     GithubCopilotUserConnectionPayload,
-    aget_user_provider_tokens,
+    aget_user_provider_credentials,
     decode_user_provider_credential,
     delete_user_provider_credential,
     delete_user_provider_credentials_for_credential,
@@ -110,7 +113,7 @@ async def test_delete_for_credential_returns_affected_user_ids():
 
 
 @pytest.mark.asyncio
-async def test_aget_tokens_returns_plaintext_and_caches_ciphertext(monkeypatch):
+async def test_aget_credentials_returns_plaintext_and_caches_ciphertext(monkeypatch):
     payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
@@ -121,12 +124,12 @@ async def test_aget_tokens_returns_plaintext_and_caches_ciphertext(monkeypatch):
     redis = _fake_redis(monkeypatch)
     cache = DualCache(redis_cache=redis)
 
-    tokens = await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
-    assert tokens == {"copilot-cred": "gho_secret"}
+    connections = await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"])
+    assert connections == {"copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}}
 
     # second call served from cache: no new DB read, and cache holds ciphertext not plaintext
-    tokens2 = await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
-    assert tokens2 == {"copilot-cred": "gho_secret"}
+    connections2 = await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"])
+    assert connections2 == {"copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}}
     assert table.find_many.await_count == 1
     cached = await redis.async_get_cache(upc._cache_key("user-a", "copilot-cred"))
     assert cached == ciphertext
@@ -135,14 +138,59 @@ async def test_aget_tokens_returns_plaintext_and_caches_ciphertext(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aget_tokens_negative_caches_missing_connection(monkeypatch):
+async def test_aget_connections_preserves_github_host(monkeypatch):
+    payload: Final = GithubCopilotUserConnectionPayload(
+        access_token="gho_secret",
+        github_login="octo",
+        github_host="octo.ghe.com",
+    )
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    table: Final = MagicMock()
+    table.find_many = AsyncMock(return_value=[_row(credential_b64=upc._encode(payload))])
+    prisma_client: Final = _prisma(table)
+    cache: Final = DualCache(redis_cache=_fake_redis(monkeypatch))
+
+    connections: Final = await aget_user_provider_credentials(
+        prisma_client,
+        cache,
+        "user-a",
+        ["copilot-cred"],
+    )
+    assert connections == {"copilot-cred": {"access_token": "gho_secret", "github_host": "octo.ghe.com"}}
+
+
+@pytest.mark.asyncio
+async def test_legacy_connection_without_github_host_defaults_to_github_com(monkeypatch):
+    ciphertext: Final = encrypt_value_helper(json.dumps({"access_token": "gho_secret", "github_login": "octo"}))
+    table: Final = MagicMock()
+    table.find_many = AsyncMock(return_value=[_row(credential_b64=ciphertext)])
+    prisma_client: Final = _prisma(table)
+    cache: Final = DualCache(redis_cache=_fake_redis(monkeypatch))
+
+    connections: Final = await aget_user_provider_credentials(
+        prisma_client,
+        cache,
+        "user-a",
+        ["copilot-cred"],
+    )
+    assert connections == {
+        "copilot-cred": {
+            "access_token": "gho_secret",
+            "github_host": GITHUB_COPILOT_DEFAULT_HOST,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_aget_credentials_negative_caches_missing_connection(monkeypatch):
     table = MagicMock()
     table.find_many = AsyncMock(return_value=[])
     prisma_client = _prisma(table)
     cache = DualCache(redis_cache=_fake_redis(monkeypatch))
 
-    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
-    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
+    assert await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
+    assert await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
     assert table.find_many.await_count == 1
 
 
@@ -156,10 +204,10 @@ async def test_invalidate_cache_forces_db_refetch(monkeypatch):
     prisma_client = _prisma(table)
     cache = DualCache(redis_cache=_fake_redis(monkeypatch))
 
-    await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
+    await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"])
     await drop_user_provider_credential_cache(cache, "user-a", "copilot-cred")
-    tokens = await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
-    assert tokens == {"copilot-cred": "gho_new"}
+    connections = await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"])
+    assert connections == {"copilot-cred": {"access_token": "gho_new", "github_host": "github.com"}}
     assert table.find_many.await_count == 2
 
 
@@ -184,19 +232,19 @@ async def test_disconnect_on_one_worker_invalidates_other_workers_via_redis(monk
     prisma_client = _prisma(table)
 
     # worker A "connects" (DB read + cache write)
-    tokens_a = await aget_user_provider_tokens(prisma_client, cache_a, "user-a", ["copilot-cred"])
-    assert tokens_a == {"copilot-cred": "gho_secret"}
+    connections_a = await aget_user_provider_credentials(prisma_client, cache_a, "user-a", ["copilot-cred"])
+    assert connections_a == {"copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}}
 
     # worker B reads the same connection straight from Redis (its in-memory layer is empty)
-    tokens_b = await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"])
-    assert tokens_b == {"copilot-cred": "gho_secret"}
+    connections_b = await aget_user_provider_credentials(prisma_client, cache_b, "user-a", ["copilot-cred"])
+    assert connections_b == {"copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}}
 
     # worker A disconnects: the key is overwritten with the not-connected tombstone
     await invalidate_user_provider_credential_cache(cache_a, "user-a", "copilot-cred")
 
     # worker B sees the tombstone from Redis, no worker-local staleness, no DB read needed
-    tokens_b_after = await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"])
-    assert tokens_b_after == {}
+    connections_b_after = await aget_user_provider_credentials(prisma_client, cache_b, "user-a", ["copilot-cred"])
+    assert connections_b_after == {}
     assert table.find_many.await_count == 1
 
 
@@ -222,8 +270,8 @@ async def test_stale_fill_cannot_overwrite_a_disconnect_tombstone(monkeypatch):
     table.find_many = AsyncMock(side_effect=_read_while_disconnecting)
     prisma_client = _prisma(table)
 
-    await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
-    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
+    await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"])
+    assert await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
 
 
 @pytest.mark.asyncio
@@ -240,8 +288,8 @@ async def test_redis_read_failure_falls_back_to_the_database(monkeypatch):
     table.find_many = AsyncMock(return_value=[_row(credential_b64=upc._encode(payload))])
     prisma_client = _prisma(table)
 
-    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
-        "copilot-cred": "gho_secret"
+    assert await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
     }
 
 
@@ -259,8 +307,8 @@ async def test_redis_write_and_delete_failures_do_not_fail_the_request(monkeypat
     table.find_many = AsyncMock(return_value=[_row(credential_b64=upc._encode(payload))])
     prisma_client = _prisma(table)
 
-    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
-        "copilot-cred": "gho_secret"
+    assert await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
     }
     await invalidate_user_provider_credential_cache(cache, "user-a", "copilot-cred")
 
@@ -279,14 +327,14 @@ async def test_without_redis_no_worker_local_entries_are_kept():
     cache_a = DualCache()
     cache_b = DualCache()
 
-    assert await aget_user_provider_tokens(prisma_client, cache_a, "user-a", ["copilot-cred"]) == {
-        "copilot-cred": "gho_secret"
+    assert await aget_user_provider_credentials(prisma_client, cache_a, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
     }
-    assert await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"]) == {
-        "copilot-cred": "gho_secret"
+    assert await aget_user_provider_credentials(prisma_client, cache_b, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
     }
     await invalidate_user_provider_credential_cache(cache_b, "user-a", "copilot-cred")
-    assert await aget_user_provider_tokens(prisma_client, cache_a, "user-a", ["copilot-cred"]) == {}
+    assert await aget_user_provider_credentials(prisma_client, cache_a, "user-a", ["copilot-cred"]) == {}
     assert table.find_many.await_count == 3
 
 
@@ -306,8 +354,8 @@ async def test_connect_overwrites_a_not_connected_tombstone(monkeypatch):
     table = MagicMock()
     table.find_many = AsyncMock(return_value=[])
     prisma_client = _prisma(table)
-    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
-        "copilot-cred": "gho_secret"
+    assert await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
     }
     table.find_many.assert_not_awaited()
 
@@ -332,9 +380,9 @@ async def test_stale_not_connected_fill_cannot_overwrite_a_connect_write(monkeyp
     table.find_many = AsyncMock(side_effect=_read_while_connecting)
     prisma_client = _prisma(table)
 
-    await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
-    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
-        "copilot-cred": "gho_secret"
+    await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"])
+    assert await aget_user_provider_credentials(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
     }
 
 
@@ -391,7 +439,7 @@ async def test_reads_hit_the_writer_engine_not_a_stale_replica():
     prisma_client.db.litellm_userprovidercredentials = reader_table
     prisma_client.writer_db.litellm_userprovidercredentials = writer_table
 
-    await aget_user_provider_tokens(prisma_client, DualCache(), "user-a", ["copilot-cred"])
+    await aget_user_provider_credentials(prisma_client, DualCache(), "user-a", ["copilot-cred"])
 
     writer_table.find_many.assert_awaited_once()
     reader_table.find_many.assert_not_awaited()
