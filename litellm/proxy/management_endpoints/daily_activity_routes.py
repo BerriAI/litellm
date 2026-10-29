@@ -59,7 +59,6 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     UserActivityRow,
 )
 from litellm.types.repositories.daily_activity import (
-    DailyActivityTable,
     ExportRow,
     ExportType,
     KeyMetadataRow,
@@ -289,8 +288,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 include_guardrail_breakdown=resolver.include_guardrail_breakdown,
                 api_key_limit=api_key_limit,
             )
-            # PTU hours are a whole-team figure, so a team's per-tag breakdown carries none.
-            if resolver.entity != "team" or resolved.scope.table is not DailyActivityTable.TEAM:
+            if resolver.entity != "team":
                 return activity
             return with_ptu_consumption(activity, llm_router, single_team_id(resolved.scope.entity_ids))
         except HTTPException:
