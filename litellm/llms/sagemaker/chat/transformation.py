@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._models import Headers
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -37,6 +38,9 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_INFERENCE_COMPONENT_HEADER: Final = "X-Amzn-SageMaker-Inference-Component"
+_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 
 class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
     def __init__(self, **kwargs):
@@ -59,7 +63,12 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         inference_component_name: Final = optional_params.get("model_id")
         if not isinstance(inference_component_name, str):
             return headers
-        return {**headers, "X-Amzn-SageMaker-Inference-Component": inference_component_name}
+        other_headers: Final = {
+            name: value
+            for name, value in _HEADERS_ADAPTER.validate_python(headers).items()
+            if name.lower() != _INFERENCE_COMPONENT_HEADER.lower()
+        }
+        return {**other_headers, _INFERENCE_COMPONENT_HEADER: inference_component_name}
 
     def transform_request(
         self,

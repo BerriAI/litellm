@@ -646,6 +646,7 @@ _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CLIENTSIDE_PARAMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -4940,8 +4941,6 @@ class Router:
             if isinstance(raw_deployment_params, LiteLLM_Params)
             else raw_deployment_params
         )
-        if self._deployment_sets_litellm_param(deployment_context, "model_id"):
-            kwargs.pop("model_id", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
         deployment_provider: Final = (
@@ -5113,6 +5112,8 @@ class Router:
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        if self._deployment_pins_model_id(deployment_context):
+            kwargs.pop("model_id", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -6038,6 +6039,8 @@ class Router:
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
+            if self._deployment_pins_model_id(_LITELLM_PARAMS_ADAPTER.validate_python(data)):
+                kwargs.pop("model_id", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
 
             # call via litellm.completion()
             return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})
@@ -16248,6 +16251,15 @@ class Router:
             key
             for key in forwarded_keys
             if isinstance(key, str) and Router._deployment_sets_litellm_param(deployment_litellm_params, key)
+        )
+
+    @staticmethod
+    def _deployment_pins_model_id(deployment_litellm_params: Mapping[str, object]) -> bool:
+        clientside_params: Final = _CLIENTSIDE_PARAMS_ADAPTER.validate_python(
+            deployment_litellm_params.get("configurable_clientside_auth_params") or ()
+        )
+        return "model_id" not in clientside_params and Router._deployment_sets_litellm_param(
+            deployment_litellm_params, "model_id"
         )
 
     @staticmethod

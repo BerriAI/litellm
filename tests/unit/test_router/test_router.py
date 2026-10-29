@@ -31283,35 +31283,47 @@ _SAGEMAKER_ROUTER_CREDENTIALS: Final = MappingProxyType(
     {"aws_region_name": "us-east-1", "aws_access_key_id": "test-key", "aws_secret_access_key": "test-secret"}
 )
 
+_PINNED_COMPONENT: Final = MappingProxyType({"model_id": "deployment-component"})
+
 _INFERENCE_COMPONENT_PRECEDENCE: Final = pytest.mark.parametrize(
-    ("deployment_component", "sent_component"),
-    [("deployment-component", "deployment-component"), (None, "client-component")],
-    ids=["deployment_pins_the_component", "deployment_leaves_the_component_to_the_client"],
+    ("deployment_params", "sent_component"),
+    [
+        (_PINNED_COMPONENT, "deployment-component"),
+        (MappingProxyType({}), "client-component"),
+        (
+            MappingProxyType({**_PINNED_COMPONENT, "configurable_clientside_auth_params": ["model_id"]}),
+            "client-component",
+        ),
+    ],
+    ids=[
+        "deployment_pins_the_component",
+        "deployment_leaves_the_component_to_the_client",
+        "deployment_lets_the_client_override_its_component",
+    ],
 )
 
 
-def _sagemaker_router(model: str, deployment_component: str | None, mode: str) -> Router:
-    pinned_component: Final = {} if deployment_component is None else {"model_id": deployment_component}
+def _sagemaker_router(
+    model: str,
+    deployment_params: Mapping[str, object],
+    mode: str,
+    router_defaults: Mapping[str, str] = MappingProxyType({}),
+    model_name: str = "sagemaker-model",
+) -> Router:
     return Router(
         model_list=[
             {
-                "model_name": "sagemaker-model",
-                "litellm_params": {"model": model, **_SAGEMAKER_ROUTER_CREDENTIALS, **pinned_component},
+                "model_name": model_name,
+                "litellm_params": {"model": model, **_SAGEMAKER_ROUTER_CREDENTIALS, **deployment_params},
                 "model_info": {"mode": mode},
             }
-        ]
+        ],
+        default_litellm_params=dict(router_defaults),
     )
 
 
-@_INFERENCE_COMPONENT_PRECEDENCE
-@pytest.mark.asyncio
-async def test_a_client_model_id_cannot_move_a_sagemaker_chat_call_off_the_deployments_component(
-    respx_mock: respx.MockRouter,
-    _router_httpx_transport: None,
-    deployment_component: str | None,
-    sent_component: str,
-) -> None:
-    route: Final = respx_mock.post(
+def _sagemaker_chat_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(
         "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/chat-endpoint/invocations"
     ).respond(
         json={
@@ -31323,7 +31335,18 @@ async def test_a_client_model_id_cannot_move_a_sagemaker_chat_call_off_the_deplo
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
     )
-    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", deployment_component, "chat")
+
+
+@_INFERENCE_COMPONENT_PRECEDENCE
+@pytest.mark.asyncio
+async def test_a_client_model_id_cannot_move_a_sagemaker_chat_call_off_the_deployments_component(
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+    deployment_params: Mapping[str, object],
+    sent_component: str,
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", deployment_params, "chat")
 
     await router.acompletion(
         model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], model_id="client-component"
@@ -31333,9 +31356,73 @@ async def test_a_client_model_id_cannot_move_a_sagemaker_chat_call_off_the_deplo
 
 
 @_INFERENCE_COMPONENT_PRECEDENCE
+def test_a_client_model_id_cannot_move_a_sync_sagemaker_text_completion_off_the_deployments_component(
+    respx_mock: respx.MockRouter, deployment_params: Mapping[str, object], sent_component: str
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router(
+        "sagemaker_chat/chat-endpoint", deployment_params, "completion", model_name="sagemaker_chat/chat-endpoint"
+    )
+
+    router.text_completion(model="sagemaker_chat/chat-endpoint", prompt="hi", model_id="client-component")
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == sent_component
+
+
+@pytest.mark.parametrize(
+    "client_header",
+    [
+        MappingProxyType({"extra_headers": {"x-amzn-sagemaker-inference-component": "client-component"}}),
+        MappingProxyType({"headers": {"x-amzn-sagemaker-inference-component": "client-component"}}),
+        MappingProxyType(
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "sagemaker_chat",
+                    "extra_headers": {"x-amzn-sagemaker-inference-component": "client-component"},
+                }
+            }
+        ),
+    ],
+    ids=["extra_headers", "headers", "provider_specific_header"],
+)
+@pytest.mark.asyncio
+async def test_a_client_inference_component_header_cannot_move_a_pinned_sagemaker_chat_call(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None, client_header: Mapping[str, object]
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", _PINNED_COMPONENT, "chat")
+
+    await router.acompletion(model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], **client_header)
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == "deployment-component"
+
+
+@pytest.mark.parametrize(
+    "request_component",
+    [MappingProxyType({}), MappingProxyType({"model_id": "deployment-component"})],
+    ids=["request_without_model_id", "request_with_the_pinned_model_id"],
+)
+@pytest.mark.asyncio
+async def test_a_router_default_model_id_cannot_move_a_sagemaker_call_off_the_deployments_component(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None, request_component: Mapping[str, str]
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router(
+        "sagemaker_chat/chat-endpoint",
+        _PINNED_COMPONENT,
+        "chat",
+        router_defaults=MappingProxyType({"model_id": "default-component"}),
+    )
+
+    await router.acompletion(model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], **request_component)
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == "deployment-component"
+
+
+@_INFERENCE_COMPONENT_PRECEDENCE
 @pytest.mark.asyncio
 async def test_a_client_model_id_cannot_move_a_sagemaker_embedding_call_off_the_deployments_component(
-    deployment_component: str | None, sent_component: str
+    deployment_params: Mapping[str, object], sent_component: str
 ) -> None:
     component_embeddings: Final = MappingProxyType({"deployment-component": [0.1], "client-component": [0.2]})
 
@@ -31348,7 +31435,7 @@ async def test_a_client_model_id_cannot_move_a_sagemaker_embedding_call_off_the_
         }
 
     client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
-    router: Final = _sagemaker_router("sagemaker/openai/embed-endpoint", deployment_component, "embedding")
+    router: Final = _sagemaker_router("sagemaker/openai/embed-endpoint", deployment_params, "embedding")
 
     with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
         response: Final = await router.aembedding(model="sagemaker-model", input=["hello"], model_id="client-component")
