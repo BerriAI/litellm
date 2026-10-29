@@ -125,11 +125,16 @@ _USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 @with_config(ConfigDict(extra="allow", strict=True))
 class _AdminTeamAndKeyRows(TypedDict):
-    keys: ReadOnly[Sequence[Mapping[str, object]] | None]
-    teams: ReadOnly[Sequence[Mapping[str, object]] | None]
+    keys: ReadOnly[Sequence[object] | None]
+    teams: ReadOnly[Sequence[object] | None]
 
 
-_ADMIN_TEAM_AND_KEY_ROWS_ADAPTER: Final = TypeAdapter(list[_AdminTeamAndKeyRows])
+_ADMIN_TEAM_AND_KEY_ROWS_ADAPTER: Final = TypeAdapter(
+    list[_AdminTeamAndKeyRows], config=ConfigDict(hide_input_in_errors=True)
+)
+_ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 def _user_table(
@@ -1209,17 +1214,17 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
 
     verbose_proxy_logger.debug("results_keys: %s", results)
 
-    _keys_in_db: Final[Sequence[Mapping[str, object]]] = results[0]["keys"] or []
+    _keys_in_db: Final[Sequence[object]] = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db: Final = []
     for key in _keys_in_db:
-        key_payload = dict[str, object](key)
+        key_payload = _ADMIN_KEY_ROW_ADAPTER.validate_python(key)
         if key_payload.get("models") is None:
             key_payload["models"] = []
         keys_in_db.append(LiteLLM_VerificationToken.model_validate(key_payload))
 
     # cast all teams to LiteLLM_TeamTable
-    _teams_rows: Final[Sequence[Mapping[str, object]]] = results[0]["teams"] or []
+    _teams_rows: Final[Sequence[object]] = results[0]["teams"] or []
     _teams_in_db: Final = sorted(
         (LiteLLM_TeamTable.model_validate(team) for team in _teams_rows),
         key=lambda x: getattr(x, "team_alias", "") or "",

@@ -312,6 +312,16 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
 
         assert AnthropicMessagesHandler().get_streaming_string_so_far([chunk]) == "abcdef"
 
+    def test_malformed_delta_data_is_skipped_without_ending_the_text_scan(self):
+        text_delta = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "abc"}}
+        chunk = (
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+            "event: content_block_delta\ndata: {not json\n\n"
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+        ).encode()
+
+        assert AnthropicMessagesHandler().get_streaming_string_so_far([chunk]) == "abcabc"
+
     def test_off_schema_message_delta_does_not_hide_a_later_stop_reason(self):
         events = [
             {"type": "message_delta", "delta": None},

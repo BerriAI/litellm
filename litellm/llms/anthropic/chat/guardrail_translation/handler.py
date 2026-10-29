@@ -349,23 +349,23 @@ def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...
     )
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="ignore", strict=True))
 class _SSETextDelta(TypedDict, total=False):
     type: ReadOnly[object]
     text: ReadOnly[str]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="ignore", strict=True))
 class _SSETextDeltaEvent(TypedDict, total=False):
     delta: ReadOnly[_SSETextDelta]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="ignore", strict=True))
 class _SSEStopDelta(TypedDict, total=False):
     stop_reason: ReadOnly[object]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="ignore", strict=True))
 class _SSEStopDeltaEvent(TypedDict, total=False):
     delta: ReadOnly[_SSEStopDelta]
 
@@ -1819,11 +1819,11 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
                     try:
-                        data: _SSETextDeltaEvent = _SSE_TEXT_DELTA_EVENT.validate_python(json.loads(data_line))
+                        data: _SSETextDeltaEvent = _SSE_TEXT_DELTA_EVENT.validate_json(data_line)
                         delta: _SSETextDelta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
-                    except (json.JSONDecodeError, ValidationError):
+                    except ValidationError:
                         verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
 
         except Exception as e:
@@ -1882,12 +1882,12 @@ class AnthropicMessagesHandler(BaseTranslation):
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
                             try:
-                                data: _SSEStopDeltaEvent = _SSE_STOP_DELTA_EVENT.validate_python(json.loads(data_line))
+                                data: _SSEStopDeltaEvent = _SSE_STOP_DELTA_EVENT.validate_json(data_line)
                                 delta: _SSEStopDelta = data.get("delta", {})
                                 stop_reason: object = delta.get("stop_reason")
                                 if stop_reason is not None:
                                     return True
-                            except (json.JSONDecodeError, ValidationError):
+                            except ValidationError:
                                 verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
 
                 except Exception as e:

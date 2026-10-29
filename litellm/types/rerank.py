@@ -4,6 +4,7 @@ https://docs.cohere.com/reference/rerank
 
 """
 
+from collections.abc import Sequence
 from typing import Literal, overload
 
 from pydantic import ConfigDict, PrivateAttr
@@ -105,10 +106,22 @@ class RerankResponse(LiteLLMBaseModel):
     def __getitem__(self, key: Literal["meta"]) -> RerankResponseMeta | None: ...
 
     @overload
-    def __getitem__(self, key: str) -> object: ...
+    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None: ...
 
-    def __getitem__(self, key: str) -> object:
+    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None:
         return self.__dict__[key]
+
+    @overload
+    def get(self, key: Literal["id"], default: None = None) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["results"], default: None = None) -> list[RerankResponseResult] | None: ...
+
+    @overload
+    def get(self, key: Literal["meta"], default: None = None) -> RerankResponseMeta | None: ...
+
+    @overload
+    def get(self, key: str, default: object = None) -> object: ...
 
     def get(self, key: str, default: object = None) -> object:
         return self.__dict__.get(key, default)
