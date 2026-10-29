@@ -34,6 +34,7 @@ class GenAIOperation(str, Enum):
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
     LITELLM_RESPONSES_MANAGEMENT = "litellm.responses_management"
     LITELLM_MODERATION = "litellm.moderation"
+    LITELLM_PASSTHROUGH = "litellm.passthrough"
 
 
 class GenAIOutputType(str, Enum):
@@ -482,14 +483,21 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
     return mapped.value if mapped is not None else custom_llm_provider
 
 
-def resolve_operation(call_type: str | None) -> GenAIOperation:
+PASSTHROUGH_OPERATION_KEY: Final = "passthrough_gen_ai_operation"
+
+
+def resolve_operation(call_type: str | None, passthrough_operation: object = None) -> GenAIOperation:
     """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value.
 
     An unmapped call type still falls back to ``chat`` so every series keeps an
     operation label, but it logs at debug rather than falling through silently:
     a new call type mislabelled as ``chat`` mixes its latency and cost into
     everyone's chat charts, which is invisible until someone reads the numbers.
+
+    A pass-through call's operation, stored under ``PASSTHROUGH_OPERATION_KEY``, wins over its call type.
     """
+    if isinstance(passthrough_operation, GenAIOperation):
+        return passthrough_operation
     if not call_type:
         return GenAIOperation.CHAT
     mapped: Final = _OPERATION_BY_CALL_TYPE.get(call_type.lower())

@@ -363,6 +363,26 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    providers: Final = TestClient(app_instance).get("/public/providers/fields").json()
+
+    zerogpu: Final = next(p for p in providers if p["litellm_provider"] == "zerogpu")
+    fields_by_key: Final = {f["key"]: f for f in zerogpu["credential_fields"]}
+    placeholder: Final = zerogpu["default_model_placeholder"]
+    _, provider, _, api_base = get_llm_provider(model=placeholder)
+
+    assert provider == "zerogpu"
+    assert api_base == fields_by_key["api_base"]["placeholder"]
+    assert litellm.model_cost[placeholder]["litellm_provider"] == "zerogpu"
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
     app_instance = FastAPI()
     app_instance.include_router(router)
@@ -1119,6 +1139,25 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert chat["endpoint"] == "/chat/completions"
     assert chat["label"] == "Chat Completions"
     assert len(chat["providers"]) > 0
+
+
+def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses(
+    reset_endpoints_cache: None,
+) -> None:
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+    client: Final[TestClient] = TestClient(app)
+    with client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    streamlake_endpoints: Final = {
+        endpoint["key"]
+        for endpoint in response.json()["endpoints"]
+        if any(provider["slug"] == "streamlake" for provider in endpoint["providers"])
+    }
+    assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
+    assert "embeddings" not in streamlake_endpoints
 
 
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(

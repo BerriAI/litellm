@@ -95,6 +95,7 @@ ignored_function_names = [
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
     "_deployment_params_base_model",  # Tested through log_retry in test_router_helper_utils.py
     "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py
+    "_every_deployment_refused",  # Tested through the unsupported transcription retry tests in test_router.py
     "_routable_deployments",  # Tested through get_configured_service_tiers and get_routable_upstream_model in test_router.py
     "_async_get_available_deployment",  # Body of the `route {model}` phase wrapper, exercised through async_get_available_deployment in test_router.py
     "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
@@ -171,20 +172,28 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
+    "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
+    "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
+    "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
+    "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
+    "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
+    "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
+    "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
 ]
 
 
 def main():
     router_file = [
         "./litellm/router.py",
-        "./litellm/router_utils/batch_utils.py",
+        "./litellm/litellm_core_utils/batch_utils.py",
         "./litellm/router_utils/pattern_match_deployments.py",
     ]
     # router_file = [
     #     "../../litellm/router.py",
     #     "../../litellm/router_utils/pattern_match_deployments.py",
-    #     "../../litellm/router_utils/batch_utils.py",
+    #     "../../litellm/litellm_core_utils/batch_utils.py",
     # ]  ## LOCAL TESTING
     tests_dir = "./tests/"  # Update this path if your tests directory is located elsewhere
     # tests_dir = "../../tests/"  # LOCAL TESTING
