@@ -4377,6 +4377,27 @@ async def test_ProxyConfig__update_general_settings_ignores_a_stored_key_no_sett
     ]
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_warns_about_an_ignored_stored_key_the_config_file_also_sets(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {"enforce_user_param": False}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await pc._update_general_settings({"enforce_user_param": True})
+    from litellm.proxy import proxy_server
+
+    assert proxy_server.general_settings["enforce_user_param"] is False
+    warnings: Final = [record.getMessage() for record in caplog.records if "enforce_user_param" in record.getMessage()]
+    assert warnings == [
+        "general_settings.enforce_user_param is stored in the database, but no settings API manages it, so the "
+        "stored value is ignored. The config file's value applies. Remove the stored copy with POST "
+        "/config/field/delete."
+    ]
+
+
 def _paused_scheduler(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 

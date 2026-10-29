@@ -488,7 +488,7 @@ def test_settings_store_ignores_stored_keys_outside_its_managed_db_keys_and_stil
 
     assert dict(store) == {"enforce_user_param": True, "max_parallel_requests": 5}
     assert store.source("enforce_user_param") == "config"
-    assert store.unmanaged_db_keys() == ()
+    assert store.unmanaged_db_keys() == ("enforce_user_param",)
 
 
 def test_settings_store_managed_db_keys_leave_other_rows_and_unrestricted_stores_whole() -> None:

@@ -8502,8 +8502,11 @@ class ProxyConfig:
         for key in sorted(unmanaged - self._warned_unmanaged_keys):
             verbose_proxy_logger.warning(
                 "general_settings.%s is stored in the database, but no settings API manages it, so the stored value "
-                "is ignored. Set it in the config file to use it, or remove it with POST /config/field/delete.",
+                "is ignored. %s",
                 key,
+                "The config file's value applies. Remove the stored copy with POST /config/field/delete."
+                if self.settings.owned_by_config(key)
+                else "Set it in the config file to use it, or remove it with POST /config/field/delete.",
             )
         self._warned_unmanaged_keys = unmanaged
 
@@ -20651,7 +20654,8 @@ async def delete_config_general_settings(
             detail={"error": f"Invalid field={data.field_name} passed in."},
         )
 
-    proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
+    if data.field_name in _db_managed_general_settings_keys():
+        proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
 
     if db_general_settings is None or db_general_settings.param_value is None:
         raise HTTPException(
