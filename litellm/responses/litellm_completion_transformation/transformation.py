@@ -321,7 +321,7 @@ def _responses_file_part(item: Mapping[str, object]) -> _ResponsesFilePart:
     )
 
 
-def _decode_responses_media(item: Mapping[str, object]) -> _ResponsesMediaPart | None:
+def decode_responses_media(item: Mapping[str, object]) -> _ResponsesMediaPart | None:
     kind: Final = item.get("type")
     if kind in ("input_image", "image_url", "computer_screenshot") and any(key in item for key in ("image_url", "url")):
         image: Final = _responses_image_part(item)
@@ -381,6 +381,52 @@ def _attribute_fields(value: object) -> dict[str, object]:
     if not hasattr(value, "__dict__"):
         return {}
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
+
+
+def tool_output_to_chat_content(
+    output: object,
+) -> str | list[ToolMessageContentPart]:
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        return output
+
+    single_media: Final = decode_responses_media(output) if isinstance(output, Mapping) else None
+    if single_media is not None:
+        return [single_media]
+    if isinstance(output, list):
+        normalized_blocks: Final[list[ToolMessageContentPart]] = []
+        text_acc: Final[list[str]] = []
+        for part in output:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type in ("input_text", "output_text", "text"):
+                txt = part.get("text")
+                if isinstance(txt, str) and txt:
+                    text_acc.append(txt)
+                    normalized_blocks.append({"type": "text", "text": txt})
+            elif (media := decode_responses_media(part)) is not None:
+                normalized_blocks.append(media)
+
+        if any(b.get("type") != "text" for b in normalized_blocks):
+            return normalized_blocks
+        if text_acc:
+            return "".join(text_acc)
+        try:
+            return json.dumps(output)
+        except Exception:
+            return str(output)
+
+    try:
+        return json.dumps(output)
+    except Exception:
+        return str(output)
+
+
+TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
+    {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
+)
 
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
@@ -2371,12 +2417,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Check if the input item is a tool call output
         """
-        return input_item.get("type") in [
-            "function_call_output",
-            "custom_tool_call_output",
-            "computer_call_output",
-            "tool_result",  # Anthropic/MCP format
-        ]
+        return input_item.get("type") in TOOL_CALL_OUTPUT_ITEM_TYPES
 
     @staticmethod
     def _is_input_item_function_call(input_item: Mapping[str, object]) -> bool:
@@ -2400,58 +2441,7 @@ class LiteLLMCompletionResponsesConfig:
         if not call_id:
             return []
 
-        def _normalize_function_call_output_to_tool_content(
-            output: object,
-        ) -> str | list[ToolMessageContentPart]:
-            """
-            Preserve structured media for downstream chat adapters and token estimation.
-            Text-only outputs retain their existing string representation.
-            """
-            if output is None:
-                return ""
-            if isinstance(output, str):
-                return output
-
-            single_media: Final = _decode_responses_media(output) if isinstance(output, Mapping) else None
-            if single_media is not None:
-                return [single_media]
-            # Some adapters represent tool output as a list of "input_*" parts
-            if isinstance(output, list):
-                normalized_blocks: Final[list[ToolMessageContentPart]] = []
-                text_acc: Final[list[str]] = []
-                for part in output:
-                    if not isinstance(part, dict):
-                        continue
-                    part_type = part.get("type")
-                    if part_type in ("input_text", "output_text", "text"):
-                        txt = part.get("text")
-                        if isinstance(txt, str) and txt:
-                            text_acc.append(txt)
-                            normalized_blocks.append({"type": "text", "text": txt})
-                    elif (media := _decode_responses_media(part)) is not None:
-                        normalized_blocks.append(media)
-
-                if any(b.get("type") != "text" for b in normalized_blocks):
-                    return normalized_blocks
-                if text_acc:
-                    return "".join(text_acc)
-                try:
-                    # last resort: keep something meaningful for providers that require a string
-                    import json as _json
-
-                    return _json.dumps(output)
-                except Exception:
-                    return str(output)
-
-            # Fallback for dict/number/etc.
-            try:
-                import json as _json
-
-                return _json.dumps(output)
-            except Exception:
-                return str(output)
-
-        tool_content: Final = _normalize_function_call_output_to_tool_content(tool_call_output.get("output"))
+        tool_content: Final = tool_output_to_chat_content(tool_call_output.get("output"))
         output_cache_control: Final = _input_item_cache_control(tool_call_output)
         tool_output_message: Final = (
             ChatCompletionToolMessage(role="tool", content=tool_content, tool_call_id=str(call_id))
@@ -2606,7 +2596,7 @@ class LiteLLMCompletionResponsesConfig:
                     content_list.append(item)
                 elif isinstance(item, dict):
                     if (
-                        media := _decode_responses_media(
+                        media := decode_responses_media(
                             fields := _validate_responses_media(_STR_KEY_DICT_ADAPTER, item)
                         )
                     ) is not None:
@@ -3565,7 +3555,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif choice.message.content is not None:
+            elif choice.message.content is not None or getattr(choice.message, "annotations", None):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3639,13 +3629,13 @@ class LiteLLMCompletionResponsesConfig:
 
         return OutputText(
             type="output_text",
-            text=message.content,
+            text=message.content or "",
             annotations=transformed_annotations,
         )
 
     @staticmethod
     def transform_chat_completion_annotations_to_response_output_annotations(
-        annotations: list[ChatCompletionAnnotation] | None,
+        annotations: Sequence[ChatCompletionAnnotation] | None,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
         response_output_annotations: Final[list[GenericResponseOutputItemContentAnnotation]] = []
 

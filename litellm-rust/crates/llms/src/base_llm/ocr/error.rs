@@ -59,6 +59,10 @@ pub enum Error {
     Pages(PagesFault),
     #[error("invalid OCR features")]
     Features,
+    #[error(
+        "invalid OCR outputContentFormat, expected text or markdown. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    OutputContentFormat,
     #[error("OCR model cannot be a dot segment")]
     DotModel,
     #[error("OCR response exceeds the size limit of {limit} bytes")]
@@ -200,6 +204,7 @@ impl Error {
             | Self::InlineDocumentTooLarge
             | Self::Pages(_)
             | Self::Features
+            | Self::OutputContentFormat
             | Self::DotModel
             | Self::TooLarge { .. }
             | Self::ResponseField { .. }
@@ -242,6 +247,7 @@ impl Error {
             | Self::InlineDocumentTooLarge
             | Self::Pages(_)
             | Self::Features
+            | Self::OutputContentFormat
             | Self::DotModel
             | Self::TooLarge { .. }
             | Self::ResponseField { .. }
@@ -291,6 +297,7 @@ impl Error {
             | Self::InlineDocumentTooLarge
             | Self::Pages(_)
             | Self::Features
+            | Self::OutputContentFormat
             | Self::DotModel
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
@@ -345,6 +352,7 @@ impl Error {
             | Self::InlineDocumentTooLarge
             | Self::Pages(_)
             | Self::Features
+            | Self::OutputContentFormat
             | Self::DotModel
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
