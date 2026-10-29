@@ -24,12 +24,13 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.config_sync_pubsub import publish_model_rows_written
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     model_access_group_cache_key,
     model_access_group_registry_cache_key,
 )
-from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 
 # Clear cache and reload models to pick up the access group changes
@@ -117,6 +118,17 @@ class _ModelTableClient(Protocol):
     async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
+class _ModelTableBatchActions(Protocol):
+    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _ModelTableBatch(Protocol):
+    @property
+    def litellm_proxymodeltable(self) -> _ModelTableBatchActions: ...
+
+    async def commit(self) -> None: ...
+
+
 class _BudgetRow(Protocol):
     @property
     def budget_id(self) -> str: ...
@@ -170,6 +182,10 @@ class _ModelAccessGroupBudgetTableClient(Protocol):
 
 def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
     return ModelRepository(WriterPinnedClient(prisma_client.db)).table
+
+
+def _model_table_batch(prisma_client: PrismaClient) -> _ModelTableBatch:
+    return writer_wrapper(prisma_client.db).batch_()
 
 
 def _model_access_group_budget_table(prisma_client: PrismaClient) -> _ModelAccessGroupBudgetTableClient:
@@ -380,11 +396,10 @@ async def _tag_deployment_with_access_group(
     """Write `access_group` into one deployment's model_info; returns the
     (model_id, updated model_info) pair when a write happened, None when the
     deployment already carried the group."""
-    updated_model_info, was_modified = add_access_group_to_deployment(
-        model_info=dict(_readable_model_info_or_raise(model_id=model_id, model_info=model_info)),
-        access_group=access_group,
+    updated_model_info: Final = _model_info_with_access_group(
+        model_id=model_id, model_info=model_info, access_group=access_group
     )
-    if not was_modified:
+    if updated_model_info is None:
         return None
     await _model_table(prisma_client).update(
         where={"model_id": model_id},
@@ -392,6 +407,63 @@ async def _tag_deployment_with_access_group(
     )
     verbose_proxy_logger.debug("Updated deployment %s with access group: %s", model_id, access_group)
     return (model_id, updated_model_info)
+
+
+def _model_info_with_access_group(model_id: str, model_info: object, access_group: str) -> Mapping[str, object] | None:
+    updated_model_info, was_modified = add_access_group_to_deployment(
+        model_info=dict(_readable_model_info_or_raise(model_id=model_id, model_info=model_info)),
+        access_group=access_group,
+    )
+    return updated_model_info if was_modified else None
+
+
+def _model_info_without_access_group(
+    model_id: str, model_info: object, access_group: str
+) -> Mapping[str, object] | None:
+    updated_model_info, was_modified = remove_access_group_from_deployment(
+        model_info=dict(_readable_model_info_or_raise(model_id=model_id, model_info=model_info)),
+        access_group=access_group,
+    )
+    return updated_model_info if was_modified else None
+
+
+def _membership_rewrite(deployment: _DeploymentRow, selected: bool, access_group: str) -> Mapping[str, object] | None:
+    if selected:
+        return _model_info_with_access_group(
+            model_id=deployment.model_id, model_info=deployment.model_info, access_group=access_group
+        )
+    return _model_info_without_access_group(
+        model_id=deployment.model_id, model_info=deployment.model_info, access_group=access_group
+    )
+
+
+def _membership_rewrites(
+    deployments: Sequence[_DeploymentRow], selected_model_ids: frozenset[str], access_group: str
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    rewrites: Final = (
+        (
+            deployment.model_id,
+            _membership_rewrite(
+                deployment=deployment,
+                selected=deployment.model_id in selected_model_ids,
+                access_group=access_group,
+            ),
+        )
+        for deployment in deployments
+    )
+    return tuple((model_id, model_info) for model_id, model_info in rewrites if model_info is not None)
+
+
+async def _commit_model_infos_together(
+    prisma_client: PrismaClient, rewrites: Sequence[tuple[str, Mapping[str, object]]]
+) -> None:
+    if not rewrites:
+        return
+    batch: Final = _model_table_batch(prisma_client)
+    for model_id, model_info in rewrites:
+        batch.litellm_proxymodeltable.update(where={"model_id": model_id}, data={"model_info": json.dumps(model_info)})
+    await batch.commit()
+    await publish_model_rows_written(tuple(model_id for model_id, _ in rewrites))
 
 
 def _readable_model_info_or_raise(model_id: str, model_info: object) -> Mapping[str, object]:
@@ -413,11 +485,10 @@ async def _strip_access_group_from_deployment(
     """Remove `access_group` from one deployment's model_info; returns the
     (model_id, updated model_info) pair when a write happened, None when the
     deployment did not carry the group."""
-    updated_model_info, was_modified = remove_access_group_from_deployment(
-        model_info=dict(_readable_model_info_or_raise(model_id=model_id, model_info=model_info)),
-        access_group=access_group,
+    updated_model_info: Final = _model_info_without_access_group(
+        model_id=model_id, model_info=model_info, access_group=access_group
     )
-    if not was_modified:
+    if updated_model_info is None:
         return None
     await _model_table(prisma_client).update(
         where={"model_id": model_id},
@@ -909,7 +980,18 @@ async def update_access_group(
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
 
-    use_model_ids: Final = has_model_ids
+    if not has_model_ids and has_model_names:
+        assert data.model_names is not None
+        missing_models: Final = await _missing_models_after_read_through(
+            model_names=data.model_names,
+            llm_router=llm_router,
+        )
+
+        if missing_models:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Model(s) not found: {', '.join(missing_models)}"},
+            )
 
     try:
         all_deployments: Final = await _model_table(prisma_client).find_many()
@@ -924,47 +1006,15 @@ async def update_access_group(
             detail={"error": f"Access group '{access_group}' not found"},
         )
 
-    # Validation: Check if all new models exist (only if using model_names path)
-    if not use_model_ids and has_model_names:
-        assert data.model_names is not None
-        missing_models: Final = await _missing_models_after_read_through(
-            model_names=data.model_names,
-            llm_router=llm_router,
-        )
-
-        if missing_models:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Model(s) not found: {', '.join(missing_models)}"},
-            )
-
     selected_deployments: Final = _selected_deployments_or_400(deployments=all_deployments, data=data)
-    selected_model_ids: Final = frozenset(deployment.model_id for deployment in selected_deployments)
-    unselected_deployments: Final = tuple(
-        deployment for deployment in all_deployments if deployment.model_id not in selected_model_ids
-    )
 
     try:
-        stripped: Final = [
-            await _strip_access_group_from_deployment(
-                model_id=deployment.model_id,
-                model_info=deployment.model_info,
-                access_group=access_group,
-                prisma_client=prisma_client,
-            )
-            for deployment in unselected_deployments
-        ]
-        stripped_pairs: Final = tuple(pair for pair in stripped if pair is not None)
-        tagged: Final = [
-            await _tag_deployment_with_access_group(
-                model_id=deployment.model_id,
-                model_info=deployment.model_info,
-                access_group=access_group,
-                prisma_client=prisma_client,
-            )
-            for deployment in selected_deployments
-        ]
-        updated_pairs: Final = tuple(pair for pair in tagged if pair is not None)
+        rewrites: Final = _membership_rewrites(
+            deployments=all_deployments,
+            selected_model_ids=frozenset(deployment.model_id for deployment in selected_deployments),
+            access_group=access_group,
+        )
+        await _commit_model_infos_together(prisma_client=prisma_client, rewrites=rewrites)
         models_updated: Final = len(selected_deployments)
 
         # Clear cache and reload models to pick up the access group changes
@@ -972,7 +1022,7 @@ async def update_access_group(
         reload_outcome: Final = await clear_cache()
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
-            written_models=list({**dict(stripped_pairs), **dict(updated_pairs)}.items()),
+            written_models=rewrites,
             access_group=access_group,
             still_desired=reload_outcome.still_desired,
             live_after=reload_outcome.live_after,

@@ -170,6 +170,10 @@ async def publish_config_change_for_object_type(object_type: str, model_ids: tup
     await publish_config_change(redis_cache=coordination_redis_cache(), object_type=object_type, model_ids=model_ids)
 
 
+async def publish_model_rows_written(model_ids: tuple[str, ...]) -> None:
+    await publish_config_change_for_object_type(_MODEL_TABLE_NAME, model_ids)
+
+
 async def publish_config_param_change(param_name: str) -> None:
     if param_name not in _RESYNC_APPLIED_CONFIG_PARAM_NAMES:
         verbose_proxy_logger.debug(
