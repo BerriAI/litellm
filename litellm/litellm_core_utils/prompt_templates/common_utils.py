@@ -17,7 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 
 import litellm
 from litellm import verbose_logger
@@ -2108,6 +2108,68 @@ def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
         key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
     }
     return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
+OPENAI_DEFAULT_PROMPT_CACHE_TTL: Final = "30m"
+
+
+@with_config(ConfigDict(extra="forbid"))
+class _ExactPromptCacheBreakpoint(PromptCacheBreakpoint):
+    pass
+
+
+_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(_ExactPromptCacheBreakpoint)
+
+
+@dataclass(frozen=True, slots=True)
+class MalformedPromptCacheBreakpoint:
+    marker: object
+
+
+def _prompt_cache_breakpoint_of(block: object) -> object:
+    if not isinstance(block, Mapping):
+        return None
+    return _BREAKPOINT_FIELDS.validate_python(block).get("prompt_cache_breakpoint")
+
+
+def has_prompt_cache_breakpoint_part(message: Mapping[str, object]) -> bool:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(_prompt_cache_breakpoint_of(part) is not None for part in _BREAKPOINT_BLOCKS.validate_python(content))
+
+
+def _part_with_cache_control(part: object, drop_params: bool) -> object:
+    marker: Final = _prompt_cache_breakpoint_of(part)
+    if marker is None:
+        return part
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(part)
+    unmarked: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    try:
+        ttl: Final = _PROMPT_CACHE_BREAKPOINT.validate_python(marker).get("ttl", OPENAI_DEFAULT_PROMPT_CACHE_TTL)
+    except ValidationError:
+        return unmarked if drop_params else MalformedPromptCacheBreakpoint(marker)
+    if fields.get("cache_control") is not None:
+        return unmarked
+    return {**unmarked, "cache_control": {"type": "ephemeral", "ttl": ttl}}
+
+
+def prompt_cache_breakpoints_as_cache_control(
+    message: _MarkedT, drop_params: bool
+) -> _MarkedT | MalformedPromptCacheBreakpoint:
+    """OpenAI's ``prompt_cache_breakpoint`` on each content part rewritten as Anthropic's ``cache_control`` with the
+    marker's ttl, or OpenAI's default 30m. A ``cache_control`` already on the part wins. A malformed marker is dropped
+    under ``drop_params`` and returned otherwise."""
+    if not has_prompt_cache_breakpoint_part(message):
+        return message
+    parts: Final = [
+        _part_with_cache_control(part, drop_params)
+        for part in _BREAKPOINT_BLOCKS.validate_python(message.get("content"))
+    ]
+    malformed: Final = next((part for part in parts if isinstance(part, MalformedPromptCacheBreakpoint)), None)
+    if malformed is not None:
+        return malformed
+    return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its part markers rewritten
 
 
 LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(

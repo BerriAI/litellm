@@ -661,3 +661,40 @@ async def test_cache_rejected_on_a_resume_hop_is_not_sent_again(
     sent: Final = [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls]
     assert sent == ["cachedContents/deleted", "cachedContents/deleted", "cachedContents/fresh"]
     assert list_route.call_count == 2
+
+
+def _prompt_cache_breakpoint_messages() -> list:
+    text: Final = "shared cacheable prefix " * _PREFIX_REPEATS
+    return [
+        {"role": "system", "content": [{"type": "text", "text": text, "prompt_cache_breakpoint": {"mode": "explicit"}}]},
+        {"role": "user", "content": "question"},
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_cache_from_a_prompt_cache_breakpoint_is_replaced_when_generate_content_rejects_it(
+    respx_mock: respx.MockRouter,
+    fake_provider_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    stream: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.get(url__regex=r".*/cachedContents.*").mock(return_value=httpx.Response(200, json={}))
+    respx_mock.post(url__regex=r".*/cachedContents$").mock(
+        side_effect=[
+            httpx.Response(200, json=_created("cachedContents/deleted", _FAR_FUTURE)),
+            httpx.Response(200, json=_created("cachedContents/fresh", _FAR_FUTURE)),
+        ]
+    )
+    generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
+        side_effect=[_generated(stream), _rejected(404, "CachedContent not found"), _generated(stream)]
+    )
+
+    assert await _complete(sync_mode, stream, messages=_prompt_cache_breakpoint_messages()) == "ok"
+    assert await _complete(sync_mode, stream, messages=_prompt_cache_breakpoint_messages()) == "ok"
+
+    sent: Final = [json.loads(call.request.content)["cachedContent"] for call in generate_route.calls]
+    assert sent == ["cachedContents/deleted", "cachedContents/deleted", "cachedContents/fresh"]

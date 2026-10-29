@@ -2,15 +2,17 @@
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from typing import Final
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import httpx
 import pytest
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.context_caching.known_cached_contents import known_cached_contents
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -485,3 +487,171 @@ def test_image_only_user_content_logs_the_blank_text_fixup_at_debug(caplog: pyte
     fixups: Final = tuple(r for r in caplog.records if "No text in user content" in r.getMessage())
     assert tuple(r.levelno for r in fixups) == (logging.DEBUG,)
     assert contents[0]["parts"][-1] == {"text": " "}
+
+
+_BREAKPOINT_MODEL: Final = "gemini/gemini-2.5-flash"
+_BREAKPOINT_CACHE_NAME: Final = "cachedContents/prompt-cache-breakpoint"
+_REFERENCE_DOCUMENT: Final = "Section watch: the watchlist feature tracks companies. " * 600
+_CREATED_CACHE: Final = {
+    "name": _BREAKPOINT_CACHE_NAME,
+    "model": "models/gemini-2.5-flash",
+    "expireTime": "2099-01-01T00:00:00Z",
+}
+_GENERATED: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "Section watch"}]}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 4000, "candidatesTokenCount": 2, "totalTokenCount": 4002},
+}
+_MALFORMED_BREAKPOINTS: Final = (
+    {"mode": "implicit"},
+    {"mode": "explicit", "ttl": "1h"},
+    {"mode": "explicit", "tll": "12h"},
+    {"ttl": "30m"},
+    {},
+    "explicit",
+)
+
+
+@pytest.fixture
+def forget_known_cached_contents():
+    known_cached_contents.clear()
+    yield
+    known_cached_contents.clear()
+
+
+def _url(args: tuple[object, ...], kwargs: Mapping[str, object]) -> str:
+    return str(kwargs.get("url", args[0] if args else ""))
+
+
+def _listed_caches(*args: object, **kwargs: object) -> httpx.Response:
+    return httpx.Response(200, json={"cachedContents": []}, request=httpx.Request("GET", _url(args, kwargs)))
+
+
+def _gemini_answer(*args: object, **kwargs: object) -> httpx.Response:
+    url: Final = _url(args, kwargs)
+    payload: Final = _CREATED_CACHE if "cachedContents" in url else _GENERATED
+    return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+
+def _fake_gemini(spec: type[HTTPHandler] | type[AsyncHTTPHandler]) -> MagicMock:
+    client: Final = MagicMock(spec=spec)
+    client.get.side_effect = _listed_caches
+    client.post.side_effect = _gemini_answer
+    return client
+
+
+def _reference_messages(**marks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": _REFERENCE_DOCUMENT, **marks}]},
+        {"role": "user", "content": "Which section mentions watchlists? One line."},
+    ]
+
+
+async def _complete_with(
+    client: MagicMock, sync_mode: bool, messages: list[dict[str, object]], **params: object
+) -> None:
+    request: Final = {"model": _BREAKPOINT_MODEL, "messages": messages, "api_key": "fake-key", "client": client}
+    if sync_mode:
+        litellm.completion(**request, **params)
+    else:
+        await litellm.acompletion(**request, **params)
+
+
+async def _sent_bodies(sync_mode: bool, messages: list[dict[str, object]], **params: object) -> dict[str, dict]:
+    client: Final = _fake_gemini(HTTPHandler if sync_mode else AsyncHTTPHandler)
+    await _complete_with(client, sync_mode, messages, **params)
+    return {
+        "cache" if "cachedContents" in _url(call.args, call.kwargs) else "generate": (
+            call.kwargs["json"] if "json" in call.kwargs else json.loads(call.kwargs["data"])
+        )
+        for call in client.post.call_args_list
+    }
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "breakpoint_ttl, gemini_ttl",
+    [({}, "1800s"), ({"ttl": "30m"}, "1800s"), ({"ttl": "12h"}, "43200s")],
+)
+@pytest.mark.asyncio
+async def test_a_prompt_cache_breakpoint_part_is_moved_into_a_gemini_cache_for_the_marker_ttl(
+    sync_mode, breakpoint_ttl, gemini_ttl
+):
+    sent: Final = await _sent_bodies(
+        sync_mode, _reference_messages(prompt_cache_breakpoint={"mode": "explicit", **breakpoint_ttl})
+    )
+
+    assert sent["cache"]["ttl"] == gemini_ttl
+    assert _REFERENCE_DOCUMENT in json.dumps(sent["cache"])
+    assert sent["generate"]["cachedContent"] == _BREAKPOINT_CACHE_NAME
+    assert _REFERENCE_DOCUMENT not in json.dumps(sent["generate"])
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_prompt_cache_breakpoint_part_creates_the_same_cache_as_the_equivalent_cache_control(sync_mode):
+    marked: Final = await _sent_bodies(
+        sync_mode, _reference_messages(prompt_cache_breakpoint={"mode": "explicit", "ttl": "12h"})
+    )
+    known_cached_contents.clear()
+    controlled: Final = await _sent_bodies(
+        sync_mode, _reference_messages(cache_control={"type": "ephemeral", "ttl": "12h"})
+    )
+
+    assert marked == controlled
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.asyncio
+async def test_cache_control_on_a_prompt_cache_breakpoint_part_keeps_its_own_ttl():
+    sent: Final = await _sent_bodies(
+        True,
+        _reference_messages(
+            cache_control={"type": "ephemeral", "ttl": "1h"},
+            prompt_cache_breakpoint={"mode": "explicit", "ttl": "12h"},
+        ),
+    )
+
+    assert sent["cache"]["ttl"] == "3600s"
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("marker", _MALFORMED_BREAKPOINTS)
+@pytest.mark.asyncio
+async def test_a_malformed_prompt_cache_breakpoint_is_a_400_before_anything_reaches_gemini(sync_mode, marker):
+    client: Final = _fake_gemini(HTTPHandler if sync_mode else AsyncHTTPHandler)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _complete_with(client, sync_mode, _reference_messages(prompt_cache_breakpoint=marker))
+
+    assert error.value.status_code == 400
+    assert "prompt_cache_breakpoint" in str(error.value)
+    client.get.assert_not_called()
+    client.post.assert_not_called()
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("marker", _MALFORMED_BREAKPOINTS)
+@pytest.mark.asyncio
+async def test_drop_params_sends_a_malformed_prompt_cache_breakpoint_part_uncached(sync_mode, marker):
+    sent: Final = await _sent_bodies(sync_mode, _reference_messages(prompt_cache_breakpoint=marker), drop_params=True)
+
+    assert list(sent) == ["generate"]
+    assert "cachedContent" not in sent["generate"]
+    assert _REFERENCE_DOCUMENT in json.dumps(sent["generate"])
+
+
+@pytest.mark.usefixtures("forget_known_cached_contents")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_global_drop_params_sends_a_malformed_prompt_cache_breakpoint_part_uncached(sync_mode, monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    sent: Final = await _sent_bodies(sync_mode, _reference_messages(prompt_cache_breakpoint={"mode": "implicit"}))
+
+    assert list(sent) == ["generate"]
+    assert "cachedContent" not in sent["generate"]
+    assert _REFERENCE_DOCUMENT in json.dumps(sent["generate"])

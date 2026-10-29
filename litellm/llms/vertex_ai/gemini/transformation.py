@@ -17,11 +17,14 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    MalformedPromptCacheBreakpoint,
     get_image_mime_type_from_url,
+    prompt_cache_breakpoints_as_cache_control,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
@@ -1241,6 +1244,27 @@ def transform_request_body(
 _transform_request_body = transform_request_body
 
 
+def _with_prompt_cache_breakpoints_as_cache_control(
+    messages: Sequence[AllMessageValues], model: str, custom_llm_provider: str, litellm_params: Mapping[str, object]
+) -> tuple[AllMessageValues, ...]:
+    drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+    remarked: Final = tuple(prompt_cache_breakpoints_as_cache_control(message, drop_params) for message in messages)
+    malformed: Final = next(
+        (message for message in remarked if isinstance(message, MalformedPromptCacheBreakpoint)), None
+    )
+    if malformed is not None:
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} does not support prompt_cache_breakpoint={malformed.marker!r}: expected "
+                '{"mode": "explicit"} with an optional ttl of "30m" or "12h". '
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    return tuple(message for message in remarked if not isinstance(message, MalformedPromptCacheBreakpoint))
+
+
 def sync_transform_request_body(
     gemini_api_key: str | None,
     messages: list[AllMessageValues],
@@ -1266,7 +1290,14 @@ def sync_transform_request_body(
         optional_params,
         cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
-        messages=messages,
+        messages=list(
+            _with_prompt_cache_breakpoints_as_cache_control(
+                messages,
+                model,
+                custom_llm_provider,
+                cast(Mapping[str, object], litellm_params),  # cast-ok: untyped shared signature
+            )
+        ),
         optional_params=optional_params,
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
@@ -1400,7 +1431,14 @@ async def async_transform_request_body(
         optional_params,
         cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
-        messages=messages,
+        messages=list(
+            _with_prompt_cache_breakpoints_as_cache_control(
+                messages,
+                model,
+                custom_llm_provider,
+                cast(Mapping[str, object], litellm_params),  # cast-ok: untyped shared signature
+            )
+        ),
         optional_params=optional_params,
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
