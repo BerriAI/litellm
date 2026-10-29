@@ -6505,6 +6505,19 @@ class _ExchangeChatToolCall(BaseModel):
     function: _ExchangeFunction
 
 
+class _ExchangeCustomInput(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    input: str = ""
+
+
+class _ExchangeChatCustomToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    custom: _ExchangeCustomInput
+
+
 class _ExchangeToolUse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -6522,7 +6535,9 @@ class _ExchangeToolResult(BaseModel):
 
 _EXCHANGE_PARTS: Final = TypeAdapter(tuple[object, ...])
 _EXCHANGE_TEXT_BLOCK: Final = TypeAdapter(_ExchangeTextBlock)
-_EXCHANGE_CHAT_TOOL_CALL: Final = TypeAdapter(_ExchangeChatToolCall)
+_EXCHANGE_CHAT_TOOL_CALL: Final[TypeAdapter[_ExchangeChatToolCall | _ExchangeChatCustomToolCall]] = TypeAdapter(
+    _ExchangeChatToolCall | _ExchangeChatCustomToolCall
+)
 _EXCHANGE_FUNCTION: Final = TypeAdapter(_ExchangeFunction)
 _EXCHANGE_BLOCK: Final[TypeAdapter[_ExchangeToolUse | _ExchangeToolResult]] = TypeAdapter(
     _ExchangeToolUse | _ExchangeToolResult
@@ -6560,6 +6575,14 @@ def _call_text(function: _ExchangeFunction) -> str:
     return f"{function.name}({arguments})"
 
 
+def _chat_call_text(call: _ExchangeChatToolCall | _ExchangeChatCustomToolCall) -> str:
+    match call:
+        case _ExchangeChatToolCall(function=function):
+            return _call_text(function)
+        case _ExchangeChatCustomToolCall(custom=custom):
+            return _call_text(_ExchangeFunction(name=custom.name, arguments=custom.input))
+
+
 def _block_exchange(part: object) -> tuple[ToolExchangeKind, str] | None:
     match _validated_or_none(_EXCHANGE_BLOCK, part):
         case _ExchangeToolUse(name=name, input=arguments):
@@ -6577,9 +6600,9 @@ def tool_exchange_texts(message: Mapping[str, object]) -> tuple[tuple[ToolExchan
     Chat completions puts calls on an assistant turn's `tool_calls` and each result on its own `tool` role,
     while Anthropic Messages puts both inside content blocks, `tool_use` on the assistant turn and
     `tool_result` on the next user turn, so this reads both places. The legacy `function_call` field and
-    `function` role, Anthropic's server tool calls, and its MCP tool blocks read the same way, while server tool
-    results such as `web_search_tool_result` are not read. Responses API input reaches callers already resolved
-    to the chat-completions shape by `resolve_structured_messages`.
+    `function` role, chat `custom` tool calls, Anthropic's server tool calls, and its MCP tool blocks read the
+    same way, while server tool results such as `web_search_tool_result` are not read. Responses API input
+    reaches callers already resolved to the chat-completions shape by `resolve_structured_messages`.
     """
     if message.get("role") in ("tool", "function"):
         result: Final = _exchange_content_text(message.get("content"))
@@ -6588,7 +6611,7 @@ def tool_exchange_texts(message: Mapping[str, object]) -> tuple[tuple[ToolExchan
         exchange for part in _exchange_parts(message.get("content")) if (exchange := _block_exchange(part)) is not None
     )
     chat_calls: Final[tuple[tuple[ToolExchangeKind, str], ...]] = tuple(
-        ("tool call", _call_text(call.function))
+        ("tool call", _chat_call_text(call))
         for part in _exchange_parts(message.get("tool_calls"))
         if (call := _validated_or_none(_EXCHANGE_CHAT_TOOL_CALL, part)) is not None
     )

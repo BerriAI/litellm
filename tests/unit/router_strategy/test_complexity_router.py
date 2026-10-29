@@ -11858,6 +11858,81 @@ class TestAgentProgressReachesClassifier:
         assert held_decision.get("classifier_model") == (ask_decision.get("classifier_model") if include_tool_turns else None)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "items",
+        [
+            pytest.param(
+                [
+                    {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": '{"path": "TASK.md"}'},
+                    {"type": "function_call_output", "call_id": "call_1", "output": _TASK_FILE},
+                ],
+                id="function_call",
+            ),
+            pytest.param(
+                [
+                    {"type": "custom_tool_call", "call_id": "call_1", "name": "read_file", "input": "TASK.md"},
+                    {"type": "custom_tool_call_output", "call_id": "call_1", "output": _TASK_FILE},
+                ],
+                id="custom_tool_call",
+            ),
+        ],
+    )
+    async def test_responses_continuation_turn_routes_on_what_the_tool_returned(
+        self, items: list[dict[str, object]]
+    ) -> None:
+        """Codex sends the loop as Responses input items, so every_request must read the task file from them too."""
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(client, classifier_context_include_tool_turns=True)
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={"input": [{"role": "user", "content": [{"type": "input_text", "text": _TASK_ASK}]}, *items]},
+        )
+
+        assert response is not None
+        assert response.model == "strong"
+        assert "read_file(" in client.states[-1]
+
+    @pytest.mark.asyncio
+    async def test_user_turn_floor_follows_the_custom_tier_order(self) -> None:
+        """tier_definitions list order is the severity order, so a tool turn moves a user_turn loop up the defined
+        tiers and a cheaper verdict on a later turn leaves it there."""
+        dependency: Final = MagicMock(
+            cache=DualCache(),
+            acompletion=AsyncMock(
+                side_effect=[_llm_response(json.dumps({"tier": tier})) for tier in ("triage", "build", "triage")]
+            ),
+        )
+        router: Final = ComplexityRouter(
+            "test-router",
+            dependency,
+            {
+                "tiers": {"triage": "cheap", "build": "mid", "deep": "strong"},
+                "tier_definitions": [
+                    {"name": "triage", "description": "Reading files and answering questions about them"},
+                    {"name": "build", "description": "Writing and changing code"},
+                    {"name": "deep", "description": "Designing and migrating systems"},
+                ],
+                "fallback_tier": "triage",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classification_mode": "user_turn",
+                "classifier_context_include_tool_turns": True,
+            },
+        )
+        loop: Final = _tool_loop_continuation("chat_completions")
+
+        responses: Final = [
+            await router.async_pre_routing_hook(
+                model="test-router", request_kwargs={"metadata": {"session_id": "custom-loop"}}, messages=turn
+            )
+            for turn in (loop[:1], loop, [*loop, *_RUN_TESTS_TURNS])
+        ]
+
+        assert [response.model for response in responses if response is not None] == ["cheap", "mid", "mid"]
+        assert dependency.acompletion.await_count == 3
+
+    @pytest.mark.asyncio
     async def test_user_turn_classifier_failure_keeps_the_held_tier(self) -> None:
         """A failed classifier decided nothing, so its fallback's verdict on the ask alone must not move the loop."""
         client: Final = _ScriptedJevClient(("SIMPLE", None))

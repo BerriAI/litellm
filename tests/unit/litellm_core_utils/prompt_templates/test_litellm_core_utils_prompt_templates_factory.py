@@ -8841,6 +8841,21 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
             {
                 "role": "assistant",
                 "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_2",
+                        "type": "custom",
+                        "custom": {"name": "apply_patch", "input": "*** Begin Patch\n*** Update File: ledger.py"},
+                    }
+                ],
+            },
+            (("tool call", "apply_patch(*** Begin Patch\n*** Update File: ledger.py)"),),
+            id="chat_custom_tool_call",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
                 "function_call": {"name": "read_file", "arguments": '{"path": "a"}'},
             },
             (("tool call", 'read_file({"path": "a"})'),),
