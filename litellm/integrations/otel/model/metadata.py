@@ -49,7 +49,7 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
-from litellm.integrations.otel.model.semconv import resolve_operation
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation, resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
 from litellm.types.utils import InternalCallOrigin
@@ -262,6 +262,7 @@ class LLMCallEvent:
     # never hands off to a provider, so ``upstream_started`` stays False even
     # though the call completed and is worth a span.
     cache_hit: bool
+    operation: GenAIOperation
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
@@ -275,7 +276,7 @@ class LLMCallEvent:
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
         raw_payload: Final = kwargs.get("standard_logging_object")
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
-        operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
+        operation: Final = resolve_operation(as_str(kwargs.get("call_type")), kwargs.get(PASSTHROUGH_OPERATION_KEY))
         model: Final = as_str(kwargs.get("model")) or ""
         trace: Final = caller_trace_controls(kwargs)
         return cls(
@@ -288,6 +289,7 @@ class LLMCallEvent:
             upstream_start_seconds=_epoch_seconds(kwargs.get("api_call_start_time")),
             purpose=internal_call_origin(payload, kwargs),
             cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            operation=operation,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),

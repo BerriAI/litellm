@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -115,6 +115,23 @@ def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
     assert _github_copilot_catalog_rows(PRICES_PATH) == _github_copilot_catalog_rows(BACKUP_PRICES_PATH)
 
 
+class _TokenLimits(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    max_input_tokens: int
+    max_output_tokens: int
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_zerogpu_rows_have_an_output_limit_that_fits_the_context_window(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    rows: Final = MappingProxyType(
+        {key: _TokenLimits.model_validate(value) for key, value in prices.items() if key.startswith("zerogpu/")}
+    )
+    assert rows, f"No ZeroGPU rows found in {path}"
+    assert tuple(key for key, row in rows.items() if row.max_output_tokens > row.max_input_tokens) == ()
+
+
 def test_github_copilot_rows_resolve_through_get_model_info() -> None:
     rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(PRICES_PATH)
     assert {
@@ -221,6 +238,85 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
         "dated model variants are missing flex/priority pricing their base alias has; "
         "sync the tier keys so service-tier requests against pinned snapshots are not "
         "billed at standard rates:\n" + "\n".join(drifted)
+    )
+
+
+# Azure OpenAI web_search runs on Grounding with Bing and bills each Bing request reported in
+# tool_usage.web_search.num_requests: https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/web-search
+# Grounding with Bing lists $14 per 1,000 transactions: https://www.microsoft.com/en-us/bing/apis/grounding-pricing
+AZURE_WEB_SEARCH_COST_PER_REQUEST: Final = 0.014
+_AZURE_DEPLOYMENT_PREFIX: Final = re.compile(r"^azure/(us/|eu/|global/|global-standard/)?")
+
+
+def _azure_rows(prices: Mapping[str, object]) -> Mapping[str, dict]:
+    return MappingProxyType(
+        {key: row for key, row in prices.items() if key.startswith("azure/") and isinstance(row, dict)}
+    )
+
+
+def test_azure_web_search_rows_charge_the_grounding_with_bing_price(prices: dict):
+    wrong = {
+        key: row["search_context_cost_per_query"]
+        for key, row in _azure_rows(prices).items()
+        if row.get("search_context_cost_per_query")
+        and set(row["search_context_cost_per_query"].values()) != {AZURE_WEB_SEARCH_COST_PER_REQUEST}
+    }
+    assert wrong == {}
+
+
+def test_azure_rows_price_web_search_when_their_openai_model_does(prices: dict):
+    missing = sorted(
+        key
+        for key, row in _azure_rows(prices).items()
+        if not row.get("search_context_cost_per_query")
+        and row.get("mode") in ("chat", "responses", None)
+        and isinstance(twin := prices.get(_AZURE_DEPLOYMENT_PREFIX.sub("", key)), dict)
+        and twin.get("search_context_cost_per_query")
+    )
+    assert missing == []
+
+
+PRIORITY_SUFFIX: Final = "_priority"
+MIN_PRIORITY_MARKUP: Final = 1.0
+MAX_PRIORITY_MARKUP: Final = 5.0
+
+
+def _rate(value: JsonValue | None) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _priority_markup(entry: Mapping[str, JsonValue], key: str) -> float | None:
+    if not key.endswith(PRIORITY_SUFFIX):
+        return None
+    priority: Final = _rate(entry[key])
+    standard: Final = _rate(entry.get(key.removesuffix(PRIORITY_SUFFIX)))
+    if priority is None or standard is None or standard <= 0:
+        return None
+    return priority / standard
+
+
+def priority_markups(prices: Mapping[str, JsonValue]) -> Iterator[tuple[str, str, float]]:
+    for name, entry in prices.items():
+        if not isinstance(entry, dict):
+            continue
+        for key in entry:
+            if (markup := _priority_markup(entry, key)) is not None:
+                yield name, key, markup
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_priority_rates_stay_within_a_premium_of_their_standard_rate(path: Path) -> None:
+    prices: Final = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    markups: Final = tuple(priority_markups(prices))
+    assert markups
+    overpriced: Final = tuple(
+        f"{name}.{key} is {markup:.1f}x its standard rate"
+        for name, key, markup in markups
+        if not MIN_PRIORITY_MARKUP <= markup <= MAX_PRIORITY_MARKUP
+    )
+    assert overpriced == (), (
+        "a priority rate is a premium on the standard rate, so one below it or far above it was likely copied from "
+        "another model; drop the key when the provider sells no priority tier for the model:\n" + "\n".join(overpriced)
     )
 
 
@@ -801,7 +897,10 @@ def test_volcengine_doubao_seed_2_1_pro_260915_row_matches_published_metadata(pa
     assert entry["cache_read_input_token_cost"] == pytest.approx(1.2 / 6.9565 / 1_000_000, rel=1e-4)
     sibling = rows["volcengine/doubao-seed-2-1-pro-260628"]
     assert isinstance(sibling, dict)
-    assert all(entry[key] == sibling[key] for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"))
+    assert all(
+        entry[key] == sibling[key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    )
 
 
 def _bedrock_gpt_oss_rows(prices: Mapping[str, JsonValue]) -> tuple[str, ...]:

@@ -1,5 +1,33 @@
 [
   {
+    "provider": "AIAND",
+    "provider_display_name": "ai&",
+    "litellm_provider": "aiand",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.aiand.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "aiand/openai/gpt-oss-120b"
+  },
+  {
     "provider": "SCALEDOWN",
     "provider_display_name": "ScaleDown",
     "litellm_provider": "scaledown",
@@ -3492,6 +3520,34 @@
     "default_model_placeholder": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash"
   },
   {
+    "provider": "StreamLake",
+    "provider_display_name": "StreamLake",
+    "litellm_provider": "streamlake",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "streamlake/<model-or-endpoint>"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",
@@ -4116,6 +4172,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "ZeroGPU",
+    "provider_display_name": "ZeroGPU",
+    "litellm_provider": "zerogpu",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.zerogpu.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "zerogpu/gpt-oss-120b"
   },
   {
     "provider": "CURSOR",

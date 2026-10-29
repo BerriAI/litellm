@@ -10,6 +10,8 @@ import time
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,6 +34,15 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PegasusResponse(TypedDict):
+    message: ReadOnly[NotRequired[str | None]]
+    finishReason: ReadOnly[NotRequired[str | None]]
+
+
+_PEGASUS_RESPONSE: Final = TypeAdapter(_PegasusResponse)
 
 
 class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
@@ -207,7 +218,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         ModelResponse with choices[0].message.content and finish_reason
         """
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _PEGASUS_RESPONSE.validate_python(raw_response.json())
         except Exception as e:
             raise BedrockError(
                 message=f"Error parsing response: {raw_response.text}, error: {e}",
@@ -224,7 +235,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         message_content: Final = completion_response.get("message", "")
 
         # Extract finish reason and map to LiteLLM format
-        finish_reason_raw: Final = completion_response.get("finishReason", "stop")
+        finish_reason_raw: Final = completion_response.get("finishReason") or "stop"
         finish_reason: Final = map_finish_reason(finish_reason_raw)
 
         # Set the response content
