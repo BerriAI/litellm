@@ -312,6 +312,7 @@ benchmarks = [
     "pytest-codspeed==4.3.0",
     "mcp>=2.3.0,<3",
     "a2a-sdk==1.1.0",
+    "pypdf>=6.21.2,<7.0",
 ]
 
 [build-system]
