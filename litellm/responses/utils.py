@@ -2,9 +2,10 @@ import base64
 import os
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
+from typing import Any, Final, NoReturn, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
@@ -1442,10 +1443,32 @@ def _openai_reasoning_field_values(model: str) -> ReasoningFieldValues:
     )
 
 
-def _reasoning_field_values(model: str, responses_config: BaseResponsesAPIConfig | None) -> ReasoningFieldValues | None:
+_CATALOG_REASONING_FIELDS: Final = (("mode", "reasoning_modes"), ("context", "reasoning_contexts"))
+
+
+def _catalog_values(values: object) -> frozenset[str | None]:
+    return frozenset(value for value in iter_items(values) if isinstance(value, str))
+
+
+def _with_catalog_reasoning_values(
+    declared: ReasoningFieldValues, model: str, custom_llm_provider: str
+) -> ReasoningFieldValues:
+    catalog: Final = cast(Mapping[str, object], litellm.model_cost)  # cast-ok: read-only view of the legacy registry
+    row: Final = as_str_mapping(catalog.get(f"{custom_llm_provider}/{model.removeprefix('responses/')}"))
+    if row is None:
+        return declared
+    overrides: Final = {
+        field: _catalog_values(row[key]) for field, key in _CATALOG_REASONING_FIELDS if isinstance(row.get(key), list)
+    }
+    return MappingProxyType({**declared, **overrides}) if overrides else declared
+
+
+def _reasoning_field_values(
+    model: str, custom_llm_provider: str, responses_config: BaseResponsesAPIConfig | None
+) -> ReasoningFieldValues | None:
     declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
     if declared is not None:
-        return declared
+        return _with_catalog_reasoning_values(declared, model, custom_llm_provider)
     catalog_model: Final = model.removeprefix("openai/")
     return (
         _openai_reasoning_field_values(catalog_model)
@@ -1473,6 +1496,23 @@ def _additional_drop_paths(additional_drop_params: object) -> tuple[str, ...]:
     return tuple(path for path in iter_items(additional_drop_params) if isinstance(path, str))
 
 
+@dataclass(frozen=True, slots=True)
+class RefusedReasoningFields:
+    refused: tuple[str, ...]
+
+
+def raise_refused_reasoning_fields(refusal: RefusedReasoningFields, model: str, custom_llm_provider: str) -> NoReturn:
+    raise litellm.UnsupportedParamsError(
+        message=(
+            f"{custom_llm_provider} does not support parameters: "
+            f"{[f'reasoning_effort.{key}' for key in refusal.refused]}, for model={model}. "
+            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+        llm_provider=custom_llm_provider,
+        model=model,
+    )
+
+
 def bridge_reasoning(
     *,
     requested: Mapping[str, object],
@@ -1482,7 +1522,7 @@ def bridge_reasoning(
     custom_llm_provider: str,
     drop_params: bool,
     additional_drop_params: object,
-) -> Mapping[str, object] | None:
+) -> Mapping[str, object] | RefusedReasoningFields | None:
     from litellm.utils import ProviderConfigManager
 
     drop_paths: Final = _additional_drop_paths(additional_drop_params)
@@ -1490,28 +1530,21 @@ def bridge_reasoning(
         return None
     kept: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
     with_summary: Final = reasoning_with_summary_default(kept, summary_alias, model, custom_llm_provider)
+    sent: Final = (
+        as_str_mapping(
+            _apply_nested_drop_params({"reasoning_effort": {**with_summary}}, list(drop_paths)).get("reasoning_effort")
+        )
+        or {}
+    )
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(custom_llm_provider, model)
-    values_by_field: Final = _reasoning_field_values(model, responses_config)
-    accepted: Final = with_summary if values_by_field is None else _accepted_reasoning(with_summary, values_by_field)
-    refused: Final = tuple(key for key in with_summary if key not in accepted)
+    values_by_field: Final = _reasoning_field_values(model, custom_llm_provider, responses_config)
+    accepted: Final = sent if values_by_field is None else _accepted_reasoning(sent, values_by_field)
+    refused: Final = tuple(key for key, value in sent.items() if key not in accepted and value is not None)
     if (
         refused
         and not drop_params
         and responses_config is not None
         and responses_config.ignores_unsupported_reasoning_fields()
     ):
-        raise litellm.UnsupportedParamsError(
-            message=(
-                f"{custom_llm_provider} does not support parameters: "
-                f"{[f'reasoning_effort.{key}' for key in refused]}, for model={model}. "
-                "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
-            ),
-            llm_provider=custom_llm_provider,
-            model=model,
-        )
-    remaining: Final = as_str_mapping(
-        _apply_nested_drop_params(
-            {"reasoning_effort": accepted if drop_params else with_summary}, list(drop_paths)
-        ).get("reasoning_effort")
-    )
-    return remaining or None
+        return RefusedReasoningFields(refused)
+    return (accepted if drop_params else sent) or None

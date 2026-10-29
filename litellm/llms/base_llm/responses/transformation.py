@@ -32,6 +32,9 @@ REASONING_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), N
 SUMMARY_ONLY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
     {"summary": REASONING_SUMMARY_VALUES}
 )
+STANDARD_MODE_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {"summary": REASONING_SUMMARY_VALUES, "mode": frozenset({"standard"}), "context": None}
+)
 
 
 class BaseResponsesAPIConfig(ABC):

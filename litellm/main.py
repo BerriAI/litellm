@@ -6145,9 +6145,13 @@ def completion(
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
             if isinstance(resolved_reasoning_effort, dict):
-                from litellm.responses.utils import bridge_reasoning
+                from litellm.responses.utils import (
+                    RefusedReasoningFields,
+                    bridge_reasoning,
+                    raise_refused_reasoning_fields,
+                )
 
-                optional_params["reasoning_effort"] = bridge_reasoning(
+                bridged_reasoning: Final = bridge_reasoning(
                     requested=resolved_reasoning_effort,
                     effort_kept="reasoning_effort" in optional_params,
                     summary_alias=rs_val,
@@ -6156,6 +6160,9 @@ def completion(
                     drop_params=drop_unsupported_reasoning,
                     additional_drop_params=routing_kwargs.get("additional_drop_params"),
                 )
+                if isinstance(bridged_reasoning, RefusedReasoningFields):
+                    raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
+                optional_params["reasoning_effort"] = bridged_reasoning
             elif rs_val is not None:
                 eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
                 if isinstance(eff, dict):
