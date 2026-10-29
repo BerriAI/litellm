@@ -1877,7 +1877,7 @@ async def find_existing_team_ids(team_ids: Sequence[str]) -> frozenset[str] | No
     if prisma_client is None:
         return None
     try:
-        rows: Final = await find_many_in(TeamRepository(prisma_client).table, "team_id", team_ids)
+        rows: Final = await find_many_in(TeamRepository(prisma_client, use_writer=True).table, "team_id", team_ids)
     except Exception as e:
         verbose_proxy_logger.debug("[Non-Blocking] Error looking up SSO teams: %s", e)
         return None

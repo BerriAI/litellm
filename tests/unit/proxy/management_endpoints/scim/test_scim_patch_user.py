@@ -567,6 +567,19 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
             ("team-omega", "team-delta", "team-beta"),
             id="replace_keeps_the_request_order",
         ),
+        pytest.param(
+            [
+                SCIMPatchOperation(
+                    op="replace",
+                    path="groups",
+                    value=[{"value": "team-omega"}, {"value": "team-delta"}, {"value": "team-beta"}],
+                ),
+                SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-mu"}]),
+                SCIMPatchOperation(op="remove", path='groups[value eq "team-delta"]'),
+            ],
+            ("team-omega", "team-beta", "team-mu"),
+            id="ops_after_a_replace_apply_to_the_replaced_list",
+        ),
     ],
 )
 def test_apply_patch_ops_keeps_team_order_so_the_first_team_stays_first(

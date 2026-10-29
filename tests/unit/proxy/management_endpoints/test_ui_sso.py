@@ -6953,19 +6953,22 @@ class TestAddMissingTeamMember:
         assert added == []
 
     @pytest.mark.asyncio
-    async def test_find_existing_team_ids_returns_stored_teams_and_none_when_the_db_cannot_answer(self):
+    async def test_find_existing_team_ids_reads_the_writer_and_returns_none_when_the_db_cannot_answer(self):
         from litellm.proxy.management_endpoints.ui_sso import find_existing_team_ids
 
-        stored: Final = ("team-zeta", "team-alpha")
+        stored_on_writer: Final = ("team-zeta", "team-alpha")
 
         async def find_many(*, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[SimpleNamespace]:
-            return [SimpleNamespace(team_id=team_id) for team_id in stored if team_id in where["team_id"]["in"]]
+            return [
+                SimpleNamespace(team_id=team_id) for team_id in stored_on_writer if team_id in where["team_id"]["in"]
+            ]
 
         prisma: Final = MagicMock()
-        prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+        prisma.writer_db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+        prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             assert await find_existing_team_ids(("grp-vpn", "team-alpha")) == frozenset({"team-alpha"})
-            prisma.db.litellm_teamtable.find_many.side_effect = RuntimeError("db unavailable")
+            prisma.writer_db.litellm_teamtable.find_many.side_effect = RuntimeError("db unavailable")
             assert await find_existing_team_ids(("team-alpha",)) is None
         with patch("litellm.proxy.proxy_server.prisma_client", None):
             assert await find_existing_team_ids(("team-alpha",)) is None

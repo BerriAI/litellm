@@ -2241,21 +2241,19 @@ def _handle_name_update(path: str, op_type: str, value: object, scim_metadata: d
             scim_metadata["familyName"] = str(value)
 
 
-def _handle_group_operations(
-    op_type: str, value: object, teams: dict[str, None], path: str | None
-) -> dict[str, None] | None:
+def _handle_group_operations(op_type: str, value: object, teams: dict[str, None], path: str | None) -> None:
     """Handle group/team membership operations, keeping the record's team order and adding new teams in op order."""
     group_values = _extract_group_values(value)
     if not group_values and value is None:
         group_values = _extract_ids_from_path_filter(path, "groups")
     if op_type == "replace":
-        return dict.fromkeys(group_values)
+        teams.clear()
+        teams.update(dict.fromkeys(group_values))
     elif op_type == "add":
         teams.update(dict.fromkeys(group_values))
     elif op_type == "remove":
         for gid in group_values:
             teams.pop(gid, None)
-    return None
 
 
 def _multi_valued_attribute_base(path: str) -> str:
@@ -2544,7 +2542,6 @@ def _apply_patch_ops(
         _raise_invalid_enterprise_value(enterprise)
 
     teams: Final[dict[str, None]] = dict.fromkeys(existing_user.teams or [])
-    replace_teams: dict[str, None] | None = None
 
     for op in patch_ops.Operations:
         path = op.path.lower() if isinstance(op.path, str) else ""
@@ -2588,15 +2585,13 @@ def _apply_patch_ops(
         elif _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
             _handle_multi_valued_attribute_update(path, op_type, value, metadata)
         elif path.startswith("groups"):
-            new_replace_teams = _handle_group_operations(op_type, value, teams, op.path)
-            if new_replace_teams is not None:
-                replace_teams = new_replace_teams
+            _handle_group_operations(op_type, value, teams, op.path)
         elif _enterprise_extension_sub_path(path) is not None:
             continue
         else:
             _handle_generic_metadata(path, op_type, value, metadata)
 
-    final_teams: Final = tuple(replace_teams if replace_teams is not None else teams)
+    final_teams: Final = tuple(teams)
     final_metadata: Final = (
         {
             **{key: metadata_value for key, metadata_value in metadata.items() if key != SCIM_ENTERPRISE_METADATA_KEY},
