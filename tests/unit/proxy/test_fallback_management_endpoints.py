@@ -10,8 +10,8 @@ Tests:
 
 import copy
 import json
-from collections.abc import AsyncIterator
-from types import SimpleNamespace
+from collections.abc import AsyncIterator, Mapping
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -326,13 +326,13 @@ NON_STANDARD_RULES: Final = [
 
 class _RedisThatRefusesDel:
     def __init__(self) -> None:
-        self.value: object = None
+        self.values: Mapping[str, object] = MappingProxyType({})
 
     async def async_get_cache(self, key: str, parent_otel_span: object = None) -> object:
-        return self.value
+        return self.values.get(key)
 
     async def async_set_cache(self, key: str, value: object, **_: object) -> None:
-        self.value = value
+        self.values = MappingProxyType({**self.values, key: value})
 
     async def async_delete_cache(self, key: str) -> None:
         raise NoPermissionError("this user has no permissions to run the 'del' command")
