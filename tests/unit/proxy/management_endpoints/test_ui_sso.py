@@ -15,9 +15,18 @@ from fastapi import HTTPException, Request
 from pydantic import SecretStr
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, NewUserResponse, ProxyException
+from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
+    LiteLLM_UserTable,
+    NewUserResponse,
+    ProxyException,
+    TeamMemberAddRequest,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -11005,3 +11014,100 @@ def test_generic_sso_login_upserts_only_the_team_id_jwt_field_claim(
     )
 
     assert (result.team_ids, result.team_id_to_upsert) == (expected_team_ids, expected_upsert)
+
+
+def test_generic_sso_login_upserts_the_team_id_jwt_field_team_when_db_team_mappings_are_set() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", "groups": ["g1"], "dept": "finance"},
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == (["g1", "finance"], "finance")
+
+
+def _recording_team_calls(events: list[tuple[str, str]]) -> tuple[AsyncMock, Callable[[str], Awaitable[object]]]:
+    async def upsert_team(team_id: str) -> object:
+        events.append(("create", team_id))
+        return None
+
+    async def member_add(data: TeamMemberAddRequest, user_api_key_dict: UserAPIKeyAuth) -> None:
+        events.append(("join", data.team_id))
+
+    return AsyncMock(side_effect=member_add), upsert_team
+
+
+@pytest.mark.asyncio
+async def test_sso_login_creates_only_the_upsert_team_and_does_so_before_joining_it() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
+    member_add, upsert_team = _recording_team_calls(events)
+    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
+
+    with patch("litellm.proxy.management_endpoints.ui_sso.team_member_add", member_add):
+        await add_missing_team_member(user, ["g1", "finance", "g2"], team_id_to_upsert="finance", upsert_team=upsert_team)
+
+    creates: Final = [team_id for kind, team_id in events if kind == "create"]
+    joins: Final = [team_id for kind, team_id in events if kind == "join"]
+    assert creates == ["finance"]
+    assert sorted(joins) == ["finance", "g1", "g2"]
+    assert events.index(("create", "finance")) < events.index(("join", "finance"))
+
+
+@pytest.mark.asyncio
+async def test_sso_login_still_joins_the_team_when_a_concurrent_login_created_it_first() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    async def lost_the_create_race(team_id: str) -> object:
+        raise HTTPException(status_code=400, detail={"error": f"Team id = {team_id} already exists"})
+
+    member_add: Final = AsyncMock(return_value=None)
+    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
+
+    with patch("litellm.proxy.management_endpoints.ui_sso.team_member_add", member_add):
+        await add_missing_team_member(user, ["finance"], team_id_to_upsert="finance", upsert_team=lost_the_create_race)
+
+    assert [call.kwargs["data"].team_id for call in member_add.call_args_list] == ["finance"]
+
+
+@pytest.mark.asyncio
+async def test_sso_login_logs_skipped_idp_groups_once_per_login_and_not_as_warnings(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    async def no_such_team(data: TeamMemberAddRequest, user_api_key_dict: UserAPIKeyAuth) -> None:
+        raise TeamNotFoundError(team_id=data.team_id)
+
+    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
+    with (
+        caplog.at_level(logging.INFO, logger=verbose_proxy_logger.name),
+        patch("litellm.proxy.management_endpoints.ui_sso.team_member_add", AsyncMock(side_effect=no_such_team)),
+    ):
+        await add_missing_team_member(user, ["idp-group-a", "idp-group-b", "idp-group-c"])
+
+    skip_lines: Final = [r for r in caplog.records if "skipped" in r.getMessage()]
+    assert [r.levelno for r in skip_lines] == [logging.INFO]
+    assert all(team in skip_lines[0].getMessage() for team in ("idp-group-a", "idp-group-b", "idp-group-c"))
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
+async def test_sso_login_warns_when_joining_an_existing_team_fails(caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
+    with (
+        caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.team_member_add",
+            AsyncMock(side_effect=HTTPException(status_code=500, detail="db down")),
+        ),
+    ):
+        await add_missing_team_member(user, ["finance"])
+
+    warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "finance" in warnings[0] and "db down" in warnings[0]

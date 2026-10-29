@@ -1240,7 +1240,7 @@ def generic_response_convertor(
     )
 
     token: Final = cast(dict[str, object], response)  # cast-ok: the IdP userinfo JSON object fastapi-sso hands back
-    all_teams: Final = []
+    all_teams: Final[list[str]] = []
     if sso_jwt_handler is not None:
         team_ids = sso_jwt_handler.get_all_jwt_team_ids(token)
         all_teams.extend(team_ids)
@@ -1267,6 +1267,9 @@ def generic_response_convertor(
         if jwt_handler.litellm_jwtauth.team_id_upsert and team_id_jwt_field is not None
         else None
     )
+    team_id_to_upsert: Final = upsert_candidate if isinstance(upsert_candidate, str) else None
+    if team_id_to_upsert is not None and team_id_to_upsert not in all_teams:
+        all_teams.append(team_id_to_upsert)
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
@@ -1335,9 +1338,7 @@ def generic_response_convertor(
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
         team_ids=all_teams,
-        team_id_to_upsert=upsert_candidate
-        if isinstance(upsert_candidate, str) and upsert_candidate in all_teams
-        else None,
+        team_id_to_upsert=team_id_to_upsert,
         user_role=user_role,
         extra_fields=extra_fields,
     )
@@ -1822,22 +1823,33 @@ async def create_team_member_add_task(
     team_id: str,
     user_info: NewUserResponse | LiteLLM_UserTable,
     upsert_team: Callable[[str], Awaitable[object]] | None = None,
-):
-    """Create a task for adding a member to a team."""
+) -> Exception | None:
+    """Add the user to one team, creating it first when ``upsert_team`` is given. Returns the failure, if any."""
+    upsert_error: Final = await _upsert_team_error(team_id, upsert_team)
     try:
-        if upsert_team is not None:
-            await upsert_team(team_id)
-        member: Final = Member(user_id=user_info.user_id, role="user")
-        team_member_add_request: Final = TeamMemberAddRequest(
-            member=member,
-            team_id=team_id,
-        )
-        return await team_member_add(
-            data=team_member_add_request,
+        await team_member_add(
+            data=TeamMemberAddRequest(member=Member(user_id=user_info.user_id, role="user"), team_id=team_id),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
     except Exception as e:
-        verbose_proxy_logger.warning("SSO login could not add user %s to team %s: %s", user_info.user_id, team_id, e)
+        return e if upsert_error is None else upsert_error
+    return None
+
+
+async def _upsert_team_error(team_id: str, upsert_team: Callable[[str], Awaitable[object]] | None) -> Exception | None:
+    """A concurrent login may create the team first, so a failed upsert is not fatal: the join below still runs."""
+    if upsert_team is None:
+        return None
+    try:
+        await upsert_team(team_id)
+    except Exception as e:
+        verbose_proxy_logger.debug("SSO login could not create team %s, trying to join it anyway: %s", team_id, e)
+        return e
+    return None
+
+
+def _is_missing_team_error(error: Exception) -> bool:
+    return isinstance(error, HTTPException) and error.status_code == 404
 
 
 async def _upsert_sso_team(team_id: str, prisma_client: PrismaClient, user_api_key_cache: UserApiKeyCache) -> object:
@@ -1855,25 +1867,34 @@ async def add_missing_team_member(
     sso_teams: list[str],
     team_id_to_upsert: str | None = None,
     upsert_team: Callable[[str], Awaitable[object]] | None = None,
-):
+) -> None:
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
     """
     # Handle None as empty list for new users
     user_teams: Final = user_info.teams if user_info.teams is not None else []
-    missing_teams: Final = set(sso_teams) - set(user_teams)
-    missing_teams_list: Final = list(missing_teams)
-    tasks = []
-    tasks = [
-        create_team_member_add_task(team_id, user_info, upsert_team if team_id == team_id_to_upsert else None)
-        for team_id in missing_teams_list
-    ]
-
-    try:
-        await asyncio.gather(*tasks)
-    except Exception as e:
-        verbose_proxy_logger.debug("[Non-Blocking] Error trying to add sso user to db: %s", e)
+    missing_teams: Final = sorted(set(sso_teams) - set(user_teams))
+    results: Final = await asyncio.gather(
+        *(
+            create_team_member_add_task(team_id, user_info, upsert_team if team_id == team_id_to_upsert else None)
+            for team_id in missing_teams
+        )
+    )
+    failures: Final = tuple((team_id, error) for team_id, error in zip(missing_teams, results) if error is not None)
+    skipped: Final = tuple(team_id for team_id, error in failures if _is_missing_team_error(error))
+    if skipped:
+        verbose_proxy_logger.info(
+            "SSO login for user %s skipped %d team(s) that do not exist in the db: %s",
+            user_info.user_id,
+            len(skipped),
+            ", ".join(skipped),
+        )
+    for team_id, error in failures:
+        if not _is_missing_team_error(error):
+            verbose_proxy_logger.warning(
+                "SSO login could not add user %s to team %s: %s", user_info.user_id, team_id, error
+            )
 
 
 def get_disabled_non_admin_personal_key_creation():
