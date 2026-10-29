@@ -709,6 +709,7 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
+            response=response,
         )
     elif (
         per_second_cost := _per_second_pricing_cost(
@@ -1913,6 +1914,7 @@ def completion_cost(
                             model=search_model,
                             custom_llm_provider=custom_llm_provider,
                             number_of_queries=number_of_queries,
+                            response=completion_response,
                             optional_params={
                                 **(get_hidden_params(completion_response) or {}),
                                 **(optional_params or {}),

@@ -95,7 +95,9 @@ async def test_search_logs_one_completed_response_and_cost(
         assert await asyncio.to_thread(recorder.finished.wait, 5)
         assert len(recorder.records) == 1
         details, logged = recorder.records[0]
-        assert logged.model_dump()["provider_metadata"]["output"] == response.model_dump()["provider_metadata"]["output"]
+        assert (
+            logged.model_dump()["provider_metadata"]["output"] == response.model_dump()["provider_metadata"]["output"]
+        )
         assert isinstance(details["standard_logging_object"], Mapping)
         expected_cost: Final = PAYLOAD["costDollars"]["total"] if price_override is None else price_override
         assert details["response_cost"] == expected_cost

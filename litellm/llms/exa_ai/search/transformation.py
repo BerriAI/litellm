@@ -122,7 +122,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Exa AI API response to LiteLLM unified SearchResponse format.
@@ -159,7 +159,18 @@ class ExaAISearchConfig(BaseSearchConfig):
                 "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
             }
         )
-        set_hidden_params(response, {EXA_AI_COST_DOLLARS_PARAM: response_json.get("costDollars")})
+        params: Final = _JSON_OBJECT.validate_python(kwargs.get("optional_params") or {})
+        set_hidden_params(
+            response,
+            {
+                **{
+                    key: value
+                    for key, value in params.items()
+                    if key in ("type", "max_results", "numResults", "contents")
+                },
+                EXA_AI_COST_DOLLARS_PARAM: response_json.get("costDollars"),
+            },
+        )
         return response
 
 

@@ -19,7 +19,7 @@ from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 from litellm.search.cost_calculator import search_provider_cost_per_query
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
-EXA_REPORTED_COST: Final = 0.022
+EXA_REPORTED_COST: Final = 0.123456
 _LOGGED: Final = TypeAdapter(Mapping[str, object])
 
 
