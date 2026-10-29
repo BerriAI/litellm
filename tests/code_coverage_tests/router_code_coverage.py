@@ -175,6 +175,8 @@ ignored_function_names = [
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
+    "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
+    "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
     "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
@@ -185,13 +187,13 @@ ignored_function_names = [
 def main():
     router_file = [
         "./litellm/router.py",
-        "./litellm/router_utils/batch_utils.py",
+        "./litellm/litellm_core_utils/batch_utils.py",
         "./litellm/router_utils/pattern_match_deployments.py",
     ]
     # router_file = [
     #     "../../litellm/router.py",
     #     "../../litellm/router_utils/pattern_match_deployments.py",
-    #     "../../litellm/router_utils/batch_utils.py",
+    #     "../../litellm/litellm_core_utils/batch_utils.py",
     # ]  ## LOCAL TESTING
     tests_dir = "./tests/"  # Update this path if your tests directory is located elsewhere
     # tests_dir = "../../tests/"  # LOCAL TESTING
