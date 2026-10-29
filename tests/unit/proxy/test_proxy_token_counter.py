@@ -11,7 +11,8 @@ import logging
 import threading
 import traceback
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -44,8 +45,11 @@ import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_http
+from litellm.llms.bedrock.count_tokens import mantle_handler as bedrock_mantle_count_tokens_http
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
@@ -3634,35 +3638,142 @@ async def test_local_count_of_a_prompt_with_system_or_tools_counts_them_like_the
     assert from_prompt.total_tokens == from_message.total_tokens > prompt_alone.total_tokens
 
 
+_PROVIDER_COUNTED_DEPLOYMENTS: Final = (
+    pytest.param(
+        {"model": "anthropic/claude-sonnet-5-5", "api_key": "test-key", "api_base": "https://count-tokens.test"},
+        id="anthropic",
+    ),
+    pytest.param(
+        {"model": "azure_ai/claude-sonnet-5-5", "api_key": "test-key", "api_base": "https://count-tokens.test"},
+        id="azure_ai",
+    ),
+    pytest.param(
+        {"model": "openai/gpt-5.6", "api_key": "test-key", "api_base": "https://count-tokens.test/v1"}, id="openai"
+    ),
+    pytest.param(
+        {
+            "model": "bedrock/us.anthropic.claude-sonnet-5-5",
+            "aws_access_key_id": "AKIATESTACCESSKEY",
+            "aws_secret_access_key": "test-secret",
+            "aws_region_name": "us-west-2",
+        },
+        id="bedrock",
+    ),
+)
+
+
+@contextmanager
+def _count_apis_answering(peer: Callable[[httpx.Request], httpx.Response]) -> Iterator[None]:
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+    with (
+        patch.object(anthropic_count_tokens_handler, "get_async_httpx_client", return_value=client),
+        patch.object(azure_ai_count_tokens_http, "get_async_httpx_client", return_value=client),
+        patch.object(bedrock_count_tokens_http, "get_async_httpx_client", return_value=client),
+        patch.object(bedrock_mantle_count_tokens_http, "get_async_httpx_client", return_value=client),
+        patch.object(openai_count_tokens_http, "get_async_httpx_client", return_value=client),
+    ):
+        yield
+
+
+def _route_to_one_deployment(litellm_params: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "provider-counted", "litellm_params": litellm_params}]),
+    )
+
+
+_FOX_AS_PROMPT: Final = TokenCountRequest(model="provider-counted", prompt=_FOX)
+_FOX_AS_MESSAGE: Final = TokenCountRequest(model="provider-counted", messages=[{"role": "user", "content": _FOX}])
+
+
 @pytest.mark.asyncio
-async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_needs_messages(
+@pytest.mark.parametrize("litellm_params", _PROVIDER_COUNTED_DEPLOYMENTS)
+async def test_call_endpoint_sends_a_prompt_to_the_provider_as_one_user_message(
+    litellm_params: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _route_to_one_deployment(litellm_params, monkeypatch)
+    sent_bodies: Final[list[JsonValue]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"object": "response.input_tokens", "input_tokens": 41, "inputTokens": 41}, request=request
+        )
+
+    with _count_apis_answering(count_api):
+        from_prompt: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+        from_message: Final = await token_counter(request=_FOX_AS_MESSAGE, call_endpoint=True)
+
+    assert (from_prompt.total_tokens, from_prompt.error) == (41, False)
+    assert from_prompt.count_source != "local_estimate"
+    assert from_prompt == from_message
+    assert len(sent_bodies) == 2 and sent_bodies[0] == sent_bodies[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [404, 503])
+@pytest.mark.parametrize("litellm_params", _PROVIDER_COUNTED_DEPLOYMENTS)
+async def test_call_endpoint_answers_a_provider_error_on_a_prompt_like_on_the_same_text_sent_as_a_user_message(
+    litellm_params: dict[str, JsonValue], status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _route_to_one_deployment(litellm_params, monkeypatch)
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"error": {"message": f"scripted {status}"}}, request=request)
+
+    with _count_apis_answering(count_api):
+        with pytest.raises(ProxyException) as from_prompt:
+            await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+        with pytest.raises(ProxyException) as from_message:
+            await token_counter(request=_FOX_AS_MESSAGE, call_endpoint=True)
+
+    assert from_prompt.value.code == str(status)
+    assert f"scripted {status}" in from_prompt.value.message
+    assert (from_prompt.value.code, from_prompt.value.type, from_prompt.value.message) == (
+        from_message.value.code,
+        from_message.value.type,
+        from_message.value.message,
+    )
+
+
+@pytest.mark.asyncio
+async def test_framed_stand_in_counts_a_prompt_like_the_same_text_sent_as_a_user_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "anthropic-counted",
-                "litellm_params": {
-                    "model": "anthropic/claude-sonnet-5-5",
-                    "api_key": "test-key",
-                    "api_base": "https://count-tokens.test",
-                },
-            }
-        ]
-    )
-    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_unavailable_peer))
-    request: Final = TokenCountRequest(model="anthropic-counted", prompt="The quick brown fox jumps over the lazy dog.")
+    _framed_kimi(monkeypatch)
 
-    with patch.object(anthropic_count_tokens_handler, "get_async_httpx_client", return_value=client):
-        with_endpoint: Final = await token_counter(request=request, call_endpoint=True)
-    local: Final = await token_counter(request=request, call_endpoint=False)
-
-    assert (with_endpoint.error, with_endpoint.total_tokens, with_endpoint.tokenizer_type) == (
-        False,
-        local.total_tokens,
-        local.tokenizer_type,
+    from_prompt: Final = await token_counter(request=TokenCountRequest(model="kimi", prompt=_FOX), call_endpoint=True)
+    from_message: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": _FOX}]), call_endpoint=True
     )
+    local_prompt: Final = await token_counter(request=TokenCountRequest(model="kimi", prompt=_FOX))
+
+    assert (from_prompt.count_source, from_prompt.error) == ("local_estimate", False)
+    assert from_prompt.total_tokens == from_message.total_tokens > local_prompt.total_tokens
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_counts_a_prompt_locally_on_a_provider_without_a_count_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _route_to_one_deployment(
+        {"model": "fireworks_ai/accounts/fireworks/models/glm-5", "api_key": "test-key"}, monkeypatch
+    )
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"input_tokens": 41}, request=request)
+
+    with _count_apis_answering(count_api):
+        with_endpoint: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+    local: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=False)
+
+    assert sent == []
+    assert with_endpoint.count_source == "local_estimate"
+    assert with_endpoint.total_tokens == local.total_tokens > 0
 
 
 _PINNED_COUNTS: Final = MappingProxyType({"deployment-a.test": 11, "deployment-b.test": 22})

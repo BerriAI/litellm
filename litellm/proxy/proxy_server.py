@@ -15197,11 +15197,6 @@ def _token_count_settings_model(deployment: _TokenCountDeployment, request_model
     return model, _non_empty_str(params.get("custom_llm_provider"))
 
 
-_PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
-    {litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value}
-)
-
-
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
 
 
@@ -15439,7 +15434,6 @@ async def _count_request_tokens(
     prompt_only: Final = bool(prompt) and conversation_empty
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
-    prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
         None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
@@ -15476,10 +15470,10 @@ async def _count_request_tokens(
                     [dict(message) for message in chat_count.messages]
                     if chat_count is not None
                     else [{"role": "user", "content": prompt}]
-                    if prompt_as_message
+                    if prompt_only
                     else request_messages
                 ),
-                contents=None if prompt_as_message else contents,
+                contents=None if prompt_only else contents,
                 deployment=count_deployment,
                 request_model=request.model,
                 tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
@@ -15519,7 +15513,7 @@ async def _count_request_tokens(
             model_info.get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(system)
-    prompt_turn: Final = prompt_only and not (system_message is None and not tools)
+    prompt_turn: Final = prompt_only and not (ladder is None and system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
         [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
