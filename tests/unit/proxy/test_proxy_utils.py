@@ -3714,3 +3714,200 @@ async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_ou
     await evict_config_param("router_settings", cache=cache)
 
     assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
+
+
+def _function_tool(name):
+    return {"type": "function", "function": {"name": name}}
+
+
+@pytest.mark.parametrize(
+    "tools,tool_choice,expected",
+    [
+        (
+            [_function_tool("get_time"), _function_tool("get_weather")],
+            {"type": "function", "function": {"name": "get_weather"}},
+            {"type": "function", "function": {"name": "get_weather"}},
+        ),
+        (
+            [_function_tool("get_time")],
+            {"type": "function", "function": {"name": "get_weather"}},
+            "auto",
+        ),
+        (
+            [],
+            {"type": "function", "function": {"name": "get_weather"}},
+            "none",
+        ),
+        (
+            None,
+            {"type": "function", "function": {"name": "get_weather"}},
+            {"type": "function", "function": {"name": "get_weather"}},
+        ),
+        (
+            [_function_tool("get_time")],
+            {"type": "custom", "custom": {"name": "get_weather"}},
+            "auto",
+        ),
+        (
+            [_function_tool("get_time"), _function_tool("get_weather")],
+            {"type": "custom", "custom": {"name": "get_weather"}},
+            {"type": "custom", "custom": {"name": "get_weather"}},
+        ),
+        (
+            [_function_tool("get_time")],
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "auto",
+                    "tools": [_function_tool("get_weather"), _function_tool("get_time")],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [_function_tool("get_time")]},
+            },
+        ),
+        (
+            [_function_tool("get_time")],
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [_function_tool("get_weather")]},
+            },
+            "auto",
+        ),
+        (
+            [],
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "required", "tools": [_function_tool("get_weather")]},
+            },
+            "none",
+        ),
+        (
+            [_function_tool("get_time")],
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [_function_tool("get_weather"), _function_tool("get_time")],
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [_function_tool("get_time")],
+            },
+        ),
+        (
+            [{"name": "get_time", "input_schema": {}}],
+            {"type": "tool", "name": "get_weather"},
+            {"type": "auto"},
+        ),
+        (
+            [{"name": "get_time", "input_schema": {}}, {"name": "get_weather", "input_schema": {}}],
+            {"type": "tool", "name": "get_weather"},
+            {"type": "tool", "name": "get_weather"},
+        ),
+        ([_function_tool("get_time")], "auto", "auto"),
+        ([_function_tool("get_time")], "none", "none"),
+        ([_function_tool("get_time")], {"type": "auto"}, {"type": "auto"}),
+        ([_function_tool("get_time")], {"type": "other"}, {"type": "other"}),
+        ([_function_tool("get_time")], None, None),
+        (
+            [_function_tool("get_time")],
+            {"type": "function", "function": {}},
+            {"type": "function", "function": {}},
+        ),
+    ],
+)
+def test_prune_tool_choice_to_surviving_tools(tools, tool_choice, expected):
+    from litellm.proxy.utils import prune_tool_choice_to_surviving_tools
+
+    assert prune_tool_choice_to_surviving_tools(tools, tool_choice) == expected
+
+
+def test_prune_tool_choice_to_surviving_tools_keeps_surviving_choice_unchanged():
+    from litellm.proxy.utils import prune_tool_choice_to_surviving_tools
+
+    choice = {"type": "function", "function": {"name": "get_weather"}}
+    tools = [_function_tool("get_time"), _function_tool("get_weather")]
+
+    assert prune_tool_choice_to_surviving_tools(tools, choice) is choice
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_prunes_tool_choice_after_guardrail_removes_tool():
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    class RemovingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="tool-pruner",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            data["tools"] = [tool for tool in data.get("tools") or [] if tool["function"]["name"] != "get_weather"]
+            return data
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [RemovingGuardrail()]
+
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="<redacted>", user_id="test_user"),
+            data={
+                "model": "gpt-5.5",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [_function_tool("get_time"), _function_tool("get_weather")],
+                "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+            },
+            call_type="completion",
+        )
+
+        assert result["tools"] == [_function_tool("get_time")]
+        assert result["tool_choice"] == "auto"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_keeps_tool_choice_naming_surviving_tool():
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    class RemovingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="tool-pruner",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            data["tools"] = [tool for tool in data.get("tools") or [] if tool["function"]["name"] != "get_weather"]
+            return data
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [RemovingGuardrail()]
+
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="<redacted>", user_id="test_user"),
+            data={
+                "model": "gpt-5.5",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [_function_tool("get_time"), _function_tool("get_weather")],
+                "tool_choice": {"type": "function", "function": {"name": "get_time"}},
+            },
+            call_type="completion",
+        )
+
+        assert result["tools"] == [_function_tool("get_time")]
+        assert result["tool_choice"] == {"type": "function", "function": {"name": "get_time"}}
+    finally:
+        litellm.callbacks = original_callbacks

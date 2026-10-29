@@ -1706,6 +1706,58 @@ def _proxy_hook_factory(hook_name: str) -> Callable[..., CustomLogger]:
     return get_proxy_hook(hook_name)
 
 
+def _tool_definition_name(tool: object) -> str | None:
+    if not isinstance(tool, Mapping):
+        return None
+    tool_type: Final = tool.get("type")
+    if isinstance(tool_type, str):
+        nested: Final = tool.get(tool_type)
+        if isinstance(nested, Mapping):
+            nested_name: Final = nested.get("name")
+            if isinstance(nested_name, str) and nested_name:
+                return nested_name
+    name: Final = tool.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def prune_tool_choice_to_surviving_tools(tools: object, tool_choice: object) -> object:
+    if not isinstance(tool_choice, Mapping):
+        return tool_choice
+    if tools is None or isinstance(tools, (str, bytes)) or not isinstance(tools, Sequence):
+        return tool_choice
+    surviving: Final = frozenset(tool_name for tool in tools if (tool_name := _tool_definition_name(tool)) is not None)
+    choice_type: Final = tool_choice.get("type")
+    if choice_type in ("function", "custom", "tool"):
+        choice_name: Final = _tool_definition_name(tool_choice)
+        if choice_name is None or choice_name in surviving:
+            return tool_choice
+        if choice_type == "tool":
+            return {"type": "auto"} if surviving else {"type": "none"}
+        return "auto" if surviving else "none"
+    if choice_type == "allowed_tools":
+        inner: Final = tool_choice.get("allowed_tools")
+        entries: Final = inner.get("tools") if isinstance(inner, Mapping) else tool_choice.get("tools")
+        if entries is None or isinstance(entries, (str, bytes)) or not isinstance(entries, Sequence):
+            return tool_choice
+        kept: Final = [
+            entry
+            for entry in entries
+            if (entry if isinstance(entry, str) else _tool_definition_name(entry)) in surviving
+        ]
+        if kept:
+            if isinstance(inner, Mapping):
+                nested_inner: Final = dict(inner)
+                nested_inner["tools"] = kept
+                nested_choice: Final = dict(tool_choice)
+                nested_choice["allowed_tools"] = nested_inner
+                return nested_choice
+            flat_choice: Final = dict(tool_choice)
+            flat_choice["tools"] = kept
+            return flat_choice
+        return "auto" if surviving else "none"
+    return tool_choice
+
+
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -3121,6 +3173,8 @@ class ProxyLogging:
 
             if data is not None:
                 self._process_guardrail_metadata(data)
+                if "tool_choice" in data:
+                    data["tool_choice"] = prune_tool_choice_to_surviving_tools(data.get("tools"), data["tool_choice"])
 
             return data
         except SensitiveDataRouteException as e:
