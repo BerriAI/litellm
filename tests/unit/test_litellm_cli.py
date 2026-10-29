@@ -214,6 +214,14 @@ with contextlib.redirect_stdout(output):
 print(json.dumps({{"imported_sdk": imported_sdk, "exit": code, "help": output.getvalue()}}))
 """
 
+_WORKER_LOGGERS_UNDER_A_DEFAULT_LOG_CONFIG: Final = """
+import json, logging, os
+os.environ["LITELLM_WORKER_LOG_CONFIG"] = json.dumps({{"version": 1, "root": {{"level": "INFO"}}}})
+from litellm_cli.main import proxy_worker_app
+proxy_worker_app()
+print(json.dumps({{name: logging.getLogger(name).disabled for name in {names!r}}}))
+"""
+
 _COMMAND_MODULES_LOADED_BY: Final = """
 import json, sys
 from litellm_cli.main import cli
@@ -256,6 +264,15 @@ def test_litellm_command_imports_the_proxy_only_when_it_runs(tmp_path: Path):
     assert run["imported_sdk"] is False
     assert run["exit"] == 0
     assert "--num_workers" in str(run["help"])
+
+
+def test_a_worker_log_config_silences_the_sdk_loggers_but_not_the_ones_the_proxy_app_creates(tmp_path: Path):
+    disabled: Final = _run(
+        _WORKER_LOGGERS_UNDER_A_DEFAULT_LOG_CONFIG.format(names=("LiteLLM Proxy", "litellm.proxy.health_check")),
+        (),
+        tmp_path,
+    )
+    assert disabled == {"LiteLLM Proxy": True, "litellm.proxy.health_check": False}
 
 
 def test_lite_runs_commands_without_initializing_the_sdk(cli_runs: Mapping[str, dict[str, object]]):

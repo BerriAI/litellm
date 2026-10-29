@@ -6,7 +6,8 @@ within 5 s, so importing the SDK here makes slow hosts kill each new worker in a
 Each worker then loads the proxy app through `proxy_worker_app`, while its ping thread runs.
 A full garbage collection during that load holds the GIL long enough to miss a ping, so
 collection waits until the app is loaded and never revisits it. The log config is applied
-only after the load, so it silences the same loggers in a worker as in a single process.
+after the SDK loads but before the proxy app does, as in earlier releases, so a config that
+disables existing loggers silences the SDK's loggers and leaves the proxy app's enabled.
 
 The CLI is a thin HTTP client, but it lives inside the `litellm` package, so a plain
 import would run the whole SDK `__init__` before Click parses argv. `lite` and
@@ -215,8 +216,8 @@ def without_gc_pauses() -> Generator[None, None, None]:
 
 def proxy_worker_app() -> "FastAPI":
     with without_gc_pauses():
-        from litellm.proxy.proxy_server import app
-    from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+        from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
-    ProxyInitializationHelpers.apply_worker_log_config(os.environ)
+        ProxyInitializationHelpers.apply_worker_log_config(os.environ)
+        from litellm.proxy.proxy_server import app
     return app

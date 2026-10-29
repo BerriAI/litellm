@@ -4135,7 +4135,7 @@ def _log_config_source(kind: str, tmp_path: Path) -> str | dict[str, object]:
 
 
 @pytest.mark.parametrize("kind", ["dict", "json", "yaml"])
-def test_a_spawned_worker_applies_the_log_config_only_after_loading_the_app(
+def test_a_spawned_worker_applies_the_log_config_in_the_app_factory_not_in_uvicorn(
     kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, probe_logger: logging.Logger
 ) -> None:
     monkeypatch.setenv(proxy_cli.WORKER_LOG_CONFIG_ENV, "")
