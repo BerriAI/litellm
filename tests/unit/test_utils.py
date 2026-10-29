@@ -8898,8 +8898,10 @@ def reset_mock_cache() -> None:
 
 
 @respx.mock
-def test_get_valid_models_does_not_ask_a_failing_provider_again_on_the_next_listing(reset_mock_cache: None) -> None:
-    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(return_value=httpx.Response(503))
+def test_get_valid_models_does_not_ask_a_timed_out_provider_again_on_the_next_listing(reset_mock_cache: None) -> None:
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=httpx.ReadTimeout("catalog hung")
+    )
     deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-during-an-outage")
 
     listings: Final = tuple(
@@ -8911,17 +8913,31 @@ def test_get_valid_models_does_not_ask_a_failing_provider_again_on_the_next_list
 
 
 @respx.mock
+def test_get_valid_models_lists_a_provider_again_right_after_a_fast_failure(reset_mock_cache: None) -> None:
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=(httpx.Response(503), httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]}))
+    )
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-recovers")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert listings == ([], ["openrouter/anthropic/claude-haiku-5-5"])
+
+
+@respx.mock
 def test_get_valid_models_keeps_a_good_listing_when_an_overlapping_listing_fails_after_it(
     reset_mock_cache: None,
 ) -> None:
     deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-overlapping-listings")
-    statuses: Final = iter((503, 200))
+    first_request: Final = iter((True, False))
 
     def answer_after_an_overlapping_listing(request: httpx.Request) -> httpx.Response:
-        status: Final = next(statuses)
-        if status == 503:
+        if next(first_request):
             get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
-            return httpx.Response(503)
+            raise httpx.ReadTimeout("catalog hung", request=request)
         return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
 
     respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=answer_after_an_overlapping_listing)

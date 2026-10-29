@@ -8506,11 +8506,14 @@ def _get_valid_models_from_provider_api(
 
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
-    except Exception as e:
-        verbose_logger.warning("Error getting valid models: %s", e)
+    except httpx.TimeoutException as e:
+        verbose_logger.warning("Timed out getting valid models: %s", e)
         _model_cache.set_failed_model_listing(
             custom_llm_provider, litellm_params, ttl_seconds=_FAILED_PROVIDER_LISTING_TTL_SECONDS
         )
+        return []
+    except Exception as e:
+        verbose_logger.warning("Error getting valid models: %s", e)
         return []
 
 
