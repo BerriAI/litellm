@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -1500,9 +1501,12 @@ def _response_time_ms_for_cost(
         return float(stamped)
     if total_time:
         return total_time
-    if litellm_logging_obj is not None:
-        return litellm_logging_obj.get_response_ms()
-    return 0.0
+    if litellm_logging_obj is None:
+        return 0.0
+    reported_ms: Final = response_ms_since_logging_start(litellm_logging_obj)
+    if reported_ms is not None and litellm_logging_obj.stream is not True:
+        return reported_ms
+    return litellm_logging_obj.get_response_ms()
 
 
 def _adjusted_provider_billed_cost(

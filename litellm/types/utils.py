@@ -4131,6 +4131,18 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         """
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
+    def custom_pricing_overrides(self) -> Mapping[str, object]:
+        return MappingProxyType(
+            self.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
+        )
+
+    def per_second_pricing(self) -> Mapping[str, float]:
+        return MappingProxyType(
+            self.model_dump(
+                include={"cost_per_second", "input_cost_per_second", "output_cost_per_second"}, exclude_none=True
+            )
+        )
+
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
