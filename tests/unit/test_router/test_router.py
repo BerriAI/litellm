@@ -12303,6 +12303,63 @@ def test_synchronous_text_completion_rejects_a_restricted_model_before_the_provi
         assert provider.call_count == 0
 
 
+def _restricted_embedding_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "embed-only",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_base": "https://sync-router.invalid/v1",
+                    "api_key": "unit-provider-key",
+                },
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            }
+        ],
+        num_retries=0,
+    )
+
+
+_GEMINI_CONTENTS: Final = [{"role": "user", "parts": [{"text": "test"}]}]
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "call"),
+    [
+        ("/v1/responses", lambda router: router.responses(model="embed-only", input="test")),
+        ("generateContent", lambda router: router.generate_content(model="embed-only", contents=_GEMINI_CONTENTS)),
+        (
+            "streamGenerateContent",
+            lambda router: router.generate_content_stream(model="embed-only", contents=_GEMINI_CONTENTS),
+        ),
+    ],
+)
+def test_synchronous_chat_shaped_calls_reject_a_restricted_model_before_the_provider(
+    endpoint: str, call: Callable[[Router], object]
+) -> None:
+    router: Final = _restricted_embedding_router()
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.route(host="sync-router.invalid").respond(500)
+        with pytest.raises(litellm.BadRequestError, match=f"{endpoint} is not supported by model=embed-only"):
+            call(router)
+        assert provider.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_adapter_completion_rejects_a_restricted_model_before_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "adapters", [{"id": "passthrough", "adapter": _PassthroughAdapter()}])
+    router: Final = _restricted_embedding_router()
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.route(host="sync-router.invalid").respond(500)
+        with pytest.raises(litellm.BadRequestError, match="/v1/chat/completions is not supported by model=embed-only"):
+            await router.aadapter_completion(
+                adapter_id="passthrough", model="embed-only", messages=[{"role": "user", "content": "test"}]
+            )
+        assert provider.call_count == 0
+
+
 def test_routable_deployments_leave_out_models_that_refuse_the_call_type() -> None:
     router: Final = Router(
         model_list=[

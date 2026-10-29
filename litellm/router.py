@@ -7368,7 +7368,11 @@ class Router(DeprecatedRouterMembers):
                 kwargs=kwargs,
                 metadata_variable_name=metadata_variable_name,
             )
-            with self._video_call_pin(handler_name, kwargs), self._route_capability_pin(handler_name):
+            with (
+                self._video_call_pin(handler_name, kwargs),
+                self._route_capability_pin(handler_name),
+                endpoint_selection(handler_name, original_function.__module__, model=model),
+            ):
                 deployment: Final = self.get_available_deployment(
                     model=model,
                     messages=kwargs.get("messages", None),

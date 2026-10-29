@@ -26,7 +26,19 @@ def _deployment(info: Mapping[str, object], identity: str = "embedding") -> dict
     )[0]
 
 
-@pytest.mark.parametrize("call_type", ["acompletion", "anthropic_messages", "aresponses", "acreate_interaction"])
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        "acompletion",
+        "_aadapter_completion",
+        "anthropic_messages",
+        "responses",
+        "aresponses",
+        "generate_content",
+        "generate_content_stream",
+        "acreate_interaction",
+    ],
+)
 def test_explicit_restriction_excludes_an_embedding_deployment_from_a_mixed_group(call_type: str) -> None:
     embedding: Final = _deployment({"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]})
     chat: Final = _deployment({"supported_endpoints": ["/v1/chat/completions"]}, "chat")
