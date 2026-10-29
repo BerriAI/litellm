@@ -954,6 +954,115 @@ def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_pref
         litellm.add_known_models(model_cost_map={})
 
 
+def _is_vertex_ai_label(label: object) -> bool:
+    return label == "vertex_ai" or (isinstance(label, str) and label.startswith("vertex_ai-"))
+
+
+def test_vertex_wildcard_lists_every_vertex_cost_map_row_under_its_callable_id():
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    vertex_rows: Final = {
+        f"vertex_ai/{name.removeprefix('vertex_ai/')}"
+        for name, info in litellm.model_cost.items()
+        if _is_vertex_ai_label(info.get("litellm_provider"))
+    }
+    assert vertex_rows
+
+    listed: Final = set(get_known_models_from_wildcard("vertex_ai/*"))
+
+    assert sorted(vertex_rows - listed) == []
+
+
+VERTEX_COST_MAP_LABELS: Final = (
+    "vertex_ai",
+    "vertex_ai-language-models",
+    "vertex_ai-vision-models",
+    "vertex_ai-chat-models",
+    "vertex_ai-code-chat-models",
+    "vertex_ai-text-models",
+    "vertex_ai-code-text-models",
+    "vertex_ai-embedding-models",
+    "vertex_ai-anthropic_models",
+    "vertex_ai-llama_models",
+    "vertex_ai-deepseek_models",
+    "vertex_ai-mistral_models",
+    "vertex_ai-ai21_models",
+    "vertex_ai-image-models",
+    "vertex_ai-video-models",
+    "vertex_ai-openai_models",
+    "vertex_ai-minimax_models",
+    "vertex_ai-moonshot_models",
+    "vertex_ai-zai_models",
+    "vertex_ai-qwen_models",
+)
+
+
+@contextmanager
+def _registered_rows(label_per_key: Mapping[str, str]) -> Generator[None, None, None]:
+    import litellm
+
+    try:
+        litellm.register_model(
+            {key: {"litellm_provider": label, "mode": "chat"} for key, label in label_per_key.items()},
+            persist_across_reloads=False,
+        )
+        yield
+    finally:
+        provider_model_sets: Final = tuple(value for value in vars(litellm).values() if isinstance(value, set))
+        for key in label_per_key:
+            for provider_models in provider_model_sets:
+                provider_models.discard(key)
+                provider_models.discard(key.removeprefix("vertex_ai/"))
+        litellm.add_known_models(model_cost_map={})
+
+
+@pytest.mark.parametrize("label", VERTEX_COST_MAP_LABELS)
+def test_vertex_wildcard_lists_a_row_registered_under_any_vertex_label(label: str):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    key: Final = f"vertex_ai/fake-{label}-row"
+    with _registered_rows({key: label}):
+        listed: Final = get_known_models_from_wildcard("vertex_ai/*")
+
+    assert key in listed
+
+
+@pytest.mark.parametrize(
+    ("wildcard_model", "listed_prefix"),
+    [("vertex_ai/*", "vertex_ai"), ("my_vertex/*", "my_vertex")],
+)
+def test_wildcard_keeps_a_publisher_segment_that_names_another_provider(wildcard_model: str, listed_prefix: str):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with _registered_rows(
+        {
+            "vertex_ai/openai/fake-publisher-maas": "vertex_ai-openai_models",
+            "vertex_ai/meta/fake-publisher-maas": "vertex_ai-llama_models",
+        }
+    ):
+        listed: Final = get_known_models_from_wildcard(
+            wildcard_model=wildcard_model,
+            litellm_params=LiteLLM_Params(model="vertex_ai/*"),
+        )
+
+    assert f"{listed_prefix}/openai/fake-publisher-maas" in listed
+    assert f"{listed_prefix}/meta/fake-publisher-maas" in listed
+    assert f"{listed_prefix}/fake-publisher-maas" not in listed
+
+
+@pytest.mark.parametrize("provider", ["replicate", "wandb"])
+def test_wildcard_lists_each_model_once_under_its_full_owner_id(provider: str):
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    full_ids: Final = {f"{provider}/{model.removeprefix(f'{provider}/')}" for model in litellm.models_by_provider[provider]}
+    assert any(model.count("/") > 1 for model in full_ids)
+
+    assert sorted(get_known_models_from_wildcard(f"{provider}/*")) == sorted(full_ids)
+
+
 def test_get_complete_model_list_drops_no_default_models_sentinel():
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
