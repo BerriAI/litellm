@@ -1268,14 +1268,30 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 
 
 async def _flush_spend_on_shutdown() -> None:
+    from litellm.proxy.utils import update_daily_tag_spend
+
     await flush_spend_counters_on_shutdown()
+    if prisma_client is not None:
+        await update_daily_tag_spend(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
     await _flush_spend_logs_queue_on_shutdown()
 
 
 async def _flush_spend_around_logging_drain_on_shutdown(
     flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
 ) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     await flush_spend()
+    verbose_proxy_logger.info("Draining success callbacks before the final spend flush")
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=GracefulShutdownManager.get_timeout())
+    except TimeoutError:
+        verbose_proxy_logger.warning("Timed out draining success callbacks on shutdown; accounting may be incomplete")
+    finally:
+        try:
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.stop(discard_pending=True), timeout=5.0)
+        except TimeoutError:
+            verbose_proxy_logger.warning("Timed out cancelling success callbacks on shutdown")
     await drain_logging_tasks()
     await flush_spend()
 

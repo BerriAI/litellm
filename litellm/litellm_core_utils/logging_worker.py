@@ -473,8 +473,12 @@ class LoggingWorker:
         self.start()
         self.enqueue(async_coroutine)
 
-    async def stop(self) -> None:
+    async def stop(self, *, discard_pending: bool = False) -> None:
         """Stop the logging worker and clean up resources."""
+        if discard_pending and self._queue is not None:
+            for task in self._drain_pending(self._queue):
+                task["coroutine"].close()
+                self._queue.task_done()
         if self._timeout_summary_task is not None:
             self._timeout_summary_task.cancel()
             self._timeout_summary_task = None
@@ -496,6 +500,11 @@ class LoggingWorker:
         # Wait for cancellation to settle; ignore errors raised during shutdown.
         await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
 
+        if discard_pending and self._queue is not None:
+            for task in self._unstarted_dequeued_tasks():
+                task["coroutine"].close()
+                self._untrack_dequeued(task)
+                self._queue.task_done()
         self._worker_task = None
         # Drop references to completed tasks so we can restart cleanly.
         self._running_tasks.clear()

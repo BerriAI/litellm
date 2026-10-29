@@ -10882,3 +10882,43 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred", [False, True])
+async def test_success_logging_is_enqueued_before_the_worker_is_flushed(deferred: bool) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.utils import _schedule_async_success_logging
+
+    completed: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+    async def callback(kwargs: object, response: object, start: object, end: object) -> None:
+        completed.put_nowait(response)
+
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    logging_obj: Final = Logging(
+        model="synthetic-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now.timestamp(),
+        litellm_call_id="logging-enqueue",
+        function_id="logging-enqueue",
+        dynamic_async_success_callbacks=[callback],
+    )
+    logging_obj.defer_async_logging = deferred
+    result: Final = litellm.ModelResponse(id="accounted-response")
+    try:
+        _schedule_async_success_logging(logging_obj, result, now, now, False)
+        if deferred:
+            assert completed.empty()
+            assert logging_obj.enqueue_deferred_logging is not None
+            logging_obj.enqueue_deferred_logging()
+        await GLOBAL_LOGGING_WORKER.flush()
+        assert completed.get_nowait() is result
+        assert completed.empty()
+    finally:
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+        await GLOBAL_LOGGING_WORKER.stop()

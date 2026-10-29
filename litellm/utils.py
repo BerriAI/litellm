@@ -1526,14 +1526,12 @@ def _schedule_async_success_logging(
 
     def _enqueue_async_logging() -> None:
         logging_obj.mark_async_success_log_enqueued()
-        asyncio.create_task(
-            _client_async_logging_helper(
-                logging_obj=logging_obj,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_completion_with_fallbacks=is_completion_with_fallbacks,
-            )
+        _client_async_logging_helper(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_completion_with_fallbacks=is_completion_with_fallbacks,
         )
 
     if not logging_obj.defer_async_logging:
@@ -1544,13 +1542,13 @@ def _schedule_async_success_logging(
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
 
 
-async def _client_async_logging_helper(
+def _client_async_logging_helper(
     logging_obj: LiteLLMLoggingObject,
-    result,
-    start_time,
-    end_time,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
     is_completion_with_fallbacks: bool,
-):
+) -> None:
     if (
         is_completion_with_fallbacks is False
     ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477

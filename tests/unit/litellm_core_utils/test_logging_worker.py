@@ -82,6 +82,56 @@ class _RecordCollector(logging.Handler):
         self.records.append(record)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("running", [False, True])
+async def test_stop_discards_waiting_callbacks_without_executing_them(running: bool) -> None:
+    worker: Final = LoggingWorker(concurrency=1)
+    started: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    executed: Final = asyncio.Event()
+
+    async def blocked() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def waiting() -> None:
+        executed.set()
+
+    if running:
+        worker.ensure_initialized_and_enqueue(blocked())
+        await started.wait()
+    else:
+        worker._ensure_queue()
+    worker.enqueue(waiting())
+    await worker.stop(discard_pending=True)
+    assert not executed.is_set()
+    assert cancelled.is_set() == running
+    assert worker._queue is not None
+    assert worker._queue.empty()
+    await asyncio.wait_for(worker._queue.join(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_stop_does_not_replay_a_callback_dequeued_before_its_processor_started() -> None:
+    worker: Final = LoggingWorker(concurrency=1)
+    executed: Final = asyncio.Event()
+
+    async def callback() -> None:
+        executed.set()
+
+    worker.ensure_initialized_and_enqueue(callback())
+    await asyncio.sleep(0)
+    await worker.stop(discard_pending=True)
+    assert not executed.is_set()
+    worker._flush_on_exit()
+    assert not executed.is_set()
+    assert worker._queue is not None
+    await asyncio.wait_for(worker._queue.join(), timeout=1)
+
+
 class TestLoggingWorker:
     """Test cases for LoggingWorker functionality."""
 

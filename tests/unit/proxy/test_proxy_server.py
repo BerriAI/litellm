@@ -260,6 +260,131 @@ async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_comm
 
 token = MASTER_KEY
 
+
+@pytest.mark.asyncio
+async def test_shutdown_persists_accounting_from_worker_callbacks_before_returning() -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    first_flush: Final = asyncio.Event()
+    pending: Final[asyncio.Queue[str]] = asyncio.Queue()
+    persisted: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def enqueue_spend() -> None:
+        pending.put_nowait("accounted request")
+
+    async def callback() -> None:
+        started.set()
+        await release.wait()
+        spawn_logging_task(asyncio.get_running_loop(), enqueue_spend(), task_name="accounting")
+
+    async def flush_spend() -> None:
+        while not pending.empty():
+            persisted.put_nowait(pending.get_nowait())
+        first_flush.set()
+
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(callback())
+    await started.wait()
+    shutdown: Final = asyncio.create_task(
+        litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend)
+    )
+    try:
+        await first_flush.wait()
+        waited_for_callback: Final = not shutdown.done()
+        release.set()
+        await shutdown
+        assert waited_for_callback, "Shutdown returned while accounting callbacks were still running"
+        assert persisted.get_nowait() == "accounted request"
+        assert pending.empty()
+    finally:
+        release.set()
+        await GLOBAL_LOGGING_WORKER.flush()
+        await GLOBAL_LOGGING_WORKER.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_worker_timeout_and_flushes_completed_accounting(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "0")
+    started: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    flushed_after_cancellation: Final = asyncio.Event()
+
+    async def callback() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def flush_spend() -> None:
+        if cancelled.is_set():
+            flushed_after_cancellation.set()
+
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(callback())
+    await started.wait()
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend)
+        assert cancelled.is_set()
+        assert flushed_after_cancellation.is_set()
+        assert "Timed out draining success callbacks" in caplog.text
+    finally:
+        await GLOBAL_LOGGING_WORKER.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounds_callback_cancellation_and_flushes_accounting(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "0")
+    started: Final = asyncio.Event()
+    cancelling: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    flushed: Final = asyncio.Event()
+    loop: Final = asyncio.get_running_loop()
+    clock: Final = loop.time
+
+    async def callback() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelling.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    async def flush_spend() -> None:
+        if cancelled.is_set():
+            flushed.set()
+
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(callback())
+    await started.wait()
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            shutdown: Final = asyncio.create_task(
+                litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend)
+            )
+            await cancelling.wait()
+            monkeypatch.setattr(loop, "time", lambda: clock() + 6)
+            await shutdown
+        assert cancelled.is_set()
+        assert flushed.is_set()
+        assert "Timed out cancelling success callbacks" in caplog.text
+    finally:
+        monkeypatch.setattr(loop, "time", clock)
+        await GLOBAL_LOGGING_WORKER.stop()
+
+
 headers = {"Authorization": f"Bearer {token}"}
 
 example_completion_result = {
