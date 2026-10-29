@@ -1,9 +1,19 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Plugin } from "./types";
 
 import SkillDetail from "./skill_detail";
+
+const { mockUseMarketplaceRequiresKey } = vi.hoisted(() => ({ mockUseMarketplaceRequiresKey: vi.fn() }));
+
+vi.mock("@/app/(dashboard)/hooks/claudeCodeMarketplace/useClaudeCodeMarketplaceRequiresKey", () => ({
+  useClaudeCodeMarketplaceRequiresKey: () => mockUseMarketplaceRequiresKey(),
+}));
+
+beforeEach(() => {
+  mockUseMarketplaceRequiresKey.mockReturnValue(false);
+});
 
 const buildSkill = (source: Plugin["source"]): Plugin => ({
   id: "plugin-id",
@@ -53,5 +63,29 @@ describe("SkillDetail source", () => {
     );
     expect(screen.getByText("git@ghe.example.com:org/repo.git @ plugins/x")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+});
+
+describe("SkillDetail marketplace setup", () => {
+  const renderSetupTab = () => {
+    render(<SkillDetail skill={buildSkill({ source: "github", repo: "org/repo" })} onBack={vi.fn()} />);
+    fireEvent.click(screen.getByText("How to Use"));
+    fireEvent.click(screen.getByText(/See one-time setup/));
+  };
+
+  it("offers the add command and a keyless snippet when the marketplace is open", () => {
+    renderSetupTab();
+    expect(screen.getByText(/^\/plugin marketplace add .*\/claude-code\/marketplace\.json$/)).toBeInTheDocument();
+    expect(screen.queryByText(/Bearer/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/plugin marketplace remove/)).not.toBeInTheDocument();
+  });
+
+  it("replaces the add command with a snippet carrying the key header when the marketplace requires a key", () => {
+    mockUseMarketplaceRequiresKey.mockReturnValue(true);
+    renderSetupTab();
+    expect(screen.queryByText(/\/plugin marketplace add/)).not.toBeInTheDocument();
+    expect(screen.getByText(/"Authorization": "Bearer <your-litellm-key>"/)).toBeInTheDocument();
+    expect(screen.getByText("/plugin marketplace remove litellm")).toBeInTheDocument();
+    expect(screen.getByText(/uninstalls the plugins you installed from it/)).toBeInTheDocument();
   });
 });
