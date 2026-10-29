@@ -89,7 +89,8 @@ def _as_sequence(value: object) -> tuple[object, ...] | None:
 
 def _is_tool_change_block(block: object) -> bool:
     mapping: Final = _as_mapping(block)
-    return mapping is not None and mapping.get("type") in _TOOL_CHANGE_BLOCK_TYPES
+    block_type: Final = mapping.get("type") if mapping is not None else None
+    return isinstance(block_type, str) and block_type in _TOOL_CHANGE_BLOCK_TYPES
 
 
 def _header_beta_values(headers: Mapping[str, str]) -> frozenset[str]:

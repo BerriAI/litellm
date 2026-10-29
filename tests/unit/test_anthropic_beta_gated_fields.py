@@ -159,6 +159,13 @@ def test_inline_tools_beta_also_unlocks_system_tool_changes() -> None:
     ]
 
 
+def test_system_block_with_unhashable_type_is_kept_for_the_provider_to_reject() -> None:
+    messages: Final = [{"role": "system", "content": [{"type": [], "text": "x"}]}]
+    result: Final = strip_beta_gated_system_messages(messages, frozenset(), drop_params=True)
+    assert result.messages is messages
+    assert result.stripped == ()
+
+
 def test_system_message_emptied_by_the_strip_is_dropped() -> None:
     messages: Final = [
         {"role": "user", "content": "hi"},
