@@ -945,7 +945,6 @@ class TestCacheControlPreservationForCustomEndpoint:
 
 _EPHEMERAL: Final[dict[str, str]] = {"type": "ephemeral"}
 _EXPLICIT: Final[dict[str, str]] = {"mode": "explicit"}
-_EXPLICIT_12H: Final[dict[str, str]] = {"mode": "explicit", "ttl": "12h"}
 _LOOKUP_TOOL: Final[dict[str, object]] = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
 
 
@@ -957,8 +956,8 @@ def _marked(part: dict[str, object], mark: dict[str, str] = _EPHEMERAL) -> dict[
     return {**part, "cache_control": mark}
 
 
-def _breakpoint(part: dict[str, object], breakpoint: dict[str, str] = _EXPLICIT) -> dict[str, object]:
-    return {**part, "prompt_cache_breakpoint": breakpoint}
+def _breakpoint(part: dict[str, object]) -> dict[str, object]:
+    return {**part, "prompt_cache_breakpoint": _EXPLICIT}
 
 
 class TestCacheControlAsPromptCacheBreakpoint:
@@ -1001,7 +1000,7 @@ class TestCacheControlAsPromptCacheBreakpoint:
             {
                 "role": "user",
                 "content": [
-                    _breakpoint(_text("Describe this"), _EXPLICIT_12H),
+                    _breakpoint(_text("Describe this")),
                     _breakpoint({"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}),
                     _text("and nothing else"),
                 ],
@@ -1051,7 +1050,7 @@ class TestCacheControlAsPromptCacheBreakpoint:
         body = self._transform("gpt-5.6", messages)
         assert body["messages"] == [
             {"role": "system", "content": [_breakpoint(_text("You are helpful."))]},
-            {"role": "user", "content": [_breakpoint(_text("Hello"), _EXPLICIT_12H)]},
+            {"role": "user", "content": [_breakpoint(_text("Hello"))]},
             {"role": "user", "content": "unmarked"},
         ]
 

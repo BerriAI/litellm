@@ -25,7 +25,6 @@ from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
-    prompt_cache_breakpoint_for,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -748,9 +747,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         only the last content block can have cache_control.
         """
         if openai_dialect:
-            return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(
-                message, PromptCacheBreakpoint(mode="explicit")
-            )
+            return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(message)
 
         message_content: Final = message.get("content", None)
 
@@ -783,24 +780,21 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 },
             )
         )
-        message_mark: Final = fields.get("cache_control")
-        if message_mark is None:
+        if fields.get("cache_control") is None:
             return renamed
-        return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(
-            renamed, prompt_cache_breakpoint_for(message_mark)
-        )
+        return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(renamed)
 
     @staticmethod
-    def _insert_prompt_cache_breakpoint_in_message(
-        message: AllMessageValues, breakpoint: PromptCacheBreakpoint
-    ) -> AllMessageValues:
+    def _insert_prompt_cache_breakpoint_in_message(message: AllMessageValues) -> AllMessageValues:
         if not _may_carry_prompt_cache_breakpoint(message):
             return message
         message_content: Final = message.get("content", None)
         if isinstance(message_content, str):
             marked: Final = copy.copy(message)
             marked["content"] = [
-                with_prompt_cache_breakpoint(ChatCompletionTextObject(type="text", text=message_content), breakpoint)
+                with_prompt_cache_breakpoint(
+                    ChatCompletionTextObject(type="text", text=message_content), PromptCacheBreakpoint(mode="explicit")
+                )
             ]
             return marked
         if isinstance(message_content, list):
@@ -813,7 +807,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 None,
             )
             if target_index is not None:
-                message_content[target_index] = with_prompt_cache_breakpoint(message_content[target_index], breakpoint)
+                message_content[target_index] = with_prompt_cache_breakpoint(
+                    message_content[target_index], PromptCacheBreakpoint(mode="explicit")
+                )
         return message
 
     @staticmethod

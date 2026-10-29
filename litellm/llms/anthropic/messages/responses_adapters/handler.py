@@ -15,7 +15,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_responses_prompt_cache_breakpoint
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -95,7 +95,7 @@ def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, objec
     """Client cache marks become breakpoints for a deployment that reads them, and a model that takes no breakpoints
     drops raw ones under drop_params."""
     if _reads_prompt_cache_breakpoint(model, forwarded_kwargs):
-        return cache_control_as_prompt_cache_breakpoint
+        return cache_control_as_responses_prompt_cache_breakpoint
     if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
         return None
     if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
