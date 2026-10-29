@@ -75,7 +75,7 @@ def _editable_rules(
     file_settings: Final = proxy_config.router_settings
     if not file_settings.owned_by_config(fallback_key):
         return _STORED_FALLBACKS.validate_python(stored_settings.get(fallback_key) or [])
-    file_rules: Final = file_settings.config_value(fallback_key)
+    file_rules: Final = file_settings.get(fallback_key)
     return _STORED_FALLBACKS.validate_python(file_rules if isinstance(file_rules, list) else [])
 
 

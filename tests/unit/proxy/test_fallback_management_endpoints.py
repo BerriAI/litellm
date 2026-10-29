@@ -566,6 +566,19 @@ class TestFallbackWritesHonourTheConfigFile:
         assert stored.row is None
         assert router.fallbacks == [CONFIG_RULE, CONFIG_WINDOW_RULE]
 
+    async def test_a_create_that_restates_a_config_rule_next_to_an_env_reference_writes_nothing(
+        self, router: Router, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITELLM_TEST_FALLBACK_MODEL", "team-fallback")
+        env_rule: Final = {"team-primary": "os.environ/LITELLM_TEST_FALLBACK_MODEL"}
+        stored: Final = _StoredRouterSettings(None, config_file={"fallbacks": [CONFIG_RULE, env_rule]})
+        request: Final = FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"])
+
+        response: Final = await self._create(request, router, stored)
+
+        assert response.fallback_models == ["team-fallback"]
+        assert stored.row is None
+
     async def test_a_create_that_restates_the_config_rule_is_accepted(
         self, router: Router, stored: _StoredRouterSettings
     ) -> None:
