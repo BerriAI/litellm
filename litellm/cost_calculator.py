@@ -22,7 +22,6 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
-from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
@@ -885,15 +884,6 @@ def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
     )
 
 
-def _bedrock_invoked_profile(invoked_model_id: str) -> ModelInfo | None:
-    profile: Final = _cost_map_model_info(invoked_model_id, "bedrock")
-    arn_region: Final = invoked_model_id.split(":")[3] if is_bedrock_arn(invoked_model_id) else None
-    regional_key: Final = f"bedrock/{arn_region}/{profile['key']}" if profile is not None and arn_region else None
-    if regional_key is None or _raw_cost_map_entry(regional_key) is None:
-        return profile
-    return _cost_map_model_info(regional_key, "bedrock")
-
-
 def _bedrock_pricing_info(
     model: str | None,
     invoked_model_id: str | None,
@@ -910,7 +900,7 @@ def _bedrock_pricing_info(
         ),
         None,
     )
-    profile: Final = _bedrock_invoked_profile(invoked_model_id) if invoked_model_id else None
+    profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
     if profile is None or not _declares_rates(profile):
         return _cost_map_model_info(registration[0], None) if registration is not None else None
     if registration is None or registration[0] == profile["key"]:

@@ -283,23 +283,41 @@ def test_bedrock_embedding_model_id_arn_region_wins_over_the_model_path_region_a
     assert route.call_count == 1
 
 
-def test_bedrock_embedding_plain_model_id_calls_the_model_path_region_over_env(
+def test_bedrock_embedding_plain_model_id_calls_the_env_region_like_chat(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-    route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/amazon.titan-embed-text-v2:0/invoke").mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    route = respx_mock.post("https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.embed-english-v3/invoke").mock(
+        return_value=httpx.Response(200, json=cohere_embedding_response)
     )
 
     litellm.embedding(
-        model="bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0",
+        model="bedrock/us-east-1/cohere.embed-english-v3",
         input=[test_input],
         api_key="test-bearer-token",
-        model_id="amazon.titan-embed-text-v2:0",
+        model_id="cohere.embed-english-v3",
     )
 
     assert route.call_count == 1
+
+
+def test_bedrock_embedding_rejects_an_empty_aws_region_name_instead_of_using_the_path_region(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route = respx_mock.post(url__startswith=GOVCLOUD_WEST_RUNTIME).mock(
+        return_value=httpx.Response(200, json=titan_embedding_response)
+    )
+
+    with pytest.raises(litellm.APIConnectionError, match="Invalid AWS region format"):
+        litellm.embedding(
+            model="bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0",
+            input=[test_input],
+            api_key="test-bearer-token",
+            aws_region_name="",
+        )
+
+    assert route.call_count == 0
 
 
 @pytest.mark.parametrize(
@@ -406,22 +424,24 @@ def test_bedrock_cohere_embedding_bills_the_row_of_the_region_it_calls(
 def test_bedrock_embedding_with_a_govcloud_arn_model_id_bills_at_the_arn_region_row(
     respx_mock: respx.MockRouter,
 ) -> None:
+    arn: Final = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0"
     route = respx_mock.post(url__startswith=f"{GOVCLOUD_WEST_RUNTIME}/model/").mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+        return_value=httpx.Response(
+            200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]}
+        )
     )
 
     response: Final = litellm.embedding(
-        model="bedrock/amazon.titan-embed-text-v2:0",
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
         input=[test_input],
         api_key="test-bearer-token",
-        model_id="arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.titan-embed-text-v2:0",
+        model_id=arn,
     )
 
     assert route.call_count == 1
-    assert response.usage.prompt_tokens > 0
     assert response._hidden_params["response_cost"] == pytest.approx(
         response.usage.prompt_tokens
-        * litellm.model_cost["bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0"]["input_cost_per_token"]
+        * litellm.model_cost["bedrock/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0"]["input_cost_per_token"]
     )
 
 

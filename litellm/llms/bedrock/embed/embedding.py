@@ -98,7 +98,8 @@ class BedrockEmbedding(BaseAWSLLM):
         region_from_model: str | None = None,
     ) -> tuple[Credentials | None, str]:
         auth_params: Final = pop_aws_auth_params(optional_params)
-        aws_region_name = optional_params.pop("aws_region_name", None) or region_from_model
+        explicit_region_name: Final = optional_params.pop("aws_region_name", None)
+        aws_region_name = region_from_model if explicit_region_name is None else explicit_region_name
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -432,7 +433,7 @@ class BedrockEmbedding(BaseAWSLLM):
         model_id_param: Final = _OPTIONAL_STR.validate_python(optional_params.pop("model_id", None)) or None
         has_async_invoke: Final = "async_invoke/" in model
         model_without_async_route: Final = model.replace("async_invoke/", "", 1)
-        path_region: Final = split_bedrock_region_path(model_without_async_route)[0]
+        path_region: Final = split_bedrock_region_path(model_without_async_route)[0] if model_id_param is None else None
         bedrock_model: Final = _without_region_path(model_without_async_route)
         credentials, aws_region_name = self._load_credentials(
             optional_params,
