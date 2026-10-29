@@ -164,7 +164,7 @@ def openai_sdk_key_params(api_key: str | None) -> OpenAISdkKeyParams:
     if not _SDK_READS_ADMIN_KEY_ENV:
         return {"api_key": api_key}
     if not api_key:
-        raise OpenAIError(status_code=401, message=_MISSING_OPENAI_API_KEY_MESSAGE)
+        raise openai.OpenAIError(_MISSING_OPENAI_API_KEY_MESSAGE)
     return {"api_key": api_key, "admin_api_key": api_key}
 
 
