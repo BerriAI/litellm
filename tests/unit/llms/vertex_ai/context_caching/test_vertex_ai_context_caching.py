@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -2231,41 +2231,63 @@ class TestVertexAIGlobalLocation:
         assert url == expected_url
 
     @pytest.mark.parametrize(
-        ("api_base", "expected_url"),
+        ("custom_llm_provider", "api_base", "expected_url"),
         [
             (
+                "vertex_ai",
                 "https://gateway.example.com",
                 "https://gateway.example.com/v1/projects/my-project/locations/us-central1/cachedContents",
             ),
             (
+                "vertex_ai",
                 "https://gateway.example.com/v1",
                 "https://gateway.example.com/v1/projects/my-project/locations/us-central1/cachedContents",
             ),
             (
+                "vertex_ai",
                 "https://gateway.example.com/v1/projects/my-project/locations/us-central1"
                 "/publishers/google/models/gemini-2.5-pro",
                 "https://gateway.example.com/v1/projects/my-project/locations/us-central1/cachedContents",
             ),
             (
-                "https://gateway.example.com/vertex-proxy",
-                "https://gateway.example.com/vertex-proxy/cachedContents",
+                "vertex_ai",
+                "https://gateway.example.com/v1/projects/tuned-project/locations/europe-west4/endpoints/123",
+                "https://gateway.example.com/v1/projects/tuned-project/locations/europe-west4/cachedContents",
             ),
             (
+                "vertex_ai",
                 "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
                 "/publishers/google/models/gemini-2.5-pro",
                 "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
                 "/cachedContents",
             ),
+            (
+                "vertex_ai",
+                "https://gateway.example.com/vertex-proxy",
+                "https://gateway.example.com/vertex-proxy/v1/projects/my-project/locations/us-central1/cachedContents",
+            ),
+            (
+                "vertex_ai",
+                "https://gateway.example.com/publishers/relay",
+                "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
+                "/cachedContents",
+            ),
+            (
+                "vertex_ai_beta",
+                "https://gateway.example.com/vertex-proxy/",
+                "https://gateway.example.com/vertex-proxy/v1beta1/projects/my-project/locations/us-central1"
+                "/cachedContents",
+            ),
         ],
     )
     def test_vertex_context_caching_with_custom_api_base_uses_collection_endpoint(
-        self, api_base: str, expected_url: str
+        self, custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta"], api_base: str, expected_url: str
     ):
         caching = ContextCachingEndpoints()
 
         auth_header, url = caching._get_token_and_url_context_caching(
             gemini_api_key=None,
-            custom_llm_provider="vertex_ai",
+            custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             vertex_project="my-project",
             vertex_location="us-central1",

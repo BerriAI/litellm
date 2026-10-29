@@ -6,6 +6,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import asyncio
 import json
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping
@@ -47,10 +48,14 @@ def graft_default_vertex_path(api_base: str, default_url: str) -> str:
 _graft_default_vertex_path = graft_default_vertex_path
 
 
-def _vertex_collection_url(api_base: str, endpoint: str) -> str:
-    prefix, model_path_marker, _ = api_base.rpartition("/publishers/")
-    resource_parent: Final = prefix if model_path_marker else api_base
-    return join_api_base(resource_parent, endpoint)
+_VERTEX_LOCATION_PARENT: Final = re.compile(r".*/projects/[^/]+/locations/[^/]+")
+
+
+def _vertex_collection_url(api_base: str, endpoint: str, default_url: str) -> str:
+    location_parent: Final = _VERTEX_LOCATION_PARENT.match(api_base)
+    if location_parent is None:
+        return join_api_base(api_base, urlparse(default_url).path)
+    return join_api_base(location_parent.group(), endpoint)
 
 
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
@@ -654,8 +659,9 @@ class VertexBase:
            for a collection endpoint
         2. Vertex AI with standard proxies - grafts the default vertex URL path onto the
            api_base when its path is empty or only an API version (/v1, /v1beta1);
-           otherwise constructs {api_base}:{endpoint}, or, for a collection endpoint,
-           {api_base}/{endpoint} with a model resource path cut back to its location parent
+           otherwise constructs {api_base}:{endpoint}, or, for a collection endpoint, the collection
+           under the api_base's projects/{project}/locations/{location} parent, or the default
+           collection path under an api_base with no location in it
         3. Vertex AI with PSC endpoints - constructs full path structure
            {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
            (only when use_psc_endpoint_format=True)
@@ -703,7 +709,7 @@ class VertexBase:
                     url = graft_default_vertex_path(api_base=api_base, default_url=url)
                 else:
                     url = (
-                        _vertex_collection_url(api_base, endpoint)
+                        _vertex_collection_url(api_base=api_base, endpoint=endpoint, default_url=url)
                         if collection_endpoint
                         else f"{api_base.rstrip('/')}:{endpoint}"
                     )
