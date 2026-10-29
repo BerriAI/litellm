@@ -4986,7 +4986,7 @@ def _check_model_access_group(models: list[str] | None, llm_router: Router | Non
         return True
 
     for model in models:
-        if llm_router.is_model_access_group_for_wildcard_route(model_access_group=model):
+        if llm_router.registry().resolve(model, kind="wildcard_access_group"):
             if not premium_user:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

@@ -432,27 +432,30 @@ class AnthropicMessagesHandler(BaseTranslation):
         message, _ = serialize_http_exception_detail(exc.detail)
         return tuple(anthropic_sse_error_frames(message))
 
-    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+    def build_block_response(self, exc: "ModifyResponseException") -> "AnthropicMessagesResponse":
         import uuid
 
-        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
         from litellm.llms.base_llm.guardrail_translation.utils import (
             blocked_response_usage,
         )
         from litellm.types.utils import AnthropicMessagesResponse
 
-        block_response: Final = AnthropicMessagesResponse(
+        return AnthropicMessagesResponse(
             id=f"msg_{uuid.uuid4()}",
             type="message",
             role="assistant",
             content=[{"type": "text", "text": exc.message}],
             model=exc.model,
             stop_reason="end_turn",
-            usage=blocked_response_usage(getattr(exc, "original_response", None)),
+            usage=blocked_response_usage(exc.original_response),
         )
-        return list(FakeAnthropicMessagesStreamIterator(response=block_response))
+
+    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+
+        return list(FakeAnthropicMessagesStreamIterator(response=self.build_block_response(exc)))
 
     def _block_continuation_chunks(
         self, exc: "ModifyResponseException", responses_so_far: Sequence[object]

@@ -316,7 +316,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return descriptors
 
         # Get model group info
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             return descriptors
 
@@ -621,7 +621,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
         # Get model configuration
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None

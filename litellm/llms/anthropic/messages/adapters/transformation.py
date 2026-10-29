@@ -123,6 +123,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_image_source_to_openai_url,
+    anthropic_inline_document,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -185,6 +186,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
@@ -203,7 +206,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     ToolMessageContentPart,
 )
-from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import Choices, LlmProviders, ModelResponse, StreamingChoices, Usage
 from litellm.utils import supports_mid_conversation_system
 
 from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
@@ -362,6 +365,9 @@ class AnthropicAdapter:
 _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
+_CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.value})
+
+
 class LiteLLMAnthropicMessagesAdapter:
     def __init__(self):
         pass
@@ -495,7 +501,9 @@ class LiteLLMAnthropicMessagesAdapter:
         for m in ordered_messages:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
-            new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
+            new_user_content_list: list[
+                ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionFileObject
+            ] = []
             if m["role"] == "system":
                 system_message = self._translate_midturn_system_message_to_openai(m, model)
                 if system_message is not None:
@@ -528,13 +536,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                     self._add_prompt_cache_breakpoint_if_present(content, image_obj)
                                 )
                         elif content.get("type") == "document":
-                            # Convert Anthropic document format (PDF, etc.) to OpenAI format
-                            source = content.get("source", {})
-                            openai_image_url = self._translate_anthropic_image_to_openai(cast(dict, source))
-
-                            if openai_image_url:
-                                image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
-                                doc_obj = ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
+                            doc_obj = self._translate_anthropic_document_to_openai(content)
+                            if doc_obj is not None:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
@@ -817,6 +820,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "name",
             "input_schema",
             "description",
+            "custom",
             "cache_control",
             "strict",
             "type",
@@ -1127,7 +1131,8 @@ class LiteLLMAnthropicMessagesAdapter:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
         A Claude-family target keeps ``thinking`` verbatim, since every bridged provider serving one
-        speaks that param. Carrying its adaptive effort tier alongside takes two different params,
+        speaks that param, except Kyma, which serves Claude over the OpenAI dialect and takes only
+        ``reasoning_effort``, so its Claude models get the non-Claude mapping. Carrying its adaptive effort tier alongside takes two different params,
         because the two are not interchangeable at the provider mapping below.
 
         Bedrock takes ``output_config`` directly, which attaches the tier and leaves ``thinking``
@@ -1158,7 +1163,9 @@ class LiteLLMAnthropicMessagesAdapter:
         is_bedrock_target: Final = model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(
             model
         )
-        is_claude_target: Final = self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
+        is_claude_target: Final = (
+            self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
+        ) and custom_llm_provider not in _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS
         output_config: Final = anthropic_message_request.get("output_config")
 
         if is_claude_target:
@@ -1350,7 +1357,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 text: Final = tool_result_text_part(block)
                 return None if text is None else ChatCompletionTextObject(type="text", text=text)
             case "image" | "document":
-                return self._tool_result_image_part(block.get("source"))
+                return self._source_image_url_part(block.get("source"))
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
@@ -1358,7 +1365,18 @@ class LiteLLMAnthropicMessagesAdapter:
             case _:
                 return None
 
-    def _tool_result_image_part(self, image_source: object) -> ChatCompletionImageObject | None:
+    def _translate_anthropic_document_to_openai(
+        self, document: Mapping[str, object]
+    ) -> ChatCompletionFileObject | ChatCompletionImageObject | None:
+        inline_document: Final = anthropic_inline_document(document)
+        if inline_document is None:
+            return self._source_image_url_part(document.get("source"))
+        return ChatCompletionFileObject(
+            type="file",
+            file=ChatCompletionFileObjectFile(filename=inline_document.filename, file_data=inline_document.file_data),
+        )
+
+    def _source_image_url_part(self, image_source: object) -> ChatCompletionImageObject | None:
         if not isinstance(image_source, dict):
             return None
         openai_image_url = self._translate_anthropic_image_to_openai(image_source)
