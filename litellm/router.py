@@ -164,7 +164,11 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_structure,
 )
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import (
+    offload_token_count,
+    served_openai_models,
+    single_encoding_openai_model,
+)
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
@@ -764,6 +768,29 @@ def _highest_billed_prices(
 ) -> Mapping[str, float]:
     rates: Final = ((key, _highest_billed_rate(key, price_entries)) for key in listed_keys)
     return MappingProxyType({key: rate for key, rate in rates if rate is not None})
+
+
+def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
+    from litellm.responses.litellm_completion_transformation.tool_search import chat_config_builds_anthropic_request
+
+    configured: Final = _configured_model_info(deployment).get("supports_search_tool")
+    if isinstance(configured, bool):
+        return configured
+    params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(model, str):
+        return None
+    try:
+        resolved_model, resolved_provider = resolve_model_and_provider_for_metadata(
+            model=model, custom_llm_provider=provider if isinstance(provider, str) else None
+        )
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=resolved_model, provider=LlmProviders(resolved_provider)
+        )
+    except (litellm.BadRequestError, ValueError):
+        return None
+    return True if chat_config_builds_anthropic_request(chat_config) else None
 
 
 def _every_deployment_refused(
@@ -1580,6 +1607,7 @@ class Router:
         self._cached_deployment_tracks_usage = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
             self._deployment_tracks_usage
         )
+        self.served_openai_models = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(self._served_openai_models)
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
@@ -11937,6 +11965,9 @@ class Router:
             indices: Final = self.model_name_to_deployment_indices.get(model_name)
             return None if indices is None else tuple(self.model_list[idx] for idx in indices)
 
+    def _served_openai_models(self, model_name: str) -> tuple[str | None, ...]:
+        return served_openai_models(self.deployments_named(model_name) or ())
+
     def team_public_model_names_of(self, team_id: str) -> frozenset[str]:
         """The public names `team_id` serves its own deployments under."""
         with self._deployment_index_lock:
@@ -12272,6 +12303,15 @@ class Router:
             _configured_model_info(deployment).get("service_tiers")
             for deployment in self._routable_deployments(model_name, team_id)
         )
+
+    def get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
+        """
+        Whether each deployment a request from team_id to model_name can route
+        to (see _routable_deployments) answers Codex's client `tool_search`:
+        its model_info.supports_search_tool when that is a bool, else True when
+        its route builds an Anthropic Messages request, else None (unknown).
+        """
+        return tuple(_search_tool_support(deployment) for deployment in self._routable_deployments(model_name, team_id))
 
     def get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
         """
@@ -14100,6 +14140,7 @@ class Router:
         self._ptu_share_teams.cache_clear()
         self._cached_team_ptu_ceiling.cache_clear()
         self._cached_deployment_tracks_usage.cache_clear()
+        self.served_openai_models.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
@@ -14359,6 +14400,7 @@ class Router:
         messages: Sequence[Mapping[str, object]] | None,
         input: str | list[object] | None,
         request_kwargs: Mapping[str, object] | None = None,
+        tokenizer_model: str = "",
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -14389,7 +14431,7 @@ class Router:
         system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
-            return litellm.token_counter(messages=counted_messages, tools=tools)
+            return litellm.token_counter(model=tokenizer_model, messages=counted_messages, tools=tools)
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -14404,6 +14446,7 @@ class Router:
                 only_since_compaction=True,
             )
             return litellm.token_counter(
+                model=tokenizer_model,
                 messages=cast(list, input_messages),  # cast-ok: transformed chat messages
                 tools=tools,
             )
@@ -14460,6 +14503,10 @@ class Router:
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,
+                tokenizer_model=single_encoding_openai_model(
+                    self.served_openai_models(model) or served_openai_models(healthy_deployments)
+                )
+                or "",
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -14474,6 +14521,8 @@ class Router:
         request_kwargs: Mapping[str, object] | None,
         input_token_count: int | None,
         count_inline: bool,
+        model: str,
+        deployments: Sequence[Mapping[str, object]],
     ) -> int | None:
         if input_token_count is not None:
             return input_token_count
@@ -14484,6 +14533,10 @@ class Router:
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,
+                tokenizer_model=single_encoding_openai_model(
+                    self.served_openai_models(model) or served_openai_models(deployments)
+                )
+                or "",
             )
         except Exception as e:
             verbose_router_logger.error(
@@ -14678,6 +14731,8 @@ class Router:
             count_inline=has_countable_input
             and not skip_inline_token_count
             and any(limit is not None for limit in deployment_max_input_tokens),
+            model=model,
+            deployments=_returned_deployments,
         )
         request_settings: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else {}
         requested_params: Final[frozenset[str]] = (

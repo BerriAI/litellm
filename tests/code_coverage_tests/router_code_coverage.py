@@ -107,6 +107,7 @@ ignored_function_names = [
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
+    "_search_tool_support",  # Tested through the test_get_search_tool_support_* tests
     "_mid_stream_retry_trigger",  # Tested through the retry policy mid-stream budget test in test_router.py
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
@@ -183,6 +184,7 @@ ignored_function_names = [
     "_is_model_group_member",  # Read by _set_model_group_info, tested through every model group info test in test_router.py
     "_deployment_model_info",  # Read by _group_deployment, tested through the cost map model group info test in test_router.py
     "_group_deployment",  # Read by _set_model_group_info, tested through the team-scoped model group info test in test_router.py
+    "_served_openai_models",  # Cached as served_openai_models, tested through the pre-call check token count tests in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
     "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
     "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
