@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -22,11 +23,11 @@ def _logging_obj() -> MagicMock:
     return logging_obj
 
 
-def _session_created(model: str) -> dict:
+def _session_created(model: str) -> dict[str, object]:
     return {"type": "session.created", "session": {"id": "sess_fake", "model": model}}
 
 
-def _realtime_response_done(text_in: int, audio_in: int, text_out: int, audio_out: int) -> dict:
+def _realtime_response_done(text_in: int, audio_in: int, text_out: int, audio_out: int) -> dict[str, object]:
     return {
         "type": "response.done",
         "response": {
@@ -45,7 +46,7 @@ def _realtime_response_done(text_in: int, audio_in: int, text_out: int, audio_ou
 
 def _responses_completed(
     model: str, input_tokens: int, output_tokens: int, event: str = "response.completed"
-) -> dict:
+) -> dict[str, object]:
     return {
         "type": event,
         "response": {
@@ -63,7 +64,12 @@ def _responses_completed(
     }
 
 
-def _handle(messages, kwargs=MappingProxyType({}), logging_obj=None, url_route="/openai/v1/realtime"):
+def _handle(
+    messages: Sequence[Mapping[str, object]],
+    kwargs: Mapping[str, object] = MappingProxyType({}),
+    logging_obj: MagicMock | None = None,
+    url_route: str = "/openai/v1/realtime",
+):
     return OpenAIWebsocketPassthroughLoggingHandler().openai_websocket_passthrough_handler(
         websocket_messages=messages,
         logging_obj=logging_obj if logging_obj is not None else _logging_obj(),
@@ -318,6 +324,37 @@ def test_a_failed_responses_turn_that_reported_no_usage_is_not_billed():
 
     assert handled["result"] is None
     assert handled["kwargs"] == {"model": RESPONSES_MODEL, "custom_llm_provider": "openai"}
+
+
+@pytest.mark.parametrize(
+    ("turn_model", "requested_model", "priced_as"),
+    [
+        ("gpt-unreleased-qa-snapshot", RESPONSES_MODEL, RESPONSES_MODEL),
+        ("gpt-5.4-mini-qa-preview", RESPONSES_MODEL, RESPONSES_MODEL),
+        (RESPONSES_MODEL, REASONING_MODEL, RESPONSES_MODEL),
+    ],
+    ids=["unmapped_model", "model_the_cost_map_prices_at_zero", "priced_turn_model"],
+)
+def test_a_responses_turn_falls_back_to_the_requested_model_only_when_its_own_has_no_price(
+    turn_model: str, requested_model: str, priced_as: str
+):
+    """
+    The provider can answer under a model name the cost map does not price
+    yet. That turn still ran the model the key was allowed to ask for, so it is
+    billed at that model's price instead of $0, while a turn whose own model
+    has a price keeps it.
+    """
+    handled = _handle(
+        [_responses_completed(turn_model, input_tokens=13, output_tokens=5)],
+        kwargs=MappingProxyType({"litellm_params": {"metadata": {"model_group": requested_model}}}),
+        url_route="/openai_passthrough/v1/responses",
+    )
+
+    prices = litellm.model_cost[priced_as]
+    expected_cost = 13 * prices["input_cost_per_token"] + 5 * prices["output_cost_per_token"]
+    assert expected_cost > 0
+    assert handled["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert handled["kwargs"]["model"] == turn_model
 
 
 @pytest.mark.parametrize(

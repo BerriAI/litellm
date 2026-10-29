@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.cost_calculator import RealtimeAPITokenUsageProcessor, handle_realtime_stream_cost_calculation
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -139,15 +140,18 @@ def _responses_turn(event: Mapping[str, object], session_model: str) -> _Complet
     )
 
 
-def _responses_billing(messages: WebsocketMessages, model: str) -> _Billing | None:
+def _responses_billing(messages: WebsocketMessages, model: str, requested_model: str | None) -> _Billing | None:
     turns: Final = tuple(turn for turn in (_responses_turn(event, model) for event in messages) if turn is not None)
     if not turns:
         return None
     usage: Final = RealtimeAPITokenUsageProcessor.combine_usage_objects([turn.usage for turn in turns])
-    return _Billing(usage=usage, cost=sum(_responses_cost(turn.usage, turn.model) for turn in turns))
+    return _Billing(
+        usage=usage,
+        cost=sum(_responses_cost(turn.usage, (turn.model, requested_model)) for turn in turns),
+    )
 
 
-def _responses_cost(usage: Usage, model: str) -> float:
+def _model_cost(usage: Usage, model: str) -> float | None:
     try:
         return litellm.completion_cost(
             completion_response=ModelResponse(model=model, usage=usage),
@@ -155,10 +159,25 @@ def _responses_cost(usage: Usage, model: str) -> float:
             custom_llm_provider=OPENAI_WEBSOCKET_PROVIDER,
         )
     except Exception:  # noqa: BLE001  # completion_cost raises a bare Exception for an unpriced model, and the turn must still log
+        return None
+
+
+def _responses_cost(usage: Usage, price_as: Sequence[str | None]) -> float:
+    costs: Final = (_model_cost(usage, model) for model in dict.fromkeys(price_as) if model is not None)
+    cost: Final = next((cost for cost in costs if cost), None)
+    if cost is None:
         verbose_proxy_logger.warning(
-            "OpenAI websocket passthrough: could not price a Responses turn on %s, logging it at zero", model
+            "OpenAI websocket passthrough: could not price a Responses turn on %s, logging it at zero", price_as
         )
         return 0.0
+    return cost
+
+
+def _requested_model(kwargs: Mapping[str, object]) -> str | None:
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    metadata: Final = None if litellm_params is None else as_str_mapping(litellm_params.get("metadata"))
+    model_group: Final = None if metadata is None else metadata.get("model_group")
+    return model_group if isinstance(model_group, str) else None
 
 
 def _priced_result(model: str, billing: _Billing, start_time: datetime) -> ModelResponse:
@@ -195,7 +214,7 @@ class OpenAIWebsocketPassthroughLoggingHandler:
         )
 
         billing: Final = _realtime_billing(websocket_messages, model, logging_obj) or _responses_billing(
-            websocket_messages, model
+            websocket_messages, model, _requested_model(kwargs)
         )
         if billing is None:
             verbose_proxy_logger.debug("OpenAI websocket passthrough (%s): no usage reported, skipping cost", url_route)

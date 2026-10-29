@@ -13,9 +13,10 @@ from functools import reduce
 from itertools import chain, count, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, cast
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+import orjson
 from fastapi import (
     APIRouter,
     Depends,
@@ -60,6 +61,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
@@ -2441,11 +2443,16 @@ def _resolved_vertex_live_setup(
     return {**setup_data, "model": setup_model_rewriter(setup_model)}
 
 
+def _decoded_frame(frame: str | bytes) -> object:
+    try:
+        return _DECODED_JSON.validate_python(orjson.loads(frame))
+    except orjson.JSONDecodeError:
+        return _DECODED_JSON.validate_python(json.loads(frame if isinstance(frame, str) else frame.decode("utf-8")))
+
+
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final[object] = _DECODED_JSON.validate_python(
-            json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
-        )
+        decoded: Final = _decoded_frame(frame)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -2526,8 +2533,15 @@ WebsocketUpstreamFrameClassifier: TypeAlias = Callable[[Mapping[str, object]], W
 
 
 @dataclass(frozen=True, slots=True)
+class _TurnAuthorization:
+    requested_model: str | None
+    access_groups: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _ForwardClientFrame:
-    turn_access_groups: tuple[str, ...] | None
+    starts_turn: bool
+    turn: _TurnAuthorization | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2537,23 +2551,34 @@ class _RefuseClientFrame:
 
 @dataclass(frozen=True, slots=True)
 class _ClientFrameRequests:
+    starts_turn: bool
     turn_model: str | None
     models: tuple[str, ...]
-    names_stored_prompt: bool
+    unverifiable_model_refusal: str | None
 
 
-_NO_CLIENT_FRAME_REQUESTS: Final = _ClientFrameRequests(turn_model=None, models=(), names_stored_prompt=False)
-_FRAME_TEXT_WORTH_PARSING: Final = ('"model"', '"prompt"', "\\")
+_NO_CLIENT_FRAME_REQUESTS: Final = _ClientFrameRequests(
+    starts_turn=False, turn_model=None, models=(), unverifiable_model_refusal=None
+)
+_FORWARD_WITHOUT_TURN: Final = _ForwardClientFrame(starts_turn=False, turn=None)
+_TURN_STARTING_FRAME: Final = "response.create"
+_FRAME_TEXT_WORTH_PARSING: Final = ('"model"', '"prompt"', '"tools"', "\\")
 _TURN_MODEL_PLACEMENTS: Final = (("model",), ("response", "model"), ("session", "model"))
 _TRANSCRIPTION_MODEL_PLACEMENTS: Final = (
     ("session", "input_audio_transcription", "model"),
     ("session", "audio", "input", "transcription", "model"),
 )
 _STORED_PROMPT_PLACEMENTS: Final = (("prompt",), ("response", "prompt"), ("session", "prompt"))
+_TOOL_LIST_PLACEMENTS: Final = (("tools",), ("response", "tools"), ("session", "tools"))
+_TOOL_THAT_RUNS_A_MODEL: Final = "image_generation"
 STORED_PROMPT_PROBE_MODEL: Final = "litellm-unverifiable-stored-prompt-model"
 _STORED_PROMPT_REFUSAL: Final = (
     "This key is limited to specific models, so it cannot run a stored prompt. "
     "The gateway cannot check which model a stored prompt runs."
+)
+_UNNAMED_TOOL_MODEL_REFUSAL: Final = (
+    "This key is limited to specific models, so an image_generation tool has to name its model. "
+    "The gateway cannot check which model an unnamed one runs."
 )
 _FIRST_SENTENCE: Final = re.compile(r".*?[.!?](?=\s|$)")
 
@@ -2577,6 +2602,21 @@ def _placed_models(frame: Mapping[str, object], placements: Iterable[Sequence[st
     return tuple(value for value in placed if isinstance(value, str))
 
 
+def _placed_tools(frame: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    tool_lists: Final = (_placed_value(frame, placement) for placement in _TOOL_LIST_PLACEMENTS)
+    tools: Final = chain.from_iterable(as_object_list(tool_list) or () for tool_list in tool_lists)
+    return tuple(tool for tool in map(as_str_mapping, tools) if tool is not None)
+
+
+def _unverifiable_model_refusal(frame: Mapping[str, object], tools: Sequence[Mapping[str, object]]) -> str | None:
+    prompts: Final = (_placed_value(frame, placement) for placement in _STORED_PROMPT_PLACEMENTS)
+    if any(isinstance(prompt, Mapping) for prompt in prompts):
+        return _STORED_PROMPT_REFUSAL
+    if any(tool.get("type") == _TOOL_THAT_RUNS_A_MODEL and not isinstance(tool.get("model"), str) for tool in tools):
+        return _UNNAMED_TOOL_MODEL_REFUSAL
+    return None
+
+
 def _client_frame_requests(frame_data: str | bytes) -> _ClientFrameRequests:
     if isinstance(frame_data, str) and not _may_name_a_model(frame_data):
         return _NO_CLIENT_FRAME_REQUESTS
@@ -2584,17 +2624,21 @@ def _client_frame_requests(frame_data: str | bytes) -> _ClientFrameRequests:
     if frame is None:
         return _NO_CLIENT_FRAME_REQUESTS
     turn_models: Final = _placed_models(frame, _TURN_MODEL_PLACEMENTS)
-    prompts: Final = (_placed_value(frame, placement) for placement in _STORED_PROMPT_PLACEMENTS)
+    tools: Final = _placed_tools(frame)
+    tool_models: Final = (model for model in (tool.get("model") for tool in tools) if isinstance(model, str))
     return _ClientFrameRequests(
+        starts_turn=frame.get("type") == _TURN_STARTING_FRAME,
         turn_model=next(iter(turn_models), None),
-        models=tuple(dict.fromkeys((*turn_models, *_placed_models(frame, _TRANSCRIPTION_MODEL_PLACEMENTS)))),
-        names_stored_prompt=any(isinstance(prompt, Mapping) for prompt in prompts),
+        models=tuple(
+            dict.fromkeys((*turn_models, *_placed_models(frame, _TRANSCRIPTION_MODEL_PLACEMENTS), *tool_models))
+        ),
+        unverifiable_model_refusal=_unverifiable_model_refusal(frame, tools),
     )
 
 
-def _stored_prompt_refusal(probe: WebsocketFrameModelRefused) -> WebsocketFrameModelRefused:
+def _unverifiable_model_probe_refusal(probe: WebsocketFrameModelRefused, message: str) -> WebsocketFrameModelRefused:
     if probe.error_type.endswith("_model_access_denied"):
-        return WebsocketFrameModelRefused(message=_STORED_PROMPT_REFUSAL, error_type=probe.error_type)
+        return WebsocketFrameModelRefused(message=message, error_type=probe.error_type)
     return probe
 
 
@@ -2602,20 +2646,25 @@ async def _client_frame_verdict(
     websocket: WebSocket, frame_data: str | bytes, gate: WebsocketFrameModelGate | None
 ) -> _ForwardClientFrame | _RefuseClientFrame:
     if gate is None:
-        return _ForwardClientFrame(turn_access_groups=None)
+        return _FORWARD_WITHOUT_TURN
     requests: Final = _client_frame_requests(frame_data)
     verdicts: Final = tuple([await gate(websocket, model) for model in requests.models])
     refusal: Final = next((verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelRefused)), None)
     if refusal is not None:
         return _RefuseClientFrame(refusal=refusal)
-    if requests.names_stored_prompt and isinstance(
+    if requests.unverifiable_model_refusal is not None and isinstance(
         probe := await gate(websocket, STORED_PROMPT_PROBE_MODEL), WebsocketFrameModelRefused
     ):
-        return _RefuseClientFrame(refusal=_stored_prompt_refusal(probe))
+        return _RefuseClientFrame(refusal=_unverifiable_model_probe_refusal(probe, requests.unverifiable_model_refusal))
     allowed: Final = tuple(verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelAllowed))
-    if requests.turn_model is None or not allowed:
-        return _ForwardClientFrame(turn_access_groups=None)
-    return _ForwardClientFrame(turn_access_groups=allowed[0].access_groups)
+    return _ForwardClientFrame(
+        starts_turn=requests.starts_turn,
+        turn=(
+            _TurnAuthorization(requested_model=requests.turn_model, access_groups=allowed[0].access_groups)
+            if requests.turn_model is not None and allowed
+            else None
+        ),
+    )
 
 
 def _refusal_close_reason(message: str) -> str:
@@ -2631,12 +2680,54 @@ async def _refuse_client_frame(
     await upstream_ws.close()
 
 
-def _stamp_billed_access_groups(kwargs: Mapping[str, object], access_groups: tuple[str, ...]) -> None:
-    """Charge a turn to the access groups that authorized its model, and to none when no group did."""
+def _stamp_billed_turn(kwargs: Mapping[str, object], turn: _TurnAuthorization) -> None:
+    """Charge a turn to the access groups that authorized its model, and its model budget to the model it asked for,
+    since the provider may answer under a dated snapshot name the budget was never set on."""
     litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
     metadata: Final = None if litellm_params is None else litellm_params.get("metadata")
-    if isinstance(metadata, MutableMapping):
-        metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(access_groups)
+    if not isinstance(metadata, MutableMapping):
+        return
+    metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(turn.access_groups)
+    if turn.requested_model is not None:
+        metadata["model_group"] = turn.requested_model
+
+
+def _opening_model(target: str) -> str | None:
+    return next(iter(parse_qs(urlparse(target).query).get("model", ())), None)
+
+
+class _WebsocketTurnLedger:
+    """The groups that authorized each turn not yet logged, when the next row starts, and how many rows were logged.
+
+    The provider runs a socket's response.create frames one at a time in the order they were sent, so each row is
+    charged to the groups that allowed the oldest turn still unlogged. A realtime session keeps the model it opened on,
+    so its rows stay charged to the groups that opened it.
+    """
+
+    def __init__(self, opening: _TurnAuthorization, started: datetime) -> None:
+        self.opening = opening
+        self.queued_turns: tuple[_TurnAuthorization | None, ...] = ()
+        self.session_opened = False
+        self.started = started
+        self.logged_turns = 0
+
+    @property
+    def current(self) -> _TurnAuthorization:
+        oldest: Final = self.queued_turns[0] if self.queued_turns else None
+        return self.opening if oldest is None else oldest
+
+    def queue_turn(self, turn: _TurnAuthorization | None) -> None:
+        if not self.session_opened:
+            self.queued_turns = (*self.queued_turns, turn)
+
+    def open_session(self) -> None:
+        self.session_opened = True
+        self.queued_turns = ()
+
+    def close_turn(self, end_time: datetime) -> None:
+        self.logged_turns += 1
+        self.started = end_time
+        self.queued_turns = self.queued_turns[1:]
 
 
 async def _relay_client_frame(
@@ -2645,35 +2736,22 @@ async def _relay_client_frame(
     checked_frame: str | bytes,
     forwarded_frame: str | bytes,
     gate: WebsocketFrameModelGate | None,
+    ledger: _WebsocketTurnLedger,
 ) -> _ForwardClientFrame | _RefuseClientFrame:
     """Forward one client frame upstream, or refuse it and end the session."""
     verdict: Final = await _client_frame_verdict(websocket, checked_frame, gate)
     match verdict:
         case _RefuseClientFrame(refusal=refusal):
             await _refuse_client_frame(websocket, upstream_ws, refusal)
+        case _ForwardClientFrame(starts_turn=True, turn=turn):
+            ledger.queue_turn(turn)
+            await upstream_ws.send(forwarded_frame)
         case _ForwardClientFrame():
             await upstream_ws.send(forwarded_frame)
     return verdict
 
 
 _EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging_payload", "custom_llm_provider"})
-
-
-class _WebsocketTurnLedger:
-    """The groups that authorized the turn in flight, when it started, and how many turns the socket has logged."""
-
-    def __init__(self, access_groups: tuple[str, ...], started: datetime) -> None:
-        self.access_groups = access_groups
-        self.started = started
-        self.logged_turns = 0
-
-    def authorize(self, access_groups: tuple[str, ...] | None) -> None:
-        if access_groups is not None:
-            self.access_groups = access_groups
-
-    def close_turn(self, end_time: datetime) -> None:
-        self.logged_turns += 1
-        self.started = end_time
 
 
 async def websocket_passthrough_request(
@@ -2835,7 +2913,11 @@ async def websocket_passthrough_request(
             self.request = MockWebSocketRequest(target_url)
 
     ledger: Final = _WebsocketTurnLedger(
-        access_groups=tuple(user_api_key_dict.matched_model_access_groups or ()), started=start_time
+        opening=_TurnAuthorization(
+            requested_model=_opening_model(target),
+            access_groups=tuple(user_api_key_dict.matched_model_access_groups or ()),
+        ),
+        started=start_time,
     )
 
     def log_frames(
@@ -2856,7 +2938,7 @@ async def websocket_passthrough_request(
             "end_time": end_time,
         }
         if client_frame_model_gate is not None:
-            _stamp_billed_access_groups(call_kwargs, ledger.access_groups)
+            _stamp_billed_turn(call_kwargs, ledger.current)
         success_kwargs: Final = {
             key: value for key, value in call_kwargs.items() if key not in _EXPLICIT_SUCCESS_KWARGS
         }
@@ -2988,26 +3070,25 @@ async def websocket_passthrough_request(
                                     # Not a JSON message or doesn't contain setup data
 
                             if isinstance(
-                                relayed_text := await _relay_client_frame(
+                                await _relay_client_frame(
                                     websocket,
                                     upstream_ws,
                                     text_data,
                                     _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
                                     client_frame_model_gate,
+                                    ledger,
                                 ),
                                 _RefuseClientFrame,
                             ):
                                 break
-                            ledger.authorize(relayed_text.turn_access_groups)
                         elif bytes_data is not None:
                             if isinstance(
-                                relayed_bytes := await _relay_client_frame(
-                                    websocket, upstream_ws, bytes_data, bytes_data, client_frame_model_gate
+                                await _relay_client_frame(
+                                    websocket, upstream_ws, bytes_data, bytes_data, client_frame_model_gate, ledger
                                 ),
                                 _RefuseClientFrame,
                             ):
                                 break
-                            ledger.authorize(relayed_bytes.turn_access_groups)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -3042,8 +3123,13 @@ async def websocket_passthrough_request(
                     _extract_vertex_live_model_from_setup_response(message_data)
                     return
                 websocket_messages.append(message_data)
-                if upstream_frame_kind is not None and upstream_frame_kind(message_data) == "ends_turn":
-                    log_turn()
+                match None if upstream_frame_kind is None else upstream_frame_kind(message_data):
+                    case "opens_session":
+                        ledger.open_session()
+                    case "ends_turn":
+                        log_turn()
+                    case _:
+                        pass
 
             async def relay_upstream_frame(upstream_message: str | bytes) -> None:
                 record_upstream_frame(upstream_message)
@@ -3105,7 +3191,9 @@ async def websocket_passthrough_request(
                     reason=_truncated_close_reason(upstream_close.reason),
                 )
 
-            if ledger.logged_turns == 0:
+            if upstream_frame_kind is None or any(
+                upstream_frame_kind(frame) != "opens_session" for frame in websocket_messages
+            ):
                 log_turn()
 
             # Call the proxy logging success hook

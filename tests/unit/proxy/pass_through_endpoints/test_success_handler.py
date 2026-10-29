@@ -667,7 +667,7 @@ REALTIME_FRAMES: Final = [
 ]
 
 
-def _normalize(url_route: str, response_body):
+def _normalize(url_route: str, response_body: dict[str, object] | list[dict[str, object]]) -> dict:
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
     return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(

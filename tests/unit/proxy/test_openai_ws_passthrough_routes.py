@@ -18,6 +18,7 @@ import litellm
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    _OPENAI_WS_ALIASED_MODEL_REFUSAL,
     _OPENAI_WS_DISABLED_REFUSAL,
     _OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL,
     _openai_websocket_refusal,
@@ -171,6 +172,18 @@ async def test_openai_websocket_forwards_query_and_keeps_provider_auth(prefix, m
     assert websocket.accepts == [None]
     assert websocket.sent == []
     assert websocket.closed is None
+
+
+@pytest.mark.asyncio
+async def test_openai_websocket_reports_its_route_without_the_proxy_root_path(monkeypatch):
+    """Route allowlists and spend rows key on the route the proxy serves, which a root path prefix is not part of"""
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
+    websocket = _FakeWebSocket("/litellm/openai/v1/responses", "")
+
+    with patch(GET_CREDENTIALS, return_value="sk-provider"):
+        served = await _serve(websocket, "v1/responses", UserAPIKeyAuth(), ENABLED)
+
+    assert [call.endpoint for call in served.relay.calls] == ["/openai/v1/responses"]
 
 
 @pytest.mark.asyncio
@@ -388,6 +401,48 @@ async def test_proxy_frame_model_gate_refuses_a_model_the_agent_was_not_granted(
     refusal: Final = _refusal(await _gate_verdict(_FrameAuthorizer(token), "gpt-5.4"))
 
     assert refusal_names in refusal.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token",
+    [
+        UserAPIKeyAuth(models=["gpt-5.4-mini"], aliases={"gpt-5.4": "gpt-5.4-mini"}),
+        UserAPIKeyAuth(models=["gpt-5.4-mini"], team_model_aliases={"gpt-5.4": "gpt-5.4-mini"}),
+    ],
+    ids=["key_alias", "team_alias"],
+)
+async def test_proxy_frame_model_gate_refuses_an_alias_that_would_reach_openai_unchanged(token):
+    """
+    The passthrough sends each frame to OpenAI as written, so OpenAI runs the
+    alias name itself. An alias pointing at an allowed model must not let a key
+    limited to that model run the model the alias is named after.
+    """
+    refusal: Final = _refusal(await _gate_verdict(_FrameAuthorizer(token), "gpt-5.4"))
+
+    assert refusal == WebsocketFrameModelRefused(
+        message=_OPENAI_WS_ALIASED_MODEL_REFUSAL, error_type=ProxyErrorTypes.key_model_access_denied.value
+    )
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_refuses_a_proxy_wide_alias_for_a_key_limited_to_its_target(monkeypatch):
+    monkeypatch.setattr(litellm, "model_alias_map", {"gpt-5.4": "gpt-5.4-mini"})
+
+    refusal: Final = _refusal(
+        await _gate_verdict(_FrameAuthorizer(UserAPIKeyAuth(models=["gpt-5.4-mini"])), "gpt-5.4")
+    )
+
+    assert refusal.message == _OPENAI_WS_ALIASED_MODEL_REFUSAL
+
+
+@pytest.mark.asyncio
+async def test_proxy_frame_model_gate_lets_a_key_that_may_use_any_model_send_an_alias():
+    token: Final = UserAPIKeyAuth(models=[], aliases={"fast": "gpt-5.4-mini"})
+
+    verdict: Final = await _gate_verdict(_FrameAuthorizer(token), "fast")
+
+    assert verdict == WebsocketFrameModelAllowed(access_groups=())
 
 
 @pytest.mark.asyncio
