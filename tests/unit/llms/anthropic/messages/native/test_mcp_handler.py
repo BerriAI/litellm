@@ -454,3 +454,84 @@ async def test_anthropic_messages_with_mcp_loads_a_filtered_routes_beta_map_off_
 @pytest.mark.asyncio
 async def test_anthropic_messages_with_mcp_never_loads_the_beta_map_for_first_party_anthropic():
     assert await _mcp_safeguards_turn_recording_beta_map_loads("anthropic", "claude-sonnet-4-6") == ()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_keeps_the_requests_parallel_slot_while_its_tools_run():
+    import asyncio
+    import contextvars
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.llms.anthropic.messages.native import mcp_handler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+    from litellm.responses.mcp.request_context import MCPRequestContext
+    from litellm.types.utils import CallTypes
+
+    local_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(local_cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-messages-tool-loop"), max_parallel_requests=1)
+
+    async def admit(data: dict[str, object]) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key, cache=local_cache, data=data, call_type=CallTypes.anthropic_messages.value
+        )
+
+    async def second_request_status() -> int:
+        try:
+            await contextvars.Context().run(asyncio.create_task, admit({"model": "claude-x", "messages": []}))
+        except HTTPException as rejected:
+            return rejected.status_code
+        return 200
+
+    async def log_the_requests_success() -> None:
+        await limiter.async_log_success_event(
+            kwargs={"litellm_call_id": "messages-owner", "stream": False},
+            response_obj=None,
+            start_time=None,
+            end_time=datetime.now(),
+        )
+
+    async def run_tool_after_the_first_round_logs(**_: object) -> list[dict[str, str]]:
+        await log_the_requests_success()
+        assert await second_request_status() == 429, "A round logged while tools run must not free the request's slot"
+        return [{"tool_call_id": "toolu_1", "result": "ok", "name": "get_weather"}]
+
+    responses = [
+        {
+            "stop_reason": "tool_use",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}}],
+        },
+        {"stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]},
+    ]
+    handler_class: Final = import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler
+
+    await admit(
+        {"model": "claude-x", "messages": [{"role": "user", "content": "hi"}], "litellm_call_id": "messages-owner"}
+    )
+    with (
+        patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")),
+        patch.object(
+            handler_class,
+            "process_mcp_tools_without_openai_transform",
+            new=AsyncMock(return_value=([], {"get_weather": "weather"})),
+        ),
+        patch.object(
+            handler_class, "execute_tool_calls", new=AsyncMock(side_effect=run_tool_after_the_first_round_logs)
+        ),
+        patch("litellm.anthropic_messages", new=AsyncMock(side_effect=responses)),
+    ):
+        result = await mcp_handler.anthropic_messages_with_mcp(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            model="claude-sonnet-4-5",
+            tools=[MCP_REFERENCE],
+        )
+
+    assert result == responses[1]
+    await log_the_requests_success()
+    assert await second_request_status() == 200, "The request's own log after its tools finish must free its slot"

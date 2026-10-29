@@ -82,6 +82,7 @@ async def anthropic_messages_with_mcp(
     from litellm.mcp_client.tools import (
         transform_mcp_tool_to_anthropic_tool,
     )
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_slot_held_by_tool_loop
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -145,52 +146,53 @@ async def anthropic_messages_with_mcp(
         else base_call_args
     )
     working_messages: Sequence[Mapping[str, object]] = tuple(messages)
-    response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-        messages=list(working_messages), stream=False, **loop_call_args
-    )
-
-    for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
-        if _get_stop_reason(response) != "tool_use":
-            break
-
-        tool_use_blocks = _extract_tool_use_blocks(response)
-        if not tool_use_blocks:
-            break
-
-        tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-            tool_server_map=tool_server_map,
-            served_tools=deduplicated_mcp_tools,
-            tool_calls=list(tool_use_blocks),
-            user_api_key_auth=context.user_api_key_auth,
-            mcp_auth_header=context.mcp_auth_header,
-            mcp_server_auth_headers=context.mcp_server_auth_headers,
-            oauth2_headers=context.oauth2_headers,
-            raw_headers=context.raw_headers,
-            litellm_call_id=context.litellm_call_id,
-            litellm_trace_id=context.litellm_trace_id,
-            request_tags=list(context.request_tags) if context.request_tags else None,
-            guardrail_context=context.guardrail_context,
-        )
-
-        # Every tool call was skipped, so there is nothing to feed back; a
-        # tool_result message with empty content is rejected by Anthropic.
-        if not tool_results:
-            break
-
-        working_messages = (
-            *working_messages,
-            {"role": "assistant", "content": list(_get_response_content(response))},
-            _build_tool_result_message(tool_results),
-        )
-        response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+    with request_slot_held_by_tool_loop(context.litellm_call_id):
+        response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
             messages=list(working_messages), stream=False, **loop_call_args
         )
-    else:
-        verbose_logger.warning(
-            "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
-            MAX_MCP_TOOL_USE_ITERATIONS,
-            model,
-        )
+
+        for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
+            if _get_stop_reason(response) != "tool_use":
+                break
+
+            tool_use_blocks = _extract_tool_use_blocks(response)
+            if not tool_use_blocks:
+                break
+
+            tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                tool_server_map=tool_server_map,
+                served_tools=deduplicated_mcp_tools,
+                tool_calls=list(tool_use_blocks),
+                user_api_key_auth=context.user_api_key_auth,
+                mcp_auth_header=context.mcp_auth_header,
+                mcp_server_auth_headers=context.mcp_server_auth_headers,
+                oauth2_headers=context.oauth2_headers,
+                raw_headers=context.raw_headers,
+                litellm_call_id=context.litellm_call_id,
+                litellm_trace_id=context.litellm_trace_id,
+                request_tags=list(context.request_tags) if context.request_tags else None,
+                guardrail_context=context.guardrail_context,
+            )
+
+            # Every tool call was skipped, so there is nothing to feed back; a
+            # tool_result message with empty content is rejected by Anthropic.
+            if not tool_results:
+                break
+
+            working_messages = (
+                *working_messages,
+                {"role": "assistant", "content": list(_get_response_content(response))},
+                _build_tool_result_message(tool_results),
+            )
+            response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+                messages=list(working_messages), stream=False, **loop_call_args
+            )
+        else:
+            verbose_logger.warning(
+                "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
+                MAX_MCP_TOOL_USE_ITERATIONS,
+                model,
+            )
 
     client_response: Final = (
         await with_safeguard_results(response, request_safeguards_evaluator(kwargs, working_messages))

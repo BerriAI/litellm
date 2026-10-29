@@ -11,8 +11,8 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence, Set
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -713,6 +713,7 @@ class RequestRateLimiterStash:
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
+    parallel_slot_held_by_tool_loop: bool = False
     parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
@@ -801,10 +802,28 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+def hold_request_slot_for_tool_loop(litellm_call_id: str | None) -> RequestRateLimiterStash | None:
+    stash: Final = get_request_stash_for_call(litellm_call_id)
+    if stash is None or stash.parallel_slot is None:
+        return None
+    stash.parallel_slot_held_by_tool_loop = True
+    return stash
+
+
+@contextmanager
+def request_slot_held_by_tool_loop(litellm_call_id: str | None) -> Generator[None, None, None]:
+    held_stash: Final = hold_request_slot_for_tool_loop(litellm_call_id)
+    try:
+        yield
+    finally:
+        if held_stash is not None:
+            held_stash.parallel_slot_held_by_tool_loop = False
+
+
+def claim_request_stash_for_data(data: dict, call_type: str | None) -> RequestRateLimiterStash:
     stash: Final = get_or_create_request_stash()
     owner_call_id: Final = data.get("litellm_call_id")
-    if isinstance(owner_call_id, str):
+    if isinstance(owner_call_id, str) and call_type != CallTypes.pass_through.value:
         stash.owner_litellm_call_id = owner_call_id
     return stash
 
@@ -2117,7 +2136,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
         async with stash.parallel_slot_release_lock:
             acquisition: Final = stash.parallel_slot
-            if acquisition is None or _ended_before_slot_reuse(round_ended_at, stash.parallel_slot_reused_at):
+            if (
+                acquisition is None
+                or (in_logging_callback and stash.parallel_slot_held_by_tool_loop)
+                or _ended_before_slot_reuse(round_ended_at, stash.parallel_slot_reused_at)
+            ):
                 return
             deferred: Final = in_logging_callback and await self._defer_parallel_slot_release(
                 acquisition, parent_otel_span
@@ -4052,7 +4075,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if not isinstance(data, dict):
             return
-        stash: Final = claim_request_stash_for_data(data)
+        stash: Final = claim_request_stash_for_data(data, call_type)
         io_token_descriptors: Final = [
             d for d in descriptors if d["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
         ]
@@ -4281,7 +4304,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
-        stash: Final = claim_request_stash_for_data(data)
+        stash: Final = claim_request_stash_for_data(data, call_type)
         reuses_request_slot: Final = call_type == CallTypes.call_mcp_tool.value and stash.parallel_slot is not None
         if reuses_request_slot:
             stash.parallel_slot_reused_at = self._get_current_time()
@@ -5787,7 +5810,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     @with_service_target("rate_limits")
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -5810,7 +5833,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         that usage instead of refunding it.
         """
         try:
-            stash: Final = get_request_stash()
+            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(request_data))
             if stash is None:
                 return
             await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
@@ -5851,7 +5874,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ptu_ops: Final = (
                 self._build_ptu_failure_settlement_ops(
                     stash,
-                    request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
+                    request_data,
                     tpm_actual,
                 )
                 if reserved_tokens > 0

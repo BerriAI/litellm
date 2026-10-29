@@ -8092,6 +8092,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         proxy_logging_obj = MagicMock(spec=ProxyLogging)
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=run_limiter)
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=limiter.async_post_call_failure_hook)
         guardrails_by_group = model_guardrails or {}
         router = litellm.Router(
             model_list=[
@@ -8258,6 +8259,42 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert processor.data["model"] == primary_model
         assert processor.data["litellm_logging_obj"].model == primary_model
         assert processor.data["litellm_call_id"]
+
+    @pytest.mark.asyncio
+    async def test_failed_request_served_by_a_fallback_frees_its_parallel_slot(self, monkeypatch: pytest.MonkeyPatch):
+        """/completions reports a failure with the endpoint's own request body, the one the
+        rate-limited first attempt ran on, so the fallback attempt that took the slot has to carry
+        the same call id or the slot never comes back."""
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        key: Final = ProxyUserAPIKeyAuth(api_key="hashed-key", max_parallel_requests=1)
+        rig: Final = self._v3_limiter_rig(
+            monkeypatch,
+            key,
+            [{primary_model: [fallback_model]}],
+            untagged_rate_limited_models=frozenset({primary_model}),
+        )
+
+        async def request_that_fails_after_falling_back() -> None:
+            client_data: Final[dict[str, object]] = {
+                "model": primary_model,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+            await self._pre_call(client_data, key, rig)
+            await rig[0].post_call_failure_hook(
+                user_api_key_dict=key,
+                original_exception=Exception("upstream failed"),
+                request_data=client_data,
+            )
+
+        await contextvars.Context().run(asyncio.create_task, request_that_fails_after_falling_back())
+        _, (next_data, _) = await contextvars.Context().run(
+            asyncio.create_task,
+            self._pre_call({"model": fallback_model, "messages": [{"role": "user", "content": "next"}]}, key, rig),
+        )
+
+        assert next_data["model"] == fallback_model
+        assert rig[3] == [primary_model, fallback_model, fallback_model]
 
     HARD_PER_MODEL_LIMITS: Final = MappingProxyType({"disable_fallbacks_on_per_model_rate_limits": True})
 
