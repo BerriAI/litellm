@@ -5,6 +5,7 @@ CRUD endpoints for storing reusable credentials.
 import time
 import unicodedata
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import (
     Annotated,
     Final,
@@ -23,7 +24,7 @@ from litellm.constants import (
     GITHUB_COPILOT_PER_USER_AUTH_TYPE,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.litellm_core_utils.litellm_logging import get_masked_values, has_sensitive_keyword
 from litellm.llms.anthropic.wif import (
     ExportedJwks,
     NotAnInternalIssuerCredential,
@@ -83,6 +84,11 @@ _CREDENTIAL_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _GITHUB_COPILOT_PROVIDER: Final = "github_copilot"
 _DISPLAY_NAME_MAX_LENGTH: Final = 255
 _DISPLAY_NAME_FORBIDDEN_CATEGORIES: Final = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+_MASK_UNMASKED_LENGTH: Final = 4
+_MASK_ASTERISKS: Final = 4
+_SHORT_SECRET_MASK: Final = "*****"
+_MASKED_READ_BACK_DEPTH: Final = 20
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _normalized_github_copilot_values(
@@ -395,7 +401,14 @@ async def get_credentials(
     """
     try:
         masked_credentials: Final = [
-            _credential_view(credential, get_masked_values(credential.credential_values))
+            _credential_view(
+                credential,
+                get_masked_values(
+                    credential.credential_values,
+                    unmasked_length=_MASK_UNMASKED_LENGTH,
+                    number_of_asterisks=_MASK_ASTERISKS,
+                ),
+            )
             for credential in litellm.credential_list
         ]
         return {"success": True, "credentials": masked_credentials}
@@ -423,7 +436,11 @@ async def get_credential_by_name(
             if credential.credential_name == credential_name:
                 return _credential_view(
                     credential,
-                    get_masked_values(credential.credential_values, unmasked_length=4, number_of_asterisks=4),
+                    get_masked_values(
+                        credential.credential_values,
+                        unmasked_length=_MASK_UNMASKED_LENGTH,
+                        number_of_asterisks=_MASK_ASTERISKS,
+                    ),
                 )
         raise HTTPException(
             status_code=404,
@@ -521,8 +538,8 @@ async def get_credential_by_model(
             raise HTTPException(status_code=404, detail="Model not found")
         masked_credential_values: Final = get_masked_values(
             credential_values,
-            unmasked_length=4,
-            number_of_asterisks=4,
+            unmasked_length=_MASK_UNMASKED_LENGTH,
+            number_of_asterisks=_MASK_ASTERISKS,
         )
         credential: Final = CredentialItem(
             credential_name=f"{model.model_name}-credential-{model_id}",
@@ -908,6 +925,48 @@ def update_db_credential(
     return merged_credential
 
 
+def _is_masked_read_back(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    if value == _SHORT_SECRET_MASK:
+        return True
+    shown: Final = _MASK_UNMASKED_LENGTH // 2
+    return len(value) == _MASK_UNMASKED_LENGTH + _MASK_ASTERISKS and value[shown:-shown] == "*" * _MASK_ASTERISKS
+
+
+def _as_fields(value: object) -> Mapping[str, object] | None:
+    try:
+        return _CREDENTIAL_DICT_ADAPTER.validate_python(value, strict=True)
+    except ValidationError:
+        return None
+
+
+def _kept_value(key: str, value: object, stored: Mapping[str, object], depth: int) -> tuple[str, object] | None:
+    if not has_sensitive_keyword(key):
+        return key, value
+    fields: Final = _as_fields(value)
+    if fields is not None and depth < _MASKED_READ_BACK_DEPTH:
+        return key, _without_masked_read_backs(fields, _as_fields(stored.get(key)) or _NO_FIELDS, depth + 1)
+    if not _is_masked_read_back(value):
+        return key, value
+    if key in stored:
+        return key, stored[key]
+    return None
+
+
+def _without_masked_read_backs(
+    requested: Mapping[str, object], stored: Mapping[str, object], depth: int = 0
+) -> Mapping[str, object]:
+    kept: Final = (_kept_value(key, value, stored, depth) for key, value in requested.items())
+    return _CREDENTIAL_DICT_ADAPTER.validate_python(
+        MappingProxyType(dict(entry for entry in kept if entry is not None))
+    )
+
+
+def _stored_objects(stored_values: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in stored_values.items() if _as_fields(value) is not None})
+
+
 @router.patch(
     "/credentials/{credential_name:path}",
     dependencies=[Depends(user_api_key_auth)],
@@ -936,12 +995,12 @@ async def update_credential(
             )
         requested_display_name: Final = _normalized_display_name(credential.display_name)
         _reject_overlapping_credential_values(credential)
-        incoming_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+        requested_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
             _resolve_deployment_credentials(llm_router, credential.model_id)
             if credential.model_id
             else credential.credential_values or {}
         )
-        _reject_non_admin_wif_fields(_incoming_wif_fields(incoming_values, credential), user_api_key_dict)
+        _reject_non_admin_wif_fields(_incoming_wif_fields(requested_values, credential), user_api_key_dict)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -952,18 +1011,19 @@ async def update_credential(
         if db_credential is None:
             raise _not_found_unless_config_defined(credential_name, "Credential not found in DB.")
         _reject_non_admin_wif_fields(_stored_wif_fields(db_credential), user_api_key_dict)
+        decrypted_stored_credential: Final = decrypted_credential(db_credential)
+        decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+            decrypted_stored_credential.credential_values
+        )
+        incoming_values: Final = _without_masked_read_backs(requested_values, _stored_objects(decrypted_values))
         patch: Final = CredentialItem(
             credential_name=credential_name,
             display_name=(
                 requested_display_name if "display_name" in credential.model_fields_set else db_credential.display_name
             ),
             credential_info=_CREDENTIAL_DICT_ADAPTER.validate_python(credential.credential_info),
-            credential_values=incoming_values,
+            credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(incoming_values),
             credential_values_to_delete=credential.credential_values_to_delete,
-        )
-        decrypted_stored_credential: Final = decrypted_credential(db_credential)
-        decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
-            decrypted_stored_credential.credential_values
         )
         stored_info: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
             db_credential.credential_info  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
