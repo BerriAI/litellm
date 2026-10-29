@@ -29,6 +29,7 @@ from litellm.proxy.client.cli.commands.agents import (
     build_agent_env,
     codex_model_sync_args,
     opencode_model_sync_env,
+    opencode_server_args,
     run_agent,
     verify_proxy_key,
     verify_subscription_key,
@@ -662,6 +663,107 @@ class TestOpencodeModelSync:
         assert _default_of(opencode_model_sync_env, "get") is requests.get
 
 
+class _FakeVersionRun:
+    def __init__(self, stdout="opencode v2.2.1\n", returncode=0, error=None):
+        self.stdout = stdout
+        self.returncode = returncode
+        self.error = error
+        self.calls = []
+
+    def __call__(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        if self.error is not None:
+            raise self.error
+        return subprocess.CompletedProcess(command, self.returncode, self.stdout, "")
+
+
+class TestOpencodeServerArgs:
+    @pytest.mark.parametrize(
+        "printed",
+        ["opencode v2.2.1\n", "opencode v2.0.0\n", "v2.1.1", "opencode v3.0.0-beta.1\n"],
+    )
+    def test_opencode_2_and_later_get_a_private_server(self, printed):
+        run = _FakeVersionRun(stdout=printed)
+        assert opencode_server_args("/usr/local/bin/opencode", [], {}, run=run) == ("--standalone",)
+        assert run.calls[0][0] == ("/usr/local/bin/opencode", "--version")
+
+    @pytest.mark.parametrize("printed", ["1.19.5\n", "opencode v1.4.0\n", "", "not a version\n"])
+    def test_opencode_1_or_an_unreadable_version_launches_unchanged(self, printed):
+        assert opencode_server_args("/usr/local/bin/opencode", [], {}, run=_FakeVersionRun(stdout=printed)) == ()
+
+    def test_a_failing_version_probe_launches_unchanged(self):
+        run = _FakeVersionRun(stdout="opencode v2.2.1\n", returncode=1)
+        assert opencode_server_args("/usr/local/bin/opencode", [], {}, run=run) == ()
+
+    @pytest.mark.parametrize(
+        "error",
+        [FileNotFoundError("opencode"), subprocess.TimeoutExpired("opencode --version", 10)],
+    )
+    def test_a_probe_that_cannot_run_launches_unchanged(self, error):
+        assert opencode_server_args("/usr/local/bin/opencode", [], {}, run=_FakeVersionRun(error=error)) == ()
+
+    def test_the_probe_runs_with_the_launch_env(self):
+        run = _FakeVersionRun()
+        opencode_server_args("/usr/local/bin/opencode", [], {"PATH": "/opt/node/bin"}, run=run)
+        assert run.calls[0][1]["env"] == {"PATH": "/opt/node/bin"}
+        assert run.calls[0][1]["stdin"] is subprocess.DEVNULL
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            [],
+            ["-c"],
+            ["--continue"],
+            ["-s", "ses_123"],
+            ["--prompt", "fix the tests"],
+            ["run", "fix the tests"],
+            ["run", "-m", "litellm/claude-sonnet-5-5", "hi"],
+            ["models"],
+            ["mini"],
+        ],
+    )
+    def test_session_launches_get_a_private_server(self, args):
+        assert opencode_server_args("/usr/local/bin/opencode", args, {}, run=_FakeVersionRun()) == ("--standalone",)
+
+    def test_a_project_directory_launch_gets_a_private_server(self, tmp_path):
+        args = [str(tmp_path)]
+        assert opencode_server_args("/usr/local/bin/opencode", args, {}, run=_FakeVersionRun()) == ("--standalone",)
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["service", "stop"],
+            ["service", "status"],
+            ["serve", "--port", "4096"],
+            ["acp"],
+            ["pair"],
+            ["upgrade"],
+            ["auth", "list"],
+            ["no-such-directory-or-subcommand"],
+            ["--server", "http://127.0.0.1:4096"],
+            ["--server=http://127.0.0.1:4096"],
+            ["-c", "--server", "http://127.0.0.1:4096"],
+            ["--standalone"],
+            ["run", "--standalone", "hi"],
+        ],
+    )
+    def test_commands_that_refuse_the_flag_or_pick_their_own_server_launch_unchanged(self, args):
+        assert opencode_server_args("/usr/local/bin/opencode", args, {}, run=_FakeVersionRun()) == ()
+
+    def test_other_agents_are_never_probed(self):
+        run = _FakeVersionRun()
+        assert opencode_server_args("/usr/local/bin/codex", [], {}, run=run) == ()
+        assert run.calls == []
+
+    def test_a_windows_npm_shim_is_probed_through_cmd(self):
+        run = _FakeVersionRun()
+        assert opencode_server_args("C:/npm/opencode.cmd", [], {}, run=run) == ("--standalone",)
+        command = run.calls[0][0]
+        assert isinstance(command, str)
+        assert command.startswith("cmd.exe /d /e:on /v:off /s /c ")
+        assert "--version" in command
+
+
 class TestCodexModelSync:
     @staticmethod
     def _listing(*models):
@@ -1227,6 +1329,25 @@ class TestRunAgent:
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
         assert "model_catalog_json" not in json.dumps(calls["env"])
 
+    def test_opencode_2_launches_on_a_private_server_ahead_of_the_user_args(self):
+        calls = {}
+        run = _FakeVersionRun()
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["opencode", "run", "fix the tests"],
+            base_env={"PATH": "/opt/node/bin"},
+            sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
+            server_args=functools.partial(opencode_server_args, run=run),
+            which=lambda name: "/opt/node/bin/opencode",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(path=p, args=tuple(a), env=dict(e)),
+        )
+        assert calls["args"] == ("opencode", "--standalone", "run", "fix the tests")
+        assert run.calls[0][0] == ("/opt/node/bin/opencode", "--version")
+        assert calls["env"]["OPENCODE_CONFIG_CONTENT"] == '{"provider":{}}'
+        assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
+
     def test_synced_model_config_reaches_the_agent_alongside_profile_env(self):
         calls = {}
         run_agent(
@@ -1236,6 +1357,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
             which=lambda name: "/usr/local/bin/opencode",
+            server_args=lambda *a: (),
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1260,6 +1382,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=fake_sync,
             which=lambda name: "/usr/local/bin/opencode",
+            server_args=lambda *a: (),
             verify=lambda *a: order.append("verify"),
             launcher=lambda p, a, e: order.append("launch"),
         )
@@ -1287,6 +1410,7 @@ class TestRunAgent:
                 base_env={},
                 sync_models=boom,
                 which=lambda name: "/usr/local/bin/opencode",
+            server_args=lambda *a: (),
                 verify=failing_verify,
                 launcher=lambda *a: None,
             )
@@ -1308,6 +1432,7 @@ class TestRunAgent:
             sync_models=fake_sync,
             warn=warnings.append,
             which=lambda name: "/usr/local/bin/opencode",
+            server_args=lambda *a: (),
             verify=lambda *a: pytest.fail("--skip-verify must not verify"),
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1325,6 +1450,7 @@ class TestRunAgent:
             sync_models=lambda *a: ModelSyncSkipped("proxy said no"),
             warn=lambda message: calls.setdefault("warned", message),
             which=lambda name: "/usr/local/bin/opencode",
+            server_args=lambda *a: (),
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
