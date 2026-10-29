@@ -615,7 +615,7 @@ def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
 
 
 def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
-    """A deployment's ``token_count_model`` and ``token_count_framing`` must not land on
+    """A deployment's ``token_count_model`` and framing settings must not land on
     the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
     from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 
@@ -624,6 +624,7 @@ def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
     configured: Final = {
         "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-west-2"},
         "token_count_framing": 7,
+        "token_count_tool_framing": 3,
     }
     builtin: Final = {field: cost_map_entry(backend_model).get(field) for field in configured}
     assert all(builtin[field] != value for field, value in configured.items()), builtin

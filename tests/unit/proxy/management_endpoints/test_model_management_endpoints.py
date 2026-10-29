@@ -4467,6 +4467,7 @@ class TestModelInfoCostMapEchoFilter:
         [
             ("bedrock/us.anthropic.claude-sonnet-5-5", "token_count_model", {}),
             ("bedrock/us.moonshotai.kimi-k3", "token_count_framing", 0),
+            ("azure_ai/grok-4-1-fast-reasoning", "token_count_tool_framing", 0),
         ],
     )
     def test_token_count_setting_is_stored_only_when_the_operator_changed_it(

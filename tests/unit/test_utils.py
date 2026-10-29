@@ -1172,6 +1172,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_vision": {"type": "boolean"},
             "supports_web_search": {"type": "boolean"},
             "token_count_framing": {"type": "integer"},
+            "token_count_tool_framing": {"type": "integer"},
             "token_count_model": {
                 "type": "object",
                 "properties": {"model": {"type": "string"}, "region": {"type": "string"}},

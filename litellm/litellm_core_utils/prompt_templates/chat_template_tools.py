@@ -12,8 +12,12 @@ class ChatTemplateToolSection:
     render_tool_schemas: Callable[[Sequence[Mapping[str, object]]], str]
 
 
-def _deepseek_v4_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
+def _json_line_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
     return "\n".join(json.dumps(function, ensure_ascii=False) for function in functions)
+
+
+def _compact_json_line_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
+    return "\n".join(json.dumps(function, ensure_ascii=False, separators=(",", ":")) for function in functions)
 
 
 def _qwen3_5_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
@@ -24,12 +28,21 @@ def _qwen3_5_tool_schemas(functions: Sequence[Mapping[str, object]]) -> str:
 
 _TOOL_SECTIONS: Final = (
     (
+        re.compile(r"deepseek-v4(?:[-._]|p)1(?!\d)", re.IGNORECASE),
+        ChatTemplateToolSection(211, 0, _json_line_tool_schemas),
+    ),
+    (
         re.compile(
             r"deepseek-v4(?![.\d]|p\d)|^(?:deepseek/)?deepseek-(?:chat|reasoner|flash)(?::free)?$", re.IGNORECASE
         ),
-        ChatTemplateToolSection(222, 0, _deepseek_v4_tool_schemas),
+        ChatTemplateToolSection(222, 0, _json_line_tool_schemas),
     ),
     (re.compile(r"qwen3[._]?5(?!\d)", re.IGNORECASE), ChatTemplateToolSection(196, 5, _qwen3_5_tool_schemas)),
+    (
+        re.compile(r"grok-4[-.]1(?![.\d])", re.IGNORECASE),
+        ChatTemplateToolSection(0, 0, _compact_json_line_tool_schemas),
+    ),
+    (re.compile(r"grok-4[-.]3(?![.\d])", re.IGNORECASE), ChatTemplateToolSection(0, 0, _json_line_tool_schemas)),
 )
 
 

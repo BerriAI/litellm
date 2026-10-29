@@ -56,6 +56,7 @@ class TokenCountSettings:
     framing: int | None
     count_model: TokenCountModel | None
     tokenizer: TokenCountTokenizer | None = None
+    tool_framing: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +104,11 @@ def _framing(value: object) -> int | None:
             return int(value)
         case _:
             return None
+
+
+def _configured_framing(configured: Mapping[str, object], default: Mapping[str, object], key: str) -> int | None:
+    framing: Final = _framing(configured.get(key))
+    return framing if framing is not None else _framing(default.get(key))
 
 
 def _non_blank(value: object) -> str | None:
@@ -175,13 +181,13 @@ def _tokenizer(value: object) -> TokenCountTokenizer | None:
 def resolve_token_count_settings(
     configured: Mapping[str, object], default: Mapping[str, object], deployment_region: Callable[[], str]
 ) -> TokenCountSettings:
-    framing: Final = _framing(configured.get("token_count_framing"))
     return TokenCountSettings(
-        framing=framing if framing is not None else _framing(default.get("token_count_framing")),
+        framing=_configured_framing(configured, default, "token_count_framing"),
         count_model=_resolved_count_model(
             configured.get("token_count_model"), default.get("token_count_model"), deployment_region
         ),
         tokenizer=_tokenizer(default.get("token_count_tokenizer")),
+        tool_framing=_configured_framing(configured, default, "token_count_tool_framing"),
     )
 
 

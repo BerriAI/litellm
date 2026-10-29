@@ -131,6 +131,29 @@ def test_shipped_australian_count_region_stays_with_an_australian_deployment() -
     assert settings.count_model == TokenCountModel(model="au.anthropic.claude-opus-5-5", region="ap-southeast-4")
 
 
+@pytest.mark.parametrize(
+    ("configured", "default", "expected"),
+    [
+        ({}, {"token_count_tool_framing": 151}, (None, 151)),
+        ({"token_count_tool_framing": 40}, {"token_count_tool_framing": 151}, (None, 40)),
+        ({"token_count_tool_framing": 0}, {"token_count_tool_framing": 151}, (None, 0)),
+        ({"token_count_tool_framing": 40.0}, {}, (None, 40)),
+        ({"token_count_tool_framing": -1}, {"token_count_tool_framing": 151}, (None, 151)),
+        ({"token_count_tool_framing": True}, {"token_count_tool_framing": 151}, (None, 151)),
+        ({"token_count_tool_framing": "40"}, {}, (None, None)),
+        ({"token_count_tool_framing": 40}, {"token_count_framing": 97}, (97, 40)),
+        ({"token_count_framing": 40}, {"token_count_tool_framing": 151}, (40, 151)),
+    ],
+)
+def test_tool_framing_resolves_like_framing_and_apart_from_it(
+    configured: dict[str, object], default: dict[str, object], expected: tuple[int | None, int | None]
+) -> None:
+    settings: Final = resolve_token_count_settings(
+        configured=configured, default=default, deployment_region=_in_us_west_2
+    )
+    assert (settings.framing, settings.tool_framing) == expected
+
+
 def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> None:
     assert resolve_token_count_settings(
         configured={}, default={}, deployment_region=_in_us_west_2

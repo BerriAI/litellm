@@ -15530,7 +15530,9 @@ async def _count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
+    message_framing: Final = 0 if counted_messages is None else settings.framing or 0
+    tool_framing: Final = (settings.tool_framing or 0) if counted_tools else 0
+    framing: Final = message_framing + tool_framing
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
         await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)

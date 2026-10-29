@@ -595,8 +595,14 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
         ("deepseek/deepseek-chat:free", "DeepSeek-V4-Flash-0731"),
         ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
         ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
-        ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
-        ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
+        ("DeepSeek-V4.1-Flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("databricks-deepseek-v4-1-flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-ai/deepseek-v4.1-flash-maas", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-v4p1-flash-1017", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("grok-4.1-fast-non-reasoning", "grok-4-1-fast-reasoning"),
+        ("xai.grok-4.1-fast", "grok-4-1-fast-reasoning"),
+        ("grok-4.3-latest", "grok-4.3"),
+        ("xai.grok-4-3", "grok-4.3"),
         ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
         ("qwen3-235b-a22b", "mistral-large-latest"),
     ],
@@ -715,9 +721,17 @@ def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
 
 # Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
 # request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
-# either way (both read on Hugging Face on 2026-10-17)
+# either way (both read on Hugging Face on 2026-10-17). A system message cost the same with and without a tool on
+# Fireworks deepseek-v4p1-flash, Azure AI Foundry grok-4-1-fast-reasoning and xAI grok-4.3 on 2026-10-29
 @pytest.mark.parametrize(
-    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+    ("model", "implicit_system_turn_tokens"),
+    [
+        ("DeepSeek-V4-Flash-0731", 0),
+        ("databricks-qwen35-122b-a10b", 5),
+        ("accounts/fireworks/models/deepseek-v4p1-flash", 0),
+        ("grok-4-1-fast-reasoning", 0),
+        ("grok-4.3", 0),
+    ],
 )
 def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
     model: str, implicit_system_turn_tokens: int
