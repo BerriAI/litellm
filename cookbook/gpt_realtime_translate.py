@@ -20,8 +20,7 @@ CHANNELS = 1
 SAMPLE_WIDTH = 2
 CHUNK_DURATION_SECONDS = 0.1
 CHUNK_BYTES = int(SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH * CHUNK_DURATION_SECONDS)
-OUTPUT_IDLE_TIMEOUT_SECONDS = 3.0
-INITIAL_RESPONSE_TIMEOUT_SECONDS = 30.0
+RESPONSE_TIMEOUT_SECONDS = 30.0
 AUDIO_EVENT_TYPES = frozenset(
     {
         "session.output_audio.delta",
@@ -161,6 +160,7 @@ async def send_audio(
         for chunk in audio_chunks(pcm + silence):
             await connection.send(audio_message(chunk))
             await asyncio.sleep(len(chunk) / (SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH))
+        await connection.send(json.dumps({"type": "session.close"}))
     finally:
         finished.set()
 
@@ -176,16 +176,14 @@ async def receive_translation(
             output.setframerate(SAMPLE_RATE)
             write_stdout("Translation: ", end="", flush=True)
             while True:
-                timeout = OUTPUT_IDLE_TIMEOUT_SECONDS if audio_received.is_set() else INITIAL_RESPONSE_TIMEOUT_SECONDS
                 try:
-                    raw_event = await asyncio.wait_for(connection.recv(), timeout=timeout)
+                    raw_event = await asyncio.wait_for(connection.recv(), timeout=RESPONSE_TIMEOUT_SECONDS)
                 except TimeoutError:
                     if not sender_finished.is_set():
                         continue
-                    if not audio_received.is_set():
-                        return "The translation stream ended without translated audio"
-                    write_stdout()
-                    return None
+                    return (
+                        f"The translation stream went quiet for {RESPONSE_TIMEOUT_SECONDS:g} s without closing the session"
+                    )
                 event = json.loads(raw_event)
                 event_type = event.get("type")
                 if event_type in AUDIO_EVENT_TYPES:
@@ -195,6 +193,9 @@ async def receive_translation(
                     write_stdout(event.get("delta", event.get("text", "")), end="", flush=True)
                 elif event_type == "error":
                     return f"Realtime API error: {json.dumps(event.get('error', event), ensure_ascii=False)}"
+                elif event_type == "session.closed":
+                    write_stdout()
+                    return None if audio_received.is_set() else "The translation stream ended without translated audio"
     except (OSError, wave.Error) as exc:
         return f"Unable to write {output_path}: {exc}"
 
