@@ -367,6 +367,14 @@ def test_a_lone_surrogate_in_the_reply_still_gets_a_record(stream: bool) -> None
     assert "openai_responses_replay" in _replayed_fields(assistant)
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_a_last_message_the_bridge_cannot_read_leaves_the_turn_without_a_phase(stream: bool) -> None:
+    unreadable: Final = {**_with_text(FINAL_ANSWER, "It is raining in Paris."), "phase": "summary"}
+    assistant: Final = _assistant_turn((COMMENTARY, WEATHER_CALL, unreadable), stream=stream)
+
+    assert "phase" not in _replayed_fields(assistant)
+
+
 def test_a_phase_openai_does_not_define_is_dropped_under_drop_params() -> None:
     assistant: Final = _assistant_turn(OUTPUT, stream=False)
 

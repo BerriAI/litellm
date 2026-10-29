@@ -51,6 +51,10 @@ _OutputItem: TypeAlias = Annotated[
 _OUTPUT_ITEM: Final[TypeAdapter[_OutputItem]] = TypeAdapter(_OutputItem)
 
 
+class _AnyMessage(_Frozen):
+    type: Literal["message"]
+
+
 class _MessageEntry(_Frozen):
     type: Literal["message"]
     parts: tuple[Annotated[int, Field(ge=0)], ...]
@@ -153,6 +157,14 @@ def _parsed_output_item(item: object) -> _OutputItem | None:
         return _OUTPUT_ITEM.validate_python(_as_json(item))
     except ValidationError:
         return None
+
+
+def _is_message(item: object) -> bool:
+    try:
+        _AnyMessage.model_validate(_as_json(item))
+    except ValidationError:
+        return False
+    return True
 
 
 def _chat_message(message: object) -> _ChatMessage | None:
@@ -263,11 +275,14 @@ def _matches(items: Sequence[_OutputItem], message: _ChatMessage) -> bool:
     )
 
 
-def _content_phase(items: Sequence[_OutputItem | None], *, first_message_only: bool) -> Phase | None:
-    messages: Final = tuple(item for item in items if isinstance(item, _OutputMessage))
+def _content_phase(
+    output_items: Sequence[object], parsed: Sequence[_OutputItem | None], *, first_message_only: bool
+) -> Phase | None:
+    messages: Final = tuple(item for raw, item in zip(output_items, parsed) if _is_message(raw))
     if not messages:
         return None
-    return messages[0].phase if first_message_only else messages[-1].phase
+    content_message: Final = messages[0] if first_message_only else messages[-1]
+    return content_message.phase if isinstance(content_message, _OutputMessage) else None
 
 
 def _with_phase(message: _ChatMessage, phase: Phase | None) -> _ChatMessage:
@@ -281,7 +296,7 @@ def replay_fields(
     output_items: Sequence[object], message: object, *, completed: bool, first_message_only: bool
 ) -> Mapping[str, object]:
     parsed: Final = tuple(map(_parsed_output_item, output_items))
-    phase: Final = _content_phase(parsed, first_message_only=first_message_only)
+    phase: Final = _content_phase(output_items, parsed, first_message_only=first_message_only)
     phase_fields: Final[Mapping[str, object]] = MappingProxyType({PHASE_FIELD: phase} if phase else {})
     items: Final = tuple(item for item in parsed if item is not None)
     parsed_message: Final = _chat_message(message)
