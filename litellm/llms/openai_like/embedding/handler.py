@@ -114,10 +114,10 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         }
         extra_headers: Final = _HEADERS_ADAPTER.validate_python(optional_params.get("extra_headers") or {})
         key_headers: Final = _HEADERS_ADAPTER.validate_python(headers)
-        key_header_names: Final = frozenset(name.lower() for name in key_headers)
+        extra_header_names: Final = frozenset(name.lower() for name in extra_headers)
         request_headers: Final = {
-            **{name: value for name, value in extra_headers.items() if name.lower() not in key_header_names},
-            **key_headers,
+            **{name: value for name, value in key_headers.items() if name.lower() not in extra_header_names},
+            **extra_headers,
         }
 
         ## LOGGING

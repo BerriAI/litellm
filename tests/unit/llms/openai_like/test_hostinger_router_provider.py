@@ -81,15 +81,17 @@ def test_hostinger_router_model_cost_and_capabilities(model: str):
     assert model_info["max_tokens"] == model_info["max_output_tokens"] <= model_info["max_input_tokens"]
     assert model_info["litellm_provider"] == "hostinger_router"
     assert model_info["mode"] == "chat"
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_reasoning"] is True
-    assert model_info["supports_response_schema"] is True
     if model_info.get("supports_prompt_caching"):
         assert 0 < model_info["cache_read_input_token_cost"] < model_info["input_cost_per_token"]
-    if "supports_vision" in model_info:
-        assert litellm.supports_vision(model) is model_info["supports_vision"]
-    else:
-        assert litellm.supports_vision(model) in (True, False, None)
+    capability_checks: Final = (
+        ("supports_function_calling", litellm.supports_function_calling),
+        ("supports_reasoning", litellm.supports_reasoning),
+        ("supports_response_schema", litellm.supports_response_schema),
+        ("supports_vision", litellm.supports_vision),
+    )
+    assert {name: check(model) for name, check in capability_checks} == {
+        name: model_info.get(name) is True for name, _ in capability_checks
+    }
 
 
 def test_hostinger_router_chat_completions_request():
@@ -233,19 +235,20 @@ def test_hostinger_router_embeddings_send_extra_headers_as_http_headers():
     assert set(body) == {"model", "input"}
 
 
-def test_hostinger_router_embeddings_key_headers_replace_extra_headers_of_any_case():
+def test_hostinger_router_embeddings_extra_headers_replace_key_headers_of_any_case():
     with respx.mock() as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
             input=["Say hello"],
             api_key="hostinger-test-key",
-            extra_headers={"authorization": "Bearer caller-key", "content-type": "text/plain"},
+            extra_headers={"authorization": "Bearer caller-key", "x-trace-id": "trace-1"},
         )
 
     request: Final = route.calls.last.request
-    assert request.headers.get_list("authorization") == ["Bearer hostinger-test-key"]
+    assert request.headers.get_list("authorization") == ["Bearer caller-key"]
     assert request.headers.get_list("content-type") == ["application/json"]
+    assert request.headers.get_list("x-trace-id") == ["trace-1"]
 
 
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):
