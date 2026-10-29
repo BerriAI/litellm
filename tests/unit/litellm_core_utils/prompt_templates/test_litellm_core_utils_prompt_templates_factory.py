@@ -5221,6 +5221,7 @@ _TEXT_DATA_URI_WITH_CHARSET = "data:text/plain;charset=utf-8;base64," + _TEXT_B6
 _LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
     "the secret code word is MANGÓ\n".encode("latin-1")
 ).decode()
+_OCTET_TEXT_DATA_URI = "data:application/octet-stream;base64," + _TEXT_B64
 
 
 @pytest.mark.parametrize(
@@ -5239,6 +5240,15 @@ _LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b6
             {"type": "image_url", "image_url": {"url": _LATIN1_TEXT_DATA_URI.replace("text/plain", "TEXT/PLAIN", 1)}},
             "the secret code word is MANGÓ\n",
         ),
+        ({"type": "file", "file": {"file_data": "data:TEXT/PLAIN;base64," + _TEXT_B64}}, "the secret code word is MANGO\n"),
+        (
+            {"type": "file", "file": {"file_data": _OCTET_TEXT_DATA_URI, "format": "Text/Plain"}},
+            "the secret code word is MANGO\n",
+        ),
+        (
+            {"type": "image_url", "image_url": {"url": _OCTET_TEXT_DATA_URI, "format": "Text/Plain"}},
+            "the secret code word is MANGO\n",
+        ),
     ],
     ids=[
         "image_url",
@@ -5248,6 +5258,9 @@ _LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b6
         "file_latin1",
         "image_url_uppercase",
         "uppercase_latin1",
+        "file_uppercase",
+        "file_mixed_case_format",
+        "image_url_mixed_case_format",
     ],
 )
 def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block, expected_text):
@@ -9436,13 +9449,16 @@ def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_tool_messag
     ]
 
 
-@pytest.mark.parametrize("pdf_format", (None, "Application/PDF"))
-def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monkeypatch, pdf_format):
+@pytest.mark.parametrize(
+    "pdf_format, content_type",
+    ((None, "application/pdf"), ("Application/PDF", "application/pdf"), (None, "image/png"), ("image/png", "application/pdf")),
+)
+def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monkeypatch, pdf_format, content_type):
     from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
 
     pdf_bytes = b"%PDF-1.4\n1 0 obj\n"
     mock_client = MagicMock()
-    mock_client.get.return_value = httpx.Response(200, content=pdf_bytes, headers={"Content-Type": "application/pdf"})
+    mock_client.get.return_value = httpx.Response(200, content=pdf_bytes, headers={"Content-Type": content_type})
     monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
     monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
     in_memory_cache.flush_cache()

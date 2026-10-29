@@ -1852,7 +1852,7 @@ def _anthropic_text_document_source(
     media_type_with_parameters: str, data: str
 ) -> AnthropicContentParamSourceText | None:
     media_type, _, _ = media_type_with_parameters.partition(";")
-    if media_type.strip() != "text/plain":
+    if media_type.strip().lower() != "text/plain":
         return None
     content_type_header: Final = Message()
     content_type_header["content-type"] = media_type_with_parameters
@@ -2338,7 +2338,9 @@ def _anthropic_native_tool_use_block(
 def anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if image_chunk["media_type"].partition(";")[0].strip().lower() == "application/pdf":
+    if image_chunk["media_type"].partition(";")[0].strip().lower() == "application/pdf" or _base64_holds_a_pdf(
+        image_chunk["data"]
+    ):
         _anthropic_content_element: AnthropicMessagesDocumentParam | AnthropicMessagesImageParam = (
             AnthropicMessagesDocumentParam(
                 type="document",
@@ -2365,9 +2367,10 @@ def anthropic_content_element_factory(
 def select_anthropic_content_block_type_for_file(
     format: str,
 ) -> Literal["document", "image", "container_upload"]:
-    if format == "application/pdf" or format == "text/plain":
+    media_type: Final = format.strip().lower()
+    if media_type == "application/pdf" or media_type == "text/plain":
         return "document"
-    elif format in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+    elif media_type in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
         return "image"
     else:
         return "container_upload"
@@ -2427,7 +2430,7 @@ def anthropic_process_openai_file_message(
             type="document",
             source=AnthropicContentParamSource(
                 type="base64",
-                media_type=media_type.strip(),
+                media_type=media_type.strip().lower(),
                 data=image_chunk["data"],
             ),
         )
