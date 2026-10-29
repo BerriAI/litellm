@@ -1,12 +1,21 @@
 import asyncio
 import hashlib
+import json
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
+import websockets
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_stream import RATE_LIMIT_MESSAGE, openai_error_event
@@ -14,17 +23,21 @@ from integration._support.responses_ws_peer import (
     PROVIDER_MODEL,
     USAGE,
     completed,
+    create,
     drain,
     events,
     responses_peer,
     session,
+    turn,
 )
 from integration._support.tls import write_self_signed_cert
-from pydantic import JsonValue
+from integration._support.worker_readiness import wait_for_worker_readiness
+from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 PROXY_OPENAI_KEY: Final = "sk-proxy-environment-openai-key"
 PROXY_AZURE_KEY: Final = "proxy-environment-azure-key"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _top_level_rate_limit(response_id: str) -> tuple[dict[str, JsonValue], ...]:
@@ -87,6 +100,68 @@ def test_previous_response_id_from_the_first_turn_reaches_the_provider_as_its_ow
         assert [frame["input"][0]["content"][0]["text"] for frame in forwarded] == list(texts)
         assert "previous_response_id" not in forwarded[0]
         assert forwarded[1]["previous_response_id"] == "resp_peer_1"
+
+
+def _enable_responses_affinity(gateway: Gateway, scenario: Scenario) -> None:
+    settings: Final = object_value(gateway.get("/router/settings")["current_values"])
+    current: Final = settings.get("optional_pre_call_checks")
+    original: Final = list(current) if isinstance(current, list) else []
+    scenario.cleanups.callback(
+        gateway.post, "/config/update", {"router_settings": {"optional_pre_call_checks": original}}
+    )
+    gateway.post(
+        "/config/update",
+        {"router_settings": {"optional_pre_call_checks": [*original, "responses_api_deployment_check"]}},
+    )
+
+
+def _add_preferred_deployment(gateway: Gateway, scenario: Scenario, group: str, api_base: str) -> None:
+    created: Final = gateway.post(
+        "/model/new",
+        {
+            "model_name": group,
+            "litellm_params": {"model": f"openai/{PROVIDER_MODEL}", "api_base": api_base, "order": 1},
+            "model_info": {},
+        },
+    )
+    scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+    wait_for_worker_readiness(gateway, group, 2, gateway.workers)
+
+
+async def _compare_on_a_new_socket(
+    proxy_url: str, key: str, model: str, compared_id: str
+) -> tuple[dict[str, JsonValue], ...]:
+    proxy: Final = proxy_url.rstrip("/").replace("http://", "ws://")
+    frame: Final = {
+        **_JSON_OBJECT.validate_json(create(model, f"compare seven {uuid.uuid4().hex}")),
+        "prompt_cache_options": {"comparison_response_id": compared_id},
+    }
+    async with websockets.connect(
+        f"{proxy}/v1/responses?model={model}", additional_headers={"Authorization": f"Bearer {key}"}, open_timeout=10
+    ) as connection:
+        return await turn(connection, json.dumps(frame))
+
+
+def test_a_first_frame_comparing_an_earlier_response_reaches_its_deployment_with_the_providers_own_id(
+    candidate: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert) as compared_peer, responses_peer(cert) as other_peer, candidate.scenario() as scenario:
+        _enable_responses_affinity(candidate, scenario)
+        model: Final = scenario.model(model=f"openai/{PROVIDER_MODEL}", api_base=compared_peer.url)
+        key: Final = scenario.key(models=[model])
+        base_url: Final = str(candidate.client.base_url)
+        (first,) = asyncio.run(session(base_url, key, model, (f"remember seven {uuid.uuid4().hex}",)))
+        compared_id: Final = string_value(completed(first)["id"])
+        assert compared_id.startswith("resp_") and compared_id != "resp_peer_1", compared_id
+        _add_preferred_deployment(candidate, scenario, model, other_peer.url)
+        second: Final = asyncio.run(_compare_on_a_new_socket(base_url, key, model, compared_id))
+        assert completed(second)["status"] == "completed"
+        assert drain(other_peer.frames) == (), "comparison_response_id did not pin the compared deployment"
+        forwarded: Final = drain(compared_peer.frames)
+        assert [frame.get("prompt_cache_options") for frame in forwarded] == [
+            None,
+            {"comparison_response_id": "resp_peer_1"},
+        ], forwarded
 
 
 def test_a_top_level_error_frame_reaches_the_client_and_logs_the_provider_code_and_message(

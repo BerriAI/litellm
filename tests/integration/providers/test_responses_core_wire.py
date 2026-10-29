@@ -229,6 +229,33 @@ def test_input_tokens_count_goes_to_the_deployment_that_served_the_previous_resp
         ], [request.body for request in requests]
 
 
+@pytest.mark.parametrize("nested", (False, True), ids=("top-level", "extra-body"))
+def test_comparison_response_id_uses_the_raw_id_and_affinity(gateway: Gateway, nested: bool) -> None:
+    compared_raw_id: Final = f"resp_compared_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        return Reply(body=_response(compared_raw_id))
+
+    with wire_server(respond) as first_wire, wire_server(respond) as second_wire, gateway.scenario() as scenario:
+        model: Final = f"integration-{uuid.uuid4().hex}"
+        _enable_responses_affinity(scenario)
+        assert _register(scenario, first_wire, model) == model
+        client: Final = openai.OpenAI(base_url=f"{gateway.client.base_url}/v1", api_key=gateway.key, max_retries=0)
+        compared: Final = client.responses.create(model=model, input="turn one")
+        assert compared.id.startswith("resp_") and compared.id != compared_raw_id, compared.model_dump_json()
+        _register_in_group(scenario, second_wire, model, order=1)
+        options: Final = {"prompt_cache_options": {"comparison_response_id": compared.id}}
+        client.responses.create(model=model, input="turn two", extra_body={"extra_body": options} if nested else options)
+        assert drain_contract_requests(second_wire) == (), "comparison_response_id did not pin the compared deployment"
+        requests: Final = drain_contract_requests(first_wire)
+        assert [_JSON_OBJECT.validate_json(request.body) for request in requests] == [
+            {"model": _MODEL, "input": "turn one"},
+            {"model": _MODEL, "input": "turn two", "prompt_cache_options": {"comparison_response_id": compared_raw_id}},
+        ], [request.body for request in requests]
+
+
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway, prefix: str) -> None:
     response_id: Final = f"resp_codex_{uuid.uuid4().hex}"
