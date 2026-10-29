@@ -1,14 +1,18 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+import asyncio
+import contextvars
 import copy
 import functools
 import itertools
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final
+from concurrent.futures import ThreadPoolExecutor
+from typing import Final, ParamSpec, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PROVIDER_MODEL_DISCOVERY_MAX_THREADS
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
@@ -21,6 +25,26 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
+
+_P: Final = ParamSpec("_P")
+_R: Final = TypeVar("_R")
+
+_MODEL_DISCOVERY_EXECUTOR: Final = ThreadPoolExecutor(
+    max_workers=PROVIDER_MODEL_DISCOVERY_MAX_THREADS, thread_name_prefix="litellm-model-discovery"
+)
+
+
+async def run_model_discovery(
+    discover: Callable[_P, _R],
+    /,
+    *args: _P.args,
+    **kwargs: _P.kwargs,  # kwargs-ok: forwards the discovery function's own arguments
+) -> _R:
+    context: Final = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(
+        _MODEL_DISCOVERY_EXECUTOR, lambda: context.run(discover, *args, **kwargs)
+    )
+
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 

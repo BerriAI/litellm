@@ -589,6 +589,59 @@ async def test_a_hung_wildcard_listing_leaves_the_event_loop_free_for_other_requ
 
 
 @respx.mock
+def test_a_hung_wildcard_listing_leaves_the_default_executor_free_for_completion_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    import litellm
+    from litellm import Router
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    listing_started: Final = threading.Event()
+    completion_served: Final = threading.Event()
+
+    def listing_that_answers_once_a_completion_is_served(request: httpx.Request) -> httpx.Response:
+        listing_started.set()
+        if completion_served.wait(timeout=3):
+            return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        return httpx.Response(503)
+
+    respx.get("http://vllm-default-executor.test:8000/v1/models").mock(
+        side_effect=listing_that_answers_once_a_completion_is_served
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "hosted_vllm/*",
+                "litellm_params": {"model": "hosted_vllm/*", "api_base": "http://vllm-default-executor.test:8000/v1"},
+            }
+        ]
+    )
+
+    async def list_models_while_a_completion_runs_on_the_default_executor() -> list[str]:
+        loop: Final = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        listing: Final = asyncio.create_task(
+            get_available_models_for_user(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=[]),
+                llm_router=router,
+                general_settings={},
+                user_model=None,
+            )
+        )
+        with ThreadPoolExecutor(max_workers=1) as waiter:
+            assert await loop.run_in_executor(waiter, listing_started.wait, 3)
+        await asyncio.wait_for(loop.run_in_executor(None, completion_served.set), timeout=1)
+        return await listing
+
+    assert "hosted_vllm/qwen2.5" in asyncio.run(list_models_while_a_completion_runs_on_the_default_executor())
+
+
+@respx.mock
 def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard

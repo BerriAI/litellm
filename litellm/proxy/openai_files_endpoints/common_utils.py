@@ -530,7 +530,7 @@ def get_team_provider_credentials(
     custom_llm_provider: str,
     *,
     include_accessible_deployments: bool = True,
-) -> dict | None:
+) -> dict[str, object] | None:
     """
     Resolve upstream credentials for a provider-scoped file operation
     (e.g. GET /v1/files), which doesn't pin a model.
@@ -704,7 +704,7 @@ def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str
     return MappingProxyType({"api_key": api_key, "api_base": api_base})
 
 
-def apply_team_provider_credentials(
+async def apply_team_provider_credentials(
     data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
@@ -719,7 +719,10 @@ def apply_team_provider_credentials(
     ``forward_llm_provider_auth_headers``) replaces the deployment's, and the
     request's ``api_base`` replaces the deployment's only alongside that key.
     """
-    credentials: Final = get_team_provider_credentials(
+    from litellm.proxy.auth.model_checks import run_model_discovery
+
+    credentials: Final = await run_model_discovery(
+        get_team_provider_credentials,
         llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,

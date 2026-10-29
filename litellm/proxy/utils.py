@@ -9499,7 +9499,7 @@ async def _agent_access_group_visible_models(
 ) -> frozenset[str] | None:
     """Models an agent key may still list once its attached access groups cap it, ``None`` when
     nothing caps it, so ``/v1/models`` never advertises a model the same key would be denied on."""
-    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models, run_model_discovery
 
     if not user_api_key_dict.agent_id:
         return None
@@ -9519,7 +9519,7 @@ async def _agent_access_group_visible_models(
     if not granted:
         return frozenset()
     return frozenset(
-        await asyncio.to_thread(
+        await run_model_discovery(
             get_complete_model_list,
             key_models=granted,
             team_models=(),
@@ -9575,6 +9575,7 @@ async def get_available_models_for_user(
         get_complete_model_list,
         get_key_models,
         get_team_models,
+        run_model_discovery,
     )
 
     # Get proxy model list and access groups
@@ -9655,7 +9656,7 @@ async def get_available_models_for_user(
     )
 
     # Get complete model list
-    complete_models: Final = await asyncio.to_thread(
+    complete_models: Final = await run_model_discovery(
         get_complete_model_list,
         key_models=granted_key_models,
         team_models=granted_team_models,
