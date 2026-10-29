@@ -132,10 +132,10 @@ def _is_undocumented_live_voice(voice: object) -> bool:
 def _gemini_live_speech_config(voice: object, drop_undocumented: bool) -> Mapping[str, object] | None:
     """Build the Gemini Live speechConfig for a client-requested voice.
 
-    Gemini Live closes the session on a voice name it does not know. OpenAI
-    stock voice names are always dropped, and so is any name outside Google's
-    documented Live voices when ``drop_undocumented`` is set, keeping the
-    model's default voice. Every other name is forwarded verbatim.
+    OpenAI stock voice names have no Gemini equivalent, so they are always
+    dropped, and so is any name outside Google's documented Live voices when
+    ``drop_undocumented`` is set, keeping the model's default voice. Every
+    other name is forwarded verbatim.
     """
     if not isinstance(voice, str):
         return VertexGeminiConfig().map_audio_params({"voice": voice})
@@ -240,6 +240,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def _rejects_vad_tuning_with_detection_off(self) -> bool:
         """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
         return True
+
+    def _rejects_undocumented_voices(self, model: str) -> bool:
+        """Google AI Studio closes the socket (1007) on an unknown voice only for its native-audio Live models."""
+        return bool(GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio"))
 
     @staticmethod
     def _usage_detail_alias(details: object, defaults: dict[str, int]) -> dict[str, object]:
@@ -408,7 +412,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "voice",
         ]
 
-    def map_openai_params(self, optional_params: dict, non_default_params: dict) -> dict:
+    def map_openai_params(self, optional_params: dict, non_default_params: dict, *, model: str) -> dict:
         if "generationConfig" not in optional_params:
             optional_params["generationConfig"] = {}
         for key, value in non_default_params.items():
@@ -440,7 +444,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if realtime_input_config is not None:
                     optional_params["realtimeInputConfig"] = realtime_input_config
             elif key == "voice":
-                speech_config = _gemini_live_speech_config(value, self.drop_params)
+                speech_config = _gemini_live_speech_config(
+                    value, self.drop_params and self._rejects_undocumented_voices(model)
+                )
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
@@ -526,7 +532,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return normalized
 
     @staticmethod
-    def _model_cost_entry(model: str) -> dict:
+    def _model_cost_entry(model: str) -> Mapping[str, object]:
         entry = litellm.model_cost.get(model)
         if entry is None:
             stripped: Final = model.split("/", 1)[-1]
@@ -603,7 +609,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         audio_output: Final = as_str_mapping((as_str_mapping(session.get("audio")) or {}).get("output")) or {}
         output_voice: Final = audio_output.get("voice")
         voice: Final = output_voice or session.get("voice")
-        if not _is_undocumented_live_voice(voice):
+        if not (self._rejects_undocumented_voices(model) and _is_undocumented_live_voice(voice)):
             return None
         param: Final = "session.audio.output.voice" if output_voice else "session.voice"
         return RealtimeSessionUpdateRejection(
@@ -700,7 +706,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # would be silently dropped because ``map_openai_params`` only
         # recognises the flat OpenAI-beta key names.
         session_payload = self._normalize_session_payload_for_mapping(session_payload)
-        new_overrides: Final = self.map_openai_params(optional_params={}, non_default_params=session_payload)
+        new_overrides: Final = self.map_openai_params(
+            optional_params={}, non_default_params=session_payload, model=model
+        )
 
         if session_configuration_request is None:
             generation_config: Final = new_overrides.setdefault("generationConfig", {})

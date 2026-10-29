@@ -51,6 +51,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     def _rejects_vad_tuning_with_detection_off(self) -> bool:
         return False
 
+    def _rejects_undocumented_voices(self, model: str) -> bool:
+        return True
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------
@@ -163,7 +166,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # settings would be silently dropped because ``map_openai_params`` only
         # recognises the flat OpenAI-beta key names.
         session_params = self._normalize_session_payload_for_mapping(session_params)
-        setup_config: Final = self.map_openai_params(optional_params={}, non_default_params=session_params)
+        setup_config: Final = self.map_openai_params(optional_params={}, non_default_params=session_params, model=model)
 
         # Use full Vertex AI model path
         setup_config["model"] = self._vertex_model_path(model)

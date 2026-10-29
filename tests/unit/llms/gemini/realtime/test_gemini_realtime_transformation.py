@@ -2007,10 +2007,12 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
     """
     cfg = GeminiRealtimeConfig()
 
-    dropped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
+    dropped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"}, model="gemini-3.8-live")
     assert "speechConfig" not in dropped.get("generationConfig", {})
 
-    passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
+    passthrough = cfg.map_openai_params(
+        optional_params={}, non_default_params={"voice": "Kore"}, model="gemini-3.8-live"
+    )
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
@@ -2020,7 +2022,9 @@ _DOCUMENTED_VOICE: Final = sorted(GEMINI_LIVE_DOCUMENTED_VOICES)[0].capitalize()
 @pytest.mark.parametrize("drop_params", [False, True])
 def test_google_ai_studio_forwards_a_documented_voice(drop_params):
     config: Final = GeminiRealtimeConfig(drop_params=drop_params)
-    mapped: Final = config.map_openai_params(optional_params={}, non_default_params={"voice": _DOCUMENTED_VOICE})
+    mapped: Final = config.map_openai_params(
+        optional_params={}, non_default_params={"voice": _DOCUMENTED_VOICE}, model="gemini-3.8-live"
+    )
 
     speech_config: Final = mapped["generationConfig"]["speechConfig"]
     assert speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == _DOCUMENTED_VOICE
@@ -2043,17 +2047,33 @@ def test_google_ai_studio_rejects_an_undocumented_voice_on_the_session_update(se
     assert (rejection.code, rejection.param) == ("invalid_value", param)
 
 
-def test_google_ai_studio_drops_an_undocumented_voice_with_drop_params():
-    config: Final = GeminiRealtimeConfig(drop_params=True)
-    mapped: Final = config.map_openai_params(optional_params={}, non_default_params={"voice": "Nova"})
-
-    assert "speechConfig" not in mapped.get("generationConfig", {})
-    assert (
-        config.setup_session_update_rejection(
-            "gemini-2.5-flash-native-audio-preview-12-2025", {"voice": "Nova"}, setup_sent=False
-        )
-        is None
+def _setup_speech_config(config: GeminiRealtimeConfig, model: str, session: dict[str, object]) -> object:
+    messages: Final = config.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}), model, session_configuration_request=None
     )
+    return json.loads(messages[0])["setup"].get("generationConfig", {}).get("speechConfig")
+
+
+@pytest.mark.parametrize(
+    "session",
+    [{"voice": "Nova"}, {"type": "realtime", "audio": {"output": {"voice": "Nova"}}}],
+)
+def test_google_ai_studio_drops_an_undocumented_voice_with_drop_params(session):
+    config: Final = GeminiRealtimeConfig(drop_params=True)
+    model: Final = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+    assert config.setup_session_update_rejection(model, session, setup_sent=False) is None
+    assert _setup_speech_config(config, model, session) is None
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "gemini-3.1-flash-live-preview"])
+def test_google_ai_studio_forwards_any_voice_to_models_that_accept_it(model, drop_params):
+    config: Final = GeminiRealtimeConfig(drop_params=drop_params)
+
+    assert config.setup_session_update_rejection(model, {"voice": "Nova"}, setup_sent=False) is None
+    speech_config: Final = _setup_speech_config(config, model, {"voice": "Nova"})
+    assert speech_config == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Nova"}}}
 
 
 @pytest.fixture(autouse=False)

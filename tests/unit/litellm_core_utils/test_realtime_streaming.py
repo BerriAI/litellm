@@ -2510,8 +2510,12 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
 
 
 def _gemini_default_mode_streaming(
-    monkeypatch, client_messages, model="gemini-live-2.5-flash-native-audio", drop_params=False, defer_setup=False
-):
+    monkeypatch: pytest.MonkeyPatch,
+    client_messages: Sequence[str],
+    model: str = "gemini-live-2.5-flash-native-audio",
+    drop_params: bool = False,
+    defer_setup: bool = False,
+) -> tuple[RealTimeStreaming, MagicMock]:
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", defer_setup, raising=False)
     from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
