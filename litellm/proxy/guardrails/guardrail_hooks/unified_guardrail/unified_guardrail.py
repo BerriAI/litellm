@@ -541,6 +541,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         finish_reason_per_choice: dict[int, str | None],
         held_chars_per_choice: dict[int, int],
         is_final: bool,
+        deliver_finish_reason: bool = True,
     ) -> ModelResponseStream | None:
         """Build the synthetic chunk carrying the newly-guardrailed deltas.
 
@@ -565,7 +566,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             # content+tool_calls chunk whose passthrough suppressed it) still
             # needs to reach the client, even if the guardrail returned no text
             # to emit. Build a terminator chunk carrying finish_reason per choice.
-            if is_final and finish_reason_per_choice:
+            if is_final and deliver_finish_reason and finish_reason_per_choice:
                 terminator_choices: Final[list[StreamingChoices]] = []
                 for choice_idx, finish_reason in finish_reason_per_choice.items():
                     if finish_reason is None:
@@ -616,7 +617,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         synthetic_choices: Final[list[StreamingChoices]] = []
         for choice_idx in mutated_text_per_choice:
             delta_text = deltas.get(choice_idx, "")
-            finish_reason = finish_reason_per_choice.get(choice_idx) if is_final else None
+            finish_reason = finish_reason_per_choice.get(choice_idx) if is_final and deliver_finish_reason else None
             # Skip a choice with nothing to say: no new content and no
             # finish_reason to deliver. This avoids emitting an empty delta for an
             # already-finished choice (e.g. one that terminated via a passed-through
@@ -664,6 +665,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         held_chars_per_choice: dict[int, int],
         is_final: bool,
         terminated: asyncio.Event,
+        deliver_finish_reason: bool = True,
     ) -> AsyncGenerator[object, None]:
         """Run one guardrail processing round and emit the resulting diff chunk.
 
@@ -693,6 +695,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 finish_reason_per_choice=finish_reason_per_choice,
                 held_chars_per_choice=held_chars_per_choice,
                 is_final=is_final,
+                deliver_finish_reason=deliver_finish_reason,
             )
         except ModifyResponseException as e:
             terminated.set()
@@ -754,7 +757,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         last_chunk: object | None = None
         terminated: Final = asyncio.Event()
 
-        def _round(reference_chunk: object, is_final: bool) -> AsyncGenerator[object, None]:
+        def _round(
+            reference_chunk: object, is_final: bool, deliver_finish_reason: bool = True
+        ) -> AsyncGenerator[object, None]:
             return self._emit_transform_round(
                 endpoint_translation=endpoint_translation,
                 guardrail_to_apply=guardrail_to_apply,
@@ -769,14 +774,17 @@ class UnifiedLLMGuardrails(CustomLogger):
                 held_chars_per_choice=held_chars_per_choice,
                 is_final=is_final,
                 terminated=terminated,
+                deliver_finish_reason=deliver_finish_reason,
             )
 
         saw_tool_calls = False
         saw_text_content = False
+        text_preceded_tool_calls = False  # rebind-ok: records text arriving before the first tool call
 
         try:
             async for item in response:
                 if self._chunk_has_tool_calls(item):
+                    text_preceded_tool_calls = text_preceded_tool_calls or (not saw_tool_calls and saw_text_content)
                     saw_tool_calls = True
                     responses_so_far.append(item)
                     last_chunk = item
@@ -816,8 +824,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                 ):
                     yield out
 
-                if saw_text_content:
-                    async for out in _round(last_chunk, is_final=False):
+                if text_preceded_tool_calls:
+                    async for out in _round(last_chunk, is_final=True, deliver_finish_reason=False):
                         yield out
                 tool_chunks: Final = tuple(
                     self._tool_call_passthrough_chunk(
@@ -1015,6 +1023,10 @@ class UnifiedLLMGuardrails(CustomLogger):
                     finish_reason=passthrough_finish,
                 )
             )
+        if isinstance(item, ModelResponseStream):
+            passthrough: Final = copy.deepcopy(item)
+            passthrough.choices = synthetic_choices
+            return passthrough
         return ModelResponseStream(
             id=getattr(item, "id", None),
             created=getattr(item, "created", None),

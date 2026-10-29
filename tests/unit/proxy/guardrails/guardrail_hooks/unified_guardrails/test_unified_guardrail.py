@@ -1212,6 +1212,72 @@ class TestStreamingTransform:
         assert delivered_arguments.count("") <= 1
 
     @pytest.mark.asyncio
+    async def test_a_tool_call_streamed_before_text_is_delivered_before_that_text(self) -> None:
+        """The replay must keep the order the model chose between tool calls and text."""
+        chunks: Final = (
+            ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                {"index": 0, "id": "call_0", "type": "function",
+                 "function": {"name": "contact", "arguments": '{"contact":"ok"}'}},
+            ]))]),
+            _stream_chunk("hello SECRET", finish_reason="stop"),
+        )
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(), chunks)
+        kinds: Final = tuple(
+            "tool" if choice.delta.tool_calls else "text"
+            for chunk in out
+            for choice in chunk.choices
+            if choice.delta.tool_calls or choice.delta.content
+        )
+        assert kinds.index("tool") < kinds.index("text")
+
+    @pytest.mark.asyncio
+    async def test_text_streamed_before_a_tool_call_is_delivered_before_it(self) -> None:
+        """The replay must not move a tool call ahead of text the model sent first."""
+        chunks: Final = (
+            _stream_chunk("hello "),
+            ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                {"index": 0, "id": "call_0", "type": "function",
+                 "function": {"name": "contact", "arguments": '{"contact":"ok"}'}},
+            ]))]),
+            _stream_chunk("SECRET", finish_reason="stop"),
+        )
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(), chunks)
+        kinds: Final = tuple(
+            "tool" if choice.delta.tool_calls else "text"
+            for chunk in out
+            for choice in chunk.choices
+            if choice.delta.tool_calls or choice.delta.content
+        )
+        assert kinds[0] == "text"
+        assert "tool" in kinds
+        assert "".join(_delta_text(chunk) for chunk in out) == "checked:hello MASKED"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_replay_keeps_the_provider_fields_of_its_chunk(self) -> None:
+        """A replayed tool-call chunk must not lose the provider metadata the model sent with it."""
+        chunks: Final = (
+            _stream_chunk("hello SECRET"),
+            ModelResponseStream(
+                id="chatcmpl-provider",
+                created=1234567890,
+                model="gpt-4",
+                system_fingerprint="fp_provider",
+                provider_specific_fields={"service_tier": "scale"},
+                choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                    {"index": 0, "id": "call_0", "type": "function",
+                     "function": {"name": "contact", "arguments": '{"contact":"ok"}'}},
+                ]), finish_reason="tool_calls")],
+            ),
+        )
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(), chunks)
+        replayed: Final = tuple(
+            chunk for chunk in out for choice in chunk.choices if choice.delta.tool_calls
+        )
+        assert replayed
+        assert all(chunk.system_fingerprint == "fp_provider" for chunk in replayed)
+        assert all(chunk.provider_specific_fields == {"service_tier": "scale"} for chunk in replayed)
+
+    @pytest.mark.asyncio
     async def test_a_mixed_text_and_tool_call_chunk_never_finishes_ahead_of_its_text(self):
         """A client that stops at finish_reason must not lose rewritten text held behind it."""
         mixed: Final = ModelResponseStream(
