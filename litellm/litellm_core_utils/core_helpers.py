@@ -1028,7 +1028,8 @@ def mark_usage_cost_as_litellm_bill(response: object, bill: float) -> None:
     so ``billed_usage_cost`` does not read it back as the upstream's charge on a later pricing pass."""
     hidden: Final[object] = getattr(response, "_hidden_params", None)
     if isinstance(hidden, dict):
-        cast(dict[str, object], hidden).update({"response_cost": bill, LITELLM_BILLED_USAGE_COST: bill})
+        hidden_params: Final = cast(dict[str, object], hidden)  # cast-ok: hidden params ride on the response as a dict
+        hidden_params.update({"response_cost": bill, LITELLM_BILLED_USAGE_COST: bill})
 
 
 def _usage_cost_is_litellm_bill(response: object) -> bool:
