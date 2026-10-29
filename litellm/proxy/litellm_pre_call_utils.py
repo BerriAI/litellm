@@ -49,7 +49,7 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
+from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -1102,18 +1102,17 @@ def should_auto_drop_params_for_agentic_cli(
 ) -> bool:
     """drop_params defaults to on for agentic CLIs so their client-specific
     params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
-    requests routed to providers that reject them. An explicit drop_params
-    from the caller or in the operator's ``litellm_settings`` always wins
-    over this default."""
+    requests routed to providers that reject them. A drop_params from the
+    caller wins over this default, and the operator's ``litellm_settings``
+    turns it off only with a value that reads as false."""
     from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 
     if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if caller_set_drop_params:
         return False
-    config: Final = getattr(proxy_config, "config", None)
-    litellm_settings: Final = config.get("litellm_settings") if isinstance(config, dict) else None
-    return not (isinstance(litellm_settings, dict) and "drop_params" in litellm_settings)
+    litellm_settings: Final = _request_fields(proxy_config.config.get("litellm_settings"))
+    return normalize_drop_params(litellm_settings.get("drop_params")) is not False
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):

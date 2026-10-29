@@ -7106,24 +7106,30 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "user_agent, request_drop_params, operator_drop_params, expected_drop_params",
+    "user_agent, request_drop_params, operator_settings, expected_drop_params",
     [
-        ("claude-cli/2.0.69 (external, cli)", None, None, True),
-        ("claude-cli/1.0.44 (external, sdk-py)", None, None, True),
-        ("claude-cli/2.0.69 (external, cli)", False, None, False),
-        ("claude-cli/2.0.69 (external, cli)", None, False, None),
-        ("claude-cli/2.0.69 (external, cli)", None, True, None),
-        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, None, True),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, None, True),
-        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, None, True),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, None, False),
-        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, True, None),
-        ("PostmanRuntime/7.53.0", None, None, None),
-        (None, None, None, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {}, True),
+        ("claude-cli/1.0.44 (external, sdk-py)", None, {}, True),
+        ("claude-cli/2.0.69 (external, cli)", False, {}, False),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": False}, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": True}, True),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": None}, True),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": "false"}, None),
+        ("claude-cli/2.0.69 (external, cli)", None, {"drop_params": "maybe"}, True),
+        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, {}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, {}, True),
+        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, {}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, {}, False),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": False}, None),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": True}, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": " False "}, None),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": "true"}, True),
+        ("PostmanRuntime/7.53.0", None, {}, None),
+        (None, None, {}, None),
     ],
 )
 async def test_add_litellm_data_to_request_agentic_cli_drop_params(
-    user_agent, request_drop_params, operator_drop_params, expected_drop_params
+    user_agent, request_drop_params, operator_settings, expected_drop_params
 ):
     """Claude Code sends Anthropic-specific params and Codex sends
     service_tier, both of which fail on providers that reject them, so those
@@ -7140,12 +7146,10 @@ async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     if request_drop_params is not None:
         data["drop_params"] = request_drop_params
 
-    proxy_config = MagicMock()
-    proxy_config.config = (
-        {"litellm_settings": {"drop_params": operator_drop_params}}
-        if operator_drop_params is not None
-        else {"litellm_settings": {}}
-    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config.update_config_state(config={"litellm_settings": operator_settings})
 
     updated = await add_litellm_data_to_request(
         data=data,
