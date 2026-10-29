@@ -6,7 +6,7 @@ from typing import Final
 
 import litellm
 from litellm.llms.opencode.common_utils import is_opencode_api_base
-from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
+from litellm.rust_bridge.detectors import api_base, drop_params, overridden, present, streaming
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
 
@@ -46,6 +46,11 @@ def thinking_signature_retry(request: NativeCall) -> bool:
 def tool_custom_field(request: NativeCall) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools")) or ()
     return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
+
+
+def strict_tools_retry(request: NativeCall) -> bool:
+    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
+    return drop_params(request) and any("strict" in (optional_mapping(tool) or {}) for tool in tools)
 
 
 def stream_cost_injection(request: NativeCall) -> bool:

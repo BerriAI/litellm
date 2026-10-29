@@ -6,6 +6,7 @@ import copy
 import json
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
@@ -1760,6 +1761,48 @@ def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) 
     thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
     binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
     return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
+
+
+_CLAUDE_STRICT_TOOLS_REJECTION: Final = re.compile(
+    r"Too many strict tools \(\d+\)"
+    r"|Schemas contains too many (?:optional parameters|parameters with union types)"
+    r"|[Cc]ompiled grammar (?:is too large|size)"
+    r"|tools\.\d+\.custom(?:\.strict)?: "
+    r"|Grammar compilation timed out"
+)
+_CLAUDE_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def is_claude_strict_tools_rejection(status_code: int, error_text: str) -> bool:
+    return status_code == 400 and _CLAUDE_STRICT_TOOLS_REJECTION.search(error_text) is not None
+
+
+@dataclass(frozen=True, slots=True)
+class ToolsWithoutStrict:
+    tools: tuple[Mapping[str, object], ...]
+    dropped_count: int
+
+
+def tools_without_strict(tools: object) -> ToolsWithoutStrict | None:
+    try:
+        validated: Final = _CLAUDE_TOOLS_ADAPTER.validate_python(tools)
+    except ValidationError:
+        return None
+    dropped_count: Final = sum("strict" in tool for tool in validated)
+    if dropped_count == 0:
+        return None
+    return ToolsWithoutStrict(
+        tools=tuple({key: value for key, value in tool.items() if key != "strict"} for tool in validated),
+        dropped_count=dropped_count,
+    )
+
+
+def warn_claude_strict_tools_dropped(dropped_count: int) -> None:
+    litellm.verbose_logger.warning(
+        "Claude rejected the strict tool schemas, so litellm dropped `strict` from %d tools and sent the request "
+        "again because drop_params is set.",
+        dropped_count,
+    )
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) -> list[object]:

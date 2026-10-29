@@ -442,6 +442,7 @@ class _Agentic(CustomLogger):
 
 
 ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "model": "claude-opus-5-5"}
+STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict": True}
 
 
 @pytest.mark.parametrize(
@@ -485,6 +486,8 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
             {"stream": True},
             {"include_cost_in_streaming_usage": True},
         ),
+        (Feature.STRICT_TOOLS_RETRY, "anthropic/claude-sonnet-4-5", {"drop_params": True, "tools": [STRICT_TOOL]}, {}),
+        (Feature.STRICT_TOOLS_RETRY, "anthropic/claude-sonnet-4-5", {"tools": [STRICT_TOOL]}, {"drop_params": True}),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(
@@ -525,6 +528,38 @@ def test_each_detected_feature_reaches_its_rule(
     for name, value in settings.items():
         monkeypatch.setattr(litellm, name, value)
     assert served(kwargs) is python_result
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param({"tools": [STRICT_TOOL]}, id="drop-params-unset"),
+        pytest.param({"drop_params": False, "tools": [STRICT_TOOL]}, id="drop-params-off"),
+        pytest.param(
+            {"drop_params": True, "tools": [{"name": "a", "input_schema": {"type": "object"}}]}, id="no-strict"
+        ),
+    ),
+)
+def test_strict_tools_stay_native_unless_python_could_drop_strict(
+    monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object]
+) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.STRICT_TOOLS_RETRY})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    served: Final = _DISPATCH.run(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        kwargs,
+        python=lambda *call_args, **python_kwargs: pytest.fail("Python cannot drop strict here"),
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, native_kwargs: hook(request),
+        rules=rules,
+    )
+
+    assert served is native_result
 
 
 ASYNC_ONLY_FEATURES: Final = (
