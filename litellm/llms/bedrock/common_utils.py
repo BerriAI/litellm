@@ -46,6 +46,7 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
+    from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
 
@@ -1679,9 +1680,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
 
-    def __init__(self, client: HTTPHandler | None = None) -> None:
+    def __init__(self, client: HTTPHandler | None = None, endpoint_failures: InMemoryCache | None = None) -> None:
         super().__init__()
         self._client: Final = client
+        self._endpoint_failures: Final = endpoint_failures
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
@@ -1715,10 +1717,17 @@ class BedrockModelInfo(BaseLLMModelInfo):
     def discover_models(
         self, litellm_params: Mapping[str, object] | None = None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        from litellm.llms.bedrock.model_listing import BedrockModelLister
+        from litellm.llms.bedrock.model_listing import CONTROL_PLANE_ENDPOINT_FAILURES, BedrockModelLister
 
         client: Final = self._client if self._client is not None else litellm.module_level_client
-        return sorted(BedrockModelLister(deployment=litellm_params or {}, client=client).invocable_model_ids())
+        endpoint_failures: Final = (
+            self._endpoint_failures if self._endpoint_failures is not None else CONTROL_PLANE_ENDPOINT_FAILURES
+        )
+        return sorted(
+            BedrockModelLister(
+                deployment=litellm_params or {}, client=client, endpoint_failures=endpoint_failures
+            ).invocable_model_ids()
+        )
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
     #     """

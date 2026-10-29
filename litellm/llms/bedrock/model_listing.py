@@ -1,12 +1,15 @@
+import hashlib
+import json
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, Protocol, TypeAlias
 from urllib.parse import quote, urlencode
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import BedrockError, bedrock_control_plane_base_url
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -15,6 +18,8 @@ from litellm.types.llms.bedrock import AwsAuthParams
 LIST_MODELS_TIMEOUT: Final = 10.0
 INFERENCE_PROFILES_PAGE_SIZE: Final = 1000
 INFERENCE_PROFILES_PAGE_CAP: Final = 20
+CONTROL_PLANE_ENDPOINT_RETRY_SECONDS: Final = 3600
+CONTROL_PLANE_ENDPOINT_FAILURES: Final = InMemoryCache(default_ttl=CONTROL_PLANE_ENDPOINT_RETRY_SECONDS)
 _DECODED_JSON: Final = TypeAdapter(object)
 
 QueryPairs: TypeAlias = tuple[tuple[str, str], ...]
@@ -46,8 +51,18 @@ class ListInferenceProfilesResponse(BaseModel):
     next_token: str | None = Field(default=None, alias="nextToken")
 
 
+class EndpointFailureMemory(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: object) -> None: ...
+
+    def delete_cache(self, key: str) -> None: ...
+
+
 class BedrockModelLister(BaseAWSLLM):
-    def __init__(self, deployment: Mapping[str, object], client: HTTPHandler) -> None:
+    def __init__(
+        self, deployment: Mapping[str, object], client: HTTPHandler, endpoint_failures: EndpointFailureMemory
+    ) -> None:
         super().__init__()
         self._aws_params: Final = dict(deployment)
         self._aws_region_name: Final = self._get_aws_region_name(optional_params=self._aws_params)
@@ -57,27 +72,61 @@ class BedrockModelLister(BaseAWSLLM):
         configured_base_url: Final = bedrock_control_plane_base_url(
             deployment.get("aws_bedrock_control_plane_endpoint"), self._aws_region_name
         )
-        self._sigv4_endpoint_base_url: Final = (
-            None
-            if self._bearer_token is not None or configured_base_url == self._regional_base_url
-            else configured_base_url
-        )
+        own_endpoint: Final = None if configured_base_url == self._regional_base_url else configured_base_url
+        self._sigv4_endpoint_base_url: Final = None if self._bearer_token is not None else own_endpoint
+        self._endpoint_skipped_for_api_key: Final = own_endpoint if self._bearer_token is not None else None
         self._client: Final = client
+        self._endpoint_failures: Final = endpoint_failures
+        self._deployment_key: Final = hashlib.sha256(
+            json.dumps(self._aws_params, sort_keys=True, default=str).encode()
+        ).hexdigest()
 
     def invocable_model_ids(self) -> frozenset[str]:
-        if self._sigv4_endpoint_base_url is None:
+        endpoint: Final = self._sigv4_endpoint_base_url
+        if endpoint is None:
+            return self._regional_model_ids()
+        if self._endpoint_failures.get_cache(self._deployment_key) is None:
+            return self._list_through(endpoint, self._regional_base_url)
+        return self._list_through(self._regional_base_url, endpoint)
+
+    def _regional_model_ids(self) -> frozenset[str]:
+        skipped: Final = self._endpoint_skipped_for_api_key
+        if skipped is None:
             return self._invocable_model_ids(self._regional_base_url)
         try:
-            return self._invocable_model_ids(self._sigv4_endpoint_base_url)
-        except (BedrockError, ValueError) as error:
-            verbose_logger.warning(
-                "Listing Bedrock models through the configured control-plane endpoint %s failed, "
-                "so listing through %s instead: %s",
-                httpx.URL(self._sigv4_endpoint_base_url).host,
-                httpx.URL(self._regional_base_url).host,
-                error,
-            )
             return self._invocable_model_ids(self._regional_base_url)
+        except BedrockError as error:
+            raise BedrockError(
+                status_code=error.status_code,
+                message=(
+                    f"{error.message} A deployment with a Bedrock API key lists through "
+                    f"{httpx.URL(self._regional_base_url).host}, never through the configured control-plane "
+                    f"endpoint {httpx.URL(skipped).host}."
+                ),
+            ) from error
+
+    def _list_through(self, first_base_url: str, fallback_base_url: str) -> frozenset[str]:
+        try:
+            listed: Final = self._invocable_model_ids(first_base_url)
+        except (BedrockError, ValueError) as error:
+            return self._list_through_fallback(first_base_url, fallback_base_url, error)
+        if listed:
+            return listed
+        return self._list_through_fallback(first_base_url, fallback_base_url, "it listed no models")
+
+    def _list_through_fallback(self, failed_base_url: str, fallback_base_url: str, reason: object) -> frozenset[str]:
+        verbose_logger.warning(
+            "Listing Bedrock models through %s failed, so listing through %s instead: %s",
+            httpx.URL(failed_base_url).host,
+            httpx.URL(fallback_base_url).host,
+            reason,
+        )
+        listed: Final = self._invocable_model_ids(fallback_base_url)
+        if failed_base_url == self._regional_base_url:
+            self._endpoint_failures.delete_cache(self._deployment_key)
+        else:
+            self._endpoint_failures.set_cache(self._deployment_key, True)
+        return listed
 
     def _invocable_model_ids(self, base_url: str) -> frozenset[str]:
         return frozenset(self._active_inference_profile_ids(base_url)) | frozenset(

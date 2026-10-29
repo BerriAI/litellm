@@ -158,7 +158,7 @@ def test_admin_models_list_through_the_configured_control_plane_endpoint_only(ri
         assert_sigv4(requests, key=key, secret=secret, region="us-east-1", host=CONFIGURED_CONTROL_PLANE_HOST)
 
 
-@pytest.mark.parametrize("status", (403, 404, 500))
+@pytest.mark.parametrize("status", (200, 403, 404, 500))
 def test_configured_endpoint_failure_lists_through_the_regional_host(rig: Rig, status: int) -> None:
     key, secret = credential()
     marker: Final = stem()

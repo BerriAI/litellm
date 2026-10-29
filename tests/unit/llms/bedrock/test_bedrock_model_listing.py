@@ -10,7 +10,9 @@ from urllib.parse import parse_qsl, quote
 import httpx
 import pytest
 
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.bedrock.common_utils import BedrockError, BedrockModelInfo
+from litellm.llms.bedrock.model_listing import CONTROL_PLANE_ENDPOINT_RETRY_SECONDS
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.router import LiteLLM_Params
 
@@ -130,8 +132,28 @@ def _hosts(handler: Mock) -> tuple[str, ...]:
     return tuple(call.args[0].url.host for call in handler.call_args_list)
 
 
-def _bedrock(handler: Callable[[httpx.Request], httpx.Response]) -> BedrockModelInfo:
-    return BedrockModelInfo(client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
+def _bedrock(
+    handler: Callable[[httpx.Request], httpx.Response], endpoint_failures: InMemoryCache | None = None
+) -> BedrockModelInfo:
+    return BedrockModelInfo(
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        endpoint_failures=endpoint_failures if endpoint_failures is not None else InMemoryCache(),
+    )
+
+
+def _endpoint_answering(
+    endpoint_answer: Callable[[httpx.Request], httpx.Response],
+) -> Callable[[httpx.Request], httpx.Response]:
+    regional: Final = _control_plane()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return endpoint_answer(request) if request.url.host == VPC_ENDPOINT_HOST else regional(request)
+
+    return handler
+
+
+def _forbidden(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(403, json={"message": "Missing Authentication Token"})
 
 
 def _deployment(
@@ -211,19 +233,16 @@ def test_configured_endpoint_without_the_list_routes_falls_back_to_the_regional_
         lambda request: httpx.Response(429, json={"message": "Too many requests"}),
         lambda request: httpx.Response(503, json={"message": "Service unavailable"}),
         lambda request: httpx.Response(200, text="<html>batch gateway</html>"),
+        lambda request: httpx.Response(200, json={"message": "ok"}),
+        lambda request: httpx.Response(200, json={"modelSummaries": [], "inferenceProfileSummaries": []}),
         _refuse_connection,
     ],
-    ids=["401", "403", "429", "503", "not-json", "connection-refused"],
+    ids=["401", "403", "429", "503", "not-json", "json-without-models", "empty-lists", "connection-refused"],
 )
 def test_any_failure_through_the_configured_endpoint_lists_through_the_regional_host(
     endpoint_answer: Callable[[httpx.Request], httpx.Response], caplog: pytest.LogCaptureFixture
 ) -> None:
-    regional: Final = _control_plane()
-
-    def endpoint_fails(request: httpx.Request) -> httpx.Response:
-        return endpoint_answer(request) if request.url.host == VPC_ENDPOINT_HOST else regional(request)
-
-    handler: Final = Mock(wraps=endpoint_fails)
+    handler: Final = Mock(wraps=_endpoint_answering(endpoint_answer))
 
     with caplog.at_level("WARNING", logger="LiteLLM"):
         assert (
@@ -235,6 +254,63 @@ def test_any_failure_through_the_configured_endpoint_lists_through_the_regional_
     assert any(
         VPC_ENDPOINT_HOST in record.getMessage() and REGIONAL_HOST in record.getMessage() for record in caplog.records
     )
+
+
+def test_failed_configured_endpoint_is_skipped_until_the_retry_window_ends() -> None:
+    clock: Final = Mock(return_value=0.0)
+    handler: Final = Mock(wraps=_endpoint_answering(_forbidden))
+    bedrock: Final = _bedrock(handler, InMemoryCache(default_ttl=CONTROL_PLANE_ENDPOINT_RETRY_SECONDS, clock=clock))
+    deployment: Final = _deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}")
+
+    assert bedrock.discover_models(deployment) == EXPECTED_MODELS
+    handler.reset_mock()
+    clock.return_value = CONTROL_PLANE_ENDPOINT_RETRY_SECONDS - 1.0
+    assert bedrock.discover_models(deployment) == EXPECTED_MODELS
+    assert set(_hosts(handler)) == {REGIONAL_HOST}
+
+    handler.reset_mock()
+    clock.return_value = CONTROL_PLANE_ENDPOINT_RETRY_SECONDS + 1.0
+    assert bedrock.discover_models(deployment) == EXPECTED_MODELS
+    assert _hosts(handler)[0] == VPC_ENDPOINT_HOST
+
+
+def test_endpoint_failure_of_one_deployment_leaves_another_on_its_endpoint() -> None:
+    endpoint_failures: Final = InMemoryCache()
+    deployment: Final = _deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}")
+    _bedrock(_endpoint_answering(_forbidden), endpoint_failures).discover_models(deployment)
+    endpoint_only: Final = Mock(wraps=_control_plane(host=VPC_ENDPOINT_HOST))
+
+    assert (
+        _bedrock(endpoint_only, endpoint_failures).discover_models({**deployment, "model": "bedrock/anthropic.*"})
+        == EXPECTED_MODELS
+    )
+    assert set(_hosts(endpoint_only)) == {VPC_ENDPOINT_HOST}
+
+
+def test_regional_failure_while_the_endpoint_is_skipped_returns_listing_to_the_endpoint() -> None:
+    endpoint_failures: Final = InMemoryCache()
+    deployment: Final = _deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}")
+    _bedrock(_endpoint_answering(_forbidden), endpoint_failures).discover_models(deployment)
+    endpoint_only: Final = Mock(wraps=_control_plane(host=VPC_ENDPOINT_HOST))
+    bedrock: Final = _bedrock(endpoint_only, endpoint_failures)
+
+    assert bedrock.discover_models(deployment) == EXPECTED_MODELS
+    assert _hosts(endpoint_only)[0] == REGIONAL_HOST
+    endpoint_only.reset_mock()
+    assert bedrock.discover_models(deployment) == EXPECTED_MODELS
+    assert set(_hosts(endpoint_only)) == {VPC_ENDPOINT_HOST}
+
+
+@pytest.mark.parametrize("control_plane_endpoint", [None, f"https://{VPC_ENDPOINT_HOST}"], ids=["regional", "configured"])
+def test_api_key_listing_failure_names_only_a_configured_endpoint_it_skipped(
+    control_plane_endpoint: str | None,
+) -> None:
+    with pytest.raises(BedrockError, match=rf"{re.escape(REGIONAL_HOST)} .*ConnectError") as raised:
+        _bedrock(_refuse_connection).discover_models(
+            _deployment(api_key=BEARER_TOKEN, control_plane_endpoint=control_plane_endpoint)
+        )
+
+    assert (VPC_ENDPOINT_HOST in str(raised.value)) == (control_plane_endpoint is not None)
 
 
 def test_bearer_token_api_key_replaces_sigv4() -> None:
