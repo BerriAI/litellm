@@ -1103,3 +1103,57 @@ async def test_marketplace_500_body_carries_no_exception_text(monkeypatch: pytes
     assert response.status_code == 500
     assert "hunter2" not in response.text
     assert "db.internal" not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["true", "True", 1, "a typo"])
+async def test_marketplace_auth_required_treats_a_quoted_or_unreadable_setting_as_on(
+    monkeypatch: pytest.MonkeyPatch, setting: object
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"claude_code_marketplace_auth_required": setting}
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http()
+
+    assert response.status_code == 401
+    assert "public-skill" not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["false", False, 0, None])
+async def test_marketplace_auth_required_off_values_keep_the_public_catalog(
+    monkeypatch: pytest.MonkeyPatch, setting: object
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"claude_code_marketplace_auth_required": setting}
+    )
+    await _register_public_and_private_plugins()
+
+    response: Final = await _get_marketplace_over_http()
+
+    assert response.status_code == 200
+    assert [plugin["name"] for plugin in response.json()["plugins"]] == ["public-skill"]
+
+
+@pytest.mark.asyncio
+async def test_marketplace_auth_required_refuses_the_database_outage_fallback_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"claude_code_marketplace_auth_required": True, "allow_requests_on_db_unavailable": True},
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    await _register_public_and_private_plugins()
+    litellm.proxy.proxy_server.prisma_client.get_data = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    litellm.proxy.proxy_server.prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+
+    response: Final = await _get_marketplace_over_http({"Authorization": "Bearer sk-not-a-litellm-key"})
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert "public-skill" not in response.text

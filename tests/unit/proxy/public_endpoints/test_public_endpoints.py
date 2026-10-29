@@ -1800,3 +1800,17 @@ def test_public_skill_hub_500_body_carries_no_exception_text() -> None:
     assert response.status_code == 500
     assert "hunter2" not in response.text
     assert "db.internal" not in response.text
+
+
+def test_public_skill_hub_without_a_database_answers_a_fixed_string_detail() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        response: Final = TestClient(app).get("/public/skill_hub")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Failed to list skills"}

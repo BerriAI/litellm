@@ -408,8 +408,6 @@ async def public_skill_hub():
                 )
             )
         return ListPluginsResponse(plugins=items, count=len(items))
-    except HTTPException:
-        raise
     except Exception as e:
         verbose_logger.exception("Error listing public skills: %s", e)
         raise HTTPException(status_code=500, detail="Failed to list skills")

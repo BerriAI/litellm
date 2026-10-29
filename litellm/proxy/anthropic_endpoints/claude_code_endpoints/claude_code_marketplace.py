@@ -28,15 +28,16 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
     SkillVisibility,
     resolve_skill_visibility,
 )
+from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
@@ -111,15 +112,24 @@ async def get_prisma_client() -> object:
 _get_prisma_client: Final = get_prisma_client
 
 
+_AUTH_REQUIRED_SETTING: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
 def marketplace_auth_required() -> bool:
     from litellm.proxy.proxy_server import general_settings_view
 
-    return general_settings_view().get("claude_code_marketplace_auth_required") is True
+    try:
+        return (
+            _AUTH_REQUIRED_SETTING.validate_python(general_settings_view().get("claude_code_marketplace_auth_required"))
+            is True
+        )
+    except ValidationError:
+        return True
 
 
 async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
     try:
-        return await user_api_key_auth(
+        caller: Final = await user_api_key_auth(
             request=request,
             api_key=request.headers.get(SpecialHeaders.openai_authorization.value) or "",
             custom_litellm_key_header=request.headers.get(SpecialHeaders.custom_litellm_api_key.value),
@@ -134,6 +144,15 @@ async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
             code=401,
             headers={**e.headers, "WWW-Authenticate": "Bearer"},
         ) from e
+    if caller.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
+        raise ProxyException(
+            message="The LiteLLM key could not be verified because the database is unavailable",
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return caller
 
 
 async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAuth | None:
