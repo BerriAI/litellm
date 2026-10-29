@@ -363,7 +363,7 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
             return None
     try:
         return await user_api_key_auth(api_key=litellm_api_key, request=request)
-    except (HTTPException, ProxyException) as exc:
+    except (HTTPException, ProxyException, OAuth2TokenValidationError) as exc:
         if _caused_by(exc, UserNotFoundError) or _caused_by(exc, OAuth2TokenValidationError):
             return None
         raise

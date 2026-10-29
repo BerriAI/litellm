@@ -3023,6 +3023,25 @@ class TestMCPDelegateAuthToUpstream:
         assert auth_result.mcp_forwards_caller_authorization is True
         assert oauth2_headers == {"Authorization": "Bearer opaque-idp-token"}
 
+    async def test_delegate_oauth2_rejection_admits_anonymously_whether_or_not_auth_wraps_it(self) -> None:
+        """A provider rejection is the provider declining to vouch, so the bearer is forwarded anonymously
+        even when it reaches admission as the bare validation error rather than a wrapped auth error."""
+        from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
+
+        with (
+            TestMCPDelegateAuthToUpstream._idp_auth_enabled("oauth2", AsyncMock()),
+            TestMCPDelegateAuthToUpstream._delegate_admission(
+                AsyncMock(side_effect=OAuth2TokenValidationError("Token is not active"))
+            ),
+        ):
+            auth_result, _, _, _, oauth2_headers, _ = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("opaque-idp-token")
+            )
+
+        assert auth_result.user_id is None
+        assert auth_result.mcp_forwards_caller_authorization is True
+        assert oauth2_headers == {"Authorization": "Bearer opaque-idp-token"}
+
     @pytest.mark.parametrize("mechanism", ["oauth2", "oauth2_proxy"])
     async def test_delegate_idp_user_refusal_propagates(self, mechanism: Literal["oauth2", "oauth2_proxy"]) -> None:
         """Once the provider vouches for the caller, LiteLLM's budget and permission refusals apply."""

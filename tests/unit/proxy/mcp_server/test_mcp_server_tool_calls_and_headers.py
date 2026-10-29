@@ -7355,6 +7355,7 @@ async def test_legacy_delegate_dual_credentials_probe_only_the_upstream_token() 
     )
 
     with (
+        _patch_delegate_resolver(server, "delegate_test"),
         patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
             "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[server]),
@@ -7397,10 +7398,12 @@ def _expired_delegate_token_preflight(mcp_servers: Sequence[str]) -> Coroutine[o
 
 @contextlib.contextmanager
 def _rejecting_delegate_upstream() -> Iterator[None]:
+    server: Final = _delegate_auth_mcp_server()
     with (
+        _patch_delegate_resolver(server, "delegate_test"),
         patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
             "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
-            new=AsyncMock(return_value=[_delegate_auth_mcp_server()]),
+            new=AsyncMock(return_value=[server]),
         ),
         patch(  # test-quality-ok: stands in for the upstream rejecting an expired token
             "litellm.proxy.mcp_server.server._probe_upstream_auth",
@@ -7451,6 +7454,7 @@ async def test_legacy_delegate_probe_sends_the_headers_a_tool_call_sends(
 
     server: Final = _delegate_auth_mcp_server().model_copy(update={"static_headers": static_headers})
     with (
+        _patch_delegate_resolver(server, "delegate_test"),
         patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
             "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[server]),
@@ -7480,6 +7484,7 @@ async def test_legacy_delegate_probe_steps_aside_when_static_headers_need_unset_
         }
     )
     with (
+        _patch_delegate_resolver(server, "delegate_test"),
         patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
             "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[server]),
@@ -7543,6 +7548,7 @@ async def test_modern_interaction_probes_legacy_delegate_only_for_a_single_reque
         }
     ).encode()
     with (
+        _patch_delegate_resolver(target, "delegate_test"),
         patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
             "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[target]),
@@ -7791,39 +7797,47 @@ async def test_delegate_not_probed_when_named_only_via_server_id():
 
 
 @pytest.mark.asyncio
-async def test_delegate_probe_not_fanned_out_to_access_group_members():
-    """A single access-group name passes the one-target route gate but must not fan
-    the delegate probe out to group-expanded member servers; the group name resolves
-    to no server under admission's resolver, so no probe fires."""
+@pytest.mark.usefixtures("httpx_transport")
+async def test_delegate_probe_not_fanned_out_to_access_group_members() -> None:
+    """A single access-group name resolves to no server under admission's resolver, so the delegate probe is
+    not fanned out to the group's members and one member rejecting the token cannot fail the whole group."""
+    import respx
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server.server import (
         _check_passthrough_upstream_auth,
     )
 
-    group_member = _delegate_auth_mcp_server()
-
+    rejecting: Final = _delegate_auth_mcp_server()
+    accepting: Final = _delegate_auth_mcp_server("delegate-2").model_copy(
+        update={"name": "delegate_two", "url": "http://upstream-two:9402/mcp"}
+    )
     with (
-        _patch_delegate_resolver(group_member, "delegate_test"),
-        patch(
+        _patch_delegate_resolver(rejecting, "delegate_test"),
+        patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
             "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
-            new=AsyncMock(return_value=[group_member]),
+            new=AsyncMock(return_value=[rejecting, accepting]),
         ),
-        patch(
-            "litellm.proxy.mcp_server.server._probe_upstream_auth",
-            new=AsyncMock(return_value=(401, None)),
-        ) as probe,
+        respx.mock as upstream,
     ):
-        await _check_passthrough_upstream_auth(
-            scope=_delegate_scope([(b"authorization", b"Bearer bogus-token")]),
-            user_api_key_auth=UserAPIKeyAuth(),
-            mcp_servers=["prod_tools_group"],
-            client_ip=None,
-            oauth2_headers=None,
-            mcp_server_auth_headers=None,
-            raw_headers=None,
+        upstream.post(rejecting.url).respond(401, headers={"www-authenticate": 'Bearer error="invalid_token"'})
+        upstream.post(accepting.url).respond(200)
+        assert (
+            await _check_passthrough_upstream_auth(
+                scope=_delegate_scope(
+                    [(b"x-litellm-api-key", b"sk-litellm-proxy-key"), (b"authorization", b"Bearer upstream-token")]
+                ),
+                user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
+                mcp_servers=["prod_tools_group"],
+                client_ip=None,
+                oauth2_headers={"Authorization": "Bearer upstream-token"},
+                mcp_server_auth_headers=None,
+                raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
+            )
+            is None
         )
 
-    probe.assert_not_awaited()
+    assert upstream.calls.call_count == 0
 
 
 @pytest.mark.asyncio

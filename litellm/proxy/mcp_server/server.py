@@ -2214,11 +2214,17 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        # A legacy delegate is probed only on a single-server route, so one rejected token cannot 401 a
-        # multi-server connect; its challenge echoes the requested name, matching the tokenless challenge.
+        # A legacy delegate is probed only when the single requested name resolves to it the way admission
+        # resolves it, so neither a multi-server connect nor an access group can be failed by one rejected
+        # token; its challenge echoes the requested name, matching the tokenless challenge.
         requested_scope: Final = requested_servers if requested_servers is not None else mcp_servers
         single_requested_name: Final = (
             requested_scope[0] if requested_scope is not None and len(requested_scope) == 1 else None
+        )
+        requested_server: Final = (
+            operations.global_mcp_server_manager.get_mcp_server_by_name(single_requested_name, client_ip=client_ip)
+            if single_requested_name is not None
+            else None
         )
         prepared_headers: Final = tuple(
             (
@@ -2234,7 +2240,12 @@ if MCP_AVAILABLE:
                 ),
             )
             for srv in allowed_servers
-            if srv.is_oauth_passthrough or (single_requested_name is not None and is_legacy_upstream_delegate(srv))
+            if srv.is_oauth_passthrough
+            or (
+                requested_server is not None
+                and srv.server_id == requested_server.server_id
+                and is_legacy_upstream_delegate(srv)
+            )
         )
         probe_headers: Final = tuple(
             (
