@@ -1062,7 +1062,7 @@ class ProxyInitializationHelpers:
         "killed when it misses one healthcheck ping, and importing the proxy takes longer than 5 s on a loaded "
         "host, so the lower default crash-loops with 'Child process died'. The same value is the deadline for a "
         "replacement worker to finish starting on SIGHUP. Requires uvicorn>=0.37.0. Only applies when running "
-        "uvicorn directly with --num_workers>1; ignored under --run_gunicorn / --run_hypercorn."
+        "uvicorn directly with --num_workers>1; ignored under --run_gunicorn, --run_hypercorn and --run_granian."
     ),
     envvar="TIMEOUT_WORKER_HEALTHCHECK",
 )

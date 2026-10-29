@@ -458,6 +458,10 @@ db:
 # GRACEFUL_SHUTDOWN_TIMEOUT again for connections still open and then cancels
 # them, so set terminationGracePeriodSeconds a few seconds above twice
 # GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before SIGKILL.
+# With numWorkers above 1, uvicorn's parent also waits up to
+# --timeout_worker_healthcheck (default 60s) on each worker that stops
+# answering health pings before it acts on SIGTERM, so add that much per
+# worker you expect could hang, or lower the flag.
 #
 # /health/drain is off by default; enable it with
 # general_settings.enable_drain_endpoint: true. The kubelet calls preStop
