@@ -28,7 +28,7 @@ import textwrap
 import threading
 import time
 import traceback
-from contextlib import nullcontext, suppress
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -8336,6 +8336,7 @@ class AvailableModelsCache(InMemoryCache):
     def __init__(self, ttl_seconds: int = 300, max_size: int = 1000, clock: Callable[[], float] | None = None):
         super().__init__(ttl_seconds, max_size, clock=clock)
         self._env_hash: str | None = None
+        self._listing_lock = threading.Lock()
 
     def _get_env_hash(self) -> str:
         """Create a hash of relevant environment variables"""
@@ -8387,11 +8388,30 @@ class AvailableModelsCache(InMemoryCache):
         custom_llm_provider: str,
         litellm_params: LiteLLM_Params | None,
         available_models: list[str],
-        ttl: int | None = None,
     ):
         """Set cached model info"""
+        with self._listing_lock:
+            self._store_model_info(custom_llm_provider, litellm_params, available_models, ttl=None)
+
+    def cache_timed_out_listing_unless_listed(
+        self,
+        custom_llm_provider: str,
+        litellm_params: LiteLLM_Params | None,
+        ttl: int,
+    ) -> None:
+        with self._listing_lock:
+            if self.get_cached_model_info(custom_llm_provider, litellm_params) is None:
+                self._store_model_info(custom_llm_provider, litellm_params, (), ttl=ttl)
+
+    def _store_model_info(
+        self,
+        custom_llm_provider: str,
+        litellm_params: LiteLLM_Params | None,
+        available_models: Sequence[str],
+        ttl: int | None,
+    ) -> None:
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
-        self.set_cache(cache_key, copy.deepcopy(available_models), ttl=ttl)
+        self.set_cache(cache_key, list(available_models), ttl=ttl)
 
 
 # Global cache instance
@@ -8458,11 +8478,10 @@ def _get_valid_models_from_provider_api(
         return models
     except httpx.TimeoutException as e:
         verbose_logger.warning("Timed out getting valid models: %s", e)
-        with suppress(ValueError):
-            model_cache.set_cached_model_info(
-                custom_llm_provider, litellm_params, [], ttl=PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
-            )
-        return []
+        model_cache.cache_timed_out_listing_unless_listed(
+            custom_llm_provider, litellm_params, ttl=PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
+        )
+        return model_cache.get_cached_model_info(custom_llm_provider, litellm_params) or []
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
         return []
