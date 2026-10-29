@@ -555,6 +555,36 @@ def test_trace_id_and_session_id_cannot_be_injected_with_no_active_context(monke
     assert "session_id" not in cap.records[0]
 
 
+def test_message_dict_keys_never_override_fields_the_logger_sets():
+    lg, cap = _make_capture_logger("test.message_dict_precedence")
+    embedded: Final = {
+        "component": "forged-component",
+        "logger": "forged.py:1",
+        "stacktrace": "forged stacktrace",
+        "litellm_call_id": "forged-call-id",
+        "model_name": "gpt-x",
+    }
+    lg.handle(
+        lg.makeRecord(
+            lg.name,
+            logging.INFO,
+            "/srv/litellm/router.py",
+            42,
+            f"Selected deployment: {embedded} for model: gpt-x",
+            (),
+            None,
+            extra={"litellm_call_id": "real-call-id"},
+        )
+    )
+
+    record: Final = cap.records[0]
+    assert record["component"] == "test.message_dict_precedence"
+    assert record["logger"] == "router.py:42"
+    assert record["litellm_call_id"] == "real-call-id"
+    assert "stacktrace" not in record
+    assert record["model_name"] == "gpt-x"
+
+
 def test_trace_id_and_session_id_are_redacted_when_credential_shaped(monkeypatch):
     """A caller-controlled trace_id/session_id (e.g. from x-litellm-trace-id or a W3C
     baggage header) that happens to look like a real credential must not reach log

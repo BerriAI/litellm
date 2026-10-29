@@ -1,5 +1,3 @@
-import json
-import re
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -8,22 +6,10 @@ from typing import Final, TypeVar
 
 from fastapi import status
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import logfmt_value, verbose_proxy_logger
 from litellm.proxy.common_utils.openai_error_payload import error_status_code
 from litellm.types.token_count import TokenCountSource
 from litellm.types.utils import TokenCountResponse
-
-_BARE_LOGFMT_VALUE: Final = re.compile(r"[\w.:/@+-]+", re.ASCII)
-_JSON_ESCAPED_BRACES: Final = str.maketrans({"{": "\\u007b", "}": "\\u007d"})
-
-
-def _logfmt_value(value: str | None) -> str:
-    if value is None:
-        return "None"
-    if _BARE_LOGFMT_VALUE.fullmatch(value):
-        return value
-    return json.dumps(value).translate(_JSON_ESCAPED_BRACES)
-
 
 _Counted: Final = TypeVar("_Counted")
 _Rejection: Final = TypeVar("_Rejection")
@@ -59,10 +45,10 @@ def _log_token_count(request: _CountRequest, fields: _CountFields, status_code: 
     verbose_proxy_logger.info(
         "token count - litellm_call_id=%s request_model=%s model_id=%s model_used=%s input_tokens=%s "
         "count_source=%s status_code=%s",
-        _logfmt_value(request.litellm_call_id),
-        _logfmt_value(request.request_model),
-        _logfmt_value(request.model_id),
-        _logfmt_value(fields.model_used),
+        logfmt_value(request.litellm_call_id),
+        logfmt_value(request.request_model),
+        logfmt_value(request.model_id),
+        logfmt_value(fields.model_used),
         fields.input_tokens,
         fields.count_source,
         status_code,

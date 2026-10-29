@@ -3,11 +3,13 @@
 import asyncio
 import copy
 import inspect
+import json
 import logging
 import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
+from io import StringIO
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,7 +20,7 @@ from prisma.errors import ClientNotConnectedError
 
 import litellm
 import litellm.proxy.proxy_server
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import JsonFormatter, verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
@@ -449,6 +451,19 @@ def token_count_log_lines(
             for record in caplog.records
             if record.levelno == logging.INFO and "count_source" in record.__dict__
         )
+
+
+@pytest.fixture
+def proxy_json_log_lines() -> Iterator[Callable[[], tuple[dict[str, object], ...]]]:
+    stream: Final = StringIO()
+    handler: Final = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    previous_level: Final = verbose_proxy_logger.level
+    verbose_proxy_logger.addHandler(handler)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    yield lambda: tuple(json.loads(line) for line in stream.getvalue().splitlines())
+    verbose_proxy_logger.removeHandler(handler)
+    verbose_proxy_logger.setLevel(previous_level)
 
 
 @pytest.fixture

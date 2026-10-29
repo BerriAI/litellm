@@ -34,7 +34,7 @@ from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
 import litellm
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import logfmt_value, redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
@@ -403,7 +403,7 @@ async def _record_streaming_client_disconnect_if_needed(
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
-        request_data.get("litellm_call_id"),
+        logfmt_value(request_data.get("litellm_call_id")),
     )
     return True
 
@@ -492,7 +492,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     if partial_responses_event is not None:
         verbose_proxy_logger.debug(
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
-            sanitize_for_log(logging_obj.litellm_call_id),
+            logfmt_value(logging_obj.litellm_call_id),
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
@@ -501,7 +501,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     verbose_proxy_logger.debug(
         "Billing partial streamed spend for %s chunks after client disconnect, litellm_call_id=%s",
         len(chunks),
-        request_data.get("litellm_call_id"),
+        logfmt_value(request_data.get("litellm_call_id")),
     )
     messages: Final[object] = getattr(response, "messages", None)
     try:
@@ -1871,7 +1871,7 @@ def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
         verbose_proxy_logger.info(
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, "
             "upstream LLM request cancelled - litellm_call_id=%s",
-            litellm_call_id,
+            logfmt_value(litellm_call_id),
             extra=MappingProxyType({"litellm_call_id": litellm_call_id}),
         )
         return
@@ -1882,7 +1882,7 @@ def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
     )
     log_fn(
         "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - litellm_call_id=%s - %s",
-        litellm_call_id,
+        logfmt_value(litellm_call_id),
         e,
         extra=MappingProxyType({"litellm_call_id": litellm_call_id}),
     )
