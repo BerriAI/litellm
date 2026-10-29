@@ -32,6 +32,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
+
 # Anchor sys.path to this file's location — not the working-directory-relative
 # pattern Greptile flagged on PR #23706. Resolves correctly regardless of
 # where pytest is invoked from.
@@ -263,3 +265,56 @@ async def test_messages_layer_converted_stream_flag_still_gets_a_message_back(co
     )
 
     assert response["content"][0]["text"] == "hi"
+
+
+_DEEPWIKI_SERVER: Final = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
+
+
+@pytest.mark.parametrize(
+    ("mcp_servers", "named"),
+    [
+        ([_DEEPWIKI_SERVER], "`deepwiki`"),
+        ([_DEEPWIKI_SERVER, {"type": "url", "url": "https://mcp.example.com/mcp"}], "`deepwiki`, `unnamed`"),
+        ({"name": "deepwiki"}, "`unnamed`"),
+    ],
+    ids=["named", "one-unnamed", "not-a-list"],
+)
+def test_mcp_servers_a_chat_route_cannot_run_answer_400_naming_each_server(
+    monkeypatch: pytest.MonkeyPatch, mcp_servers: object, named: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        _call_prepare(
+            extra_kwargs={"mcp_servers": mcp_servers, "custom_llm_provider": "gemini"}, model="gemini-3.8-flash"
+        )
+
+    assert raised.value.status_code == 400
+    assert f"gemini-3.8-flash on gemini cannot run the MCP server {named} from `mcp_servers`" in str(raised.value)
+
+
+@pytest.mark.parametrize("drop_params", ["request", "global"])
+def test_drop_params_drops_mcp_servers_instead_of_forwarding_them(
+    monkeypatch: pytest.MonkeyPatch, drop_params: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params == "global")
+    completion_kwargs, _ = _call_prepare(
+        extra_kwargs={
+            "mcp_servers": [_DEEPWIKI_SERVER],
+            "custom_llm_provider": "gemini",
+            **({"drop_params": True} if drop_params == "request" else {}),
+        },
+        model="gemini-3.8-flash",
+    )
+
+    assert "mcp_servers" not in completion_kwargs
+    assert completion_kwargs["messages"] == MESSAGES
+
+
+@pytest.mark.parametrize("mcp_servers", [None, []], ids=["absent", "empty"])
+def test_no_mcp_servers_needs_no_drop_params(monkeypatch: pytest.MonkeyPatch, mcp_servers: object) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    completion_kwargs, _ = _call_prepare(
+        extra_kwargs={"mcp_servers": mcp_servers, "custom_llm_provider": "gemini"}, model="gemini-3.8-flash"
+    )
+
+    assert "mcp_servers" not in completion_kwargs

@@ -739,3 +739,33 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+_DEEPWIKI_SERVER: Final = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
+
+
+def test_mcp_servers_the_responses_bridge_cannot_run_answer_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            model="gpt-5.6",
+            extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER]},
+            max_tokens=1024,
+            messages=MESSAGES,
+        )
+
+    assert rejected.value.status_code == 400
+    assert "gpt-5.6 on openai cannot run the MCP server `deepwiki` from `mcp_servers`" in rejected.value.message
+
+
+def test_drop_params_keeps_mcp_servers_off_the_responses_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="gpt-5.6",
+        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], "drop_params": True},
+        max_tokens=1024,
+        messages=MESSAGES,
+    )
+
+    assert "mcp_servers" not in responses_kwargs
+    assert responses_kwargs["input"]

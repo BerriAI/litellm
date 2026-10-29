@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.tool_fields import check_mcp_servers_droppable
 from litellm.llms.anthropic.messages.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
-ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config", "safeguards"})
+ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"mcp_servers", "output_config", "safeguards"})
 _REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
@@ -646,13 +647,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["output_config"] = extra_kwargs["output_config"]
 
         custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
+        target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        drop_params: Final = drops_unsupported_params(extra_kwargs.get("drop_params"))
+        check_mcp_servers_droppable(
+            extra_kwargs.get("mcp_servers"), model=model, route=target_provider or "this route", drop_params=drop_params
+        )
         (
             openai_request,
             tool_name_mapping,
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
-            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-            drop_params=drops_unsupported_params(extra_kwargs.get("drop_params")),
+            custom_llm_provider=target_provider,
+            drop_params=drop_params,
         )
 
         if openai_request is None:

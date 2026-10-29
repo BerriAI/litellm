@@ -185,25 +185,69 @@ def _hosted_mcp_server_label(tool: object) -> str | None:
             return None
 
 
+def _drop_params_hint(dropped: str) -> str:
+    return (
+        f"To drop {dropped} instead, set `litellm.drop_params=True` or for proxy:\n\n"
+        "`litellm_settings:\n drop_params: true`\n"
+    )
+
+
+def _unrunnable_mcp_error(message: str, model: str, route: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(message=message, model=model, llm_provider=route, status_code=400)
+
+
 def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, drop_params: bool) -> Sequence[_ToolT]:
     server_labels: Final = tuple(label for label in map(_hosted_mcp_server_label, tools) if label is not None)
     if not server_labels:
         return tools
     named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
     if not drops_unsupported_params(drop_params):
-        raise UnsupportedParamsError(
-            message=(
-                f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
-                "run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
-                '`server_url: "litellm_proxy/mcp/<server name>"`. To drop hosted MCP tools instead, set '
-                "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
-            ),
+        raise _unrunnable_mcp_error(
+            f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
+            "run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
+            '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("hosted MCP tools"),
             model=model,
-            llm_provider=route,
-            status_code=400,
+            route=route,
         )
     verbose_logger.warning(HOSTED_MCP_DROP_WARNING, named_servers, model, route)
     return [tool for tool in tools if _hosted_mcp_server_label(tool) is None]
+
+
+MCP_SERVERS_DROP_WARNING: Final = (
+    "Dropping mcp_servers %s for model=%s on %s (drop_params=True) because this route cannot run an MCP server."
+)
+
+
+def _mcp_server_name(server: object) -> str:
+    match server:
+        case {"name": str() as name}:
+            return name
+        case _:
+            return "unnamed"
+
+
+def _mcp_server_names(mcp_servers: object) -> tuple[str, ...]:
+    if not mcp_servers:
+        return ()
+    if not isinstance(mcp_servers, list):
+        return ("unnamed",)
+    return tuple(map(_mcp_server_name, _TOOLS.validate_python(mcp_servers)))
+
+
+def check_mcp_servers_droppable(mcp_servers: object, model: str, route: str, drop_params: bool) -> None:
+    server_names: Final = _mcp_server_names(mcp_servers)
+    if not server_names:
+        return
+    named_servers: Final = ", ".join(f"`{name}`" for name in server_names)
+    if not drops_unsupported_params(drop_params):
+        raise _unrunnable_mcp_error(
+            f"{model} on {route} cannot run the MCP server {named_servers} from `mcp_servers`. To have LiteLLM run "
+            'it for this model, register it on the LiteLLM MCP gateway and send a `type: "mcp"` tool with '
+            '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("`mcp_servers`"),
+            model=model,
+            route=route,
+        )
+    verbose_logger.warning(MCP_SERVERS_DROP_WARNING, named_servers, model, route)
 
 
 _TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls"})

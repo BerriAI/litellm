@@ -113,6 +113,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -5955,14 +5956,20 @@ def completion(
                 optional_params.pop("functions_unsupported_model")
             )
             request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
-            messages = function_call_prompt(
-                messages=messages,
-                functions=functions_unsupported_model,
-                model=model,
-                llm_provider=custom_llm_provider,
-                drop_params=litellm.drop_params is True
-                or normalize_drop_params(request_kwargs.get("drop_params")) is True,
+            prompt_drop_params: Final = (
+                litellm.drop_params is True or normalize_drop_params(request_kwargs.get("drop_params")) is True
             )
+            prompt_functions: Final = tools_without_hosted_mcp(
+                functions_unsupported_model, model=model, route=custom_llm_provider, drop_params=prompt_drop_params
+            )
+            if prompt_functions:
+                messages = function_call_prompt(
+                    messages=messages,
+                    functions=list(prompt_functions),
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                    drop_params=prompt_drop_params,
+                )
 
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
