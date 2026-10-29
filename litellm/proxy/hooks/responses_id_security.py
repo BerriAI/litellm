@@ -130,8 +130,10 @@ def _with_comparison_response_id(options: object, comparison_response_id: str) -
 
 
 def _innermost_response_id(response_id: str) -> str:
-    decoded: Final = ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(response_id)
-    return response_id if decoded is None else _innermost_response_id(decoded.get("response_id", response_id))
+    innermost = response_id  # rebind-ok: peels one wrapper layer per pass instead of recursing
+    while (decoded := ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(innermost)) is not None:
+        innermost = decoded.get("response_id", innermost)
+    return innermost
 
 
 def _is_responses_api_create_route(request_route: str | None) -> bool:
