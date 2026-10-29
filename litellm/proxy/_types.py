@@ -2833,6 +2833,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    spend_logs_prompt_storage: Literal["latest_user_message"] | None = Field(
+        None,
+        description="With store_prompts_in_spend_logs on, 'latest_user_message' stores only the text of the request's latest user message and no response. Unset stores the full request and response.",
+    )
     claude_code_marketplace_auth_required: bool = Field(
         False,
         description="If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.",
