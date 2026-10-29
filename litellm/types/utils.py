@@ -2392,6 +2392,11 @@ class ModelResponse(ModelResponseBase):
             return self.dict()
 
 
+def hidden_response_cost_value(response: ModelResponse) -> object | None:
+    # Module scope so `object` is the builtin. Inside ModelResponse it is shadowed by the `object` field.
+    return response.hidden_params.get("response_cost")
+
+
 class Embedding(OpenAIObject):
     embedding: list | str = []
     index: int

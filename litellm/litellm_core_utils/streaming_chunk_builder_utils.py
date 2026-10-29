@@ -55,6 +55,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     UnreportedUsage,
     Usage,
+    hidden_response_cost_value,
 )
 from litellm.utils import get_base_model_from_metadata, print_verbose, token_counter
 
@@ -1381,7 +1382,12 @@ def _stream_builder_response_cost(
         )
         return next((cost for cost in reported if cost is not None), None)
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
+    # A non-positive leftover (common on Vertex Anthropic stream assembly) is not a provider total.
+    if (
+        isinstance(usage_cost, (int, float))
+        and usage_cost > 0
+        and not _reported_cost_is_priced_by_calculator(logging_obj)
+    ):
         return float(usage_cost)
     if logging_obj is not None:
         return None
@@ -1421,15 +1427,31 @@ def _set_stream_builder_response_cost(
     response: ModelResponse, logging_obj: Optional["Logging"], chunks: Sequence[object]
 ) -> None:
     response_cost: Final = _stream_builder_response_cost(response, logging_obj, chunks)
-    if response_cost is None:
+    if response_cost is not None:
+        _set_hidden_response_cost(response, response_cost)
         return
-    _set_hidden_response_cost(response, response_cost)
+    usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
+    hidden_cost: Final = hidden_response_cost_value(response)
+    # xAI is priced by the calculator, so the provider total here is None even after
+    # the stamp wrote the same positive number onto usage.cost and hidden response_cost.
+    # Keep that pair. Any other leftover, including a Vertex 0, has to go so token pricing runs.
+    if (
+        isinstance(usage_cost, (int, float))
+        and not isinstance(usage_cost, bool)
+        and isinstance(hidden_cost, (int, float))
+        and not isinstance(hidden_cost, bool)
+        and usage_cost > 0
+        and float(usage_cost) == float(hidden_cost)
+    ):
+        return
+    response.hidden_params.pop("response_cost", None)  # pyright: ignore[reportUnknownMemberType]  # legacy dict
 
 
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if isinstance(getattr(usage, "cost", None), (int, float)):
+    existing_cost: Final = getattr(usage, "cost", None)
+    if isinstance(existing_cost, (int, float)) and existing_cost > 0:
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:

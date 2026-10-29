@@ -1732,10 +1732,28 @@ class CustomStreamWrapper:
                 self.tool_call = True
 
             chunk_usage: Final = getattr(chunk, "usage", None)
-            if isinstance(chunk_usage, Usage):
-                model_response.usage = chunk_usage
-            elif isinstance(chunk_usage, BaseModel):
-                model_response.usage = Usage(**chunk_usage.model_dump())
+            parsed_usage: Final = (
+                chunk_usage
+                if isinstance(chunk_usage, Usage)
+                else Usage(**chunk_usage.model_dump())
+                if isinstance(chunk_usage, BaseModel)
+                else None
+            )
+            # vertex_ai returns before cost propagation, so a leftover usage.cost=0 would
+            # be read downstream as a provider total. Drop it so token pricing runs.
+            reported_cost: Final = getattr(parsed_usage, "cost", None)
+            drop_reported_cost: Final = (
+                self.custom_llm_provider == "vertex_ai"
+                and reported_cost is not None
+                and _usable_provider_reported_cost(reported_cost) is None
+            )
+            attached_usage: Final = (
+                parsed_usage.model_copy(update={"cost": None})
+                if parsed_usage is not None and drop_reported_cost
+                else parsed_usage
+            )
+            if attached_usage is not None:
+                model_response.usage = attached_usage
 
             ## RETURN ARG
             if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
@@ -1985,17 +2003,7 @@ class CustomStreamWrapper:
 
     @staticmethod
     def _resolve_provider_reported_cost(usage_cost: object) -> float | None:
-        """
-        Providers report usage.cost either as a number or as a breakdown object
-        whose total lives under ``total_cost``.
-        """
-        if isinstance(usage_cost, bool):
-            return None
-        if isinstance(usage_cost, (int, float)):
-            return float(usage_cost)
-        if isinstance(usage_cost, dict):
-            return CustomStreamWrapper._resolve_provider_reported_cost(usage_cost.get("total_cost"))
-        return None
+        return _usable_provider_reported_cost(usage_cost)
 
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
@@ -2757,6 +2765,28 @@ def _reported_total_usage(chunks: Sequence[ModelResponse | ModelResponseStream])
     return calculate_total_usage(chunks=chunks)
 
 
+def _positive_provider_cost(usage_cost: object) -> float | None:
+    if isinstance(usage_cost, bool) or not isinstance(usage_cost, (int, float)) or usage_cost <= 0:
+        return None
+    return float(usage_cost)
+
+
+def _usable_provider_reported_cost(usage_cost: object) -> float | None:
+    """
+    Providers report usage.cost either as a number or as a breakdown object
+    whose total lives under ``total_cost``.
+
+    Zero / negative is not a real provider total. Stream assembly can leave
+    ``usage.cost = 0`` on Vertex Anthropic chunks that still have tokens
+    (including cache-read). Treating that 0 as authoritative made the
+    stream spend path log spend=0 while ``cost_per_token`` on the same
+    Usage priced correctly. Leave it absent so token-based pricing runs.
+    """
+    if isinstance(usage_cost, dict):
+        return _positive_provider_cost(usage_cost.get("total_cost"))
+    return _positive_provider_cost(usage_cost)
+
+
 def calculate_total_usage(chunks: Sequence[ModelResponse | ModelResponseStream]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
@@ -2805,8 +2835,9 @@ def calculate_total_usage(chunks: Sequence[ModelResponse | ModelResponseStream])
             if isinstance(latest_usage_chunk, dict)
             else getattr(latest_usage_chunk, "cost", None)
         )
-        if latest_cost is not None:
-            returned_usage_chunk.cost = latest_cost
+        resolved_cost: Final = _usable_provider_reported_cost(latest_cost)
+        if resolved_cost is not None:
+            returned_usage_chunk.cost = resolved_cost
 
     return returned_usage_chunk
 
