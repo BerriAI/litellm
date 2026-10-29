@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import importlib
 import json
 from collections.abc import Iterator
@@ -555,3 +556,133 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert "anthropic-beta" not in upstream.calls.last.request.headers
+
+
+_VERTEX_GEMINI_PATH: Final = "v1/projects/caller-project/locations/global/publishers/google/models/gemini-3.8-flash"
+_VERTEX_GEMINI_BODY: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+_VERTEX_LABELED_KEY: Final = "sk-billing-svc"
+_VERTEX_CALLER_LABELS: Final = {"user_api_key_team_alias": "forged", "env": "prod"}
+_VERTEX_RESOLVED_LABELS: Final = {
+    "user_api_key_alias": "billing-svc",
+    "user_api_key_team_alias": "ai_platform",
+    "env": "prod",
+}
+
+
+def _labels_header(labels: dict[str, str]) -> str:
+    return base64.b64encode(json.dumps(labels).encode()).decode()
+
+
+@pytest.fixture
+def labeled_key(monkeypatch: pytest.MonkeyPatch) -> str:
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def billing_service_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        assert api_key == _VERTEX_LABELED_KEY
+        return UserAPIKeyAuth(api_key=api_key, key_alias="billing-svc", team_alias="AI Platform")
+
+    monkeypatch.setattr(proxy_server, "user_custom_auth", billing_service_auth)
+    return _VERTEX_LABELED_KEY
+
+
+@pytest.mark.parametrize("method", [":generateContent", ":streamGenerateContent", ":predict"])
+@pytest.mark.parametrize(
+    ("label_fields", "sent_labels", "upstream_labels"),
+    [
+        pytest.param(
+            ["user_api_key_alias", "user_api_key_team_alias"],
+            _VERTEX_CALLER_LABELS,
+            _VERTEX_RESOLVED_LABELS,
+            id="identity-replaces-forged-label",
+        ),
+        pytest.param(["user_api_key_org_id"], {"user_api_key_team_alias": "forged"}, None, id="only-forged-label"),
+        pytest.param(None, _VERTEX_CALLER_LABELS, _VERTEX_CALLER_LABELS, id="setting-off"),
+    ],
+)
+def test_vertex_pass_through_labels_the_request_body_from_the_key_identity(
+    vertex_proxy: TestClient,
+    respx_mock: "respx.MockRouter",
+    monkeypatch: pytest.MonkeyPatch,
+    labeled_key: str,
+    method: str,
+    label_fields: list[str] | None,
+    sent_labels: dict[str, str],
+    upstream_labels: dict[str, str] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", label_fields)
+    upstream: Final = respx_mock.post(
+        url__startswith=f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_PATH}{method}"
+    ).mock(return_value=httpx.Response(200, json={}))
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{_VERTEX_GEMINI_PATH}{method}",
+        json={**_VERTEX_GEMINI_BODY, "labels": sent_labels},
+        headers={"x-litellm-api-key": labeled_key, "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+    )
+
+    assert response.status_code == 200
+    expected_labels: Final = {} if upstream_labels is None else {"labels": upstream_labels}
+    assert json.loads(upstream.calls.last.request.content) == {**_VERTEX_GEMINI_BODY, **expected_labels}
+
+
+@pytest.mark.parametrize(
+    ("label_fields", "caller_headers", "upstream_labels"),
+    [
+        pytest.param(
+            ["user_api_key_alias", "user_api_key_team_alias"],
+            {"x-pass-x-vertex-ai-labels": _labels_header(_VERTEX_CALLER_LABELS)},
+            _VERTEX_RESOLVED_LABELS,
+            id="identity-replaces-forged-header",
+        ),
+        pytest.param(
+            ["user_api_key_alias", "user_api_key_team_alias"],
+            {},
+            {"user_api_key_alias": "billing-svc", "user_api_key_team_alias": "ai_platform"},
+            id="identity-without-caller-header",
+        ),
+        pytest.param(
+            ["user_api_key_org_id"],
+            {"x-pass-x-vertex-ai-labels": _labels_header({"user_api_key_team_alias": "forged"})},
+            None,
+            id="only-forged-header",
+        ),
+        pytest.param(
+            None,
+            {"x-pass-x-vertex-ai-labels": _labels_header(_VERTEX_CALLER_LABELS)},
+            _VERTEX_CALLER_LABELS,
+            id="setting-off",
+        ),
+    ],
+)
+def test_vertex_pass_through_labels_the_claude_request_header_from_the_key_identity(
+    vertex_proxy: TestClient,
+    respx_mock: "respx.MockRouter",
+    monkeypatch: pytest.MonkeyPatch,
+    labeled_key: str,
+    label_fields: list[str] | None,
+    caller_headers: dict[str, str],
+    upstream_labels: dict[str, str] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", label_fields)
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_CALLER_PATH}").mock(
+        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+    )
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{_VERTEX_CALLER_PATH}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={
+            "x-litellm-api-key": labeled_key,
+            "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}",
+            **caller_headers,
+        },
+    )
+
+    assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
+    outbound: Final = upstream.calls.last.request
+    sent_headers: Final = tuple(json.loads(base64.b64decode(value)) for value in outbound.headers.get_list("x-vertex-ai-labels"))
+    assert sent_headers == (() if upstream_labels is None else (upstream_labels,))
+    assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY

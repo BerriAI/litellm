@@ -69,6 +69,14 @@ from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    VERTEX_REQUEST_LABELS_MAX,
+    is_vertex_labels_header,
+    resolve_vertex_request_labels,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
@@ -2633,6 +2641,42 @@ def _without_dropped_anthropic_betas(
     return MappingProxyType({name: value for name, value in upstream_values if value is not None})
 
 
+_VERTEX_BODY_LABELED_METHODS: Final = (":generateContent", ":streamGenerateContent", ":predict")
+_VERTEX_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def _is_vertex_anthropic_route(endpoint: str) -> bool:
+    return "/publishers/anthropic/" in f"/{endpoint}"
+
+
+def _vertex_body_with_resolved_labels(
+    label_fields: tuple[str, ...], identity: Mapping[str, object], body: Mapping[str, object]
+) -> Mapping[str, object]:
+    resolved: Final = resolve_vertex_request_labels(
+        label_fields, body.get("labels"), {"litellm_metadata": identity}, VERTEX_REQUEST_LABELS_MAX
+    )
+    unlabeled: Final = {name: value for name, value in body.items() if name != "labels"}
+    return {**unlabeled, "labels": dict(resolved)} if resolved else unlabeled
+
+
+def _upstream_vertex_headers(
+    dropped_anthropic_betas: frozenset[str],
+    label_fields: tuple[str, ...],
+    identity: Mapping[str, object],
+    headers: Mapping[str, str],
+) -> Mapping[str, str]:
+    without_dropped_betas: Final = _without_dropped_anthropic_betas(dropped_anthropic_betas, headers)
+    if not label_fields:
+        return without_dropped_betas
+    labels_header: Final = vertex_partner_labels_header(
+        label_fields, None, without_dropped_betas, {"litellm_metadata": identity}
+    )
+    unlabeled: Final = {
+        name: value for name, value in without_dropped_betas.items() if not is_vertex_labels_header(name)
+    }
+    return MappingProxyType(unlabeled if labels_header is None else {**unlabeled, VERTEX_LABELS_HEADER: labels_header})
+
+
 def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]) -> Mapping[str, str]:
     if not _is_vertex_anthropic_count_tokens_route(endpoint):
         return headers
@@ -3081,6 +3125,19 @@ async def _base_vertex_proxy_route(
     if is_streaming_request:
         target += "?alt=sse"
 
+    label_fields: Final = vertex_request_label_fields()
+    identity: Final[Mapping[str, object]] = (
+        get_passthrough_router_request_metadata(user_api_key_dict) if label_fields else MappingProxyType({})
+    )
+    if label_fields and encoded_endpoint.endswith(_VERTEX_BODY_LABELED_METHODS):
+        body: Final = _VERTEX_REQUEST_BODY.validate_python(await read_request_body(request))
+        if body:
+            setattr(
+                request.state,
+                LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+                _vertex_body_with_resolved_labels(label_fields, identity, body),
+            )
+
     ## CREATE PASS-THROUGH
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
@@ -3088,7 +3145,10 @@ async def _base_vertex_proxy_route(
         custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
         upstream_headers_filter=partial(
-            _without_dropped_anthropic_betas, _vertex_dropped_anthropic_betas(general_settings, request.headers)
+            _upstream_vertex_headers,
+            _vertex_dropped_anthropic_betas(general_settings, request.headers),
+            label_fields if _is_vertex_anthropic_route(encoded_endpoint) else (),
+            identity,
         ),
     )  # dynamically construct pass-through endpoint based on incoming path
 
