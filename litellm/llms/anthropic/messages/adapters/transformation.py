@@ -1337,7 +1337,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if not isinstance(raw_content, list):
             return ""
         items: Final = cast(Sequence[object], raw_content)  # cast-ok: untrusted client payload
-        parts: Final = tuple(part for part in (self._tool_result_part(item) for item in items) if part is not None)
+        parts: Final = tuple(part for part in (self.tool_result_part(item) for item in items) if part is not None)
         match parts:
             case ():
                 return ""
@@ -1346,7 +1346,7 @@ class LiteLLMAnthropicMessagesAdapter:
             case _:
                 return list(parts)
 
-    def _tool_result_part(self, item: object) -> ToolMessageContentPart | None:
+    def tool_result_part(self, item: object) -> ToolMessageContentPart | None:
         if isinstance(item, str):
             return ChatCompletionTextObject(type="text", text=item)
         if not isinstance(item, dict):
