@@ -59,6 +59,7 @@ class _Rig:
 class _Streamed:
     pieces: tuple[str, ...]
     arrived_at: tuple[float, ...]
+    finished_after: tuple[int, ...]
 
 
 def _chat_sse(pieces: tuple[str, ...]) -> tuple[bytes, ...]:
@@ -193,9 +194,17 @@ def _messages_text(event: dict[str, JsonValue]) -> str | None:
     return text if isinstance(text, str) and text else None
 
 
+def _chat_finished(event: dict[str, JsonValue]) -> bool:
+    return any(object_value(choice).get("finish_reason") for choice in list_value(event.get("choices") or []))
+
+
+def _messages_finished(event: dict[str, JsonValue]) -> bool:
+    return event.get("type") == "message_delta"
+
+
 _ROUTES: Final = {
-    "/v1/chat/completions": (_MODEL, {}, _chat_text),
-    "/v1/messages": (_CLAUDE, {"max_tokens": 256}, _messages_text),
+    "/v1/chat/completions": (_MODEL, {}, _chat_text, _chat_finished),
+    "/v1/messages": (_CLAUDE, {"max_tokens": 256}, _messages_text, _messages_finished),
 }
 
 
@@ -205,9 +214,10 @@ def _stream(
     """Stream `route`, releasing held scans once `release_after` text pieces have arrived."""
     scans: Final = _Scans()
     rig.scans[0] = scans
-    model, extra, text_of = _ROUTES[route]
+    model, extra, text_of, finished = _ROUTES[route]
     pieces: Final[list[str]] = []
     arrived_at: Final[list[float]] = []
+    finished_after: Final[list[int]] = []
     with rig.gateway.client.stream(
         "POST",
         route,
@@ -224,13 +234,16 @@ def _stream(
         for line in response.iter_lines():
             if not line.startswith("data: ") or line == "data: [DONE]":
                 continue
-            text = text_of(object_value(json.loads(line[len("data: ") :])))
+            event = object_value(json.loads(line[len("data: ") :]))
+            text = text_of(event)
             if text is not None:
                 pieces.append(text)
                 arrived_at.append(time.monotonic())
+            if finished(event):
+                finished_after.append(len(pieces))
             if len(pieces) >= release_after:
                 scans.release.set()
-    return _Streamed(tuple(pieces), tuple(arrived_at)), scans
+    return _Streamed(tuple(pieces), tuple(arrived_at), tuple(finished_after)), scans
 
 
 def test_chunks_after_the_nth_keep_streaming_while_its_scan_is_pending(rig: _Rig) -> None:
@@ -250,9 +263,12 @@ def test_block_verdict_stops_the_stream_at_the_next_chunk(rig: _Rig, route: str)
     assert streamed.arrived_at[_RATE] < scans.replied_at[0]
 
 
-def test_block_verdict_that_lands_after_the_last_chunk_still_ends_the_stream(rig: _Rig) -> None:
-    streamed, scans = _stream(rig, "background", "leak", release_after=len(_LEAKY))
+@pytest.mark.parametrize("route", tuple(_ROUTES))
+def test_block_verdict_that_lands_after_the_upstream_finished_replaces_the_finish(rig: _Rig, route: str) -> None:
+    streamed, scans = _stream(rig, "background", "leak", release_after=len(_LEAKY) + 1, route=route)
     assert streamed.pieces == (*_LEAKY, _DENIAL)
+    assert streamed.arrived_at[len(_LEAKY) - 1] < scans.replied_at[0], "the verdict landed before the upstream finished"
+    assert streamed.finished_after == (len(streamed.pieces),), "the stream finished before the block verdict"
     assert len(scans.replied_at) == 1, "a scan started while another was still in flight"
 
 

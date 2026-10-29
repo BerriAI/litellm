@@ -137,6 +137,13 @@ def _chunk_choices(item: object) -> Sequence[object]:
     return choices
 
 
+def _ends_stream(endpoint_translation: object, item: object) -> bool:
+    has_ended: Final[Callable[[Sequence[object]], bool] | None] = getattr(
+        endpoint_translation, "_check_streaming_has_ended", None
+    )
+    return has_ended is not None and has_ended((item,))
+
+
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
     return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
 
@@ -1180,7 +1187,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             end_of_stream_only = True
 
         # Run each sampled scan as a background task so the stream keeps flowing; a failed scan ends
-        # the stream before the next chunk. Buffered and end-only streams already scan before releasing.
+        # the stream before the next chunk, and the terminal frames wait for the final verdict.
+        # Buffered and end-only streams already scan before releasing.
         scan_in_background: Final = bool(_streaming_setting("streaming_scan_in_background", False)) and not (
             buffer_until_moderated or end_of_stream_only
         )
@@ -1299,6 +1307,12 @@ class UnifiedLLMGuardrails(CustomLogger):
                             yield item
                     else:
                         withheld_items.append(item)
+                    continue
+
+                if scan_in_background and (
+                    pending_end_of_stream_items or _ends_stream(mappings[CallTypes(call_type)](), item)
+                ):
+                    pending_end_of_stream_items.append(item)
                     continue
 
                 if pending_scan is not None and pending_scan.done():
@@ -1526,4 +1540,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                     user_api_key_dict=user_api_key_dict,
                     request_data=typed_request_data,
                 )
+            raise
+        except Exception:
+            if pending_scan is not None:
+                pending_scan.cancel()
             raise
