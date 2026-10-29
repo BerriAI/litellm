@@ -46,6 +46,16 @@ def _to_converse_message(message: JsonValue) -> dict[str, JsonValue]:
     }
 
 
+def _converse_message_problem(index: int, message: JsonValue) -> str | None:
+    if not isinstance(message, dict):
+        return f"Message {index} must be a dictionary"
+    if "role" not in message:
+        return f"Message {index} must have a 'role' field"
+    if "content" not in message:
+        return f"Message {index} must have a 'content' field"
+    return None
+
+
 def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
     name: Final = re.sub(r"[^a-zA-Z0-9_]", "_", raw_name if isinstance(raw_name, str) else "")
     prefixed: Final = name if not name or name[0].isalpha() else f"t_{name}"
@@ -267,42 +277,13 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"input_tokens": input_tokens}
 
-    def validate_count_tokens_request(self, request_data: Mapping[str, JsonValue]) -> None:
-        """
-        Validate the incoming count tokens request.
-        Supports both Converse and InvokeModel input formats.
-
-        Args:
-            request_data: The request payload
-
-        Raises:
-            ValueError: If the request is invalid
-        """
+    def count_tokens_request_problem(self, request_data: Mapping[str, JsonValue]) -> str | None:
         if not request_data.get("model"):
-            raise ValueError("model parameter is required")
-
-        input_type: Final = self._detect_input_type(request_data)
-
-        if input_type == "converse":
-            # Validate Converse format (messages-based)
-            messages: Final = request_data.get("messages", [])
-            if not messages:
-                raise ValueError("messages parameter is required for Converse input")
-
-            if not isinstance(messages, list):
-                raise ValueError("messages must be a list")
-
-            for i, message in enumerate(messages):
-                if not isinstance(message, dict):
-                    raise ValueError(f"Message {i} must be a dictionary")
-
-                if "role" not in message:
-                    raise ValueError(f"Message {i} must have a 'role' field")
-
-                if "content" not in message:
-                    raise ValueError(f"Message {i} must have a 'content' field")
-        else:
-            # For InvokeModel format, we need at least some content to count tokens
-            # The content structure varies by model, so we do minimal validation
-            if len(request_data) <= 1:  # Only has 'model' field
-                raise ValueError("Request must contain content to count tokens")
+            return "model parameter is required"
+        if self._detect_input_type(request_data) == "invokeModel":
+            return "Request must contain content to count tokens" if len(request_data) <= 1 else None
+        messages: Final = _json_list(request_data.get("messages"))
+        if not messages:
+            return "messages parameter is required for Converse input"
+        problems: Final = (_converse_message_problem(index, message) for index, message in enumerate(messages))
+        return next((problem for problem in problems if problem is not None), None)

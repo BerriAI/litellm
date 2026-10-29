@@ -1425,6 +1425,19 @@ class TestGetBedrockBaseModel:
         """Test that throughput tier suffixes like :51k are stripped. Issue #19113."""
         assert get_bedrock_base_model(input_model) == expected
 
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("us", "us"),
+            ("global", "global"),
+            ("apac", "apac"),
+            ("bedrock/us", "us"),
+            ("us.anthropic.claude-opus-4-8", "anthropic.claude-opus-4-8"),
+        ],
+    )
+    def test_bare_cross_region_prefix_names_no_model_to_strip(self, model, expected):
+        assert get_bedrock_base_model(model) == expected
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockModelInfoWrappers:
     """Tests that BedrockModelInfo methods correctly wrap standalone functions."""

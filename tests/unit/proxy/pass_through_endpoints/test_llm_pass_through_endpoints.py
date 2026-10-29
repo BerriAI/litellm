@@ -7254,8 +7254,16 @@ _BEDROCK_COUNT_ALIAS: Final = "count-log-bedrock"
 _BEDROCK_COUNT_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
+_BEDROCK_COUNT_BODY: Final = MappingProxyType(
+    {"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]}
+)
+
+
 async def _bedrock_native_count(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, aws_reply: httpx.Response
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    aws_reply: httpx.Response,
+    request_body: Mapping[str, object] = _BEDROCK_COUNT_BODY,
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         handle_bedrock_count_tokens,
@@ -7295,7 +7303,7 @@ async def _bedrock_native_count(
         request=request,
         fastapi_response=Response(),
         user_api_key_dict=MagicMock(),
-        request_body={"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]},
+        request_body=dict(request_body),
     )
 
 
@@ -7349,6 +7357,70 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
             "status_code": 400,
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("request_body", "problem"),
+    [
+        ({"model": _BEDROCK_COUNT_ALIAS}, "Request must contain content to count tokens"),
+        ({"model": _BEDROCK_COUNT_ALIAS, "messages": []}, "messages parameter is required for Converse input"),
+        ({"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user"}]}, "Message 0 must have a 'content' field"),
+        ({"model": _BEDROCK_COUNT_ALIAS, "messages": [{"content": "hi"}]}, "Message 0 must have a 'role' field"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_without_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    request_body: Mapping[str, object],
+    problem: str,
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(
+            monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), request_body
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(("model", "model_id"), [("us", "us"), ("global", "global"), ("apac", "apac"), ("bedrock/us", "us")])
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_for_a_bare_region_prefix_answers_bedrocks_own_400(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    model: str,
+    model_id: str,
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    invalid_model: Final = {"message": "The provided model identifier is invalid."}
+    respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path=f"/model/{model_id}/count-tokens").mock(
+        return_value=httpx.Response(400, json=invalid_model)
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{model}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert json.loads(exc_info.value.detail["error"]) == invalid_model
+    assert len(respx_mock.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -7418,9 +7490,7 @@ async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_
             request_body={"model": "us"},
         )
 
-    assert exc_info.value.detail == {
-        "error": "CountTokens processing error: Request must contain content to count tokens"
-    }
+    assert exc_info.value.detail == {"error": "Request must contain content to count tokens"}
     assert token_count_log_lines() == (
         {
             "litellm_call_id": "bedrock-native-region-only",

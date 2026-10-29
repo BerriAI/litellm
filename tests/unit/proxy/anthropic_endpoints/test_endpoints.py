@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 from litellm import Router
@@ -793,6 +794,49 @@ def test_count_tokens_rejected_before_counting_logs_the_400_it_answers(
             "status_code": 400,
         },
     )
+
+
+def test_count_tokens_on_bedrock_answers_400_for_a_message_without_content_without_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch, httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-bedrock-claude",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-zeta-9",
+                        "aws_region_name": "us-east-1",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                    },
+                    "model_info": {"id": "count-bedrock-claude-deployment", "token_count_framing": 3},
+                }
+            ]
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    response: Final = TestClient(app).post(
+        "/v1/messages/count_tokens", json={"model": "count-bedrock-claude", "messages": [{"role": "user"}]}
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert response.json()["error"]["message"] == "Message 0 must have a 'content' field"
+    assert len(respx_mock.calls) == 0
 
 
 class TestEventLoggingBatchEndpoint:

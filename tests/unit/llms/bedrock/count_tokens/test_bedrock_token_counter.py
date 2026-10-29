@@ -74,6 +74,28 @@ async def test_claude_model_bedrock_runtime_cannot_count_is_counted_on_mantle() 
 
 
 @pytest.mark.asyncio
+async def test_claude_model_message_without_content_is_rejected_without_calling_runtime_or_mantle() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        "Message 0 must have a 'content' field",
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
 async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
 

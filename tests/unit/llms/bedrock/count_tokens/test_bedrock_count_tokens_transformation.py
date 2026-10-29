@@ -1,6 +1,8 @@
 import base64
 import json
 
+import pytest
+
 from litellm.llms.bedrock.count_tokens.transformation import (
     DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
     BedrockCountTokensConfig,
@@ -293,3 +295,18 @@ def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
         endpoint
         == "https://bedrock-runtime.us-east-1.amazonaws.com/model/..%2F..%2Fmodel%2Fother%3Fx%3D1%23frag/count-tokens"
     )
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"model": "us.anthropic.claude-opus-4-8", "messages": [{"role": "user", "content": "hi"}]},
+        {"model": "us.anthropic.claude-opus-4-8", "messages": "hi"},
+        {
+            "model": "us.anthropic.claude-opus-4-8",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}, {"content": "hi"}],
+        },
+    ],
+)
+def test_count_tokens_request_problem_leaves_bodies_bedrock_can_judge_to_bedrock(request_data):
+    assert BedrockCountTokensConfig().count_tokens_request_problem(request_data) is None

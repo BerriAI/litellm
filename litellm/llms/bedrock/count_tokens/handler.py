@@ -16,6 +16,11 @@ from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensC
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 
+class BedrockCountTokensRequestError(BedrockError):
+    def __init__(self, problem: str) -> None:
+        super().__init__(status_code=400, message=problem)
+
+
 class BedrockCountTokensHandler(BedrockCountTokensConfig):
     """
     Simplified handler for AWS Bedrock CountTokens API requests.
@@ -41,10 +46,10 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
         Returns:
             Dictionary containing token count response
         """
+        problem: Final = self.count_tokens_request_problem(request_data)
+        if problem is not None:
+            raise BedrockCountTokensRequestError(problem)
         try:
-            # Validate the request
-            self.validate_count_tokens_request(request_data)
-
             verbose_logger.debug("Processing CountTokens request for resolved model: %s", resolved_model)
 
             # Get AWS region using existing LiteLLM function

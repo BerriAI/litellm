@@ -16,7 +16,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -49,6 +49,7 @@ class CountTokensFailure:
     status_code: int
     message: str
     tokenizer_type: str
+    rejected_before_provider_call: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
@@ -69,6 +70,7 @@ def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicC
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
     return (
         isinstance(outcome, CountTokensFailure)
+        and not outcome.rejected_before_provider_call
         and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
@@ -120,6 +122,13 @@ class BedrockTokenCounter(BaseTokenCounter):
                 client=self._client,
             )
             reply: Final = _CountTokensReply.model_validate(result)
+        except BedrockCountTokensRequestError as e:
+            return CountTokensFailure(
+                status_code=e.status_code,
+                message=e.message,
+                tokenizer_type=tokenizer_type,
+                rejected_before_provider_call=True,
+            )
         except BedrockError as e:
             verbose_logger.debug(
                 "%s CountTokens API error: status=%s, message=%s", tokenizer_type, e.status_code, e.message
@@ -214,6 +223,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     error=True,
                     error_message=outcome.message,
                     status_code=outcome.status_code,
+                    rejected_before_provider_call=outcome.rejected_before_provider_call,
                 )
             case _:
                 assert_never(outcome)

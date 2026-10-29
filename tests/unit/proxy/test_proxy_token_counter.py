@@ -1008,33 +1008,32 @@ async def test_bedrock_handler_httpx_error_status_code_propagation():
         response=mock_response,
     )
 
-    with patch.object(handler, "validate_count_tokens_request"):
-        with patch.object(handler, "_get_aws_region_name", return_value="us-west-2"):
-            with patch.object(handler, "transform_anthropic_to_bedrock_count_tokens", return_value={}):
-                with patch.object(
-                    handler,
-                    "get_bedrock_count_tokens_endpoint",
-                    return_value="https://example.com",
-                ):
-                    with patch.object(handler, "_sign_request", return_value=({}, "{}")):
-                        with patch("litellm.llms.bedrock.count_tokens.handler.get_async_httpx_client") as mock_client:
-                            mock_async_client = AsyncMock()
-                            mock_async_client.post = AsyncMock(side_effect=http_error)
-                            mock_client.return_value = mock_async_client
+    with patch.object(handler, "_get_aws_region_name", return_value="us-west-2"):
+        with patch.object(handler, "transform_anthropic_to_bedrock_count_tokens", return_value={}):
+            with patch.object(
+                handler,
+                "get_bedrock_count_tokens_endpoint",
+                return_value="https://example.com",
+            ):
+                with patch.object(handler, "_sign_request", return_value=({}, "{}")):
+                    with patch("litellm.llms.bedrock.count_tokens.handler.get_async_httpx_client") as mock_client:
+                        mock_async_client = AsyncMock()
+                        mock_async_client.post = AsyncMock(side_effect=http_error)
+                        mock_client.return_value = mock_async_client
 
-                            with pytest.raises(BedrockError) as exc_info:
-                                await handler.handle_count_tokens_request(
-                                    request_data={
-                                        "model": "test",
-                                        "messages": [{"role": "user", "content": "hello"}],
-                                    },
-                                    litellm_params={},
-                                    resolved_model="anthropic.claude-3-sonnet",
-                                )
+                        with pytest.raises(BedrockError) as exc_info:
+                            await handler.handle_count_tokens_request(
+                                request_data={
+                                    "model": "test",
+                                    "messages": [{"role": "user", "content": "hello"}],
+                                },
+                                litellm_params={},
+                                resolved_model="anthropic.claude-3-sonnet",
+                            )
 
-                            assert exc_info.value.status_code == 403
-                            # Message should be the raw response text
-                            assert exc_info.value.message == "Forbidden - Invalid credentials"
+                        assert exc_info.value.status_code == 403
+                        # Message should be the raw response text
+                        assert exc_info.value.message == "Forbidden - Invalid credentials"
 
 
 @pytest.mark.asyncio

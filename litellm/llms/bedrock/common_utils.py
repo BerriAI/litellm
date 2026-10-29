@@ -1419,7 +1419,7 @@ def get_bedrock_base_model(model: str) -> str:
     potential_region: Final = model.split(".", 1)[0]
     alt_potential_region: Final = model.split("/", 1)[0]
 
-    if potential_region in get_bedrock_cross_region_inference_regions():
+    if potential_region in get_bedrock_cross_region_inference_regions() and len(model.split(".", 1)) > 1:
         return model.split(".", 1)[1]
     elif alt_potential_region in get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
