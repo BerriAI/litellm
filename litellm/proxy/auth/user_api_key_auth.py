@@ -40,6 +40,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
@@ -85,6 +86,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     jwt_key_mapping_cache_key,
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
+    model_max_budget_of,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
@@ -384,6 +386,16 @@ class _TeamModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
+class _EndUserModelBudgetLimiter(Protocol):
+    async def is_end_user_within_model_budget(
+        self,
+        end_user_id: str,
+        end_user_model_max_budget: Mapping[str, object],
+        model: str,
+        team_id: str | None = None,
+    ) -> bool: ...
+
+
 class _EveryModelBudgetLimiter(Protocol):
     async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool: ...
 
@@ -527,6 +539,49 @@ async def _check_team_model_budget(
             team_model_max_budget=team_model_max_budget,
             key_model_max_budget=key_model_max_budget,
             model=model_name,
+        )
+
+
+async def _end_user_model_max_budget(
+    end_user_id: str | None,
+    end_user_object: LiteLLM_EndUserTable | None,
+    key_end_user_budget_id: str | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+) -> Mapping[str, object] | None:
+    budget_table: Final = (
+        end_user_object.litellm_budget_table
+        if end_user_object is not None
+        else (
+            await resolve_default_end_user_budget(
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                key_end_user_budget_id=key_end_user_budget_id,
+                parent_otel_span=parent_otel_span,
+            )
+            if end_user_id and prisma_client is not None
+            else None
+        )
+    )
+    return model_max_budget_of(budget_table) if budget_table is not None else None
+
+
+async def _check_end_user_model_budget(
+    end_user_id: str | None,
+    end_user_model_max_budget: Mapping[str, object] | None,
+    model_max_budget_limiter: _EndUserModelBudgetLimiter,
+    models: Sequence[str],
+    team_id: str | None,
+) -> None:
+    if not end_user_id or not end_user_model_max_budget:
+        return
+    for model_name in models:
+        await model_max_budget_limiter.is_end_user_within_model_budget(
+            end_user_id=end_user_id,
+            end_user_model_max_budget=end_user_model_max_budget,
+            model=model_name,
+            team_id=team_id,
         )
 
 
@@ -2094,6 +2149,10 @@ async def _resolve_object_permission_for_unresolvable_team(
     )
 
 
+def _custom_auth_token_for_this_request(response: object) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth.model_validate(response).model_copy()
+
+
 async def user_api_key_auth_builder(
     request: Request,
     api_key: str,
@@ -2172,7 +2231,7 @@ async def user_api_key_auth_builder(
                     request=request, api_key=api_key, user_custom_auth=user_custom_auth
                 )
             if response is not None and isinstance(response, UserAPIKeyAuth):
-                validated = UserAPIKeyAuth.model_validate(response)
+                validated = _custom_auth_token_for_this_request(response)
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
                     validated = await _run_post_custom_auth_checks(
                         valid_token=validated,
@@ -2188,7 +2247,7 @@ async def user_api_key_auth_builder(
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)
-            validated = UserAPIKeyAuth.model_validate(response)
+            validated = _custom_auth_token_for_this_request(response)
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
                     valid_token=validated,
@@ -3129,7 +3188,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         )
 
                     # Recompute after a potential budget-fallback rewrite so
-                    # the end-user check below validates the final model
+                    # the user check below validates the final model
                     current_model = _get_model_from_request_context(
                         request_data=request_data,
                         route=route,
@@ -3146,23 +3205,6 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         model_max_budget_limiter=model_max_budget_limiter,
                         models=current_models,
                     )
-
-                # Check 5b. End-user model max budget
-                end_user_mmb: Final = valid_token.end_user_model_max_budget
-                if (
-                    end_user_mmb is not None
-                    and isinstance(end_user_mmb, dict)
-                    and len(end_user_mmb) > 0
-                    and current_models
-                    and valid_token.end_user_id is not None
-                ):
-                    for model_name in current_models:
-                        await model_max_budget_limiter.is_end_user_within_model_budget(
-                            end_user_id=valid_token.end_user_id,
-                            end_user_model_max_budget=end_user_mmb,
-                            model=model_name,
-                            team_id=valid_token.team_id,
-                        )
 
         # Check 6: Additional Common Checks across jwt + key auth
         if valid_token.team_id is not None:
@@ -3733,9 +3775,7 @@ async def run_centralized_common_checks(
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
-    end_user_object: Final[LiteLLM_EndUserTable | None] = (
-        None if isinstance(end_user_result, BaseException) else end_user_result
-    )
+    end_user_object: Final = end_user_result if isinstance(end_user_result, LiteLLM_EndUserTable) else None
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
     carry_team_and_user_budget_state(
         valid_token=user_api_key_auth_obj,
@@ -3794,6 +3834,21 @@ async def run_centralized_common_checks(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             keep_token_limits=user_custom_auth is not None,
+        )
+    end_user_model_max_budget: Final = await _end_user_model_max_budget(
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
+        key_end_user_budget_id=key_end_user_budget_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+    )
+    if end_user_id and (
+        not user_api_key_auth_obj.authenticated_by_custom_auth
+        or user_api_key_auth_obj.end_user_model_max_budget is None
+    ):
+        user_api_key_auth_obj.end_user_model_max_budget = (  # rebind-ok: the spend hook charges from this token
+            dict(end_user_model_max_budget) if end_user_model_max_budget else None
         )
 
     skip_budget_checks: Final = _should_skip_budget_checks(
@@ -3886,6 +3941,21 @@ async def run_centralized_common_checks(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                )
+                await _check_end_user_model_budget(
+                    end_user_id=end_user_id,
+                    end_user_model_max_budget=user_api_key_auth_obj.end_user_model_max_budget,
+                    model_max_budget_limiter=model_max_budget_limiter,
+                    team_id=user_api_key_auth_obj.team_id,
+                    models=_get_model_names_for_budget_checks(
+                        model=_get_model_from_request_context(
+                            request_data=request_data,
+                            route=route,
+                            request=request,
+                            llm_router=llm_router,
+                            team_id=user_api_key_auth_obj.team_id,
+                        )
+                    ),
                 )
             if sub_call and RouteChecks.is_llm_api_route(route=route):
                 await virtual_key_max_budget_check(
