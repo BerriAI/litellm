@@ -306,11 +306,7 @@ def has_team_unbound_mcp_admin_view(user_api_key_auth: UserAPIKeyAuth | None) ->
     return (
         user_api_key_auth is not None
         and user_api_key_has_admin_view(user_api_key_auth)
-        and (
-            is_mcp_admitted_user_subject(user_api_key_auth)
-            or not user_api_key_auth.team_id
-            or user_api_key_auth.team_id == UI_TEAM_ID
-        )
+        and (not user_api_key_auth.team_id or user_api_key_auth.team_id == UI_TEAM_ID)
     )
 
 

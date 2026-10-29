@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.mcp_server import operations as mcp_operations
 from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
@@ -1519,6 +1519,7 @@ async def _tools_listing_kwargs_for_toolset_url(
     team_toolset_id: str,
     owner_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER,
     requested_toolsets: tuple[str, ...] = ("team-toolset",),
+    team_id: str | None = "team-1",
 ) -> dict[str, object]:
     from litellm.proxy.mcp_server.ui_session_utils import granted_toolset_ids
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1537,7 +1538,7 @@ async def _tools_listing_kwargs_for_toolset_url(
     async def granted_through_team(context: UserAPIKeyAuth) -> frozenset[str]:
         return await granted_toolset_ids(context, team_object_permission=team_permission, require_key_access=False)
 
-    team_key: Final = UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=owner_role)
+    team_key: Final = UserAPIKeyAuth(api_key="sk-team", team_id=team_id, user_role=owner_role)
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=team_key,
         mcp_tools_with_litellm_proxy=[
@@ -1606,6 +1607,20 @@ async def test_a_denied_toolset_beside_a_granted_one_adds_nothing_to_the_scoped_
         team_toolset_id="ts-granted",
         owner_role=LitellmUserRoles.PROXY_ADMIN,
         requested_toolsets=requested_toolsets,
+    )
+    scoped = kwargs["user_api_key_auth"].object_permission
+    assert scoped is not None
+    assert scoped.mcp_servers == ["srv-1"]
+    assert scoped.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", [None, UI_TEAM_ID], ids=["no_team", "dashboard_session"])
+async def test_an_admin_credential_without_a_team_keeps_a_toolset_no_grant_names(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None
+):
+    kwargs: Final = await _tools_listing_kwargs_for_toolset_url(
+        monkeypatch, team_toolset_id="ts-other", owner_role=LitellmUserRoles.PROXY_ADMIN, team_id=team_id
     )
     scoped = kwargs["user_api_key_auth"].object_permission
     assert scoped is not None
