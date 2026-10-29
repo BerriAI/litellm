@@ -670,6 +670,41 @@ def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
     assert request["input"][5]["namespace"] == "get_weather"
 
 
+@pytest.mark.parametrize(
+    "answer_item",
+    [
+        ResponseFunctionToolCall(
+            type="function_call", id="fc_1", call_id="call_weather", name="get_weather", arguments="{}"
+        ),
+        ResponseOutputMessage(
+            type="message",
+            id="msg_1",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="Rain.", annotations=[])],
+        ),
+    ],
+    ids=["tool-call", "message"],
+)
+def test_every_reasoning_item_before_an_answer_reaches_an_openai_chat_message(answer_item: object) -> None:
+    reasoning: Final = tuple(
+        ResponseReasoningItem(
+            type="reasoning",
+            id=f"rs_{name}",
+            summary=[Summary(type="summary_text", text=f"{name.title()}.")],
+            encrypted_content=f"enc_{name}",
+        )
+        for name in ("first", "second")
+    )
+
+    message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        [*reasoning, answer_item], replay_openai_history=True
+    )[0].message
+
+    assert [item["id"] for item in message.reasoning_items] == ["rs_first", "rs_second"]
+    assert message.reasoning_content == "First. Second."
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock
@@ -1270,9 +1305,7 @@ def test_transform_request_forwards_defer_loading_only_beside_tool_search(
     [{"type": "tool_search", "execution": "client"}, {"type": "tool_search"}],
     ids=["client-only", "hosted-and-client"],
 )
-def test_transform_request_drops_defer_loading_beside_client_tool_search(
-    deferred_tool, drop_params, tool_search_tool
-):
+def test_transform_request_drops_defer_loading_beside_client_tool_search(deferred_tool, drop_params, tool_search_tool):
     tool_search_tools: Final = (
         [tool_search_tool]
         if tool_search_tool.get("execution") == "client"
@@ -4396,7 +4429,11 @@ def test_tool_search_items_replay_only_to_a_request_that_carries_tool_search(too
             "provider_specific_fields": {
                 "tool_search_items": [
                     {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}},
-                    {"type": "tool_search_output", "id": "tso_1", "tools": [{"type": "function", "name": "get_weather"}]},
+                    {
+                        "type": "tool_search_output",
+                        "id": "tso_1",
+                        "tools": [{"type": "function", "name": "get_weather"}],
+                    },
                 ]
             },
         },

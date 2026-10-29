@@ -1938,6 +1938,16 @@ class CustomStreamWrapper:
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
         )
+        served_tier: Final = next(
+            (
+                tier
+                for chunk in reversed(self.chunks)
+                if isinstance(tier := getattr(chunk, "service_tier", None), str) and tier
+            ),
+            None,
+        )
+        if served_tier is not None:
+            setattr(model_response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
