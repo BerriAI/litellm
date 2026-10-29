@@ -90,9 +90,9 @@ from litellm.types.responses.streaming_websocket import ResponsesWebSocketReques
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
+    AgenticLoopParams,
     CallTypes,
     CostPerToken,
-    CustomPricingLiteLLMParams,
     all_litellm_params,
 )
 from litellm.utils import (
@@ -563,12 +563,6 @@ async def aresponses_api_with_mcp(
                     return final_response
 
     return response
-
-
-def _per_call_custom_pricing(litellm_params: GenericLiteLLMParams) -> Mapping[str, float]:
-    return MappingProxyType(
-        litellm_params.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
-    )
 
 
 class _DeploymentModelInfo(BaseModel):
@@ -1580,6 +1574,7 @@ def responses(
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
         )
+        litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none
 
@@ -1798,7 +1793,7 @@ def responses(
             optional_params=dict(responses_api_request_params),
             litellm_params={
                 **responses_api_request_params,
-                **_per_call_custom_pricing(litellm_params),
+                **litellm_params.custom_pricing_overrides(),
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),

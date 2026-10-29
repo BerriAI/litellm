@@ -80,7 +80,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
 )
-from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -194,6 +194,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "used_client_oauth_token",
         KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
+        "is_silent_experiment",
         BILLED_RETRY_ATTEMPT_METADATA_KEY,
         "user_api_key_user_email",
     )
@@ -227,6 +228,7 @@ def _get_spend_logs_metadata(
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
+    is_silent_experiment: bool = False,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -294,6 +296,7 @@ def _get_spend_logs_metadata(
         used_client_oauth_token=used_client_oauth_token,
         kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
+        **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
         billed_retry_attempt=billed_retry_attempt,
         user_api_key_user_email=_stored_user_email(metadata),
     )
@@ -461,7 +464,11 @@ def _sl_attribution_fallback(
 ) -> str:
     if standard_logging_payload is None:
         return ""
-    return standard_logging_payload.get(field) or ""
+    return _string_or_empty(standard_logging_payload.get(field))
+
+
+def _string_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
@@ -679,7 +686,7 @@ def get_logging_payload(
     _model_id: Final = metadata.get("model_info", {}).get("id", "") or _sl_attribution_fallback(
         standard_logging_payload, "model_id"
     )
-    _model_group: Final = metadata.get("model_group", "") or _sl_attribution_fallback(
+    _model_group: Final = _string_or_empty(metadata.get("model_group")) or _sl_attribution_fallback(
         standard_logging_payload, "model_group"
     )
     _api_base: Final = litellm_params.get("api_base", "") or _sl_attribution_fallback(
@@ -738,6 +745,11 @@ def get_logging_payload(
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
+        is_silent_experiment=(
+            standard_logging_payload is not None
+            and "is_silent_experiment" in standard_logging_payload["metadata"]
+            and standard_logging_payload["metadata"]["is_silent_experiment"]
+        ),
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None
