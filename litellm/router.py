@@ -119,6 +119,7 @@ from litellm.litellm_core_utils.batch_utils import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -162,7 +163,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_structure,
 )
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import counts_with_own_tokenizer, offload_token_count, own_tokenizer_model
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
@@ -255,6 +256,13 @@ from litellm.router_utils.common_utils import (
     with_admin_api_key_secret_reference,
     without_model_capability_flags,
     without_router_only_kwargs,
+)
+from litellm.router_utils.context_window_fit import (
+    ContextWindow,
+    ContextWindowOverflow,
+    PreCallTokenCount,
+    context_window_overflow,
+    stand_in_tokenizer,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -460,6 +468,7 @@ from litellm.types.utils import (
     LlmProviders,
     ModelInfo,
     ModelResponseStream,
+    SelectTokenizerResponse,
     StandardLoggingPayload,
     StandardLoggingRoutingDecision,
     Usage,
@@ -14301,8 +14310,10 @@ class Router:
     def _count_pre_call_check_tokens(
         self,
         messages: Sequence[Mapping[str, object]] | None,
-        input: str | list[object] | None,
+        input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None = None,
+        model: str = "",
+        custom_tokenizer: SelectTokenizerResponse | None = None,
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -14333,7 +14344,9 @@ class Router:
         system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
-            return litellm.token_counter(messages=counted_messages, tools=tools)
+            return litellm.token_counter(
+                model=model, custom_tokenizer=custom_tokenizer, messages=counted_messages, tools=tools
+            )
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -14348,13 +14361,15 @@ class Router:
                 only_since_compaction=True,
             )
             return litellm.token_counter(
+                model=model,
+                custom_tokenizer=custom_tokenizer,
                 messages=cast(list, input_messages),  # cast-ok: transformed chat messages
                 tools=tools,
             )
         raise ValueError("Either messages or input must be provided to count tokens")
 
-    def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
-        """The deployment's declared context window, or None when it declares none or cannot be resolved."""
+    def _deployment_context_window(self, model: str, deployment: Mapping[str, object]) -> ContextWindow | None:
+        """The deployment's model and declared context window, or None when it declares none or cannot be resolved."""
         try:
             model_info: Final = self.get_router_model_info(
                 deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
@@ -14362,22 +14377,59 @@ class Router:
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
             verbose_router_logger.debug(
-                "litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e
+                "litellm.router.py::_deployment_context_window: skipping deployment. Got - %s", e
             )
             return None
         max_input_tokens: Final = model_info.get("max_input_tokens")
-        return max_input_tokens if isinstance(max_input_tokens, int) else None
+        if not isinstance(max_input_tokens, int):
+            return None
+        return ContextWindow(
+            tokenizer_model=own_tokenizer_model(model_info["key"]) or model_info["key"],
+            max_input_tokens=max_input_tokens,
+        )
 
-    def _pre_call_checks_need_token_count(
+    def _pre_call_check_tokenizer_models(
         self, model: str, healthy_deployments: Sequence[Mapping[str, object]]
-    ) -> bool:
-        """Whether any healthy deployment declares a context window that a token count could exceed.
+    ) -> frozenset[str]:
+        """The models whose tokenizers must count the prompt: one per deployment that declares a context window.
 
         Resolves each deployment the way ``_pre_call_checks`` does, so one unmappable deployment
         cannot hide a later one that does declare a limit.
         """
-        return any(
-            self._deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
+        windows: Final = tuple(self._deployment_context_window(model, deployment) for deployment in healthy_deployments)
+        return frozenset(window.tokenizer_model for window in windows if window is not None)
+
+    def _pre_call_check_token_count(
+        self,
+        tokenizer_model: str,
+        messages: Sequence[Mapping[str, object]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> PreCallTokenCount:
+        own_tokenizer: Final = counts_with_own_tokenizer(tokenizer_model)
+        return PreCallTokenCount(
+            tokens=self._count_pre_call_check_tokens(
+                messages=messages,
+                input=input,
+                request_kwargs=request_kwargs,
+                model=tokenizer_model,
+                custom_tokenizer=None if own_tokenizer else stand_in_tokenizer(),
+            ),
+            own_tokenizer=own_tokenizer,
+        )
+
+    def _pre_call_check_token_counts(
+        self,
+        tokenizer_models: frozenset[str],
+        messages: Sequence[Mapping[str, object]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> Mapping[str, PreCallTokenCount]:
+        return MappingProxyType(
+            {
+                tokenizer_model: self._pre_call_check_token_count(tokenizer_model, messages, input, request_kwargs)
+                for tokenizer_model in tokenizer_models
+            }
         )
 
     async def _acount_pre_call_check_tokens(
@@ -14387,7 +14439,7 @@ class Router:
         messages: Sequence[Mapping[str, str]] | None,
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
-    ) -> int | None:
+    ) -> Mapping[str, PreCallTokenCount] | None:
         """Count input tokens off the event loop, so a multi-MB prompt cannot stall the proxy.
 
         Returns None when no deployment limits its context window, and when counting fails. The
@@ -14398,11 +14450,13 @@ class Router:
         if messages is None and input is None:
             return None
         try:
-            if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+            tokenizer_models: Final = self._pre_call_check_tokenizer_models(model, healthy_deployments)
+            if not tokenizer_models:
                 return None
-            return await offload_token_count(self._count_pre_call_check_tokens)(
-                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
-                input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
+            return await offload_token_count(self._pre_call_check_token_counts)(
+                tokenizer_models=tokenizer_models,
+                messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
@@ -14411,22 +14465,33 @@ class Router:
             )
             return None
 
-    def _resolve_pre_call_check_input_tokens(
+    @staticmethod
+    def _context_window_exceeded_line(deployment: Mapping[str, object], overflow: ContextWindowOverflow) -> str:
+        model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
+        litellm_params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+        deployment_model: Final = (
+            model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
+        )
+        return f"Model={deployment_model}, Max Input Tokens={overflow.max_input_tokens}, Got={overflow.tokens}"
+
+    def _resolve_pre_call_check_token_counts(
         self,
         messages: Sequence[Mapping[str, str]] | None,
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
-        input_token_count: int | None,
+        token_counts: Mapping[str, PreCallTokenCount] | None,
+        tokenizer_models: frozenset[str],
         count_inline: bool,
-    ) -> int | None:
-        if input_token_count is not None:
-            return input_token_count
+    ) -> Mapping[str, PreCallTokenCount] | None:
+        if token_counts is not None:
+            return token_counts
         if not count_inline:
             return None
         try:
-            return self._count_pre_call_check_tokens(
-                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
-                input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the sync counter
+            return self._pre_call_check_token_counts(
+                tokenizer_models=tokenizer_models,
+                messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
         except Exception as e:
@@ -14585,7 +14650,7 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         request_kwargs: dict | None = None,
-        input_token_count: int | None = None,
+        input_token_counts: Mapping[str, PreCallTokenCount] | None = None,
         skip_inline_token_count: bool = False,
         request_deployments: Sequence[DeploymentTypedDict] | None = None,
     ):
@@ -14603,25 +14668,23 @@ class Router:
         # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
         _returned_deployments = list(healthy_deployments)
 
-        invalid_model_indices: Final = set[int]()  # Use set for O(1) membership checks
-
-        _context_window_error = False
-        _potential_error_str = ""
-
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
             request_kwargs
         )
-        deployment_max_input_tokens: Final = tuple(
-            self._deployment_max_input_tokens(model, deployment) for deployment in _returned_deployments
+        context_windows: Final = tuple(
+            self._deployment_context_window(model, deployment) for deployment in _returned_deployments
         )
-        input_tokens: Final = self._resolve_pre_call_check_input_tokens(
+        tokenizer_models: Final = frozenset(window.tokenizer_model for window in context_windows if window is not None)
+        token_counts: Final = self._resolve_pre_call_check_token_counts(
             messages=messages,
             input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the resolver
             request_kwargs=cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: forwarded to the resolver
-            input_token_count=input_token_count,
-            count_inline=has_countable_input
-            and not skip_inline_token_count
-            and any(limit is not None for limit in deployment_max_input_tokens),
+            token_counts=input_token_counts,
+            tokenizer_models=tokenizer_models,
+            count_inline=has_countable_input and not skip_inline_token_count and bool(tokenizer_models),
+        )
+        overflows: Final = tuple(
+            context_window_overflow(window, token_counts if has_countable_input else None) for window in context_windows
         )
         request_settings: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else {}
         requested_params: Final[frozenset[str]] = (
@@ -14629,40 +14692,35 @@ class Router:
             if request_kwargs is not None and litellm.drop_params is False
             else frozenset()
         )
-
-        for idx, deployment in enumerate(_returned_deployments):
-            # Cache nested dict access to avoid repeated temporary dict allocations
-            _litellm_params = deployment.get("litellm_params", {})
-            _model_info = deployment.get("model_info", {})
-
-            max_input_tokens = deployment_max_input_tokens[idx]
-            if (
-                max_input_tokens is not None
-                and has_countable_input
-                and input_tokens is not None
-                and input_tokens > max_input_tokens
-            ):
-                invalid_model_indices.add(idx)
-                _context_window_error = True
-                deployment_model = (
-                    _model_info.get("base_model") or _litellm_params.get("base_model") or _litellm_params.get("model")
+        allowed_model_region: Final = request_settings.get("allowed_model_region")
+        region_excluded: Final = (
+            frozenset()
+            if not isinstance(allowed_model_region, str)
+            else frozenset(
+                idx
+                for idx, deployment in enumerate(_returned_deployments)
+                if not is_region_allowed(
+                    litellm_params=LiteLLM_Params.model_validate(deployment.get("litellm_params", {})),
+                    allowed_model_region=allowed_model_region,
                 )
-                _potential_error_str += (
-                    f"Model={deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
-                )
-                continue
-
-            ## REGION CHECK ##
-            if request_kwargs is not None and request_kwargs.get("allowed_model_region") is not None:
-                allowed_model_region = request_kwargs.get("allowed_model_region")
-
-                if allowed_model_region is not None:
-                    if not is_region_allowed(
-                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
-                        allowed_model_region=allowed_model_region,
-                    ):
-                        invalid_model_indices.add(idx)
-                        continue
+            )
+        )
+        some_deployment_fits: Final = any(
+            overflow is None for idx, overflow in enumerate(overflows) if idx not in region_excluded
+        )
+        window_excluded: Final = MappingProxyType(
+            {
+                idx: overflow
+                for idx, overflow in enumerate(overflows)
+                if overflow is not None and (overflow.certain or some_deployment_fits)
+            }
+        )
+        _context_window_error: Final = bool(window_excluded)
+        _potential_error_str: Final = "".join(
+            self._context_window_exceeded_line(_returned_deployments[idx], window_excluded[idx])
+            for idx in sorted(window_excluded)
+        )
+        invalid_model_indices: Final = frozenset(window_excluded) | region_excluded
 
         typed_deployments: Final = tuple(
             cast(DeploymentTypedDict, deployment)  # cast-ok: router deployments are plain dicts
@@ -15214,7 +15272,7 @@ class Router:
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
-                input_token_count=await self._acount_pre_call_check_tokens(
+                input_token_counts=await self._acount_pre_call_check_tokens(
                     model=model,
                     healthy_deployments=deployments_to_check,
                     messages=messages,

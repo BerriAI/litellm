@@ -20,6 +20,7 @@ import sys
 import threading
 from pathlib import Path
 from types import MappingProxyType
+from collections.abc import Mapping
 from typing import Final, cast
 from unittest.mock import Mock, patch
 
@@ -35,6 +36,7 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.router_utils.context_window_fit import PreCallTokenCount
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -383,9 +385,14 @@ async def test_discovered_limits_are_isolated_overridable_and_refreshable(
         assert listing is not None
         assert listing.max_input_tokens == 8192
         assert router.get_configured_token_limits("local") == (8192, 8192)
-        assert router._deployment_max_input_tokens("local", router.model_list[1]) == 4096
+        window: Final = router._deployment_context_window("local", router.model_list[1])
+        assert window is not None
+        assert window.max_input_tokens == 4096
         allowed: Final = router._pre_call_checks(
-            model="local", healthy_deployments=router.model_list, input="prompt", input_token_count=5000
+            model="local",
+            healthy_deployments=router.model_list,
+            input="prompt",
+            input_token_counts={window.tokenizer_model: PreCallTokenCount(tokens=5000, own_tokenizer=True)},
         )
         assert [deployment["model_info"]["id"] for deployment in allowed] == ["one"]
         assert router.model_list[0]["model_info"].get("max_input_tokens") is None
@@ -4162,6 +4169,13 @@ def _capacity_test_router(route: str, base: str, base_location: str | None, expl
     )
 
 
+def _tokens_for_every_model(router: Router, tokens: int) -> Mapping[str, PreCallTokenCount]:
+    return {
+        model: PreCallTokenCount(tokens=tokens, own_tokenizer=True)
+        for model in router._pre_call_check_tokenizer_models("capacity-test", router.model_list)
+    }
+
+
 def _deployments_allowed_for_2048_input_tokens(router: Router) -> int:
     try:
         return len(
@@ -4169,7 +4183,7 @@ def _deployments_allowed_for_2048_input_tokens(router: Router) -> int:
                 model="capacity-test",
                 healthy_deployments=router.model_list,
                 input="synthetic input",
-                input_token_count=2048,
+                input_token_counts=_tokens_for_every_model(router, 2048),
             )
         )
     except litellm.ContextWindowExceededError:

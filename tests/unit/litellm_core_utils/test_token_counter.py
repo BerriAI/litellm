@@ -120,6 +120,16 @@ def test_token_counter_default_encoding_matches_cl100k():
     assert token_counter_new(model=None, text="hello world") == expected
 
 
+def test_token_counter_counts_with_a_custom_openai_tokenizer_encoding():
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    o200k: Final = tiktoken.get_encoding("o200k_base")
+    assert len(o200k.encode(japanese)) != len(tiktoken.get_encoding("cl100k_base").encode(japanese))
+
+    assert token_counter_new(
+        custom_tokenizer={"type": "openai_tokenizer", "tokenizer": o200k}, text=japanese
+    ) == len(o200k.encode(japanese))
+
+
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
     encoding = tiktoken.get_encoding("cl100k_base")

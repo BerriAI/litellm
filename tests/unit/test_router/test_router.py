@@ -36,6 +36,12 @@ from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.router_utils.context_window_fit import (
+    STAND_IN_OVERCOUNT_MARGIN,
+    ContextWindow,
+    PreCallTokenCount,
+    stand_in_tokenizer,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -7916,7 +7922,7 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 5}
     )
 
     calls = []
@@ -7950,7 +7956,7 @@ def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 5}
     )
 
     calls = []
@@ -7966,7 +7972,7 @@ def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
             model="m",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": "hi"}],
-            input_token_count=1000,
+            input_token_counts={"gpt-3.5-turbo": PreCallTokenCount(tokens=1000, own_tokenizer=True)},
         )
 
     assert calls == []
@@ -7984,7 +7990,7 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1_000_000}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 1_000_000}
     )
 
     counting_threads = []
@@ -7998,7 +8004,7 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
     original_pre_call_checks = router._pre_call_checks
 
     def spy(**kwargs):
-        counts_passed_in.append(kwargs.get("input_token_count"))
+        counts_passed_in.append(kwargs.get("input_token_counts"))
         return original_pre_call_checks(**kwargs)
 
     monkeypatch.setattr(router, "_pre_call_checks", spy)
@@ -8013,7 +8019,7 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
     )
 
     assert len(result) == 1
-    assert counts_passed_in == [42]
+    assert counts_passed_in == [{"gpt-3.5-turbo": PreCallTokenCount(tokens=42, own_tokenizer=True)}]
     assert len(counting_threads) == 1
     assert counting_threads[0] is not threading.current_thread()
 
@@ -8021,12 +8027,12 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
 @pytest.mark.parametrize(
     "model_info,expected",
     [
-        ({"max_input_tokens": 100}, True),
-        ({"max_input_tokens": None}, False),
-        ({}, False),
+        ({"key": "gpt-3.5-turbo", "max_input_tokens": 100}, frozenset({"gpt-3.5-turbo"})),
+        ({"key": "gpt-3.5-turbo", "max_input_tokens": None}, frozenset()),
+        ({"key": "gpt-3.5-turbo"}, frozenset()),
     ],
 )
-def test_pre_call_checks_need_token_count(monkeypatch, model_info, expected):
+def test_pre_call_check_tokenizer_models(monkeypatch, model_info, expected):
     """Only a deployment that declares an integer context window makes a token count worth taking."""
     router = litellm.Router(
         model_list=[
@@ -8039,7 +8045,7 @@ def test_pre_call_checks_need_token_count(monkeypatch, model_info, expected):
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
     ]
-    assert router._pre_call_checks_need_token_count("m", deployments) is expected
+    assert router._pre_call_check_tokenizer_models("m", deployments) == expected
 
 
 def test_deployment_max_input_tokens_survives_an_unmappable_deployment(monkeypatch):
@@ -8058,16 +8064,18 @@ def test_deployment_max_input_tokens_survives_an_unmappable_deployment(monkeypat
     def flaky_model_info(deployment, received_model_name, id=None):
         if deployment["model_info"]["id"] == "unmapped":
             raise ValueError("This model isn't mapped yet.")
-        return {"max_input_tokens": 100}
+        return {"key": "gpt-3.5-turbo", "max_input_tokens": 100}
 
     monkeypatch.setattr(router, "get_router_model_info", flaky_model_info)
 
     unmapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "unmapped"}}
     mapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "mapped"}}
 
-    assert router._deployment_max_input_tokens("m", unmapped) is None
-    assert router._deployment_max_input_tokens("m", mapped) == 100
-    assert router._pre_call_checks_need_token_count("m", [unmapped, mapped]) is True
+    assert router._deployment_context_window("m", unmapped) is None
+    assert router._deployment_context_window("m", mapped) == ContextWindow(
+        tokenizer_model="gpt-3.5-turbo", max_input_tokens=100
+    )
+    assert router._pre_call_check_tokenizer_models("m", [unmapped, mapped]) == frozenset({"gpt-3.5-turbo"})
 
 
 def test_pre_call_checks_does_not_recount_inline_after_an_off_loop_failure(monkeypatch):
@@ -8082,7 +8090,7 @@ def test_pre_call_checks_does_not_recount_inline_after_an_off_loop_failure(monke
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 5}
     )
 
     calls = []
@@ -8097,7 +8105,7 @@ def test_pre_call_checks_does_not_recount_inline_after_an_off_loop_failure(monke
         model="m",
         healthy_deployments=deployments,
         messages=[{"role": "user", "content": "hi"}],
-        input_token_count=None,
+        input_token_counts=None,
         skip_inline_token_count=True,
     )
 
@@ -8117,7 +8125,7 @@ async def test_async_get_healthy_deployments_never_recounts_on_the_loop(monkeypa
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 5}
     )
 
     counting_threads = []
@@ -8154,7 +8162,7 @@ async def test_acount_pre_call_check_tokens_leaves_the_event_loop_free(monkeypat
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 5}
     )
 
     deployments = [
@@ -8176,7 +8184,7 @@ async def test_acount_pre_call_check_tokens_leaves_the_event_loop_free(monkeypat
     ran.append("count")
     await task
 
-    assert count is not None and count > 0
+    assert count is not None and count["gpt-3.5-turbo"].tokens > 0
     assert ran == ["competitor", "count"]
 
 
@@ -8222,7 +8230,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 1}
     )
 
     deployments = [
@@ -8249,7 +8257,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 1}
     )
 
     deployments = [
@@ -8293,7 +8301,7 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
     assert with_instructions_tokens > input_only_tokens
 
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": input_only_tokens}
     )
     with pytest.raises(litellm.ContextWindowExceededError):
         router._pre_call_checks(
@@ -8364,7 +8372,7 @@ def test_pre_call_checks_counts_tool_definition_tokens(monkeypatch, prompt_kwarg
         messages=prompt_kwargs.get("messages"), input=prompt_kwargs.get("input")
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": prompt_only_tokens}
     )
 
     assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, **prompt_kwargs)) == 1
@@ -8405,7 +8413,7 @@ def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
     messages = [{"role": "user", "content": "hi"}]
 
     messages_only_tokens = router._count_pre_call_check_tokens(messages=messages, input=None)
-    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": messages_only_tokens})
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": messages_only_tokens})
 
     assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)) == 1
     with pytest.raises(litellm.ContextWindowExceededError):
@@ -8524,7 +8532,7 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+        router, "get_router_model_info", lambda **kwargs: {"key": "gpt-3.5-turbo", "max_input_tokens": 5}
     )
 
     counted: list[dict] = []
@@ -30141,6 +30149,84 @@ def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["large"]
+
+
+_JAPANESE_PROMPT: Final = [{"role": "user", "content": "日本語のテキストを数えます。" * 50}]
+_RUSSIAN_PROMPT: Final = [{"role": "user", "content": "Привет, как дела? Это тестовый текст. " * 50}]
+
+
+def _stand_in_tokens(messages: list[dict[str, str]]) -> int:
+    return litellm.token_counter(custom_tokenizer=stand_in_tokenizer(), messages=messages)
+
+
+def _single_deployment(model: str, max_input_tokens: int) -> list[dict[str, object]]:
+    return [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": model, "api_key": "my-fake-key"},
+            "model_info": {"id": "only", "max_input_tokens": max_input_tokens},
+        }
+    ]
+
+
+def _kept_ids(model_list: list[dict[str, object]], messages: list[dict[str, str]]) -> list[str]:
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+    return [
+        d["model_info"]["id"]
+        for d in router._pre_call_checks(model="m", healthy_deployments=model_list, messages=messages)
+    ]
+
+
+@pytest.mark.parametrize("model", ["openai/my-fake-model", "claude-sonnet-5-5"])
+def test_pre_call_checks_leaves_a_stand_in_overcount_within_the_margin_to_the_provider(model):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    smallest_window_within_margin: Final = -(-tokens // STAND_IN_OVERCOUNT_MARGIN)
+
+    assert _kept_ids(_single_deployment(model, tokens - 1), _RUSSIAN_PROMPT) == ["only"]
+    assert _kept_ids(_single_deployment(model, smallest_window_within_margin), _RUSSIAN_PROMPT) == ["only"]
+
+
+def test_pre_call_checks_refuses_a_stand_in_count_past_the_margin():
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    largest_window_past_margin: Final = (tokens - 1) // STAND_IN_OVERCOUNT_MARGIN
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_ids(_single_deployment("openai/my-fake-model", largest_window_past_margin), _RUSSIAN_PROMPT)
+
+
+def test_pre_call_checks_counts_an_openai_model_with_its_own_encoding():
+    own_tokens: Final = litellm.token_counter(model="gpt-5.6-luna", messages=_JAPANESE_PROMPT)
+    assert own_tokens < litellm.token_counter(messages=_JAPANESE_PROMPT)
+
+    assert _kept_ids(_single_deployment("gpt-5.6-luna", own_tokens), _JAPANESE_PROMPT) == ["only"]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_ids(_single_deployment("gpt-5.6-luna", own_tokens - 1), _JAPANESE_PROMPT)
+
+
+def test_pre_call_checks_counts_a_provider_prefixed_openai_model_with_its_own_encoding():
+    own_tokens: Final = litellm.token_counter(model="gpt-5.6-luna", messages=_JAPANESE_PROMPT)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_ids(_single_deployment("openai/gpt-5.6-luna", own_tokens - 1), _JAPANESE_PROMPT)
+    assert _kept_ids(_single_deployment("openai/gpt-5.6-luna", own_tokens), _JAPANESE_PROMPT) == ["only"]
+
+
+def test_pre_call_checks_steers_off_a_stand_in_overcount_when_another_deployment_fits():
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"id": "small", "max_input_tokens": tokens - 1},
+        },
+        {
+            "model_name": "m",
+            "litellm_params": {"model": "openai/my-other-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"id": "large", "max_input_tokens": tokens},
+        },
+    ]
+
+    assert _kept_ids(model_list, _RUSSIAN_PROMPT) == ["large"]
 
 
 def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():

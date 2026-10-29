@@ -984,7 +984,12 @@ def _get_exact_count_function(
 
         return count_tokens
     if tokenizer_json["type"] == "openai_tokenizer":
-        encoding: Final = openai_tokenizer_encoding(model)
+        encoding: Final = (
+            tokenizer_json["tokenizer"]
+            if custom_tokenizer is not None
+            and isinstance(tokenizer_json["tokenizer"], (tiktoken.Encoding, OpenAIEncoding))
+            else openai_tokenizer_encoding(model)
+        )
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
@@ -1008,14 +1013,42 @@ def openai_tokenizer_encoding_name(model: str) -> str:
     """The tiktoken encoding name for `model`, without loading the encoding."""
     from litellm.utils import print_verbose
 
-    model_to_use: Final = _fix_model_name(model)
+    own_encoding: Final = _own_openai_encoding_name(model)
+    if own_encoding is not None:
+        return own_encoding
+    print_verbose("Warning: model not found. Using cl100k_base encoding.")
+    return "cl100k_base"
+
+
+def _own_openai_encoding_name(model: str) -> str | None:
+    model_to_use: Final = _known_openai_model_name(model)
+    if model_to_use is None:
+        return None
     if "gpt-4o" in model_to_use:
         return "o200k_base"
     try:
         return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
-        print_verbose("Warning: model not found. Using cl100k_base encoding.")
-        return "cl100k_base"
+        return None
+
+
+def counts_with_own_tokenizer(model: str) -> bool:
+    """Whether `token_counter` counts `model` with that model's own tokenizer rather than a stand-in encoding.
+
+    The bundled Anthropic tokenizer is Claude 2's, which overcounts current Claude models on some scripts."""
+    from litellm.utils import select_tokenizer, uses_anthropic_tokenizer
+
+    if uses_anthropic_tokenizer(model):
+        return False
+    return select_tokenizer(model)["type"] == "huggingface_tokenizer" or _own_openai_encoding_name(model) is not None
+
+
+def own_tokenizer_model(model: str) -> str | None:
+    """The name `token_counter` counts `model` by with that model's own tokenizer, trying it without its provider
+    prefix too, or None when litellm has no tokenizer of the model's own."""
+    provider, _, bare_model = model.partition("/")
+    candidates: Final = (model, bare_model) if bare_model and provider in litellm.provider_list else (model,)
+    return next((candidate for candidate in candidates if counts_with_own_tokenizer(candidate)), None)
 
 
 def uses_legacy_message_accounting(model: str) -> bool:
@@ -1025,13 +1058,17 @@ def uses_legacy_message_accounting(model: str) -> bool:
 
 def _fix_model_name(model: str) -> str:
     """We normalize some model names to others"""
+    known_model: Final = _known_openai_model_name(model)
+    return known_model if known_model is not None else "gpt-3.5-turbo"
+
+
+def _known_openai_model_name(model: str) -> str | None:
     if model in litellm.azure_llms:
         # azure llms use gpt-35-turbo instead of gpt-3.5-turbo 🙃
         return model.replace("-35", "-3.5")
-    elif model in litellm.open_ai_chat_completion_models:
+    if model in litellm.open_ai_chat_completion_models:
         return model
-    else:
-        return "gpt-3.5-turbo"
+    return None
 
 
 def _count_image_tokens(
