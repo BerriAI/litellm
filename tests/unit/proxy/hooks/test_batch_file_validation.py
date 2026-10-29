@@ -2286,3 +2286,99 @@ async def test_disable_flag_still_skips_batch_processing_with_enqueued_limits():
 
     assert result is data
     afile_content_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_input_audio_row_reserves_size_based_floor():
+    """A chat row carrying an OpenAI `input_audio` content block must reserve
+    at least the size-based estimate (serialized bytes / 4).
+
+    token_counter's audio contribution is a size-derived estimate at a
+    deliberately low assumed bitrate (decoded bytes / AUDIO_BYTES_PER_TOKEN),
+    far below the raw-bytes fallback. Before audio blocks were countable
+    (#38459) such a row RAISED inside token_counter and fell back to the
+    size-based estimate; the floor restores exactly that conservatism so a
+    large base64 audio payload cannot slide the batch under the TPM limit.
+    """
+    import json as _json
+
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    prl = MagicMock()
+    prl.no_max_tokens_output_floor.return_value = 0
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=prl,
+    )
+
+    blob = "A" * 400_000
+    audio_row_bytes = _json.dumps(
+        {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "gpt-4o-audio-preview",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What does the audio say?"},
+                            {"type": "input_audio", "input_audio": {"data": blob, "format": "wav"}},
+                        ],
+                    }
+                ],
+            },
+        }
+    ).encode("utf-8")
+    fake_content = MagicMock()
+    fake_content.content = audio_row_bytes
+
+    with patch(  # test-quality-ok: mirrors the file's established harness — the download, not an HTTP boundary
+        "litellm.afile_content",
+        new=AsyncMock(return_value=fake_content),
+    ):
+        usage = await rate_limiter.count_input_file_usage(
+            file_id="file-not-managed",
+            custom_llm_provider="openai",
+            user_api_key_dict=None,
+        )
+
+    size_based_floor = len(audio_row_bytes) // 4
+    assert usage.request_count == 1
+    assert usage.total_tokens >= size_based_floor, (
+        f"audio-block row must reserve at least the size-based estimate "
+        f"({size_based_floor} tokens for {len(audio_row_bytes)} bytes), got "
+        f"{usage.total_tokens} — a large audio payload would evade TPM limits"
+    )
+
+    # Control: a plain-text row must NOT be floored at its serialized size —
+    # measured text rows keep the (smaller) real token count.
+    text_row_bytes = _json.dumps(
+        {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "gpt-4o-audio-preview",
+                "messages": [{"role": "user", "content": "What does the audio say?"}],
+            },
+        }
+    ).encode("utf-8")
+    fake_text_content = MagicMock()
+    fake_text_content.content = text_row_bytes
+
+    with patch(  # test-quality-ok: mirrors the file's established harness — the download, not an HTTP boundary
+        "litellm.afile_content",
+        new=AsyncMock(return_value=fake_text_content),
+    ):
+        text_usage = await rate_limiter.count_input_file_usage(
+            file_id="file-not-managed",
+            custom_llm_provider="openai",
+            user_api_key_dict=None,
+        )
+
+    assert text_usage.request_count == 1
+    assert text_usage.total_tokens < len(text_row_bytes) // 4, (
+        "plain-text rows must keep the measured token count, not the size-based floor"
+    )
