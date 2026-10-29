@@ -137,6 +137,7 @@ def test_messages_request_hoists_wrapped_defer_loading_and_drops_custom_only_und
         (DeepSeekAnthropicMessagesConfig(), "deepseek-chat"),
         (MinimaxMessagesConfig(), "MiniMax-M2"),
         (AnthropicMessagesConfig(), "deepseek-chat"),
+        (OpenAILikeAnthropicMessagesConfig(), "anthropic/claude-haiku-4.5"),
     ],
 )
 @pytest.mark.parametrize("drop_params", [True, False])

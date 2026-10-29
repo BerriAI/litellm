@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
+)
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -573,6 +577,26 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param
 
 
+_TOOL_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON tool objects  # mutable-ok: fallbacks reuse tools edited in place
+    return isinstance(value, dict)
+
+
+def _normalize_custom_field_on_tool(tool: object) -> None:
+    if not _is_str_keyed_dict(tool):
+        return
+    custom: Final = tool.pop("custom", None)
+    if not _is_str_keyed_dict(custom) or "defer_loading" in tool:
+        return
+    deferred: Final = custom.get("defer_loading")
+    if isinstance(deferred, bool):
+        tool["defer_loading"] = deferred  # rebind-ok: a fallback reuses the caller's tool, as on main
+
+
 def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
@@ -590,12 +614,8 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    from litellm.llms.anthropic.common_utils import OBJECT_LIST_ADAPTER, tools_without_custom_field
-
-    normalized_tools: Final = tools_without_custom_field(
-        OBJECT_LIST_ADAPTER.validate_python(tools), hoist_defer_loading=True, drop_custom=True
-    )
-    request_body["tools"] = normalized_tools  # rebind-ok: out-param
+    for tool in _TOOL_ITEMS_ADAPTER.validate_python(tools):
+        _normalize_custom_field_on_tool(tool)
 
 
 _TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])

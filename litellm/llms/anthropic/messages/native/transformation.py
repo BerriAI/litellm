@@ -187,6 +187,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return is_claude_model_target(self._resolved_provider, model)
 
+    def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
+        return tools_without_custom_field(
+            tools,
+            hoist_defer_loading=self.hoists_wrapped_defer_loading(model),
+            drop_custom=drops_unsupported_params(drop_params),
+        )
+
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
         """
@@ -724,10 +731,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return dict(anthropic_messages_request)
         return {
             **anthropic_messages_request,
-            "tools": tools_without_custom_field(
-                OBJECT_LIST_ADAPTER.validate_python(tools),
-                hoist_defer_loading=self.hoists_wrapped_defer_loading(model),
-                drop_custom=drops_unsupported_params(litellm_params.drop_params),
+            "tools": self.tools_for_upstream(
+                OBJECT_LIST_ADAPTER.validate_python(tools), model, litellm_params.drop_params
             ),
         }
 
