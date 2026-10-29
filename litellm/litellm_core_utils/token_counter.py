@@ -709,7 +709,7 @@ class _MessageCountParams:
 
     @cached_property
     def pdf_pricing(self) -> PdfPagePricing:
-        return _pdf_page_pricing(self._model)
+        return pdf_page_pricing(self._model)
 
 
 def _is_openai_chat_model(model: str) -> bool:
@@ -753,8 +753,13 @@ def _is_openai_or_azure_model(model: str) -> bool:
     return _is_openai_chat_model(model) or _openai_model_family(model) is not None or _is_azure_openai_chat_model(model)
 
 
-def _pdf_page_pricing(model: str | None) -> PdfPagePricing:
+def pdf_page_pricing(model: str | None) -> PdfPagePricing:
     return "openai" if _is_openai_or_azure_model(model or "") else "claude"
+
+
+def reads_pdf_pages(model: str) -> bool:
+    entry: Final = _cost_map_entry(model) or _cost_map_entry(model.partition("/")[2])
+    return entry.get("supports_pdf_input") is True
 
 
 def token_counter(
@@ -1262,7 +1267,7 @@ def _pdf_xobjects(container: Mapping[str, object], inherited: _PdfXObjects) -> _
 _PDF_WHITESPACE: Final = rb"\x00\t\n\x0c\r "
 _PDF_TOKEN_END: Final = _PDF_WHITESPACE + rb"()<>\[\]{}/%"
 _PDF_XOBJECT_DRAW: Final = re.compile(
-    rb"/([^" + _PDF_TOKEN_END + rb"]*)[" + _PDF_WHITESPACE + rb"]+Do(?![^" + _PDF_TOKEN_END + rb"])"
+    rb"/([^" + _PDF_TOKEN_END + rb"]*)(?:[" + _PDF_WHITESPACE + rb"]|%[^\r\n]*[\r\n])+Do(?![^" + _PDF_TOKEN_END + rb"])"
 )
 _PDF_INLINE_IMAGE: Final = re.compile(rb"(?<![^" + _PDF_WHITESPACE + rb"])BI(?![^" + _PDF_WHITESPACE + rb"/])")
 _PDF_NAME_ESCAPE: Final = re.compile(rb"#([0-9A-Fa-f]{2})")

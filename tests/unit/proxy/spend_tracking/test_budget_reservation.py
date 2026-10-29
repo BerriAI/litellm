@@ -440,7 +440,7 @@ async def test_reservation_counts_a_pdf_with_the_deployment_behind_a_gpt_named_g
     )
 
     counts: Final = await count_request_input_tokens(
-        request_body=request_body, route="/chat/completions", llm_router=router
+        request_body=request_body, route="/chat/completions", llm_router=router, team_id=None
     )
 
     assert counts == {"gpt-4o": count_input_tokens_for_model(request_body=request_body, model="claude-haiku-5-5")}

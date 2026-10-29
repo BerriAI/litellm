@@ -9106,7 +9106,7 @@ async def test_project_itpm_reserves_a_pdf_at_the_largest_count_of_the_group_dep
     cache: Final = DualCache()
     handler: Final = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(cache),
-        counted_models_resolver=lambda model: ("claude-haiku-5-5", "gpt-5.6-sol"),
+        counted_models_resolver=lambda model, team_id: ("claude-haiku-5-5", "gpt-5.6-sol"),
     )
     messages: Final = _one_page_pdf_message()
     caller: Final = UserAPIKeyAuth(

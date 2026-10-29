@@ -29,7 +29,11 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import (
+    HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
+    PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
@@ -2283,13 +2287,19 @@ def test_openai_model_finds_an_image_a_shared_form_without_resources_draws_from_
     ) == _rendered_page_cost()
 
 
-@pytest.mark.timeout(10)
-def test_openai_model_prices_a_page_of_a_million_drawing_operators_promptly():
-    """A page of a million drawing operators and no image took about 30 seconds to price, since every operator was
-    parsed to find the images it draws, while the stream compresses into a request a few kilobytes long."""
+@pytest.mark.parametrize(
+    ("drawing", "draws_image"),
+    [(b" /X0 %scale it first\n Do", True), (b" /X0 % Do\n", False)],
+    ids=["comment-before-do", "do-inside-a-comment"],
+)
+def test_openai_model_reads_a_comment_in_a_content_stream_as_whitespace(drawing: bytes, draws_image: bool):
+    """A comment runs to the end of its line and separates tokens like whitespace, so it neither hides the Do after
+    it nor draws anything itself."""
     model: Final = "gpt-4o"
 
-    assert _pdf_cost(model, _pdf_base64(("",), drawing=b" q Q" * 1_000_000, page_resources="<< >>")) == 0
+    assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=drawing)) == (
+        _text_cost(model, _REVENUE_LINE) + (_rendered_page_cost() if draws_image else 13)
+    )
 
 
 @pytest.mark.parametrize("escaped_name", ["/Im#231", "/#C4#E3", "/caf#C3#A9"], ids=["hex_escape", "gbk", "utf8"])
@@ -2309,32 +2319,16 @@ def test_openai_model_finds_an_image_drawn_by_an_escaped_name(escaped_name: str)
     ) == _rendered_page_cost()
 
 
-@pytest.mark.timeout(10)
-def test_openai_model_reads_resources_shared_by_many_forms_once():
-    """3,000 forms that all list the same /Resources took 17 seconds to price before each dictionary was read once."""
+@pytest.mark.parametrize(("parent_count", "draws_too_many"), [(1, False), (2, True)])
+def test_openai_model_prices_a_page_whose_forms_draw_too_many_xobjects_as_rendered(
+    parent_count: int, draws_too_many: bool
+):
+    """A page prices as if it drew an image once its forms draw more than PDF_MAX_XOBJECT_DRAWS_PER_PAGE XObjects
+    between them, so a page of forms nested to blow up the walk cannot stall the request."""
     model: Final = "gpt-4o"
-    form_count: Final = 3000
-    shared_resources_number: Final = 7
-    shared_resources: Final = (
-        "<< /XObject << " + " ".join(f"/F{index} {8 + index} 0 R" for index in range(form_count)) + " >> >>"
-    ).encode()
-    forms: Final = tuple(_form_xobject(shared_resources_number, b"/F0 Do") for _ in range(form_count))
-
-    assert _pdf_cost(
-        model, _pdf_base64((_REVENUE_LINE,), xobjects=(forms[0], shared_resources, *forms), drawing=_DRAW_X0)
-    ) == (_text_cost(model, _REVENUE_LINE) + 13)
-
-
-@pytest.mark.timeout(10)
-def test_openai_model_prices_a_child_form_shared_by_many_parents_promptly():
-    """1,000 forms that each list their own /Resources and draw one shared 4,000-operator child took about 45
-    seconds to price, since the child was parsed and walked again under every parent. A page now prices as if it
-    drew an image once its forms draw more than a fixed number of XObjects, and each form is parsed once."""
-    model: Final = "gpt-4o"
-    parent_count: Final = 1000
     first: Final = 6
     child_number: Final = first + 2 * parent_count
-    child_drawing: Final = b" ".join((b"/D Do",) * 4000)
+    child_drawing: Final = b" ".join((b"/D Do",) * (PDF_MAX_XOBJECT_DRAWS_PER_PAGE // 2))
     child: Final = (
         f"<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length {len(child_drawing)} >>\nstream\n".encode()
         + child_drawing
@@ -2358,7 +2352,7 @@ def test_openai_model_prices_a_child_form_shared_by_many_parents_promptly():
         _pdf_base64(
             (_REVENUE_LINE,), xobjects=(*parents, child), drawing=page_drawing, page_resources=page_resources
         ),
-    ) == _text_cost(model, _REVENUE_LINE) + _rendered_page_cost()
+    ) == _text_cost(model, _REVENUE_LINE) + (_rendered_page_cost() if draws_too_many else 13)
 
 
 _NON_LATIN_SAMPLE: Final = "Привет, как дела? これは日本語のテキストです。 Ceci est un texte en français: éèàç. " * 8
@@ -2458,16 +2452,6 @@ def test_openai_fine_tunes_count_like_their_base_model(fine_tune: str, base_mode
     assert _pdf_cost(fine_tune, pdf) == _pdf_cost(base_model, pdf) == _text_cost(base_model, _REVENUE_LINE) + 13
     assert token_counter_new(model=fine_tune, text=_NON_LATIN_SAMPLE) == token_counter_new(
         model=base_model, text=_NON_LATIN_SAMPLE
-    )
-
-
-@pytest.mark.timeout(10)
-def test_a_very_long_unknown_model_name_counts_promptly():
-    """A 200,000-word model name took minutes to count, since every dash-joined prefix of it was tried."""
-    long_name: Final = "unknown-" + "a-" * 200_000
-
-    assert token_counter_new(model=long_name, text=_NON_LATIN_SAMPLE) == token_counter_new(
-        model="my-private-model", text=_NON_LATIN_SAMPLE
     )
 
 

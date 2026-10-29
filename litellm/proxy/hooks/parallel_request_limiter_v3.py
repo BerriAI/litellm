@@ -160,10 +160,10 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     return resolve_model_group_alias(llm_router.model_group_alias, model)
 
 
-def _resolve_counted_models_via_proxy_router(model: str) -> Sequence[str]:
+def _resolve_counted_models_via_proxy_router(model: str, team_id: str | None) -> Sequence[str]:
     from litellm.proxy.proxy_server import llm_router
 
-    return models_counted_for(model, llm_router)
+    return models_counted_for(model, llm_router, team_id)
 
 
 def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
@@ -885,7 +885,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
-        counted_models_resolver: Callable[[str], Sequence[str]] = _resolve_counted_models_via_proxy_router,
+        counted_models_resolver: Callable[[str, str | None], Sequence[str]] = _resolve_counted_models_via_proxy_router,
         media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
         ptu_team_ceiling_resolver: Callable[
             [str, str], PTUTeamCeiling | None
@@ -4082,14 +4082,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             call_type=call_type,
             include_media=False,
         )
-        counted_models: Final = self._counted_models_resolver(requested_model) if requested_model else (None,)
+        counted_models: Final = (
+            self._counted_models_resolver(requested_model, user_api_key_dict.team_id) if requested_model else (None,)
+        )
         raw_estimated_input_tokens: Final = max(
-            [
-                await offload_token_count(self._estimate_precise_input_tokens)(
-                    data=data, model=model, call_type=call_type
+            await asyncio.gather(
+                *(
+                    offload_token_count(self._estimate_precise_input_tokens)(
+                        data=data, model=model, call_type=call_type
+                    )
+                    for model in counted_models
                 )
-                for model in counted_models
-            ]
+            )
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
         estimated_output_tokens: Final = (

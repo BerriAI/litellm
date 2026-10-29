@@ -82,18 +82,66 @@ def test_a_model_group_counts_like_the_deployment_that_serves_it(group: str, dep
     request_body: Final = {"model": group, "messages": _one_page_pdf_message()}
     counted_with: Final = deployment_model.partition("/")[2]
 
-    assert models_counted_for(group, _router((group, deployment_model))) == (counted_with,)
+    assert models_counted_for(group, _router((group, deployment_model)), None) == (counted_with,)
     assert count_input_tokens_for_model(request_body=request_body, model=counted_with) != count_input_tokens_for_model(
         request_body=request_body, model=group
     )
 
 
+@pytest.mark.parametrize(
+    ("group", "deployment_model"),
+    [
+        ("my-claude", "anthropic/claude-haiku-5-5"),
+        ("my-llama", "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        ("my-cohere", "cohere/command-r-plus"),
+        ("gpt-4o", "cohere/command-r-plus"),
+    ],
+    ids=["claude-alias", "llama-alias", "cohere-alias", "gpt-named-group-served-by-a-model-that-reads-no-pdf"],
+)
+def test_a_group_whose_deployment_prices_pdf_pages_alike_or_reads_none_counts_as_the_group(
+    group: str, deployment_model: str
+) -> None:
+    assert models_counted_for(group, _router((group, deployment_model)), None) == (group,)
+
+
+def test_a_custom_named_deployment_counts_with_its_base_model():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "reports",
+                "litellm_params": {"model": "azure/prod-deploy-1", "api_key": "x", "api_base": "https://x"},
+                "model_info": {"base_model": "azure/gpt-5.6-sol"},
+            },
+            {"model_name": "drafts", "litellm_params": {"model": "azure/prod-deploy-2", "api_key": "x"}},
+        ]
+    )
+
+    assert models_counted_for("reports", router, None) == ("gpt-5.6-sol",)
+    assert models_counted_for("drafts", router, None) == ("drafts",)
+
+
 def test_a_group_of_differently_priced_deployments_counts_with_each_and_a_name_no_deployment_serves_counts_as_is():
     router: Final = _router(("mixed", "anthropic/claude-haiku-5-5"), ("mixed", "azure/gpt-5.6-sol"))
 
-    assert models_counted_for("mixed", router) == ("claude-haiku-5-5", "gpt-5.6-sol")
-    assert models_counted_for("not-deployed", router) == ("not-deployed",)
-    assert models_counted_for("gpt-4o", None) == ("gpt-4o",)
+    assert models_counted_for("mixed", router, None) == ("mixed", "gpt-5.6-sol")
+    assert models_counted_for("not-deployed", router, None) == ("not-deployed",)
+    assert models_counted_for("gpt-4o", None, None) == ("gpt-4o",)
+
+
+def test_a_team_request_counts_with_the_deployment_its_team_is_served_by():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "reports", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "x"}},
+            {
+                "model_name": "reports-team-a",
+                "litellm_params": {"model": "azure/gpt-5.6-sol", "api_key": "x"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "reports"},
+            },
+        ]
+    )
+
+    assert models_counted_for("reports", router, "team-a") == ("gpt-5.6-sol",)
+    assert models_counted_for("reports", router, "team-b") == ("reports",)
 
 
 def test_count_input_tokens_for_model_counts_anthropic_auto_tool_choice() -> None:

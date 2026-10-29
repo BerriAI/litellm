@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.token_counter import pdf_page_pricing, reads_pdf_pages
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
@@ -133,15 +134,20 @@ def _count_input_tokens_for_models(
     )
 
 
-def models_counted_for(model: str, llm_router: Router | None) -> tuple[str, ...]:
-    """The names a request for `model` is counted with: each deployment's model minus its provider prefix, the
-    name `/v1/messages/count_tokens` counts with, or `model` itself when no deployment serves it."""
-    deployments: Final = (llm_router.get_model_list(model_name=model) or ()) if llm_router is not None else ()
-    deployment_models: Final = (deployment["litellm_params"].get("model") for deployment in deployments)
-    served: Final = tuple(
-        dict.fromkeys(name.partition("/")[2] or name for name in deployment_models if isinstance(name, str) and name)
+def models_counted_for(model: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
+    """The names a request for `model` from `team_id` is counted with: `model` itself, except for a deployment that
+    reads PDF pages and prices them unlike `model`, which is counted with its own model minus the provider prefix,
+    the name `/v1/messages/count_tokens` counts with."""
+    served: Final = (
+        llm_router.resolved_litellm_models(model, team_id, use_base_model=True) if llm_router is not None else ()
     )
-    return served or (model,)
+    return tuple(dict.fromkeys(_counted_name(model, served_model) for served_model in served)) or (model,)
+
+
+def _counted_name(model: str, served_model: str) -> str:
+    if pdf_page_pricing(served_model) == pdf_page_pricing(model) or not reads_pdf_pages(served_model):
+        return model
+    return served_model.partition("/")[2] or served_model
 
 
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:

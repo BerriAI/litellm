@@ -275,6 +275,7 @@ async def reserve_budget_for_request(
         request_body=request_body,
         route=route,
         llm_router=llm_router,
+        team_id=valid_token.team_id,
         raw_body=raw_body,
     )
 
@@ -1596,6 +1597,7 @@ async def count_request_input_tokens(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    team_id: str | None,
     raw_body: bytes | None = None,
 ) -> Mapping[str, int]:
     """Input-token count per candidate model, counted once per request.
@@ -1604,7 +1606,9 @@ async def count_request_input_tokens(
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    counted_models: Final = MappingProxyType({model: models_counted_for(model, llm_router) for model in models})
+    counted_models: Final = MappingProxyType(
+        {model: models_counted_for(model, llm_router, team_id) for model in models}
+    )
     counts: Final = await count_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
