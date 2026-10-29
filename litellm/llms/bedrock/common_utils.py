@@ -200,13 +200,6 @@ def get_cached_model_info():
     return _get_model_info
 
 
-@functools.lru_cache(maxsize=1)
-def _get_local_model_cost_map() -> dict:
-    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-
-    return GetModelCostMap.load_local_model_cost_map()
-
-
 def pop_bedrock_invoke_output_config_format(request_body: dict[str, object]) -> dict[str, object] | None:
     """
     Remove and return Anthropic's nested ``output_config.format`` field.
@@ -1586,12 +1579,6 @@ def _bedrock_converse_model_flag(model: str, key: _BedrockConverseModelFlag) -> 
             flag = model_info.get(key)
             if isinstance(flag, bool):
                 return flag
-
-            model_cost_key = model_info.get("key")
-            if isinstance(model_cost_key, str):
-                local_flag = _get_local_model_cost_map().get(model_cost_key, {}).get(key)
-                if isinstance(local_flag, bool):
-                    return local_flag
     return None
 
 
@@ -1633,16 +1620,7 @@ def _get_bedrock_output_config_effort_ceiling(
     except Exception:
         return None
 
-    ceiling = model_info.get("bedrock_output_config_effort_ceiling")
-    if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
-        return ceiling
-
-    model_cost_key: Final = model_info.get("key")
-    if not isinstance(model_cost_key, str):
-        return None
-
-    local_model_info: Final = _get_local_model_cost_map().get(model_cost_key, {})
-    ceiling = local_model_info.get("bedrock_output_config_effort_ceiling")
+    ceiling: Final = model_info.get("bedrock_output_config_effort_ceiling")
     if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
         return ceiling
     return None

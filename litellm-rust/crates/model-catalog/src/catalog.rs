@@ -143,6 +143,14 @@ impl Catalog {
         let mut entries = IndexMap::with_capacity(document.len());
         let mut alias_lists = Vec::new();
         for (index, (name, value)) in document.into_iter().enumerate() {
+            if value.is_null() && !is_section(&name) {
+                sections.push(Section {
+                    index,
+                    key: name,
+                    value,
+                });
+                continue;
+            }
             let fields = match value {
                 Value::Object(fields) if !is_section(&name) => fields,
                 value => {
@@ -346,6 +354,41 @@ impl Catalog {
             section.index -= removed_before;
         }
         (catalog, removed_errors)
+    }
+
+    /// Rows replaced by the same key's row in `bundled` when it has one, and left out otherwise
+    pub fn with_rejected_replaced<'a>(
+        self,
+        errors: &'a [Error],
+        bundled: &Catalog,
+    ) -> (Self, Vec<Rejection<'a>>) {
+        let (mut catalog, removed) = self.without_rejected(errors);
+        let mut rejected: IndexMap<String, Vec<&'a Error>> = IndexMap::new();
+        for error in removed {
+            if let Some(key) = crate::error::pointer_root(error.path()) {
+                rejected.entry(key).or_default().push(error);
+            }
+        }
+        let rejections: Vec<_> = rejected
+            .into_iter()
+            .map(|(key, errors)| Rejection {
+                replaced_by_bundled: bundled.rows().entries.contains_key(&key),
+                key,
+                errors,
+            })
+            .collect();
+        catalog.store.edit(|rows| {
+            for rejection in rejections
+                .iter()
+                .filter(|rejection| rejection.replaced_by_bundled)
+            {
+                rows.entries.insert(
+                    rejection.key.clone(),
+                    bundled.rows().entries[&rejection.key].clone(),
+                );
+            }
+        });
+        (catalog, rejections)
     }
 
     pub fn unrecognized(&self) -> impl Iterator<Item = (&str, &str)> {

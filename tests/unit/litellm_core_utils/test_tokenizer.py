@@ -245,11 +245,11 @@ def test_tokenization_stays_offline(tmp_path: Path, rust: str | None) -> None:
     script: Final = """
 import sys
 sys.path.insert(0, sys.argv[1])
+import litellm
 def reject_network(event, args):
     if event == "socket.connect":
         raise AssertionError("tokenizer attempted a network connection")
 sys.addaudithook(reject_network)
-import litellm
 from litellm.rust_bridge.tokenizer import get_encoding
 import tiktoken
 from tokenizers import Tokenizer

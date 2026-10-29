@@ -32,6 +32,15 @@ _ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context
 # ---------------------------------------------------------------------------
 
 
+def _reloaded(cost_map: dict) -> "ModelCostMapReloaded":
+    from litellm._catalog import Catalog, Parsed
+    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+
+    parsed = Catalog.parse(json.dumps(cost_map).encode(), etag=None, min_model_count=0, max_shrink_ratio=0.0)
+    assert isinstance(parsed, Parsed)
+    return ModelCostMapReloaded(parsed=parsed)
+
+
 def _attach_litellm_config(mock_prisma):
     """Attach a litellm_config table mock (not in conftest's _PRISMA_TABLES)."""
     table = MagicMock()
@@ -55,7 +64,7 @@ def _attach_litellm_config(mock_prisma):
 
 def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     """Admin can trigger a manual reload; handler returns model count + status."""
-    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+    from litellm._catalog import CATALOG
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -65,7 +74,7 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-        AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=fake_cost_map)),
+        AsyncMock(return_value=_reloaded(fake_cost_map)),
     )
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
     monkeypatch.setattr("litellm.model_cost", {}, raising=False)
@@ -83,11 +92,12 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.post("/reload/model_cost_map")
     assert response.status_code == 200
+    served = len(CATALOG.bundled().served().keys() | fake_cost_map.keys())
     body = normalize(response.json(), volatile=_VOLATILE)
     assert body == {
-        "message": "Price data reloaded successfully! 2 models updated.",
+        "message": f"Price data reloaded successfully! {served} models updated.",
         "status": "success",
-        "models_count": 2,
+        "models_count": served,
         "timestamp": "<VOLATILE>",
         **get_model_cost_map_provenance(),
     }
@@ -103,7 +113,7 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     import httpx
 
     import litellm
-    from litellm.litellm_core_utils.get_model_cost_map import _finalize_model_cost_map, git_blob_id
+    import hashlib
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -111,7 +121,10 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     body = _ROOT_COST_MAP.read_bytes()
-    expected = {"source_revision": git_blob_id(body), "etag": _SERVED_ETAG}
+    expected = {
+        "source_revision": hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest(),
+        "etag": _SERVED_ETAG,
+    }
     served = httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
@@ -142,7 +155,7 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     assert {key: status_response.json()[key] for key in expected} == expected
     assert public_response.status_code == 200
     assert "gpt-4o" in public_response.json()
-    assert reload_body["models_count"] == len(_finalize_model_cost_map(json.loads(body)))
+    assert reload_body["models_count"] == len(litellm.model_cost)
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(

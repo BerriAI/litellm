@@ -1,9 +1,16 @@
 
-import asyncio, importlib, litellm, litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map, pytest
+import asyncio
+import importlib
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import Mock, patch
 
+import pytest
 
-from litellm.llms.bedrock.common_utils import(
+import litellm
+import litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map
+from litellm import completion
+from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
@@ -18,11 +25,8 @@ from litellm.llms.bedrock.common_utils import(
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
 )
-from collections.abc import Iterator
-from litellm import completion
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import Mock, patch
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -35,10 +39,8 @@ def _reset_bedrock_response_stream_shape_cache():
     import litellm.llms.bedrock.common_utils as mod
 
     mod.get_bedrock_response_stream_shape.cache_clear()
-    mod._get_local_model_cost_map.cache_clear()
     yield
     mod.get_bedrock_response_stream_shape.cache_clear()
-    mod._get_local_model_cost_map.cache_clear()
 
 
 def test_bedrock_response_stream_shape_lazy_loads_once():
@@ -344,9 +346,9 @@ def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch)
 def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
     model, expected_ceiling
 ):
-    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm._catalog import CATALOG
 
-    model_info = GetModelCostMap.load_local_model_cost_map()[model]
+    model_info = CATALOG.bundled().served()[model]
 
     assert model_info["bedrock_output_config_effort_ceiling"] == expected_ceiling
 
@@ -2036,6 +2038,7 @@ class TestBedrockGovCloudSupport:
 @pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
 def test_event_decoder_reports_only_missing_aws_dependency(missing):
     from unittest.mock import patch
+
     from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
 
     failure = ModuleNotFoundError("missing dependency", name=missing)

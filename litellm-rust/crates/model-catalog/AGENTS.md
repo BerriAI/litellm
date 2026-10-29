@@ -10,7 +10,9 @@
 
 `store/` is the catalog's in-memory store and the only place that indexes model names. Its rules are in [src/store/AGENTS.md](src/store/AGENTS.md)
 
-`layers.rs`, `resolve/`, `model_info.rs` and `register.rs` hold types only. The functions over them land with their first caller
+`layers.rs` composes the served rows. `install.rs` writes them into the bound dict through `BoundMap`, owning the per-field rules for direct writes, so the Python host only implements `BoundMap` for its `PyDict`. `resolve/`, `model_info.rs` and `register.rs` hold types only. The functions over them land with their first caller
+
+`tests/policy.rs` is the layering and install policy as cases. Its `expected` module is the behavior users expect, its `open` module pins today's behavior where no policy is decided yet
 
 Catalog errors use one opaque `Error` with typed causes and JSON Pointer accessors (`path`, `key`, `field`). `Error::rejects` alone decides whether an error fails the document, rejects its row or neither, and `ErrorKind` is the stable name hosts report it by
 

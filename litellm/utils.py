@@ -3830,10 +3830,19 @@ def _registration_attempt(
     warning_display_name: str | None,
     final_attempt: bool,
 ) -> _RegistrationWrite | None:
+    from litellm.litellm_core_utils.get_model_cost_map import model_cost_install_generation
+
     source: Final = _builtin_cost_map()
+    generation: Final = model_cost_install_generation()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
+    if not final_attempt and model_cost_install_generation() != generation:
+        return None
     _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry, value)
-    return write if final_attempt or litellm.model_cost is source else None
+    return (
+        write
+        if final_attempt or (litellm.model_cost is source and model_cost_install_generation() == generation)
+        else None
+    )
 
 
 def _register_on_current_map(
@@ -9055,11 +9064,9 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 
 @lru_cache(maxsize=1)
 def get_bundled_model_cost_map() -> dict[str, Any]:
-    try:
-        model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
-    except Exception:
-        return {}
+    from litellm._catalog import CATALOG
+
+    return CATALOG.bundled().document()
 
 
 _get_bundled_model_cost_map = get_bundled_model_cost_map

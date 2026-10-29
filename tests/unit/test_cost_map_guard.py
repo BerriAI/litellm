@@ -109,9 +109,7 @@ def test_evaluation_and_decisions_rows_with_zero_or_missing_output_price_pass(mo
 
 
 def test_chat_rows_with_output_price_pass() -> None:
-    head: Final = _snapshot(
-        {**BASE_MAP, "openrouter/chat-with-output": _entry(output_cost_per_token=4.2e-08)}
-    )
+    head: Final = _snapshot({**BASE_MAP, "openrouter/chat-with-output": _entry(output_cost_per_token=4.2e-08)})
     assert _failures(head) == ()
 
 
@@ -186,10 +184,44 @@ def test_bot_may_only_touch_the_cost_map_files() -> None:
     )
 
 
-def test_bot_may_not_remove_models() -> None:
+_REMOVED_B: Final = "openrouter/b is removed before a past deprecation_date; set deprecation_date first"
+_PAST: Final = "2000-01-01"
+_FUTURE: Final = "2999-01-01"
+
+
+def _base_with(**rows: object) -> object:
+    return _snapshot({**BASE_MAP, **rows})
+
+
+def test_a_human_pr_may_not_remove_a_model_without_a_past_deprecation_date() -> None:
     head = _snapshot({key: value for key, value in BASE_MAP.items() if key != "openrouter/b"})
+    assert _failures(head, bot=False) == (_REMOVED_B,)
+    assert _failures(head) == (_REMOVED_B, "bot PRs may not remove models: openrouter/b")
+
+
+@pytest.mark.parametrize(
+    ("deprecation_date", "expected"),
+    [(_PAST, ()), (_FUTURE, (_REMOVED_B,))],
+    ids=["past", "future"],
+)
+def test_a_model_is_removable_once_its_base_deprecation_date_has_passed(
+    deprecation_date: str, expected: tuple[str, ...]
+) -> None:
+    base = _base_with(**{"openrouter/b": _entry(2e-06, deprecation_date=deprecation_date)})
+    head = _snapshot({key: value for key, value in BASE_MAP.items() if key != "openrouter/b"})
+    failures = guard.guard_failures(base, head, MAP_FILES, False, evaluation_output_price_sources={})
+    assert failures == expected
+
+
+def test_a_null_row_is_refused_since_released_wheels_crash_on_it() -> None:
+    head = _snapshot({**BASE_MAP, "openrouter/b": None})
+    assert any("openrouter/b" in failure for failure in _failures(head, bot=False))
+
+
+@pytest.mark.parametrize("field", ["supports_vision", "max_tokens", "input_cost_per_token"])
+def test_a_human_pr_may_remove_any_field(field: str) -> None:
+    head = _snapshot({**BASE_MAP, "openrouter/a": {k: v for k, v in BASE_MAP["openrouter/a"].items() if k != field}})
     assert _failures(head, bot=False) == ()
-    assert _failures(head) == ("bot PRs may not remove models: openrouter/b",)
 
 
 def test_bot_may_not_remove_fields() -> None:
@@ -244,7 +276,7 @@ def _run_guard(repo: Path, base: str, head: str, head_ref: str) -> subprocess.Co
     ("head_ref", "expected_code", "expected_line"),
     [
         (BOT_REF, 1, "- bot PRs may not remove models: openrouter/b"),
-        ("litellm_fix_pricing", 0, "cost map guard passed (human PR, file checks only)"),
+        ("litellm_fix_pricing", 1, f"- {_REMOVED_B}"),
     ],
 )
 def test_main_reads_both_revisions_from_git(

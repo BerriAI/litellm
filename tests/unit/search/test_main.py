@@ -8,6 +8,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._catalog import CATALOG
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.search.cost_calculator import search_provider_cost_per_query
@@ -29,7 +30,7 @@ SEARCH_MODE_PRICES: Final = {
 
 @pytest.fixture
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+    monkeypatch.setattr(litellm, "model_cost", CATALOG.bundled().served())
 
 
 @pytest.fixture

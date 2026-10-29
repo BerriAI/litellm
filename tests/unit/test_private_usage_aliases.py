@@ -1385,13 +1385,6 @@ ALIAS_CASES: Final = (
         False,
     ),
     (
-        "litellm.litellm_core_utils.get_model_cost_map",
-        "GetModelCostMap",
-        "_get_backup_model_count",
-        "get_backup_model_count",
-        False,
-    ),
-    (
         "litellm.litellm_core_utils.health_check_helpers",
         "HealthCheckHelpers",
         "_update_model_params_with_health_check_tracking_information",
