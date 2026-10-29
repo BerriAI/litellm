@@ -12,6 +12,7 @@ import pytest
 from openai.types.responses import ResponseInputImageParam
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -29,6 +30,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
+    AnthropicOutputConfig,
 )
 from litellm.types.llms.openai import ResponseAPIUsage
 
@@ -1021,10 +1023,6 @@ class TestTranslateThinkingToReasoning:
         assert result_low["effort"] == "low"
         assert "summary" not in result_low
 
-    def test_disabled_type_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"})
-        assert result is None
-
     def test_non_dict_returns_none(self):
         result = _ADAPTER.translate_thinking_to_reasoning("enabled")  # type: ignore
         assert result is None
@@ -1065,6 +1063,127 @@ class TestTranslateThinkingToReasoning:
         finally:
             litellm.reasoning_auto_summary = original
             os.environ.pop("LITELLM_REASONING_AUTO_SUMMARY", None)
+
+
+def _set_auto_summary(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", enabled)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+
+
+_FRESH_TURN: Final = ({"role": "user", "content": "What is the weather in Denver?"},)
+_TOOL_CALL_TURNS: Final = (
+    *_FRESH_TURN,
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {"city": "Denver"}}],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Sunny"},
+            {"type": "text", "text": "Keep it short."},
+        ],
+    },
+)
+_NEW_QUESTION_AFTER_TOOL_CALLS: Final = (
+    *_TOOL_CALL_TURNS,
+    {"role": "assistant", "content": "It is sunny."},
+    {"role": "user", "content": [{"type": "text", "text": "And tomorrow?"}]},
+)
+_LOW_BUDGET: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}
+
+
+@pytest.mark.parametrize(
+    "thinking, output_config, messages, reasoning",
+    [
+        pytest.param({"type": "disabled"}, {"effort": "high"}, _FRESH_TURN, {"effort": "none"}, id="disabled"),
+        pytest.param(
+            {"type": "between_tools"}, {"effort": "high"}, _FRESH_TURN, {"effort": "none"}, id="between-fresh"
+        ),
+        pytest.param(
+            {"type": "between_tools"},
+            {"effort": "high"},
+            _NEW_QUESTION_AFTER_TOOL_CALLS,
+            {"effort": "none"},
+            id="between-new-question-after-tool-calls",
+        ),
+        pytest.param(
+            {"type": "between_tools"},
+            {"effort": "high"},
+            _TOOL_CALL_TURNS,
+            {"effort": "high"},
+            id="between-tool-result",
+        ),
+        pytest.param({"type": "between_tools"}, None, _TOOL_CALL_TURNS, {"effort": "medium"}, id="between-default"),
+        pytest.param(None, {"effort": "low"}, _FRESH_TURN, {"effort": "low"}, id="output-effort-alone"),
+        pytest.param({"type": "future"}, {"effort": "low"}, _FRESH_TURN, {"effort": "low"}, id="unknown-type-effort"),
+        pytest.param({"type": "adaptive"}, {"effort": "xhigh"}, _FRESH_TURN, {"effort": "xhigh"}, id="adaptive-effort"),
+        pytest.param({"type": "adaptive"}, None, _FRESH_TURN, {"effort": "medium"}, id="adaptive-default"),
+        pytest.param(_LOW_BUDGET, {"effort": "high"}, _FRESH_TURN, {"effort": "low"}, id="enabled-budget-wins"),
+        pytest.param(None, None, _FRESH_TURN, None, id="nothing-set"),
+        pytest.param({"type": "future"}, None, _FRESH_TURN, None, id="unknown-type-alone"),
+    ],
+)
+def test_translate_request_turns_thinking_and_output_effort_into_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: dict[str, object] | None,
+    output_config: AnthropicOutputConfig | None,
+    messages: tuple[dict[str, object], ...],
+    reasoning: dict[str, object] | None,
+) -> None:
+    _set_auto_summary(monkeypatch, False)
+    request: Final = _make_request(messages=list(messages), thinking=thinking, output_config=output_config)
+
+    assert _ADAPTER.translate_request(request).get("reasoning") == reasoning
+
+
+@pytest.mark.parametrize(
+    "auto_summary, thinking, output_config, reasoning",
+    [
+        pytest.param(
+            False,
+            {"type": "adaptive", "display": "summarized"},
+            None,
+            {"effort": "medium", "summary": "auto"},
+            id="summarized",
+        ),
+        pytest.param(
+            False,
+            {"type": "adaptive", "display": "updates"},
+            None,
+            {"effort": "medium", "summary": "auto"},
+            id="updates",
+        ),
+        pytest.param(
+            False, {**_LOW_BUDGET, "display": "summarized"}, None, {"effort": "low", "summary": "auto"}, id="enabled"
+        ),
+        pytest.param(True, {"type": "adaptive", "display": "omitted"}, None, {"effort": "medium"}, id="omitted"),
+        pytest.param(
+            True,
+            {"type": "adaptive", "summary": "detailed", "display": "summarized"},
+            None,
+            {"effort": "medium", "summary": "detailed"},
+            id="summary-beats-display",
+        ),
+        pytest.param(True, {"type": "adaptive"}, None, {"effort": "medium", "summary": "concise"}, id="auto-summary"),
+        pytest.param(False, {"type": "adaptive"}, None, {"effort": "medium"}, id="no-summary-asked"),
+        pytest.param(True, None, {"effort": "low"}, {"effort": "low", "summary": "concise"}, id="output-effort-alone"),
+        pytest.param(True, {"type": "disabled", "display": "summarized"}, None, {"effort": "none"}, id="disabled"),
+        pytest.param(
+            True, {"type": "between_tools", "display": "summarized"}, None, {"effort": "none"}, id="between-fresh"
+        ),
+    ],
+)
+def test_translate_thinking_to_reasoning_asks_for_the_summary_the_client_shows(
+    monkeypatch: pytest.MonkeyPatch,
+    auto_summary: bool,
+    thinking: dict[str, object] | None,
+    output_config: dict[str, object] | None,
+    reasoning: dict[str, object],
+) -> None:
+    _set_auto_summary(monkeypatch, auto_summary)
+
+    assert _ADAPTER.translate_thinking_to_reasoning(thinking, output_config, auto_summary_level="concise") == reasoning
 
 
 # ---------------------------------------------------------------------------
@@ -1177,11 +1296,6 @@ class TestTranslateRequestBroaderCoverage:
         # reasoning_auto_summary is False by default, so no summary key
         assert kwargs["reasoning"] == {"effort": "high"}
         assert "summary" not in kwargs["reasoning"]
-
-    def test_disabled_thinking_not_included_in_kwargs(self):
-        req = _make_request(thinking={"type": "disabled"})
-        kwargs = _ADAPTER.translate_request(req)
-        assert "reasoning" not in kwargs
 
     def test_thinking_asks_for_the_encrypted_reasoning(self):
         """The documented way to get reasoning that survives store=false is to ask for it."""

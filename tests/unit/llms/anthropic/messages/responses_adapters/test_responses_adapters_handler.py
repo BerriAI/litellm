@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,6 +21,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import (
     _build_responses_kwargs,
 )
 from litellm.router import Router
+from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 
 MESSAGES = [{"role": "user", "content": "hello"}]
@@ -129,6 +130,39 @@ def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_acc
         extra_kwargs={"custom_llm_provider": provider},
     )
     assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
+
+
+@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-sol", "gpt-4.1", "gpt-bridge-unmapped"])
+def test_build_responses_kwargs_turns_reasoning_off_unless_the_map_knows_the_model_never_reasons(model: str) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        thinking={"type": "disabled"},
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    map_row: Final = litellm.model_cost.get(model)
+    never_reasons: Final = map_row is not None and not map_row.get("supports_reasoning")
+    assert responses_kwargs.get("reasoning") == (None if never_reasons else {"effort": "none"})
+
+
+@pytest.mark.parametrize("effort", ["max", "xhigh"])
+def test_build_responses_kwargs_forwards_an_output_effort_the_model_accepts(effort: Literal["max", "xhigh"]) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        output_config={"effort": effort},
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    forwarded: Final = cast(Mapping[str, object], responses_kwargs["reasoning"])["effort"]
+    accepted: Final = resolve_supported_reasoning_efforts(
+        litellm.get_model_info(model="gpt-5.6-luna", custom_llm_provider="openai"), deployment_is_mapped=True
+    )
+    assert accepted is not None and forwarded in accepted
+    assert (forwarded == effort) == (effort in accepted)
 
 
 def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():

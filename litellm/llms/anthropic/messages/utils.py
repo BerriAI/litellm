@@ -25,7 +25,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
         "minimal": ("minimal", "low"),
     }
 )
-_THINKING_OFF: Final = "none"
+REASONING_EFFORT_OFF: Final = "none"
 
 _JsonValue: Final = TypeVar("_JsonValue")
 
@@ -189,6 +189,28 @@ def is_reasoning_auto_summary_enabled() -> bool:
     return litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
 
 
+def requested_reasoning_summary(thinking: Mapping[str, object]) -> str | None:
+    if thinking.get("type") == "disabled":
+        return None
+    summary: Final = thinking.get("summary")
+    if isinstance(summary, str):
+        return summary
+    display: Final = thinking.get("display")
+    return "auto" if display is not None and display != "omitted" else None
+
+
+def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
+    """``()`` is a model the map knows takes no effort level, ``None`` a model the map does not know."""
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+    from litellm.utils import get_model_info
+
+    try:
+        model_info: Final[ModelInfo] = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+    return resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
+
+
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
@@ -214,23 +236,14 @@ def normalize_reasoning_effort_value(
     if chain is None:
         return effort
 
-    from litellm.router_utils.reasoning_effort_capability import (
-        deployment_rounds_reasoning_effort,
-        resolve_supported_reasoning_efforts,
-    )
+    from litellm.router_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 
     if deployment_rounds_reasoning_effort(deployment_model_info):
         return effort
-    from litellm.utils import get_model_info
 
-    try:
-        model_info: Final[ModelInfo] = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        return chain[-1]
-
-    supported: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
+    supported: Final = model_reasoning_efforts(model, custom_llm_provider)
     if not supported:
         return chain[-1]
 
-    accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
+    accepted_tiers: Final = tuple(level for level in supported if level != REASONING_EFFORT_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])

@@ -14,7 +14,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
@@ -34,7 +34,13 @@ from litellm.utils import ProviderConfigManager
 from ..adapters.handler import request_safeguards_evaluator
 from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
-from ..utils import litellm_logging_obj_from_kwargs, local_model_name
+from ..utils import (
+    REASONING_EFFORT_OFF,
+    litellm_logging_obj_from_kwargs,
+    local_model_name,
+    model_reasoning_efforts,
+    normalize_reasoning_effort_value,
+)
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -119,6 +125,30 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def _reasoning_for_target(
+    reasoning: object,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    deployment_model_info: object,
+) -> object:
+    """A model the map knows does not reason already honors reasoning turned off, and its Responses API would
+    reject ``reasoning`` outright."""
+    reasoning_params: Final = as_str_mapping(reasoning)
+    effort: Final = reasoning_params.get("effort") if reasoning_params is not None else None
+    if reasoning_params is None or not isinstance(effort, str):
+        return reasoning
+    if effort == REASONING_EFFORT_OFF and model_reasoning_efforts(model, custom_llm_provider) == ():
+        return None
+    normalized: Final = normalize_reasoning_effort_value(
+        effort,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        deployment_model_info=deployment_model_info,
+    )
+    return reasoning if normalized == effort else {**reasoning_params, "effort": normalized}
+
+
 def _build_responses_kwargs(
     *,
     max_tokens: int,
@@ -195,25 +225,15 @@ def _build_responses_kwargs(
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
     )
 
-    # Normalize reasoning effort based on model capabilities
-    # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
-    reasoning: Final = responses_kwargs.get("reasoning")
-    if isinstance(reasoning, dict):
-        effort: Final[object] = reasoning.get("effort")
-        if isinstance(effort, str):
-            from litellm.llms.anthropic.messages.utils import (
-                normalize_reasoning_effort_value,
-            )
-
-            provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
-            normalized: Final = normalize_reasoning_effort_value(
-                effort,
-                model=model,
-                custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
-                deployment_model_info=forwarded_kwargs.get("model_info"),
-            )
-            if normalized != effort:
-                responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
+    provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
+    target_reasoning: Final = _reasoning_for_target(
+        responses_kwargs.pop("reasoning", None),
+        model=model,
+        custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
+        deployment_model_info=forwarded_kwargs.get("model_info"),
+    )
+    if target_reasoning is not None:
+        responses_kwargs["reasoning"] = target_reasoning
 
     if stream:
         responses_kwargs["stream"] = True
