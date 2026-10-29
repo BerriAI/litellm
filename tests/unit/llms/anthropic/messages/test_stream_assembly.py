@@ -144,6 +144,30 @@ def test_anthropic_message_delta_fields_reads_the_fields_the_openai_shape_drops(
     assert dict(anthropic_message_delta_fields(GOOGLE_STREAM)) == {}
 
 
+def test_anthropic_message_delta_fields_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
+    safeguard_results: Final = [
+        {
+            "type": "dangerous_tool_use",
+            "status": {
+                "type": "available",
+                "tool_uses": {
+                    "toolu_01": {"type": "evaluated", "outcome": "flagged", "explanation": "deletes\u2028the\u2029root"}
+                },
+            },
+        }
+    ]
+    message_delta: Final = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "safeguard_results": safeguard_results},
+        "usage": {"output_tokens": 2},
+    }
+    raw_message_delta_frame: Final = f"event: message_delta\ndata: {json.dumps(message_delta, ensure_ascii=False)}\n\n"
+
+    fields: Final = anthropic_message_delta_fields((*ANTHROPIC_STREAM[:5], raw_message_delta_frame.encode()))
+
+    assert dict(fields) == {"safeguard_results": safeguard_results}
+
+
 @pytest.mark.parametrize(
     "chunks",
     [GOOGLE_STREAM, INVALID_UTF8, (ANTHROPIC_ERROR,), ()],
