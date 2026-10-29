@@ -42,6 +42,9 @@ class _ManualClock:
     def __call__(self) -> float:
         return self.now
 
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
 
 def _far_deadline() -> float:
     """A run deadline far enough out that only the other bounds can stop a batch loop."""
@@ -986,7 +989,7 @@ async def test_cleanup_groups_share_budget_so_health_checks_still_get_a_delete()
     clock: Final = _ManualClock()
 
     async def _delete_batch(_query: str, *_args: object) -> int:
-        clock.now += 0.1
+        clock.advance(0.1)
         return 1000
 
     mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
@@ -1616,7 +1619,7 @@ async def test_spend_logs_backlog_cannot_starve_tool_index_cleanup():
     clock: Final = _ManualClock()
 
     async def _delete_batch(_query: str, *_args: object) -> int:
-        clock.now += 0.1
+        clock.advance(0.1)
         return 1000
 
     mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
