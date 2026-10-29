@@ -148,7 +148,7 @@ from litellm.llms.openai_like.model_info import (
     get_openai_compatible_model_info,
 )
 from litellm.responses.bridge_check import keep_registered_mode
-from litellm.responses.retrieve_stream_query import requests_streamed_retrieval
+from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.complexity_router.context_compaction import (
@@ -6372,7 +6372,7 @@ class Router:
             generic_function_name: Final[str] = getattr(original_generic_function, "__name__", "")
 
             response_kwargs: Final = {
-                **data,
+                **without_retrieve_stream_defaults(data, kwargs),
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,

@@ -412,6 +412,7 @@ async def test_a_resume_that_times_out_raises_a_timeout(sync_mode: bool) -> None
         {"stream": True, "starting_after": -1},
         {"extra_query": {"stream": "true", "starting_after": "abc"}},
         {"extra_query": {"stream": "1"}},
+        {"extra_query": {"stream": "true", "starting_after": "9" * 5000}},
     ),
 )
 @pytest.mark.parametrize("sync_mode", (True, False))
@@ -435,6 +436,7 @@ async def test_a_malformed_resume_query_is_rejected_before_any_upstream_call(
         ({"extra_query": {"stream": "1"}}, {}),
         ({"stream": True, "starting_after": -1}, {"stream": "true"}),
         ({"extra_query": {"stream": "true", "starting_after": "abc"}}, {"stream": "true"}),
+        ({"extra_query": {"stream": "true", "starting_after": "9" * 5000}}, {"stream": "true"}),
     ),
 )
 @pytest.mark.parametrize("sync_mode", (True, False))
@@ -537,6 +539,58 @@ async def test_a_routed_resume_requested_in_extra_query_gets_the_deployment_stre
     assert event_types == ("response.output_text.delta", "response.completed")
     assert call.request.extensions["timeout"]["read"] == 60
 
+
+@pytest.mark.asyncio
+async def test_a_routed_plain_retrieve_on_a_deployment_that_forces_stream_answers_the_response_object() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "background-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1",
+                    "stream": True,
+                },
+            }
+        ]
+    )
+    with respx.mock() as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            return_value=httpx.Response(200, json=_stored_response("completed"))
+        )
+        retrieved: Final = await router.aget_responses(model="background-model", response_id=_STORED_RESPONSE_ID)
+        (call,) = route.calls
+
+    assert isinstance(retrieved, ResponsesAPIResponse)
+    assert dict(call.request.url.params) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_routed_create_on_a_deployment_that_forces_stream_still_streams() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "background-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "sk-test",
+                    "api_base": "https://api.openai.com/v1",
+                    "stream": True,
+                },
+            }
+        ]
+    )
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+        )
+        stream: Final = await router.aresponses(model="background-model", input="hi", background=True)
+        event_types: Final = await _event_types(stream)
+        (call,) = route.calls
+
+    assert event_types == ("response.output_text.delta", "response.completed")
+    assert json.loads(call.request.content)["stream"] is True
 
 class _SuccessLog(CustomLogger):
     def __init__(self) -> None:

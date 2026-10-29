@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 RETRIEVE_STREAM_QUERY_KEYS: Final = frozenset({"stream", "starting_after"})
 RETRIEVE_INCLUDE_QUERY_KEYS: Final = frozenset({"include", "include[]", "include_obfuscation"})
 _QUERY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_MAX_STARTING_AFTER_DIGITS: Final = len(str(2**63 - 1))
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +44,7 @@ def _parsed_starting_after(value: object) -> int | None | InvalidRetrieveStreamQ
             return None
         case int() if not isinstance(value, bool) and value >= 0:
             return value
-        case str() if value.isascii() and value.isdigit():
+        case str() if value.isascii() and value.isdigit() and len(value) <= _MAX_STARTING_AFTER_DIGITS:
             return int(value)
         case _:
             return InvalidRetrieveStreamQuery(
@@ -72,3 +73,11 @@ def requests_streamed_retrieval(request: Mapping[str, object]) -> bool:
         and isinstance(extra_query, Mapping)
         and _parsed_stream(_QUERY_ADAPTER.validate_python(extra_query).get("stream")) is True
     )
+
+
+def without_retrieve_stream_defaults(
+    deployment_params: Mapping[str, object], request: Mapping[str, object]
+) -> Mapping[str, object]:
+    if "response_id" not in request:
+        return deployment_params
+    return {key: value for key, value in deployment_params.items() if key not in RETRIEVE_STREAM_QUERY_KEYS}
