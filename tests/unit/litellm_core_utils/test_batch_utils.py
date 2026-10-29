@@ -7,7 +7,7 @@ from typing import Dict, Final, List
 import pytest
 
 import litellm
-from litellm.router_utils.batch_utils import (
+from litellm.litellm_core_utils.batch_utils import (
     InMemoryFile,
     get_router_metadata_variable_name,
     parse_jsonl_with_embedded_newlines,
@@ -116,7 +116,7 @@ def test_router_metadata_variable_name():
 
 def test_non_json_input():
     """Test that replace_model_in_jsonl returns original content for non-JSON input"""
-    from litellm.router_utils.batch_utils import replace_model_in_jsonl
+    from litellm.litellm_core_utils.batch_utils import replace_model_in_jsonl
 
     # Test with non-JSON string
     non_json_str = "This is not a JSON string"
@@ -138,7 +138,7 @@ def test_non_json_input():
 
 def test_should_replace_model_in_jsonl():
     """Test that should_replace_model_in_jsonl returns the correct value"""
-    from litellm.router_utils.batch_utils import should_replace_model_in_jsonl
+    from litellm.litellm_core_utils.batch_utils import should_replace_model_in_jsonl
 
     assert should_replace_model_in_jsonl(purpose="batch") is True
     assert should_replace_model_in_jsonl(purpose="batch", passthrough=True) is False
@@ -340,7 +340,7 @@ def test_replace_model_in_jsonl_with_embedded_newlines():
 
 
 def test_is_batch_retrieve_call_type_matches_only_batch_retrieves():
-    from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+    from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
     from litellm.types.utils import CallTypes
 
     assert is_batch_retrieve_call_type(CallTypes.aretrieve_batch.value) is True
@@ -389,7 +389,8 @@ def setup_and_teardown():
 )
 def test_batch_charge_identity_requires_a_cost_bearing_retrieval(call_type: str, cost: float, eligible: bool) -> None:
     from openai.types import Batch
-    from litellm.router_utils.batch_utils import batch_id_to_charge_once
+
+    from litellm.litellm_core_utils.batch_utils import batch_id_to_charge_once
 
     batch: Final = Batch(
         id="batch-budget", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
@@ -401,7 +402,7 @@ def test_batch_charge_identity_requires_a_cost_bearing_retrieval(call_type: str,
 
 def test_batch_charge_markers_keep_counters_and_batches_independent() -> None:
     from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.router_utils.batch_utils import batch_charged_once_marker_key
+    from litellm.litellm_core_utils.batch_utils import batch_charged_once_marker_key
 
     cache: Final = InMemoryCache()
     cache.set_cache(batch_charged_once_marker_key("provider-spend", "first-batch"), 1)

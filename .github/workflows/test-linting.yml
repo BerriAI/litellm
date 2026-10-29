@@ -561,6 +561,9 @@ jobs:
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
 
+      - name: router_surface_check
+        run: uv run --no-sync python ./tests/code_coverage_tests/router_surface_check.py
+
       - name: test_chat_completion_imports
         run: uv run --no-sync python ./tests/code_coverage_tests/test_chat_completion_imports.py
 
