@@ -36,7 +36,7 @@ _LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
 _LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
 
 
-def _exception_chain(e: BaseException) -> Iterator[BaseException]:
+def exception_chain(e: BaseException) -> Iterator[BaseException]:
     current = e  # rebind-ok: advances one link per iteration of the bounded walk
     for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
         yield current
@@ -49,7 +49,7 @@ def _exception_chain(e: BaseException) -> Iterator[BaseException]:
 def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, ...]:
     return tuple(
         link
-        for link in _exception_chain(e)
+        for link in exception_chain(e)
         if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
     )
 
