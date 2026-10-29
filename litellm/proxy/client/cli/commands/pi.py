@@ -193,7 +193,13 @@ def _reasoning_fields(limit: ModelLimits | None) -> Mapping[str, JsonValue]:
     efforts: Final = limit.supported_reasoning_efforts if limit else None
     if not efforts:
         return MappingProxyType({})
-    return MappingProxyType({"reasoning": True, "thinkingLevelMap": _thinking_level_map(efforts)})
+    return MappingProxyType(
+        {
+            "reasoning": True,
+            "thinkingLevelMap": _thinking_level_map(efforts),
+            "compat": {"supportsDeveloperRole": False},
+        }
+    )
 
 
 def _model_entry(

@@ -257,7 +257,7 @@ class TestProviderBlock:
             ),
         ],
     )
-    def test_reasoning_efforts_become_pi_thinking_levels(self, efforts, thinking_level_map):
+    def test_reasoning_efforts_become_pi_thinking_levels_and_keep_the_system_role(self, efforts, thinking_level_map):
         block = provider_block(
             "http://localhost:4000",
             ("m-1",),
@@ -270,6 +270,7 @@ class TestProviderBlock:
                 "maxTokens": 8192,
                 "reasoning": True,
                 "thinkingLevelMap": thinking_level_map,
+                "compat": {"supportsDeveloperRole": False},
             }
         ]
 
