@@ -10582,23 +10582,22 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
 
 
 @respx.mock
-def test_a_timed_out_provider_model_listing_is_retried_only_after_its_timeout_ttl(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import time
-
+def test_a_timed_out_provider_model_listing_is_retried_only_after_its_timeout_ttl() -> None:
     from litellm.constants import PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
+    from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
     from litellm.types.router import LiteLLM_Params
+    from litellm.utils import AvailableModelsCache, _get_valid_models_from_provider_api
 
     models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
         side_effect=httpx.ReadTimeout("vLLM did not answer")
     )
     litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
-    failed_at: Final = time.time()
+    clock: Final = Mock(return_value=1000.0)
+    model_cache: Final = AvailableModelsCache(clock=clock)
 
     def list_models() -> list[str]:
-        return get_valid_models(
-            check_provider_endpoint=True, custom_llm_provider="hosted_vllm", litellm_params=litellm_params
+        return _get_valid_models_from_provider_api(
+            HostedVLLMModelInfo(), "hosted_vllm", litellm_params, model_cache=model_cache
         )
 
     assert list_models() == []
@@ -10606,11 +10605,13 @@ def test_a_timed_out_provider_model_listing_is_retried_only_after_its_timeout_tt
     assert models_route.call_count == 1
 
     models_route.mock(side_effect=None, return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
-    monkeypatch.setattr(time, "time", lambda: failed_at + PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS + 1)
+    clock.return_value = 1000.0 + PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS - 1
+    assert list_models() == []
+    assert models_route.call_count == 1
 
+    clock.return_value = 1000.0 + PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS + 1
     assert list_models() == ["qwen2.5"]
     assert models_route.call_count == 2
-
 
 
 @pytest.mark.parametrize(
@@ -10637,6 +10638,7 @@ def test_a_provider_model_listing_that_fails_fast_is_tried_again_on_the_next_cal
     assert list_models() == []
     assert list_models() == ["qwen2.5"]
     assert models_route.call_count == 2
+
 
 def test_delta_tool_calls_sequential_indices():
     """

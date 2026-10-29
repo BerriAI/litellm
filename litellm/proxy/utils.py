@@ -9517,7 +9517,8 @@ async def _agent_access_group_visible_models(
     if not granted:
         return frozenset()
     return frozenset(
-        get_complete_model_list(
+        await asyncio.to_thread(
+            get_complete_model_list,
             key_models=granted,
             team_models=(),
             proxy_model_list=proxy_model_list,
@@ -9652,7 +9653,8 @@ async def get_available_models_for_user(
     )
 
     # Get complete model list
-    complete_models: Final = get_complete_model_list(
+    complete_models: Final = await asyncio.to_thread(
+        get_complete_model_list,
         key_models=granted_key_models,
         team_models=granted_team_models,
         proxy_model_list=proxy_model_list,

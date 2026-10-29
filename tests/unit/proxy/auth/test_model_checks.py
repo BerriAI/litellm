@@ -540,6 +540,54 @@ def test_hosted_vllm_wildcard_listing_does_not_wait_the_completion_timeout_on_a_
     assert read_timeout <= NON_LLM_CONNECTION_TIMEOUT
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_hung_wildcard_listing_leaves_the_event_loop_free_for_other_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    import litellm
+    from litellm import Router
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    listing_started: Final = threading.Event()
+    other_request_served: Final = threading.Event()
+
+    def listing_that_answers_once_another_request_is_served(request: httpx.Request) -> httpx.Response:
+        listing_started.set()
+        if other_request_served.wait(timeout=3):
+            return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        return httpx.Response(503)
+
+    respx.get("http://vllm-stalled.test:8000/v1/models").mock(
+        side_effect=listing_that_answers_once_another_request_is_served
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "hosted_vllm/*",
+                "litellm_params": {"model": "hosted_vllm/*", "api_base": "http://vllm-stalled.test:8000/v1"},
+            }
+        ]
+    )
+
+    listing: Final = asyncio.create_task(
+        get_available_models_for_user(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=[]),
+            llm_router=router,
+            general_settings={},
+            user_model=None,
+        )
+    )
+    assert await asyncio.to_thread(listing_started.wait, 3)
+    other_request_served.set()
+
+    assert "hosted_vllm/qwen2.5" in await listing
+
+
 @respx.mock
 def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm

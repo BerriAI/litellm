@@ -8333,8 +8333,8 @@ _HUGGINGFACE_TOKENIZER_LOAD_FAILURES: Final[_HuggingFaceTokenizerLoadFailureCach
 
 
 class AvailableModelsCache(InMemoryCache):
-    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000):
-        super().__init__(ttl_seconds, max_size)
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000, clock: Callable[[], float] | None = None):
+        super().__init__(ttl_seconds, max_size, clock=clock)
         self._env_hash: str | None = None
 
     def _get_env_hash(self) -> str:
@@ -8443,9 +8443,10 @@ def _get_valid_models_from_provider_api(
     provider_config: BaseLLMModelInfo,
     custom_llm_provider: str,
     litellm_params: LiteLLM_Params | None = None,
+    model_cache: AvailableModelsCache = _model_cache,
 ) -> list[str]:
     try:
-        cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
+        cached_result: Final = model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
 
         if cached_result is not None:
             return cached_result
@@ -8453,12 +8454,12 @@ def _get_valid_models_from_provider_api(
             litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
         )
 
-        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+        model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
     except httpx.TimeoutException as e:
         verbose_logger.warning("Timed out getting valid models: %s", e)
         with suppress(ValueError):
-            _model_cache.set_cached_model_info(
+            model_cache.set_cached_model_info(
                 custom_llm_provider, litellm_params, [], ttl=PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
             )
         return []
