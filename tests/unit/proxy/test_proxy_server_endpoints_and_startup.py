@@ -14259,6 +14259,12 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
     [
         pytest.param(HTTPException(status_code=400, detail="bad input"), "invalid_request_error", "400", id="http_400"),
         pytest.param(HTTPException(status_code=429, detail="slow down"), "rate_limit_error", "429", id="http_429"),
+        pytest.param(
+            HTTPException(status_code=403, detail="Blocked by the content policy"),
+            "permission_error",
+            "403",
+            id="hook_policy_block",
+        ),
         pytest.param(Exception("provider down"), "internal_server_error", "500", id="bare_exception"),
         pytest.param(
             ValueError("Not allowed to access model due to tags configuration. Passed model=m and tags=['x']"),

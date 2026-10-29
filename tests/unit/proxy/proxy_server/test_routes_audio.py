@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -284,19 +285,31 @@ def test_audio_speech_tag_routing_denial_is_typed_as_a_proxy_auth_error(
     assert (error["type"], error["param"]) == ("auth_error", None)
 
 
-def test_audio_transcription_tag_routing_denial_is_typed_as_a_proxy_auth_error(
-    client, auth_as, patched_transcription, monkeypatch
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_type"),
+    [
+        pytest.param(ValueError(_TAG_ROUTING_DENIAL), 401, "auth_error", id="tag_routing_denial"),
+        pytest.param(
+            HTTPException(status_code=403, detail="Blocked by the content policy"),
+            403,
+            "permission_error",
+            id="hook_policy_block",
+        ),
+    ],
+)
+def test_audio_transcription_failure_is_typed_by_who_rejected_it(
+    client, auth_as, patched_transcription, monkeypatch, failure, expected_status, expected_type
 ):
     async def _deny(*args, **kwargs):
-        raise ValueError(_TAG_ROUTING_DENIAL)
+        raise failure
 
     monkeypatch.setattr(proxy_server, "route_request", _deny)
     files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
     with auth_as():
         response = client.post("/v1/audio/transcriptions", files=files, data={"model": "whisper-1"})
-    assert response.status_code == 401
+    assert response.status_code == expected_status
     error = response.json()["error"]
-    assert (error["type"], error["param"]) == ("auth_error", None)
+    assert (error["type"], error["param"]) == (expected_type, None)
 
 
 @pytest.mark.parametrize(

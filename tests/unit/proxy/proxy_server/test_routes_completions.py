@@ -12,6 +12,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy import common_request_processing, proxy_server
 from litellm.types.router import RouterErrors
@@ -131,6 +132,13 @@ def test_completion_pipeline_error(client, auth_as, completion_pipeline_raises, 
     ("failure", "expected_status", "expected_type"),
     [
         pytest.param(ValueError("boom"), 500, "internal_server_error", id="unexpected_failure"),
+        pytest.param(
+            HTTPException(status_code=403, detail="Blocked by the content policy"),
+            403,
+            "permission_error",
+            id="hook_policy_block",
+        ),
+        pytest.param(HTTPException(status_code=401, detail="key expired"), 401, "authentication_error", id="hook_401"),
         pytest.param(
             ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=gpt-4o and tags=['x']"),
             401,
