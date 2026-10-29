@@ -1,6 +1,6 @@
 from typing import Final
 
-from litellm.litellm_core_utils.stream_usage_chunks import is_usage_only_chunk
+from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
 
 
@@ -60,8 +60,8 @@ class TextCompletionStreamWrapper:
         except Exception as e:
             raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e}")
 
-    def _is_injected_usage_chunk(self, chunk: ModelResponseStream) -> bool:
-        return self.usage_injected_by_proxy and is_usage_only_chunk(chunk)
+    def _is_injected_usage_artifact(self, chunk: ModelResponseStream) -> bool:
+        return self.usage_injected_by_proxy and is_injected_stream_usage_artifact(chunk)
 
     def __next__(self):
         # model_response = ModelResponse(stream=True, model=self.model)
@@ -70,7 +70,7 @@ class TextCompletionStreamWrapper:
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                if isinstance(chunk, ModelResponseStream) and self._is_injected_usage_chunk(chunk):
+                if isinstance(chunk, ModelResponseStream) and self._is_injected_usage_artifact(chunk):
                     continue
                 return self.convert_to_text_completion_object(chunk=chunk)
             raise StopIteration
@@ -92,7 +92,7 @@ class TextCompletionStreamWrapper:
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                if isinstance(chunk, ModelResponseStream) and self._is_injected_usage_chunk(chunk):
+                if isinstance(chunk, ModelResponseStream) and self._is_injected_usage_artifact(chunk):
                     continue
                 return self.convert_to_text_completion_object(chunk=chunk)
             raise StopIteration

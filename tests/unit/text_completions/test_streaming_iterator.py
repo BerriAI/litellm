@@ -203,3 +203,29 @@ def test_text_completion_stream_keeps_a_finish_frame_but_hides_the_usage_the_pro
     frames: Final = list(wrapper)
 
     assert [(frame.choices[0].finish_reason, frame.usage) for frame in frames] == [("stop", None)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", (False, True))
+async def test_text_completion_stream_hides_the_empty_prompt_filter_frame_when_the_proxy_asked_for_usage(
+    async_stream: bool,
+) -> None:
+    prompt_filter_frame: Final = ModelResponseStream(id="", choices=[])
+    upstream: Final = (prompt_filter_frame, *_stream_with_trailing_usage_chunk())
+
+    async def chunks() -> AsyncIterator[ModelResponseStream]:
+        for chunk in upstream:
+            yield chunk
+
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=chunks() if async_stream else iter(upstream),
+        model="gpt-5.4-mini",
+        stream_options={"include_usage": True},
+        usage_injected_by_proxy=True,
+    )
+    frames: Final = [frame async for frame in wrapper] if async_stream else list(wrapper)
+
+    assert [(frame.choices[0].text, frame.choices[0].finish_reason) for frame in frames] == [
+        ("Hi", None),
+        (None, "length"),
+    ]

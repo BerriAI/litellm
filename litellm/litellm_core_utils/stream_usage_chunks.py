@@ -19,7 +19,9 @@ def _all_values_none(values: Iterable[object]) -> bool:
     return all(value is None for value in values)
 
 
-def is_usage_only_chunk(chunk: ModelResponseStream) -> bool:
-    if getattr(chunk, "usage", None) is None:
+def is_injected_stream_usage_artifact(chunk: object) -> bool:
+    if not isinstance(chunk, ModelResponseStream):
+        return False
+    if chunk.provider_specific_fields is not None:
         return False
     return all(is_empty_streaming_choice(choice) for choice in chunk.choices or [])

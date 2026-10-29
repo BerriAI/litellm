@@ -376,7 +376,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
-from litellm.litellm_core_utils.stream_usage_chunks import is_empty_streaming_choice
+from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_tool_result_texts,
@@ -10148,14 +10148,6 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
 
 
-def _is_injected_stream_usage_artifact(chunk: object) -> bool:
-    if not isinstance(chunk, ModelResponseStream):
-        return False
-    if chunk.provider_specific_fields is not None:
-        return False
-    return all(is_empty_streaming_choice(choice) for choice in chunk.choices or [])
-
-
 async def _apply_streaming_chunk_hooks(
     *,
     chunk: Any,
@@ -10535,7 +10527,7 @@ async def async_data_generator(
                 fallback_model_from_metadata=fallback_model_from_metadata,
             )
 
-            if strip_stream_usage and _is_injected_stream_usage_artifact(chunk):
+            if strip_stream_usage and is_injected_stream_usage_artifact(chunk):
                 if pending_fallback_event:
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
