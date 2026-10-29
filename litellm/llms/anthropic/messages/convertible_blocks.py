@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import partial, reduce
-from itertools import accumulate, chain, groupby, islice
+from itertools import accumulate, chain, groupby, islice, takewhile
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -256,11 +256,20 @@ def _content_blocks(content: object) -> tuple[object, ...]:
             return _list_items(content)
 
 
+def _with_trailing_whitespace(original_text: str, text: str) -> str:
+    return text + original_text[len(original_text.rstrip()) :] if text == text.rstrip() else text
+
+
+def _without_citations(block: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in block.items() if key != "citations"})
+
+
 def _rewritten_part(original: object, rewritten: object) -> object:
     match (as_str_mapping(original), as_str_mapping(rewritten)):
         case ({"type": "text"} as text_block, {"type": "text", "text": str(text)}):
-            unchanged: Final = text == tool_result_text_part(_scannable_part(original))
-            return original if unchanged else {**text_block, "text": text}
+            original_text: Final = tool_result_text_part(_scannable_part(original)) or ""
+            restored: Final = _with_trailing_whitespace(original_text, text)
+            return original if restored == original_text else {**_without_citations(text_block), "text": restored}
         case ({"type": str(block_type), "source": source}, {"source": rewritten_source}) if (
             block_type in _SOURCED_BLOCK_TYPES and source == rewritten_source
         ):
@@ -290,12 +299,20 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
 
 
+def _source_key(source: object) -> str:
+    match as_str_mapping(source):
+        case {"data": str(data)} as fields:
+            return f"{_canonical_json({**fields, 'data': None})}\n{data}"
+        case _:
+            return _canonical_json(source)
+
+
 def _unit_key(block: object) -> _UnitKey:
     match as_str_mapping(block):
         case {"type": "text"}:
             return ("text", tool_result_text_part(_scannable_part(block)) or "")
         case {"type": "image" | "document", "source": source}:
-            return ("source", _canonical_json(source))
+            return ("source", _source_key(source))
         case {"type": "tool_use", "id": str(tool_use_id)}:
             return ("tool_use", sanitize_anthropic_tool_use_id(tool_use_id))
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)}:
@@ -426,11 +443,13 @@ def _opcode_pairs(
 
 
 def _unit_pairs(units: tuple[_Unit, ...], rewritten_units: tuple[_Unit, ...]) -> tuple[tuple[int, int], ...]:
+    keys: Final = tuple(unit.key for unit in units)
+    rewritten_keys: Final = tuple(unit.key for unit in rewritten_units)
+    if keys == rewritten_keys:
+        return tuple(enumerate(range(len(units))))
     if len(units) * len(rewritten_units) <= _MAX_ALIGNED_CELLS:
         return _best_pairs(units, rewritten_units)
-    opcodes: Final = SequenceMatcher(
-        None, tuple(unit.key for unit in units), tuple(unit.key for unit in rewritten_units), autojunk=False
-    ).get_opcodes()
+    opcodes: Final = SequenceMatcher(None, keys, rewritten_keys, autojunk=False).get_opcodes()
     return tuple(chain.from_iterable(_opcode_pairs(units, rewritten_units, opcode) for opcode in opcodes))
 
 
@@ -514,7 +533,7 @@ def _mapped_offset(offset: int, spans: tuple[_Span, ...], ends: tuple[int, ...])
 
 def _split_text(texts: tuple[str, ...], rewritten: str) -> tuple[str, ...]:
     joined: Final = "".join(texts)
-    if joined == rewritten:
+    if rewritten in (joined, joined.rstrip()):
         return texts
     spans: Final = _diff_spans(joined, rewritten)
     span_ends: Final = tuple(span.end for span in spans)
@@ -760,8 +779,34 @@ def _restored_turns(rewritten: Sequence[object], original: object, scan_part: _S
     return [*restored, *chain.from_iterable(map(_segment_messages, remaining))]
 
 
+def _is_blank_text(block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": "text", "text": str(text)}:
+            return not text.strip()
+        case _:
+            return False
+
+
+def _without_trailing_whitespace(blocks: tuple[object, ...]) -> tuple[object, ...]:
+    kept: Final = blocks[: len(blocks) - len(tuple(takewhile(_is_blank_text, reversed(blocks))))]
+    match as_str_mapping(kept[-1]) if kept else None:
+        case {"type": "text", "text": str(text)} as last if text != text.rstrip():
+            return (*kept[:-1], {**last, "text": text.rstrip()})
+        case _:
+            return kept
+
+
+def _prefill_without_trailing_whitespace(message: object) -> object:
+    match as_str_mapping(message):
+        case {"role": "assistant", "content": list()} as assistant:
+            return {**assistant, "content": list(_without_trailing_whitespace(_list_items(assistant["content"])))}
+        case _:
+            return message
+
+
 def restore_client_blocks(rewritten: Sequence[object], original: object, scan_part: _ScanPart) -> Sequence[object]:
-    return _restored_turns(_restored_tool_results(rewritten, original, scan_part), original, scan_part)
+    restored: Final = _restored_turns(_restored_tool_results(rewritten, original, scan_part), original, scan_part)
+    return [*restored[:-1], _prefill_without_trailing_whitespace(restored[-1])] if restored else restored
 
 
 def _without_non_string_text(block: object) -> object:

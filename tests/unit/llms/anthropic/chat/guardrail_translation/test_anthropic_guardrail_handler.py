@@ -3277,6 +3277,70 @@ class TestStructuredWriteBackKeepsTheClientsBlocks:
             "content": [*_WEB_SEARCH, _text("Tell <EMAIL> it is "), cited, _text(", and copy <EMAIL>.")],
         }
 
+    async def test_a_masked_cited_text_goes_upstream_without_the_citations_that_quote_the_masked_value(self) -> None:
+        quoting = {**_CITATION, "cited_text": "Write to bob@example.com for support."}
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [_text("Who do I contact?")]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        *_WEB_SEARCH,
+                        _text("Write to "),
+                        {**_cached("bob@example.com"), "citations": [quoting]},
+                        _text(" for support."),
+                    ],
+                },
+                {"role": "user", "content": [_text("Draft the email")]},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"][1]["content"] == [
+            *_WEB_SEARCH,
+            _text("Write to "),
+            _cached("<EMAIL>"),
+            _text(" for support."),
+        ]
+        assert "bob@example.com" not in json.dumps(data["messages"])
+
+    @pytest.mark.parametrize(
+        ("answer", "follow_up", "sent"),
+        [
+            ([_text("plain reply\n"), _text("second\n")], [{"role": "user", "content": [_text("next")]}], None),
+            (
+                [{**_text("Mail bob@example.com "), "citations": [_CITATION]}, _text("today.")],
+                [{"role": "user", "content": [_text("next")]}],
+                [_text("Mail <EMAIL> "), _text("today.")],
+            ),
+            ([_text("Sure:\n"), _text("\n")], [], [_text("Sure:")]),
+            ([_text("Searching.\n"), *_WEB_SEARCH], [], None),
+        ],
+        ids=["earlier-turn-as-sent", "masked-text-keeps-its-space", "final-prefill-trimmed", "paused-search-turn-as-sent"],
+    )
+    async def test_a_reply_keeps_its_trailing_whitespace_unless_it_is_the_final_prefill(
+        self, answer: list[dict[str, object]], follow_up: list[dict[str, object]], sent: list[dict[str, object]] | None
+    ) -> None:
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [_text("Reply to bob@example.com")]},
+                {"role": "assistant", "content": answer},
+                *follow_up,
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"][0]["content"] == [_text("Reply to <EMAIL>")]
+        assert data["messages"][1]["content"] == (answer if sent is None else sent)
+
 
 class NamelessComputerToolGuardrail(CustomGuardrail):
     """Guardrail that appends an OpenAI-format computer tool without a function name."""

@@ -8,6 +8,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.messages.convertible_blocks import (
+    drop_non_string_tool_result_texts,
     malformed_tool_result_text_error,
     restore_client_blocks,
     unconvertible_anthropic_blocks,
@@ -213,6 +214,37 @@ def test_a_non_string_tool_result_text_is_named_with_or_without_a_tool_use_id(
     assert malformed_tool_result_text_error([{"role": "user", "content": [tool_result]}]) == error
 
 
+_IMAGE: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+
+def _turn_with_a_number_text(tool_result_content: list[object]) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content},
+                {"type": "text", "text": "what does it show?"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "kept_content"),
+    (
+        (True, [_IMAGE, {"type": "text", "text": "ok"}]),
+        (False, [_IMAGE, {"type": "text", "text": 5}, {"type": "text", "text": "ok"}]),
+    ),
+    ids=["drop-params-drops-only-the-number-text", "no-drop-params-sends-it-as-is"],
+)
+def test_drop_params_drops_only_the_non_string_texts_of_a_tool_result(
+    drop_params: bool, kept_content: list[object]
+) -> None:
+    messages: Final = _turn_with_a_number_text([_IMAGE, {"type": "text", "text": 5}, {"type": "text", "text": "ok"}])
+
+    assert drop_non_string_tool_result_texts(messages, drop_params) == _turn_with_a_number_text(kept_content)
+
+
 _SEARCH_RESULT: Final = {"type": "search_result", "source": "https://example.com", "title": "t", "content": []}
 
 
@@ -270,11 +302,16 @@ def test_a_conversation_the_guardrail_never_saw_comes_back_as_the_client_sent_it
     assert restored == original
 
 
-def _cited_answer(texts: tuple[str, ...]) -> list[object]:
+def _cited_answer(texts: tuple[str, ...], cited_texts: tuple[str, ...] | None = None) -> list[object]:
+    kept_citations: Final = texts if cited_texts is None else cited_texts
     return [
         {
             "role": "assistant",
-            "content": [{"type": "text", "text": text, "citations": [index]} for index, text in enumerate(texts) if text],
+            "content": [
+                {"type": "text", "text": text, **({"citations": [index]} if text == kept_citations[index] else {})}
+                for index, text in enumerate(texts)
+                if text
+            ],
         }
     ]
 
@@ -311,4 +348,4 @@ def test_a_rewritten_answer_is_split_back_across_the_text_blocks_it_was_joined_f
         rewritten, _cited_answer(texts), LiteLLMAnthropicMessagesAdapter().tool_result_part
     )
 
-    assert restored == _cited_answer(restored_texts)
+    assert restored == _cited_answer(restored_texts, cited_texts=texts)
