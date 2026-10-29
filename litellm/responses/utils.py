@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import (
+    ANY_REASONING_FIELD_VALUES,
     REASONING_SUMMARY_VALUES,
     BaseResponsesAPIConfig,
     ReasoningFieldValues,
@@ -1428,16 +1429,13 @@ def _declared_values(values: Sequence[str] | None) -> frozenset[str | None] | No
     return None if values is None else frozenset(values)
 
 
-_ANY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = MappingProxyType(
-    {"summary": REASONING_SUMMARY_VALUES, "mode": None, "context": None}
-)
 _REFUSABLE_REASONING_FIELDS: Final = frozenset({"mode", "context"})
 
 
 def _openai_reasoning_field_values(model: str) -> ReasoningFieldValues:
     model_info: Final = _openai_model_info(model)
     if model_info is None:
-        return _ANY_REASONING_FIELD_VALUES
+        return ANY_REASONING_FIELD_VALUES
     if not model_info.get("supports_reasoning"):
         return MappingProxyType({})
     return MappingProxyType(
@@ -1456,36 +1454,53 @@ def _catalog_values(values: object) -> frozenset[str | None]:
     return frozenset(value for value in iter_items(values) if isinstance(value, str))
 
 
-def _with_catalog_reasoning_values(
-    defaults: ReasoningFieldValues | None, model: str, custom_llm_provider: str
+def _declared_reasoning_values(row: Mapping[str, object] | None) -> Mapping[str, frozenset[str | None]]:
+    if row is None:
+        return {}
+    return {
+        field: _catalog_values(row[key]) for field, key in _CATALOG_REASONING_FIELDS if isinstance(row.get(key), list)
+    }
+
+
+def _with_declared_reasoning_values(
+    defaults: ReasoningFieldValues | None,
+    model: str,
+    custom_llm_provider: str,
+    deployment_model_info: Mapping[str, object] | None,
 ) -> ReasoningFieldValues | None:
     catalog: Final = cast(Mapping[str, object], litellm.model_cost)  # cast-ok: read-only view of the legacy registry
-    row: Final = as_str_mapping(catalog.get(f"{custom_llm_provider}/{model.removeprefix('responses/')}"))
-    if row is None:
-        return defaults
+    catalog_row: Final = as_str_mapping(catalog.get(f"{custom_llm_provider}/{model.removeprefix('responses/')}"))
     overrides: Final = {
-        field: _catalog_values(row[key]) for field, key in _CATALOG_REASONING_FIELDS if isinstance(row.get(key), list)
+        **_declared_reasoning_values(catalog_row),
+        **_declared_reasoning_values(deployment_model_info),
     }
     if not overrides:
         return defaults
-    return MappingProxyType({**(_ANY_REASONING_FIELD_VALUES if defaults is None else defaults), **overrides})
+    return MappingProxyType({**(ANY_REASONING_FIELD_VALUES if defaults is None else defaults), **overrides})
+
+
+def _openai_catalog_family(name: str) -> str | None:
+    parts: Final = name.rsplit("/", 1)[-1].split("-")
+    prefixes: Final = ("-".join(parts[:end]) for end in range(len(parts), 0, -1))
+    return next((prefix for prefix in prefixes if OpenAIGPTConfig.is_openai_catalog_model(prefix)), None)
 
 
 def _openai_catalog_model(model: str, base_model: str | None) -> str | None:
-    names: Final = (name.rsplit("/", 1)[-1] for name in (base_model, model) if name)
-    return next((name for name in names if OpenAIGPTConfig.is_openai_catalog_model(name)), None)
+    families: Final = (_openai_catalog_family(name) for name in (base_model, model) if name)
+    return next((family for family in families if family is not None), None)
 
 
 def _reasoning_field_values(
-    model: str, base_model: str | None, custom_llm_provider: str, responses_config: BaseResponsesAPIConfig | None
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    responses_config: BaseResponsesAPIConfig | None,
+    deployment_model_info: Mapping[str, object] | None,
 ) -> ReasoningFieldValues | None:
     declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
     catalog_model: Final = None if declared is not None else _openai_catalog_model(model, base_model)
     defaults: Final = declared if catalog_model is None else _openai_reasoning_field_values(catalog_model)
-    values: Final = _with_catalog_reasoning_values(defaults, model, custom_llm_provider)
-    if values is not None or responses_config is None:
-        return values
-    return responses_config.unresolved_model_reasoning_field_values()
+    return _with_declared_reasoning_values(defaults, model, custom_llm_provider, deployment_model_info)
 
 
 def _accepts_reasoning_field(key: str, value: object, values_by_field: ReasoningFieldValues) -> bool:
@@ -1532,6 +1547,7 @@ def bridge_reasoning(
     model: str,
     base_model: str | None,
     custom_llm_provider: str,
+    deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
     additional_drop_params: object,
 ) -> Mapping[str, object] | RefusedReasoningFields | None:
@@ -1549,7 +1565,9 @@ def bridge_reasoning(
         or {}
     )
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(custom_llm_provider, model)
-    values_by_field: Final = _reasoning_field_values(model, base_model, custom_llm_provider, responses_config)
+    values_by_field: Final = _reasoning_field_values(
+        model, base_model, custom_llm_provider, responses_config, deployment_model_info
+    )
     accepted: Final = sent if values_by_field is None else _accepted_reasoning(sent, values_by_field)
     refused: Final = tuple(
         key

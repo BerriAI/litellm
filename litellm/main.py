@@ -6121,6 +6121,9 @@ def completion(
         # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
         # (early) check doesn't cover.
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
+        typed_deployment_model_info: Final = str_keyed_mapping(
+            cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+        )
         if responses_api_model_info.get("mode") != "responses":
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
@@ -6130,9 +6133,7 @@ def completion(
                 reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
-                deployment_model_info=str_keyed_mapping(
-                    cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
-                ),
+                deployment_model_info=typed_deployment_model_info,
             )
 
         # Use base_model (the true underlying model) for Azure model-type
@@ -6158,6 +6159,7 @@ def completion(
                     model=model,
                     base_model=base_model if isinstance(base_model, str) else None,
                     custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=typed_deployment_model_info,
                     drop_params=drop_unsupported_reasoning,
                     additional_drop_params=routing_kwargs.get("additional_drop_params"),
                 )

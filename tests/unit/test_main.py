@@ -2529,6 +2529,11 @@ def non_openai_responses_bridge(
             "https://openrouter.ai/api/v1/responses",
             {"api_key": "fake-key"},
         ),
+        "litellm_proxy": (
+            "litellm_proxy/responses/gpt-6.1-standard-only",
+            "https://proxy.example/v1/responses",
+            {"api_base": "https://proxy.example/v1", "api_key": "fake-key"},
+        ),
     }
 
     def route_backend(backend: str) -> tuple[str, Mapping[str, str], respx.Route]:
@@ -2721,18 +2726,27 @@ def test_chatgpt_bridge_keeps_a_reasoning_mode_its_catalog_row_declares_under_dr
     assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "mode": "pro"}
 
 
-@pytest.mark.parametrize("base_model", ["azure/gpt-6.1-standard-only", "azure/eu/gpt-6.1-standard-only"])
-def test_azure_bridge_reads_reasoning_modes_from_the_deployment_base_model_under_drop_params(
-    base_model: str,
+@pytest.mark.parametrize(
+    ("model", "model_info"),
+    [
+        ("azure/responses/custom-deployment-name", {"base_model": "azure/gpt-6.1-standard-only"}),
+        ("azure/responses/custom-deployment-name", {"base_model": "azure/eu/gpt-6.1-standard-only"}),
+        ("azure/responses/custom-deployment-name", {"base_model": "azure/gpt-6.1-standard-only-2026-07-09"}),
+        ("azure/responses/gpt-6.1-standard-only-prod", {}),
+    ],
+)
+def test_azure_bridge_reads_reasoning_modes_from_the_deployment_model_family_under_drop_params(
+    model: str,
+    model_info: dict[str, str],
     non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
 ):
     _, kwargs, route = non_openai_responses_bridge("azure")
 
     litellm.completion(
-        model="azure/responses/custom-deployment-name",
+        model=model,
         messages=[{"role": "user", "content": "hello"}],
         reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
-        model_info={"base_model": base_model},
+        model_info=model_info,
         drop_params=True,
         **kwargs,
     )
@@ -2741,28 +2755,23 @@ def test_azure_bridge_reads_reasoning_modes_from_the_deployment_base_model_under
 
 
 @pytest.mark.parametrize(
-    ("backend", "model", "dropped_reasoning"),
+    ("backend", "model"),
     [
-        ("azure", "azure/responses/gpt-6.1-standard-only-prod", {"effort": "low"}),
-        (
-            "databricks",
-            "databricks/responses/databricks-gpt-bridge-test",
-            {"effort": "low", "mode": "pro", "context": "all_turns"},
-        ),
+        ("azure", "azure/responses/terra-prod"),
+        ("databricks", "databricks/responses/databricks-gpt-bridge-test"),
+        ("litellm_proxy", "litellm_proxy/responses/gpt-6.1-standard-only"),
     ],
 )
 @pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
-def test_responses_bridge_sends_mode_and_context_for_an_unknown_deployment_as_its_backend_decides(
+def test_responses_bridge_forwards_mode_and_context_it_cannot_judge_under_drop_params(
     backend: str,
     model: str,
-    dropped_reasoning: dict[str, str],
     summary: dict[str, str],
     non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
 ):
     _, kwargs, route = non_openai_responses_bridge(backend)
     requested: Final = {"effort": "low", "mode": "pro", "context": "all_turns", **summary}
 
-    litellm.completion(model=model, messages=[{"role": "user", "content": "hello"}], reasoning_effort=requested, **kwargs)
     litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "hello"}],
@@ -2771,9 +2780,58 @@ def test_responses_bridge_sends_mode_and_context_for_an_unknown_deployment_as_it
         **kwargs,
     )
 
+    assert json.loads(route.calls[0].request.content)["reasoning"] == requested
+
+
+def test_azure_bridge_applies_a_deployment_reasoning_modes_only_to_that_deployment_under_drop_params(
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("azure")
+    litellm.register_model(
+        {
+            "gpt-6.1-pro-capable": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "reasoning_modes": ["standard", "pro"],
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    litellm_params: Final = {"model": "azure/responses/gpt-6.1-pro-capable", **kwargs}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "standard-only",
+                "litellm_params": litellm_params,
+                "model_info": {"reasoning_modes": ["standard"]},
+            },
+            {"model_name": "pro-capable", "litellm_params": litellm_params},
+        ]
+    )
+    requested: Final = {"effort": "low", "mode": "pro"}
+
+    for model_name in ("standard-only", "pro-capable"):
+        router.completion(
+            model=model_name,
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort=requested,
+            drop_params=True,
+        )
+    litellm.completion(
+        model="azure/responses/gpt-6.1-pro-capable",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=requested,
+        drop_params=True,
+        **kwargs,
+    )
+
     assert [json.loads(call.request.content)["reasoning"] for call in route.calls] == [
+        {"effort": "low"},
         requested,
-        {**dropped_reasoning, **summary},
+        requested,
     ]
 
 

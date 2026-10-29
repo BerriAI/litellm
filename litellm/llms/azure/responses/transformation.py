@@ -14,7 +14,6 @@ from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.llms.base_llm.responses.transformation import SUMMARY_ONLY_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -92,9 +91,6 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         return AzureOpenAIGPT5Config.effort_resolves_to_none(model, effort)
-
-    def unresolved_model_reasoning_field_values(self) -> ReasoningFieldValues:
-        return SUMMARY_ONLY_REASONING_FIELD_VALUES
 
     def get_supported_openai_params(self, model: str) -> list:
         """
