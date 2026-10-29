@@ -61,19 +61,22 @@ class _FailureDetails(LiteLLMBaseModel):
 class _ErrorPayload(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    error: Mapping[str, object]
+    error: Mapping[str, object] | str
+
+    def error_object(self) -> Mapping[str, object]:
+        return {"message": self.error} if isinstance(self.error, str) else self.error
 
 
 def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
     try:
-        return _ErrorPayload.model_validate_json(data).error
+        return _ErrorPayload.model_validate_json(data).error_object()
     except ValidationError:
         return None
 
 
 def event_error_object(event: Mapping[str, object]) -> Mapping[str, object] | None:
     try:
-        return _ErrorPayload.model_validate(event).error or None
+        return _ErrorPayload.model_validate(event).error_object() or None
     except ValidationError:
         return None
 

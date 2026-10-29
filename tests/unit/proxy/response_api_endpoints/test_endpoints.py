@@ -181,14 +181,16 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
 
 
 class _FirstFrameHook(CustomLogger):
-    def __init__(self, frame: str | bytes) -> None:
+    def __init__(self, first: str | bytes | Exception) -> None:
         super().__init__()
-        self.frame: Final = frame
+        self.first: Final = first
 
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: object, response: object, request_data: object
     ) -> AsyncIterator[str | bytes]:
-        yield self.frame
+        if isinstance(self.first, Exception):
+            raise self.first
+        yield self.first
 
 
 _DATA_ERROR_FRAME: Final = 'data: {"error": {"message": "denied", "type": "guardrail_scan_error", "code": 403}}\n\n'
@@ -197,22 +199,9 @@ _NAMED_ERROR_FRAME: Final = (
 )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "path,first_frame,expected_status",
-    [
-        ("/v1/responses", _DATA_ERROR_FRAME, 403),
-        ("/v1/chat/completions", _DATA_ERROR_FRAME, 403),
-        ("/v1/chat/completions", _NAMED_ERROR_FRAME, 200),
-        ("/v1/responses", _NAMED_ERROR_FRAME, 529),
-        ("/v1/responses", _NAMED_ERROR_FRAME.replace(b"event: error", b"event: response.created"), 200),
-        ("/v1/chat/completions", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
-        ("/v1/responses", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
-    ],
-)
-async def test_only_a_lone_first_error_frame_answers_with_its_status(
-    monkeypatch: pytest.MonkeyPatch, path: str, first_frame: str | bytes, expected_status: int
-) -> None:
+async def _post_through_first_frame_hook(
+    monkeypatch: pytest.MonkeyPatch, path: str, first: str | bytes | Exception
+) -> httpx.Response:
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -230,14 +219,14 @@ async def test_only_a_lone_first_error_frame_answers_with_its_status(
     )
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "callbacks", [_FirstFrameHook(first_frame)])
+    monkeypatch.setattr(litellm, "callbacks", [_FirstFrameHook(first)])
     monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
     with respx.mock as transport:
         transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).respond(
             200, content="data: [DONE]\n\n", headers={"Content-Type": "text/event-stream"}
         )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
-            result: Final = await client.post(
+            return await client.post(
                 path,
                 json={
                     "model": model,
@@ -246,11 +235,48 @@ async def test_only_a_lone_first_error_frame_answers_with_its_status(
                 },
             )
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,first_frame,expected_status",
+    [
+        ("/v1/responses", _DATA_ERROR_FRAME, 403),
+        ("/v1/chat/completions", _DATA_ERROR_FRAME, 403),
+        ("/v1/chat/completions", _NAMED_ERROR_FRAME, 200),
+        ("/cursor/chat/completions", _NAMED_ERROR_FRAME, 200),
+        ("/v1/responses", _NAMED_ERROR_FRAME, 529),
+        ("/v1/responses", _NAMED_ERROR_FRAME.replace(b"event: error", b"event: response.created"), 200),
+        ("/v1/chat/completions", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
+        ("/v1/responses", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
+    ],
+)
+async def test_only_a_lone_first_error_frame_answers_with_its_status(
+    monkeypatch: pytest.MonkeyPatch, path: str, first_frame: str | bytes, expected_status: int
+) -> None:
+    result: Final = await _post_through_first_frame_hook(monkeypatch, path, first_frame)
+
     assert result.status_code == expected_status, result.text
     if expected_status == 200:
         assert result.headers["content-type"].startswith("text/event-stream"), result.text
     else:
         assert result.json()["error"]["message"] == "denied"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/cursor/chat/completions", "/v1/chat/completions"])
+async def test_a_hook_failure_before_the_first_chunk_answers_in_chat_completions_shape(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    message: Final = "rate limited before the first chunk"
+    result: Final = await _post_through_first_frame_hook(
+        monkeypatch, path, HTTPException(status_code=429, detail=message)
+    )
+    frames: Final = tuple(frame for frame in result.text.split("\n\n") if frame)
+
+    assert result.status_code == 429, result.text
+    assert frames[-1] == "data: [DONE]", result.text
+    assert message in json.loads(frames[0].removeprefix("data: "))["error"]["message"]
+    assert len(frames) == 2, result.text
 
 
 @pytest.mark.parametrize("path", ["/v1/responses", "/v1/chat/completions"])

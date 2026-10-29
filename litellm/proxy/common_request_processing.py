@@ -1250,6 +1250,16 @@ RESPONSES_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class SseFraming:
+    first_chunk: FirstChunkSseFraming
+    late: LateSseFraming
+
+
+OPENAI_SSE_FRAMING: Final = SseFraming(first_chunk=OPENAI_FIRST_CHUNK_FRAMING, late=OPENAI_LATE_SSE_FRAMING)
+RESPONSES_SSE_FRAMING: Final = SseFraming(first_chunk=RESPONSES_FIRST_CHUNK_FRAMING, late=RESPONSES_LATE_SSE_FRAMING)
+
+
 def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     """`headers` plus the two that stop reverse proxies from buffering SSE (issue #28384)."""
     return MappingProxyType({**headers, **_TTFT_KEEPALIVE_HEADERS})
@@ -2945,7 +2955,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
-        late_framing: LateSseFraming = OPENAI_LATE_SSE_FRAMING,
+        sse_framing: SseFraming = OPENAI_SSE_FRAMING,
     ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
@@ -2986,10 +2996,11 @@ class ProxyBaseLLMRequestProcessing:
                 is_streaming_request=is_streaming_request,
                 contents=contents,
                 skip_pre_call_logic=skip_pre_call_logic,
+                first_chunk_framing=sse_framing.first_chunk,
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
-            late_framing=late_framing,
+            late_framing=sse_framing.late,
         )
 
     async def _process_llm_request(
@@ -3013,6 +3024,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
+        first_chunk_framing: FirstChunkSseFraming = OPENAI_FIRST_CHUNK_FRAMING,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -3306,9 +3318,7 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                         refresh_headers=refresh_stream_headers,
                         general_settings=general_settings,
-                        framing=(
-                            RESPONSES_FIRST_CHUNK_FRAMING if route_type == "aresponses" else OPENAI_FIRST_CHUNK_FRAMING
-                        ),
+                        framing=first_chunk_framing,
                     )
 
             ### CALL HOOKS ### - modify outgoing data

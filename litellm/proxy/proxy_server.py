@@ -10202,6 +10202,12 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
     return f"data: {chunk}\n\n"
 
 
+def _format_responses_sse_chunk(chunk: object) -> str | bytes:
+    if isinstance(chunk, Mapping):
+        return f"data: {json.dumps(chunk, default=str)}\n\n"
+    return _format_streaming_sse_chunk(chunk=chunk)
+
+
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
 _OPENAI_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
 _MAX_RAW_SSE_BUFFER_CHARS: Final = 8 * 1024 * 1024
@@ -10602,7 +10608,7 @@ async def async_data_generator(
             if not raw_passthrough:
                 try:
                     if error_state is not None:
-                        yield error_state.mark_emitted(_format_streaming_sse_chunk(chunk=chunk))
+                        yield error_state.mark_emitted(_format_responses_sse_chunk(chunk=chunk))
                     else:
                         yield _format_streaming_sse_chunk(chunk=chunk)
                 except Exception as e:

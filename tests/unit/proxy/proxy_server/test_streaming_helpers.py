@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -148,7 +148,8 @@ async def test_responses_stream_dispatches_named_events_without_a_chat_done_sent
 
 
 @pytest.mark.asyncio
-async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_event() -> None:
+@pytest.mark.parametrize("as_mapping", [False, True])
+async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_event(as_mapping: bool) -> None:
     response: Final = ResponsesAPIResponse(id="resp_error_then_raise", created_at=1, model="local-model", output=[])
     created: Final = ResponseCreatedEvent.model_validate(
         {"type": "response.created", "sequence_number": 0, "response": response}
@@ -157,9 +158,9 @@ async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_e
         {"type": "error", "sequence_number": 1, "code": "server_error", "message": "upstream failed", "param": None}
     )
 
-    async def upstream() -> AsyncIterator[BaseModel]:
+    async def upstream() -> AsyncIterator[BaseModel | Mapping[str, object]]:
         yield created
-        yield error_event
+        yield error_event.model_dump() if as_mapping else error_event
         raise litellm.APIError(status_code=500, message="Stream close failed", llm_provider="openai", model="local-model")
 
     frames: Final = tuple(
@@ -172,14 +173,26 @@ async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_e
     )
 
     assert tuple(frame.split("\n", 1)[0] for frame in frames) == ("event: response.created", "event: error")
+    assert json.loads(frames[-1].split("data: ", 1)[1])["message"] == "upstream failed"
 
 @pytest.mark.asyncio
-async def test_a_guardrail_error_string_mid_responses_stream_ends_it_as_a_named_error_event() -> None:
+@pytest.mark.parametrize(
+    ("guardrail_error", "error_object"),
+    [
+        (
+            {"message": "response withheld", "type": "guardrail_scan_error", "code": 500},
+            {"message": "response withheld", "type": "guardrail_scan_error", "code": 500},
+        ),
+        ("response withheld", {"message": "response withheld"}),
+    ],
+)
+async def test_a_guardrail_error_string_mid_responses_stream_ends_it_as_a_named_error_event(
+    guardrail_error: Mapping[str, object] | str, error_object: Mapping[str, object]
+) -> None:
     response: Final = ResponsesAPIResponse(id="resp_hook_error", created_at=1, model="local-model", output=[])
     created: Final = ResponseCreatedEvent.model_validate(
         {"type": "response.created", "sequence_number": 0, "response": response}
     )
-    guardrail_error: Final = {"message": "response withheld", "type": "guardrail_scan_error", "code": 500}
 
     async def upstream() -> AsyncIterator[object]:
         yield created
@@ -203,7 +216,7 @@ async def test_a_guardrail_error_string_mid_responses_stream_ends_it_as_a_named_
         "message": "response withheld",
         "param": None,
         "sequence_number": 1,
-        "error": guardrail_error,
+        "error": error_object,
     }
 
 

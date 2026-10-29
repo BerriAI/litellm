@@ -21,7 +21,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import RESPONSES_LATE_SSE_FRAMING, ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import RESPONSES_SSE_FRAMING, ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.responses_stream_errors import (
     event_error_object,
     responses_error_fields,
@@ -188,7 +188,7 @@ async def background_streaming_task(
             user_api_base=user_api_base,
             version=version,
             skip_pre_call_logic=True,
-            late_framing=RESPONSES_LATE_SSE_FRAMING,
+            sse_framing=RESPONSES_SSE_FRAMING,
         )
 
         # Process streaming response following OpenAI events format
