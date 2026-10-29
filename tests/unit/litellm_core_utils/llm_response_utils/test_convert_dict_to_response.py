@@ -2997,3 +2997,19 @@ def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_j
     assert "cost" not in usage
     assert usage["total_tokens"] == 4
 
+
+def test_a_finite_provider_cost_breakdown_with_non_string_keys_is_kept():
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-int-key-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": {1: 0.5}},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.usage.cost == {1: 0.5}
+

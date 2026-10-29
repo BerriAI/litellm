@@ -1077,6 +1077,31 @@ def test_cost_field_in_usage_chunks():
     assert usage.completion_tokens == 5
 
 
+
+def _perplexity_usage_chunk(cost: Mapping[str, float], finish_reason: str | None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-pplx",
+        created=1745513206,
+        model="sonar",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content="ok"))],
+        usage={"prompt_tokens": 26, "completion_tokens": 1, "total_tokens": 27, "cost": dict(cost)},
+    )
+
+
+@pytest.mark.parametrize("poisoned_field", ["request_cost", "total_cost"])
+def test_a_non_finite_final_stream_cost_does_not_fall_back_to_an_earlier_chunk_cost(poisoned_field: str):
+    final_cost: Final = {"input_tokens_cost": 0.0012, "output_tokens_cost": 1e-05, "request_cost": 0.0025}
+    chunks: Final = [
+        _perplexity_usage_chunk({"input_tokens_cost": 0, "output_tokens_cost": 0, "total_cost": 0}, None),
+        _perplexity_usage_chunk({**final_cost, "total_cost": 0.00371, poisoned_field: float("nan")}, "stop"),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) is None
+    assert response.usage.total_tokens == 27
+
 def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
     """Regression for https://github.com/BerriAI/litellm/issues/32051
 

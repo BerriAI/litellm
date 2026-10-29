@@ -984,7 +984,9 @@ class ChunkProcessor:
                     prompt_tokens_details, cache_creation_token_details
                 )
 
-                if usage_chunk_dict["cost"] is not None:
+                if usage_chunk.dropped_non_finite_cost():
+                    cost = None
+                elif usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)

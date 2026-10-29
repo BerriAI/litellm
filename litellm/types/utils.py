@@ -1949,7 +1949,7 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
-_COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 
 
 def _is_non_finite_float(value: object) -> bool:
@@ -1969,6 +1969,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _dropped_non_finite_cost: bool = PrivateAttr(False)
 
     server_tool_use: ServerToolUse | None = None
     cost: float | None = None
@@ -2079,6 +2080,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
             del self.cost
         elif _carries_non_finite_number(cost):
             verbose_logger.warning("Dropping a non-finite provider usage cost")
+            self._dropped_non_finite_cost = True
             del self.cost
         else:
             self.cost = cost
@@ -2096,6 +2098,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         for k, v in params.items():
             setattr(self, k, v)
+
+    def dropped_non_finite_cost(self) -> bool:
+        return self._dropped_non_finite_cost
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
