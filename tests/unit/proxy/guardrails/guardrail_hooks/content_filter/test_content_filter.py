@@ -412,15 +412,16 @@ class TestContentFilterGuardrail:
     @pytest.mark.parametrize(
         ("text", "expected"),
         [
-            ("PIN 4821 4532 0151 1283 0366 thanks", "PIN [CREDIT_CARD_REDACTED] thanks"),
-            ("order 4111 4532 0151 1283 0366", "order [CREDIT_CARD_REDACTED]"),
+            ("PIN 4821 4532 0151 1283 0366 thanks", "PIN [CREDIT_CARD_REDACTED] 0366 thanks"),
+            ("order 4111 4532 0151 1283 0366", "order [CREDIT_CARD_REDACTED] 0366"),
             ("codes 4532 4532 4532 4532 4532 0151 1283 0366 thanks", "codes 4532 4532 4532 4532 [CREDIT_CARD_REDACTED] thanks"),
             ("order 4532 1234 5678 9010 paid by 4532 0151 1283 0366", "order 4532 1234 5678 9010 paid by [CREDIT_CARD_REDACTED]"),
             ("card 4532 4151 4283 4000 4777 4888 4999 ok", "card [CREDIT_CARD_REDACTED] 4777 4888 4999 ok"),
             ("card 4532 4111 1111 1116 2025 ok", "card [CREDIT_CARD_REDACTED] 2025 ok"),
+            ("VISA4000 4000 0000 0004 1111 ok", "VISA4000 [CREDIT_CARD_REDACTED] ok"),
         ],
     )
-    async def test_checksum_pattern_masks_a_valid_card_with_the_base_matches_overlapping_it(self, text: str, expected: str):
+    async def test_checksum_pattern_keeps_the_mask_on_a_match_that_overlaps_a_valid_card(self, text: str, expected: str):
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="test-checksum-overlap",
             patterns=[
@@ -444,8 +445,13 @@ class TestContentFilterGuardrail:
             ("ids 4336 4262 4755 4637 3753 786027 13221 end", "ids [VISA_REDACTED] [AMEX_REDACTED] end"),
             ("4000 4000 0000 0000\n5555 5555 5555 4444", "[VISA_REDACTED]\n[MASTERCARD_REDACTED]"),
             ("cards 4378 4937 4618 4485 5555 5555 5555 4444 ok", "cards [VISA_REDACTED] [MASTERCARD_REDACTED] ok"),
-            ("pay 5472 3038 5280 1841 1485 4534 3853 6336 1330 ok", "pay [VISA_REDACTED] ok"),
+            ("pay 5472 3038 5280 1841 1485 4534 3853 6336 1330 ok", "pay [MASTERCARD_REDACTED] 1485 [VISA_REDACTED] ok"),
             ("cards 4532 0151 1283 0366 5555 5555 5555 4444 ok", "cards [VISA_REDACTED] [MASTERCARD_REDACTED] ok"),
+            (
+                "5521-5568-8763-1997 4966 7452 4225 5188 4264 ref 580355",
+                "[MASTERCARD_REDACTED] [VISA_REDACTED] 4264 ref 580355",
+            ),
+            ("ref XX00DE89370400440532013000 ok", "ref [IBAN_REDACTED] ok"),
         ],
     )
     async def test_checksum_patterns_mask_each_valid_card_where_two_brands_overlap(self, text: str, expected: str):
@@ -473,9 +479,11 @@ class TestContentFilterGuardrail:
             ("visa", "mastercard", "4000 4000 0000 0000 5555 5555 5555 4444"),
             ("visa", "mastercard", "ids 4853 4091 4909 4475 5508 5016 6232 6258 end"),
             ("discover", "credit_card", "4629 4611-6260-8050-5592-2700 65405563 93269332"),
+            ("visa", "mastercard", "pay 5472 3038 5280 1841 1485 4534 3853 6336 1330 ok"),
+            ("credit_card", "nl_bsn_contextual", "BSN 4111 1111 1111 1112 123456789"),
         ],
     )
-    async def test_checksum_mask_leaves_a_later_blocking_pattern_its_valid_card(
+    async def test_checksum_mask_leaves_a_later_blocking_pattern_its_match(
         self, masking_pattern: str, blocking_pattern: str, text: str
     ):
         guardrail: Final = ContentFilterGuardrail(
@@ -511,54 +519,32 @@ class TestContentFilterGuardrail:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("checksum_patterns", "regex", "later_patterns", "text", "expected"),
+        ("later_pattern", "text", "expected"),
         [
             (
-                ("credit_card",),
-                "1111 BSN",
-                ("nl_bsn_contextual",),
-                "4111 1111 1111 1111 BSN 123456789",
-                "[CREDIT_CARD_REDACTED] BSN [NL_BSN_CONTEXTUAL_REDACTED]",
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="nl_bsn_contextual", action=ContentFilterAction.MASK
+                ),
+                "BSN 4111 1111 1111 1112 123456789",
+                "BSN 4111 1111 1111 1112 [NL_BSN_CONTEXTUAL_REDACTED]",
             ),
             (
-                ("visa", "mastercard"),
-                "4444 BSN",
-                ("nl_bsn_contextual",),
-                "4532 0151 1283 0366 5555 5555 5555 4444 BSN 123456789",
-                "[VISA_REDACTED] [MASTERCARD_REDACTED] BSN [NL_BSN_CONTEXTUAL_REDACTED]",
+                ContentFilterPattern(
+                    pattern_type="regex", pattern=r"\b\d{4}[\s-]?\d{4}\b", name="acct8", action=ContentFilterAction.MASK
+                ),
+                "4381 4099 4560 4729 4064 4577 4061",
+                "[CREDIT_CARD_REDACTED] [ACCT8_REDACTED] 4061",
             ),
-            (
-                ("visa", "mastercard", "amex", "discover", "credit_card", "iban"),
-                "1330 BSN",
-                ("nl_bsn_contextual",),
-                "pay 5472 3038 5280 1841 1485 4534 3853 6336 1330 BSN 123456789",
-                "pay [VISA_REDACTED] BSN [NL_BSN_CONTEXTUAL_REDACTED]",
-            ),
-            (("credit_card",), "PIN 4821", (), "PIN 4821 4532 0151 1283 0366 ok", "PIN [CREDIT_CARD_REDACTED] ok"),
         ],
     )
-    async def test_checksum_mask_keeps_the_words_a_later_regex_match_shares_with_the_card(
-        self,
-        checksum_patterns: tuple[str, ...],
-        regex: str,
-        later_patterns: tuple[str, ...],
-        text: str,
-        expected: str,
+    async def test_later_patterns_run_on_the_text_with_every_checksum_match_masked(
+        self, later_pattern: ContentFilterPattern, text: str, expected: str
     ):
         guardrail: Final = ContentFilterGuardrail(
-            guardrail_name="test-checksum-mask-then-regex",
+            guardrail_name="test-checksum-mask-then-later-pattern",
             patterns=[
-                *(
-                    ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
-                    for name in checksum_patterns
-                ),
-                ContentFilterPattern(
-                    pattern_type="regex", pattern=regex, name="account_note", action=ContentFilterAction.MASK
-                ),
-                *(
-                    ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
-                    for name in later_patterns
-                ),
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK),
+                later_pattern,
             ],
         )
         guardrailed_inputs: Final = await guardrail.apply_guardrail(
@@ -567,16 +553,66 @@ class TestContentFilterGuardrail:
         assert guardrailed_inputs.get("texts") == [expected]
 
     @pytest.mark.asyncio
-    async def test_checksum_pattern_streams_the_same_text_as_a_whole_response(self):
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
-
+    @pytest.mark.parametrize(
+        ("pattern_name", "checksum_valid", "checksum_invalid"),
+        [
+            ("visa", "4111 1111 1111 1111", "4111 1111 1111 1112"),
+            ("mastercard", "5555555555554444", "5555555555554445"),
+            ("iban", "GB82WEST12345698765432", "GB83WEST12345698765432"),
+        ],
+    )
+    async def test_checksum_pattern_blocks_only_values_that_pass_the_checksum(
+        self, pattern_name: str, checksum_valid: str, checksum_invalid: str
+    ):
         guardrail: Final = ContentFilterGuardrail(
-            guardrail_name="test-checksum-streaming",
+            guardrail_name="test-checksum-block",
             patterns=[
-                ContentFilterPattern(pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK)
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=pattern_name, action=ContentFilterAction.BLOCK)
             ],
         )
-        chunks: Final = ("4532 " * 20, "4532 0151 1283 0366 thanks")
+
+        passed: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [f"look-alike {checksum_invalid}"]}, request_data={}, input_type="request"
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [f"real {checksum_valid}"]}, request_data={}, input_type="request"
+            )
+
+        assert passed.get("texts") == [f"look-alike {checksum_invalid}"]
+        assert exc_info.value.detail["pattern"] == pattern_name
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("patterns", "chunks", "hidden"),
+        [
+            (
+                (
+                    ContentFilterPattern(
+                        pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+                    ),
+                ),
+                ("4532 " * 20, "4532 0151 1283 0366 thanks"),
+                "0366",
+            ),
+            (
+                (
+                    ContentFilterPattern(pattern_type="prebuilt", pattern_name="iban", action=ContentFilterAction.MASK),
+                    ContentFilterPattern(
+                        pattern_type="regex", pattern="904580", name="ref", action=ContentFilterAction.BLOCK
+                    ),
+                ),
+                ("send it to DE07841266521904580", "435 thanks"),
+                "904580",
+            ),
+        ],
+    )
+    async def test_checksum_pattern_streams_the_same_text_as_a_whole_response(
+        self, patterns: tuple[ContentFilterPattern, ...], chunks: tuple[str, ...], hidden: str
+    ):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        guardrail: Final = ContentFilterGuardrail(guardrail_name="test-checksum-streaming", patterns=list(patterns))
 
         async def mock_stream():
             for index, content in enumerate(chunks):
@@ -604,7 +640,7 @@ class TestContentFilterGuardrail:
             inputs={"texts": ["".join(chunks)]}, request_data={}, input_type="response"
         )
 
-        assert "0366" not in streamed
+        assert hidden not in streamed
         assert [streamed] == whole_response.get("texts")
 
     @pytest.mark.asyncio
