@@ -51,7 +51,11 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    qualify_agentic_followup_model,
+    set_provider_response_headers_in_hidden_params,
+)
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
@@ -2606,6 +2610,7 @@ class BaseLLMHTTPHandler:
                 "preset_cache_key": None,
                 "stream_response": {},
                 "model_info": kwargs.get("model_info"),
+                **litellm_params.per_second_pricing(),
                 **vertex_location_params,
                 **anthropic_messages_optional_request_params,
             },
@@ -6304,9 +6309,7 @@ class BaseLLMHTTPHandler:
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
 
-        full_model_name = patch.model or model
-        if "/" not in full_model_name:
-            full_model_name = f"{custom_llm_provider}/{full_model_name}"
+        full_model_name: Final = qualify_agentic_followup_model(patch.model, model, custom_llm_provider)
 
         optional_params_for_followup: Final = dict(optional_params)
         optional_params_for_followup.update(patch.optional_params)
