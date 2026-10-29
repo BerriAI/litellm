@@ -3,3 +3,4 @@
 /ci_cd/cost_map_pins.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
 /helm/ @yassin-berriai
 /terraform/ @yassin-berriai
+/.github/workflows/zizmor.yml @yuneng-berri
