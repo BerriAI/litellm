@@ -946,6 +946,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 # Only match deployment_names if no wildcard matched
                 return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
             elif route_type in [
+                "allm_passthrough_route",
                 "amoderation",
                 "aget_responses",
                 "adelete_responses",

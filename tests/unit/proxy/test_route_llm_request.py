@@ -13,7 +13,7 @@ import respx
 
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from uuid import uuid4
 from typing import Final
 from unittest.mock import MagicMock
@@ -3027,3 +3027,118 @@ async def test_user_config_routers_discard_the_least_recently_used_router_past_c
     assert first_handler() is not None
     assert second_handler() is None
     routers.clear()
+
+
+_BEDROCK_MODEL_ID: Final = "us.anthropic.claude-haiku-5-5"
+_BEDROCK_CONVERSE_BODY: Final = MappingProxyType(
+    {"messages": [{"role": "user", "content": [{"text": "Hello"}]}], "inferenceConfig": {"maxTokens": 16}}
+)
+_BEDROCK_CONVERSE_ANSWER: Final = MappingProxyType(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 9, "outputTokens": 2, "totalTokens": 11},
+    }
+)
+
+
+def _bedrock_passthrough_data(model: str) -> dict[str, object]:
+    return {
+        "model": model,
+        "method": "POST",
+        "endpoint": f"model/{model}/converse",
+        "data": dict(_BEDROCK_CONVERSE_BODY),
+        "custom_llm_provider": "bedrock",
+    }
+
+
+@pytest.fixture
+def proxy_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    for ambient in (
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_ROLE_NAME",
+        "AWS_WEB_IDENTITY_TOKEN",
+    ):
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDPROXYENV")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "proxy-env-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to_bedrock_with_the_proxy_credentials() -> (
+    None
+):
+    router: Final = litellm.Router(model_list=[])
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post(
+            f"https://bedrock-runtime.us-west-2.amazonaws.com/model/{_BEDROCK_MODEL_ID}/converse"
+        ).mock(return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER)))
+        response: Final = await (
+            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
+        )
+
+    assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
+    assert upstream.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIDPROXYENV/")
+
+
+@pytest.mark.parametrize(
+    "model_list, requested_model",
+    [
+        pytest.param(
+            [
+                {
+                    "model_name": "*",
+                    "litellm_params": {
+                        "model": "bedrock/*",
+                        "aws_access_key_id": "AKIDDEPLOYMENT",
+                        "aws_secret_access_key": "deployment-secret",
+                        "aws_region_name": "us-east-1",
+                    },
+                }
+            ],
+            _BEDROCK_MODEL_ID,
+            id="catch-all-wildcard",
+        ),
+        pytest.param(
+            [
+                {
+                    "model_name": "claude-haiku",
+                    "litellm_params": {
+                        "model": f"bedrock/{_BEDROCK_MODEL_ID}",
+                        "aws_access_key_id": "AKIDDEPLOYMENT",
+                        "aws_secret_access_key": "deployment-secret",
+                        "aws_region_name": "us-east-1",
+                    },
+                }
+            ],
+            f"bedrock/{_BEDROCK_MODEL_ID}",
+            id="deployment-model-name",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_keeps_a_bedrock_model_the_router_routes_on_its_deployment_credentials(
+    model_list: list[dict[str, object]], requested_model: str
+) -> None:
+    router: Final = litellm.Router(model_list=model_list)
+
+    with respx.mock(assert_all_mocked=True) as respx_mock:
+        upstream: Final = respx_mock.post(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        response: Final = await (
+            await route_request(_bedrock_passthrough_data(requested_model), router, None, "allm_passthrough_route")
+        )
+
+    assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
+    assert upstream.calls.last.request.headers["authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIDDEPLOYMENT/"
+    )
