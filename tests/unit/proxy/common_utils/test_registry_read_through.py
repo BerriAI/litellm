@@ -521,7 +521,6 @@ async def test_resync_model_deployments_by_ids_loads_the_rows_under_model_reconc
     prisma_client.db.litellm_proxymodeltable.find_many.assert_awaited_once_with(
         where={"model_id": {"in": ["m-1", "m-2"]}}
     )
-    load_credentials.assert_awaited_once_with(prisma_client=prisma_client)
     assert installed == [rows]
     assert lock_states == [True]
     assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
@@ -896,3 +895,159 @@ async def test_resync_model_deployments_reconciles_every_db_row_when_the_missed_
 
     assert await _resync_model_deployments(router_name) is router_holds_the_name_after_reconcile
     reconciled.assert_called_once_with(prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj)
+
+
+@pytest.mark.asyncio
+async def test_resync_model_deployments_by_ids_reads_the_writer_not_a_lagging_replica(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+    from types import SimpleNamespace
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    committed_rows: Final = [MagicMock(name="just_committed_backup")]
+    writer: Final = MagicMock(name="writer_prisma")
+    writer.litellm_proxymodeltable = SimpleNamespace(
+        find_many=AsyncMock(return_value=committed_rows), create=AsyncMock()
+    )
+    replica: Final = MagicMock(name="lagging_replica_prisma")
+    replica.litellm_proxymodeltable = SimpleNamespace(find_many=AsyncMock(return_value=[]), create=AsyncMock())
+    prisma_client: Final = MagicMock()
+    prisma_client.db = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=writer, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=replica, iam_token_db_auth=False),
+    )
+    router: Final = MagicMock()
+    router.get_model_list.return_value = []
+    installed: Final[list[object]] = []
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", AsyncMock())
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", lambda db_models: installed.append(db_models))
+
+    await resync_model_deployments_by_ids(("backup-id",))
+
+    assert installed == [committed_rows]
+    replica.litellm_proxymodeltable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resync_model_deployments_by_ids_installs_the_row_a_concurrent_reload_left_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
+
+    stale_row: Final = MagicMock(name="row_before_the_update")
+    current_row: Final = MagicMock(name="row_after_the_update")
+    stored: Final = {"row": stale_row}
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=lambda where: [stored["row"]])
+    router: Final = MagicMock()
+    router.get_model_list.return_value = []
+    installed: Final[list[object]] = []
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", AsyncMock())
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", lambda db_models: installed.append(db_models))
+
+    async with proxy_server.MODEL_RECONCILE_LOCK:
+        targeted_load: Final = asyncio.create_task(resync_model_deployments_by_ids(("m-1",)))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        stored["row"] = current_row
+    await targeted_load
+
+    assert installed == [[current_row]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credentials_on_this_worker", "expect_credential_reload"),
+    [((), True), (("another-openai",), True), (("shared-openai",), False)],
+)
+async def test_resync_model_deployments_by_ids_reloads_credentials_only_for_one_this_worker_lacks(
+    monkeypatch: pytest.MonkeyPatch,
+    credentials_on_this_worker: tuple[str, ...],
+    expect_credential_reload: bool,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-by-ids-credentials")
+    row: Final = MagicMock()
+    row.litellm_params = {
+        "model": encrypt_value_helper("openai/backup-model"),
+        "litellm_credential_name": encrypt_value_helper("shared-openai"),
+    }
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[row])
+    router: Final = MagicMock()
+    router.get_model_list.return_value = []
+    load_credentials: Final = AsyncMock()
+    installed: Final[list[object]] = []
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(credential_name=name, credential_values={}, credential_info={})
+            for name in credentials_on_this_worker
+        ],
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", load_credentials)
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", lambda db_models: installed.append(db_models))
+
+    await resync_model_deployments_by_ids(("backup-id",))
+
+    assert load_credentials.await_count == (1 if expect_credential_reload else 0)
+    assert installed == [[row]]
+
+
+@pytest.mark.asyncio
+async def test_resync_model_deployments_by_ids_leaves_an_auto_router_to_the_debounced_full_resync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-by-ids-auto-router")
+    row: Final = MagicMock()
+    row.litellm_params = {"model": encrypt_value_helper("auto_router/complexity-router")}
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[row])
+    full_reload: Final = AsyncMock()
+    single_row_install: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", full_reload)
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", single_row_install)
+
+    await resync_model_deployments_by_ids(("auto-router-id",))
+
+    full_reload.assert_not_awaited()
+    single_row_install.assert_not_called()
+    assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
