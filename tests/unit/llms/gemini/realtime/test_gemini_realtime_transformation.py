@@ -440,6 +440,51 @@ def test_gemini_realtime_session_update_with_tools():
     assert "parameters" in function_decl
 
 
+def _schema_nodes(schema: object):
+    if isinstance(schema, dict):
+        yield schema
+        for value in schema.values():
+            yield from _schema_nodes(value)
+    elif isinstance(schema, list):
+        for value in schema:
+            yield from _schema_nodes(value)
+
+
+def test_gemini_session_update_converts_flat_realtime_tool_schemas_to_gemini_schemas():
+    session_update: Final = {
+        "type": "session.update",
+        "session": {
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_weather",
+                    "description": "Look up the weather in a city.",
+                    "parameters": {
+                        "type": "object",
+                        "$defs": {
+                            "City": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+                        },
+                        "properties": {"city": {"$ref": "#/$defs/City"}, "note": {"type": ["string", "null"]}},
+                        "required": ["city"],
+                    },
+                }
+            ]
+        },
+    }
+
+    messages: Final = GeminiRealtimeConfig().transform_realtime_request(
+        json.dumps(session_update), "gemini-2.5-flash", session_configuration_request=None
+    )
+
+    declaration: Final = json.loads(messages[0])["setup"]["tools"][0]["function_declarations"][0]
+    assert declaration["name"] == "lookup_weather"
+    parameters: Final = declaration["parameters"]
+    assert parameters["properties"]["city"]["properties"]["name"]["type"] == "string"
+    nodes: Final = tuple(_schema_nodes(parameters))
+    assert not any("$defs" in node or "$ref" in node for node in nodes)
+    assert all(isinstance(node["type"], str) for node in nodes if "type" in node)
+
+
 def test_gemini_session_update_defaults_to_audio_modality():
     config = GeminiRealtimeConfig()
 
@@ -2056,16 +2101,29 @@ def test_gemini_transcribe_live_synthetic_session_created_reports_text_output(
     assert session["modalities"] == ["text"]
 
 
-@pytest.mark.parametrize("modalities", [["audio"], ["audio", "text"]])
+@pytest.mark.parametrize(
+    ("model", "modalities", "producible"),
+    [
+        ("gemini-3.5-transcribe-live", ["audio"], False),
+        ("gemini-3.5-transcribe-live", ["audio", "text"], True),
+        ("gemini-live-2.5-flash-native-audio", ["text"], False),
+        ("gemini-live-2.5-flash-native-audio", ["text", "audio"], True),
+    ],
+)
 @pytest.mark.parametrize("drop_params", [False, True])
-def test_gemini_transcribe_live_audio_output_is_rejected_unless_drop_params(
-    modalities, drop_params, patch_gemini_transcribe_live_cost_map_entry
+def test_gemini_live_rejects_only_output_modalities_the_model_cannot_produce_at_all(
+    model,
+    modalities,
+    producible,
+    drop_params,
+    patch_gemini_transcribe_live_cost_map_entry,
+    patch_gemini_audio_cost_map_entries,
 ):
     rejection = GeminiRealtimeConfig(drop_params=drop_params).setup_session_update_rejection(
-        "gemini-3.5-transcribe-live", {"output_modalities": modalities}, setup_sent=False
+        model, {"output_modalities": modalities}, setup_sent=False
     )
 
-    assert (rejection is None) is drop_params
+    assert (rejection is None) is (drop_params or producible)
     assert rejection is None or rejection.param == "session.output_modalities"
 
 

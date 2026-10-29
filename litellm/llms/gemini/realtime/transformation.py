@@ -201,6 +201,13 @@ def _base64_decoded_byte_count(data: str) -> int:
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
 
 
+def _chat_completion_tool(tool: object) -> dict[str, object]:
+    fields: Final = as_str_mapping(tool) or {}
+    if fields.get("type") != "function" or "function" in fields:
+        return {**fields}
+    return {"type": "function", "function": {key: value for key, value in fields.items() if key != "type"}}
+
+
 def _system_instruction_text(system_instruction: HttpxContentType | None) -> str | None:
     parts: Final = system_instruction.get("parts", []) if system_instruction else []
     texts: Final = tuple(text for part in parts if isinstance(text := part.get("text"), str))
@@ -426,7 +433,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 vertex_gemini_config = VertexGeminiConfig()
                 # Tools should be at the top level of setup, not inside generationConfig
                 optional_params["tools"] = vertex_gemini_config.map_function(
-                    value=value, optional_params=optional_params
+                    value=[_chat_completion_tool(tool) for tool in _JSON_ARRAY.validate_python(value)],
+                    optional_params=optional_params,
                 )
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
@@ -558,7 +566,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             return unknown
         if GeminiRealtimeConfig._is_audio_only_live_model(model) and frozenset(requested) == frozenset(("TEXT",)):
             return ("TEXT",)
-        if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in requested:
+        if GeminiRealtimeConfig._is_text_only_live_model(model) and frozenset(requested) == frozenset(("AUDIO",)):
             return ("AUDIO",)
         return ()
 

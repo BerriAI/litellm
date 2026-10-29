@@ -16,6 +16,7 @@ from litellm._logging import redact_internal_details_from_client_message, verbos
 from litellm._uuid import uuid
 from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
+    REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
@@ -172,7 +173,7 @@ _HELD_SESSION_UPDATE_TOO_LARGE: Final = RealtimeSessionUpdateRejection(
 )
 
 
-def _unscreened_audio_error_event(client_event_id: object) -> dict[str, object]:
+def _unscreened_audio_error_event(client_event_id: object) -> Mapping[str, object]:
     return {
         "type": "error",
         "event_id": f"event_{uuid.uuid4()}",
@@ -308,9 +309,14 @@ class RealTimeStreaming:
         usage_meter: RealtimeUsageMeter | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
         lazy_setup_deadline_seconds: float = REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
+        lazy_setup_content_grace_seconds: float = REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
     ):
         self.websocket: _ClientWebSocket = websocket
         self._lazy_setup_deadline: Final = time.monotonic() + lazy_setup_deadline_seconds
+        self._lazy_setup_content_grace_seconds: Final = lazy_setup_content_grace_seconds
+        self._held_client_content: tuple[str, ...] = ()
+        self._held_client_content_bytes: int = 0
+        self._held_client_content_deadline: float | None = None
         self._replay_scope: Final = client_websocket_scope(websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
@@ -416,6 +422,8 @@ class RealTimeStreaming:
             "input_audio_buffer.end",
         ]
     )
+    _HELD_CONTENT_TYPES: Final = frozenset(["conversation.item.create", "input_audio_buffer.append"])
+    _DEFERRED_SETUP_HELD_CONTENT_TYPES: Final = frozenset(["conversation.item.create"])
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
@@ -776,6 +784,42 @@ class RealTimeStreaming:
         self._held_session_update_bytes = 0
         if await self._send_to_backend(message):
             self._applied_session_fields = held
+            await self._send_held_client_content()
+
+    def _holds_client_content(self, msg_type: str | None, message: str) -> bool:
+        held_types: Final = (
+            RealTimeStreaming._DEFERRED_SETUP_HELD_CONTENT_TYPES
+            if self._uses_deferred_backend_setup()
+            else RealTimeStreaming._HELD_CONTENT_TYPES
+        )
+        return (
+            msg_type in held_types
+            and self._held_session_update is not None
+            and self._holds_session_updates_until_first_content()
+            and not self._pending_messages_until_setup
+            and len(self._held_client_content) < RealTimeStreaming._MAX_BUFFERED_MESSAGES
+            and self._held_client_content_bytes + len(message.encode("utf-8")) <= RealTimeStreaming._MAX_BUFFERED_BYTES
+        )
+
+    def _hold_client_content(self, message: str) -> None:
+        if self._held_client_content_deadline is None:
+            self._held_client_content_deadline = time.monotonic() + self._lazy_setup_content_grace_seconds
+        self._held_client_content = (*self._held_client_content, message)
+        self._held_client_content_bytes += len(message.encode("utf-8"))
+
+    async def _send_held_client_content(self) -> None:
+        held: Final = self._held_client_content
+        self._held_client_content = ()
+        self._held_client_content_bytes = 0
+        self._held_client_content_deadline = None
+        for message in held:
+            await self._send_to_backend(message)
+
+    def _setup_deadline(self) -> float:
+        content_deadline: Final = self._held_client_content_deadline
+        return (
+            self._lazy_setup_deadline if content_deadline is None else min(self._lazy_setup_deadline, content_deadline)
+        )
 
     async def _send_setup_before_content(self, msg_type: str | None) -> None:
         if self._holds_session_updates_until_first_content():
@@ -787,7 +831,7 @@ class RealTimeStreaming:
             return await self._receive_client_message()
         receive: Final = asyncio.ensure_future(self._receive_client_message())
         try:
-            done, _ = await asyncio.wait((receive,), timeout=self._lazy_setup_deadline - time.monotonic())
+            done, _ = await asyncio.wait((receive,), timeout=self._setup_deadline() - time.monotonic())
             if not done:
                 await self._send_setup_before_content(None)
             return await receive
@@ -809,6 +853,7 @@ class RealTimeStreaming:
         await self.backend_ws.send(setup)
         self._cache_session_configuration_request(setup)
         self._applied_session_fields = _NO_SESSION_FIELDS
+        await self._send_held_client_content()
 
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
@@ -1054,6 +1099,20 @@ class RealTimeStreaming:
         self._guardrail_cancel_event_ids = self._guardrail_cancel_event_ids | {event_id}
         await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
 
+    async def _send_blocked_turn_to_backend(self, pre_block_backend_message: str | None, item_id: str | None) -> None:
+        if pre_block_backend_message is None and self._is_transcription_session:
+            return
+        await self._send_setup_before_content("conversation.item.create")
+        # Deliver any caller-supplied backend message FIRST so that
+        # protocol contracts requiring a specific ordering (e.g.
+        # Gemini Live's mandatory ``toolResponse`` after a
+        # ``toolCall``) are honored before the guardrail's own
+        # clientContent / cancel messages are sent.
+        if pre_block_backend_message is not None:
+            await self._send_to_backend(pre_block_backend_message)
+        if not self._is_transcription_session:
+            await self._withdraw_blocked_turn(item_id)
+
     async def _withdraw_blocked_turn(self, item_id: str | None) -> None:
         await self._send_guardrail_cancel()
         if item_id is not None and self._deletes_conversation_items:
@@ -1248,15 +1307,7 @@ class RealTimeStreaming:
                 # Use realtime_violation_message if configured; fall back to guardrail error text.
                 error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
 
-                # Deliver any caller-supplied backend message FIRST so that
-                # protocol contracts requiring a specific ordering (e.g.
-                # Gemini Live's mandatory ``toolResponse`` after a
-                # ``toolCall``) are honored before the guardrail's own
-                # clientContent / cancel messages are sent.
-                if pre_block_backend_message is not None:
-                    await self._send_to_backend(pre_block_backend_message)
-                if not self._is_transcription_session:
-                    await self._withdraw_blocked_turn(item_id)
+                await self._send_blocked_turn_to_backend(pre_block_backend_message, item_id)
                 # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
                     json.dumps(
@@ -1719,7 +1770,6 @@ class RealTimeStreaming:
                     msg_type = client_event.get("type")
 
                     if msg_type == "conversation.item.create":
-                        await self._send_setup_before_content(msg_type)
                         # Check user text messages for prompt injection
                         item = client_event.get("item", {})
                         # Check function_call_output first so a client cannot
@@ -1890,6 +1940,12 @@ class RealTimeStreaming:
                 # turn_detection injection) so audit logs reflect what we
                 # actually forward to the backend.
                 self.store_input(message=message)
+
+                if self._holds_client_content(msg_type, message):
+                    self._hold_client_content(message)
+                    continue
+                if self._held_client_content and msg_type != "session.update":
+                    await self._send_setup_before_content(msg_type)
 
                 if msg_type in RealTimeStreaming._CLIENT_CONTENT_TYPES and self._uses_deferred_backend_setup():
                     await self._send_setup_before_content(msg_type)
