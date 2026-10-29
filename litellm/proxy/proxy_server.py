@@ -970,6 +970,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    update_daily_tag_spend,
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
@@ -1254,6 +1255,7 @@ async def flush_spend_counters_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the commit fails
         verbose_proxy_logger.exception("Error flushing spend counters on shutdown: %s", e)
+    await update_daily_tag_spend(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
 
 async def _flush_spend_logs_queue_on_shutdown() -> None:
@@ -11326,8 +11328,6 @@ class ProxyStartupEvent:
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
         tag_spend_update_interval: Final = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
-        from litellm.proxy.utils import update_daily_tag_spend
-
         scheduler.add_job(
             update_daily_tag_spend,
             "interval",

@@ -13,6 +13,7 @@ import httpx
 import psycopg
 import pytest
 import yaml
+from pydantic import JsonValue
 from integration._support.client import Gateway, delete_key_if_present, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
@@ -25,6 +26,7 @@ BATCH_DRAINED_LOG_LINE: Final = f"flushed {REQUESTS_WHILE_BLOCKED} daily spend u
 MODEL_INSERT_ARRIVED_LOG_LINE: Final = "path=/model/new"
 COMMIT_DELAY_SECONDS: Final = 15
 BURST_REQUESTS: Final = 30
+TAGGED_REQUESTS: Final = 5
 
 
 def _api_requests(table: str, column: str, identity: str) -> int:
@@ -166,6 +168,14 @@ class _Shutdown:
         eventually(lambda: self.logged(CANCEL_LOG_LINE), lambda seen: seen, seconds=60)
         release()
         self.owned.process.wait(timeout=120)
+
+
+def _config_with_batch_write_interval(tmp_path: Path, seconds: int) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["general_settings"]["proxy_batch_write_at"] = seconds
+    path: Final = tmp_path / f"batch-write-{seconds}.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
 
 
 def _config_with_pool_limit(tmp_path: Path, pool_limit: int) -> Path:
@@ -310,3 +320,30 @@ def test_daily_spend_burst_across_two_workers_survives_shutdown_during_commit_ex
             shutdown.terminate_once(lambda: _committing_daily_user_spend() >= 1, lambda: None)
         finally:
             _drop_slow_commit(suffix)
+
+
+def test_daily_tag_spend_buffered_since_the_last_tag_job_run_is_written_by_the_shutdown_flush(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    tag: Final = f"integration-shutdown-tag-{uuid.uuid4().hex}"
+    with gateway.scenario() as scenario, wire_server(_provider) as wire:
+        model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
+        with owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"]},
+            config=_config_with_batch_write_interval(tmp_path, 600),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned:
+            for _ in range(TAGGED_REQUESTS):
+                body: dict[str, JsonValue] = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": f"tag {uuid.uuid4().hex}"}],
+                }
+                response = owned.gateway.request("POST", "/v1/chat/completions", body, headers={"x-litellm-tags": tag})
+                assert response.status_code == 200, response.text
+            owned.begin_shutdown()
+            owned.process.wait(timeout=120)
+    assert _api_requests("LiteLLM_DailyTagSpend", "tag", tag) == TAGGED_REQUESTS, (
+        "the tag job runs every batch interval x 2.3, so only the shutdown flush can have written these rows"
+    )

@@ -29,10 +29,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from pydantic import BaseModel
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
+from pydantic import BaseModel, TypeAdapter
+from redis.asyncio import BlockingConnectionPool
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
+from litellm.proxy._types import BaseDailySpendTransaction, DailyTagSpendTransaction
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
@@ -52,6 +60,9 @@ from litellm.proxy.proxy_server import (
 )
 
 from .conftest import normalize
+
+_TAG_BATCH_ADAPTER: Final = TypeAdapter(dict[str, DailyTagSpendTransaction])
+_REDIS_LIST_ADAPTER: Final = TypeAdapter(list[bytes])
 
 # ---------------------------------------------------------------------------
 # cleanup_router_config_variables
@@ -409,6 +420,72 @@ async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(
         await ps.flush_spend_counters_on_shutdown()
 
     assert "Error flushing spend counters on shutdown: db gone" in caplog.text
+
+
+def _daily_tag_spend(tag: str) -> dict[str, BaseDailySpendTransaction]:
+    return {
+        f"{tag}_2026-10-26_key-1_gpt-4o_openai": DailyTagSpendTransaction(
+            tag=tag,
+            date="2026-10-26",
+            api_key="key-1",
+            model="gpt-4o",
+            model_group=None,
+            custom_llm_provider="openai",
+            mcp_namespaced_tool_name="",
+            endpoint="",
+            prompt_tokens=10,
+            completion_tokens=5,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+            compression_saved_tokens=0,
+            compression_savings_spend=0.0,
+            prompt_caching_savings_spend=0.0,
+            gateway_injected_caching_savings_spend=0.0,
+            spend=0.01,
+            api_requests=1,
+            successful_requests=1,
+            failed_requests=0,
+            request_id=None,
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_counters_on_shutdown_hands_daily_tag_spend_to_redis_when_another_pod_holds_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    server: Final = FakeServer()
+    sync_client: Final = FakeRedis(server=server)
+    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
+    try:
+        with (
+            patch("redis.Redis.from_url", return_value=sync_client),
+            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
+        ):
+            redis: Final = RedisCache(url="redis://spend-buffer.example:6379/0")
+            writer: Final = DBSpendUpdateWriter(redis_cache=redis)
+            writer.pod_lock_manager.redis_cache = redis
+            sync_client.set(PodLockManager.get_redis_lock_key(DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME), "other-pod")
+            await writer.daily_tag_spend_update_queue.add_update(_daily_tag_spend("prod-tag"))
+            monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+            monkeypatch.setattr(ps, "general_settings", {"use_redis_transaction_buffer": True}, raising=False)
+            monkeypatch.setattr(ps.proxy_logging_obj, "db_spend_update_writer", writer)
+
+            await ps.flush_spend_counters_on_shutdown()
+
+            buffered_tags: Final = [
+                txn["tag"]
+                for value in _REDIS_LIST_ADAPTER.validate_python(
+                    sync_client.lrange(REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY, 0, -1)
+                )
+                for txn in _TAG_BATCH_ADAPTER.validate_json(value).values()
+            ]
+            assert buffered_tags == ["prod-tag"], (
+                "a pod that is not the tag-commit leader must leave its buffered tag spend in Redis for the leader"
+            )
+    finally:
+        await pool.disconnect()
+        sync_client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1084,9 @@ async def test_proxy_shutdown_commits_spend_before_waiting_on_a_slow_logging_tas
 
     task_may_finish: Final = asyncio.Event()
     task_finished: Final = asyncio.Event()
-    flushes: Final[list[tuple[str, bool]]] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
+    flushes: Final[
+        list[tuple[str, bool]]
+    ] = []  # mutable-ok: records what each shutdown flush saw, which is the assertion
 
     async def slow_logging_task() -> None:
         await task_may_finish.wait()
