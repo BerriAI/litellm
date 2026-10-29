@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
@@ -25,6 +26,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
 )
 from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
+from litellm.responses.litellm_completion_transformation.tool_search import tool_search_routing
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     ChatCompletionSession,
@@ -663,6 +665,46 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "message" not in output_types
         assert "function_call" in output_types
 
+    def test_cited_tool_call_only_response_keeps_its_citations_in_a_message_item(self) -> None:
+        citation: Final = {"start_index": 0, "end_index": 0, "url": "https://example.com", "title": "Example"}
+        chat_completion_response: Final = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-3.8-flash",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        annotations=[{"type": "url_citation", "url_citation": citation}],
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_cited",
+                                type="function",
+                                function=Function(name="save_museum", arguments='{"name": "Louvre"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="which museum?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        output: Final = responses_api_response.output
+        assert [item.type for item in output] == ["message", "function_call"]
+        assert output[0].content[0].text == ""
+        assert [annotation.url for annotation in output[0].content[0].annotations] == [citation["url"]]
+
     def test_content_bearing_response_still_emits_message_item(self):
         """Turns with real text content must keep their message output item."""
         chat_completion_response = ModelResponse(
@@ -1248,12 +1290,7 @@ class TestFunctionCallTransformation:
 
     def test_parallel_tool_calls_dropped_when_no_chat_tools_remain(self) -> None:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
-        codex_tool_search: Final = {
-            "type": "tool_search",
-            "execution": "client",
-            "description": "Searches over deferred tool metadata with BM25.",
-            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
-        }
+        hosted_tool_search: Final = {"type": "tool_search", "execution": "server"}
         function_tool: Final = {
             "type": "function",
             "name": "get_goal",
@@ -1271,7 +1308,7 @@ class TestFunctionCallTransformation:
         hosted_only_result: Final = transform(
             model="azure/gpt-5.4-mini",
             input="Reply with just the word pong.",
-            responses_api_request={"tools": [codex_tool_search], "parallel_tool_calls": True},
+            responses_api_request={"tools": [hosted_tool_search], "parallel_tool_calls": True},
             custom_llm_provider="azure",
         )
         function_tools_result: Final = transform(
@@ -1730,7 +1767,7 @@ class TestToolTransformation:
         assert len(result_tools) == 0
         assert web_search_options is None
 
-    def test_transform_codex_tools_drops_hosted_tool_search(self) -> None:
+    def test_transform_codex_tools_offers_client_tool_search_as_a_function(self) -> None:
         codex_tools: Final = [
             {
                 "type": "function",
@@ -1783,16 +1820,22 @@ class TestToolTransformation:
             },
             {"type": "web_search", "external_web_access": False, "search_content_types": ["text", "image"]},
         ]
-        function_and_custom_count: Final = sum(1 for tool in codex_tools if tool["type"] in ("function", "custom"))
+        codex_search: Final = codex_tools[3]
 
         (
             result_tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=codex_tools)
 
-        assert not any(tool.get("type") == "tool_search" for tool in result_tools)
         assert all(tool.get("type") == "function" for tool in result_tools)
-        assert len(result_tools) == function_and_custom_count
+        assert [tool["function"]["name"] for tool in result_tools] == [
+            "exec_command",
+            "write_stdin",
+            "apply_patch",
+            "tool_search",
+        ]
+        assert result_tools[3]["function"]["description"] == codex_search["description"]
+        assert result_tools[3]["function"]["parameters"] == codex_search["parameters"]
         assert web_search_options is not None
 
     @pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
@@ -1838,9 +1881,6 @@ class TestToolTransformation:
         assert all("defer_loading" not in tool for tool in result["tools"])
 
     @pytest.mark.parametrize(
-        "search_tools", [[], [{"type": "tool_search", "execution": "client"}]], ids=["none", "client"]
-    )
-    @pytest.mark.parametrize(
         ("model", "provider"),
         [
             ("anthropic/claude-sonnet-5-5", "anthropic"),
@@ -1850,7 +1890,7 @@ class TestToolTransformation:
         ],
     )
     def test_claude_routes_keep_the_callers_deferral_when_no_server_search_tool_is_sent(
-        self, model: str, provider: str, search_tools: list[dict[str, object]]
+        self, model: str, provider: str
     ) -> None:
         function_tools: Final = [
             tool for tool in _deferred_tools_with_server_tool_search() if tool["type"] != "tool_search"
@@ -1859,7 +1899,7 @@ class TestToolTransformation:
         result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model=model,
             input="What is the weather in Paris right now?",
-            responses_api_request={"tools": [*search_tools, *function_tools]},
+            responses_api_request={"tools": function_tools},
             custom_llm_provider=provider,
         )
 
@@ -4306,6 +4346,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._reasoning_active = False
         iterator._pending_response_events = []
         iterator._pending_tool_events = []
+        iterator._annotations_awaiting_message = ()
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
         iterator._tool_item_id_by_call_id = {}
@@ -4320,8 +4361,8 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         iterator._web_search_calls = {}
         iterator._queued_web_search_call_ids = set()
-        iterator._tool_search_requested = False
-        iterator._tool_search_call_ids = set()
+        iterator._tool_search = tool_search_routing(None)
+        iterator._tool_search_executions = MappingProxyType({})
         return iterator
 
     def _make_text_chunk(self):
@@ -6713,7 +6754,6 @@ def test_summary_replay_drops_the_history_its_compaction_item_replaces() -> None
     ]
 
 
-
 @pytest.mark.parametrize(
     ("call", "output"),
     [
@@ -6864,7 +6904,14 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
     [
         pytest.param(
             _COMPACTION_REQUESTED,
-            [("user", ()), ("assistant", ("call_0",)), ("tool", "Sunny."), ("assistant", ()), ("assistant", ("call_0",)), ("tool", "Rain.")],
+            [
+                ("user", ()),
+                ("assistant", ("call_0",)),
+                ("tool", "Sunny."),
+                ("assistant", ()),
+                ("assistant", ("call_0",)),
+                ("tool", "Rain."),
+            ],
             id="native_compaction_block",
         ),
         pytest.param(
@@ -7006,7 +7053,9 @@ async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chun
     assert incomplete_event.type == "response.incomplete"
     assert incomplete_event.response.status == "incomplete"
     assert incomplete_event.response.usage is not None
-    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(model="gpt-4o-mini", text=relayed_text)
+    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(
+        model="gpt-4o-mini", text=relayed_text
+    )
     assert incomplete_event.response.usage.input_tokens > 0
 
 

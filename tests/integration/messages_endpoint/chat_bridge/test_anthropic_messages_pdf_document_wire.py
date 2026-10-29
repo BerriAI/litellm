@@ -7,7 +7,8 @@ from typing import Final
 
 import anthropic
 import pytest
-from integration._support.client import Gateway, Scenario, string_value
+import yaml
+from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.pdf_document import LETTER, Page, document, encoded, pdf_bytes
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -16,7 +17,6 @@ from pydantic import JsonValue, TypeAdapter
 _API_KEY: Final = "synthetic-pdf-document-key"
 _ANSWER: Final = "The codeword is PELICAN-42."
 _TITLE: Final = "Quarterly report"
-_URL: Final = "https://example.com/brief.pdf"
 _SAP_TOKEN_TARGET: Final = "/oauth/token"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PARTS: Final = TypeAdapter(list[dict[str, JsonValue]])
@@ -59,18 +59,45 @@ def _user_parts(body: dict[str, JsonValue], key: str) -> list[dict[str, JsonValu
     return _PARTS.validate_python(turns[0]["content" if key == "messages" else "parts"])
 
 
-def test_anthropic_sdk_pdf_documents_reach_azure_as_file_parts_named_by_title(gateway: Gateway) -> None:
+def _local_fetch_config(directory: Path) -> Path:
+    config: Final = _JSON_OBJECT.validate_python(
+        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    )
+    path: Final = directory / "pdf-url-local-fetch.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                **config,
+                "general_settings": {
+                    **object_value(config["general_settings"]),
+                    "user_url_allowed_hosts": ["127.0.0.1"],
+                },
+            }
+        )
+    )
+    return path
+
+
+def test_anthropic_sdk_pdf_documents_reach_azure_as_file_parts_named_by_title(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = uuid.uuid4().hex
     backend: Final = f"gpt-pdf-{marker[:8]}"
     identity: Final = f"chatcmpl-{marker}"
     titled: Final = _pdf(f"PELICAN-42 {marker}")
     untitled: Final = _pdf(f"ORCHID-77 {marker}")
+    linked: Final = pdf_bytes((Page(text=f"HERON-13 {marker}"), LETTER))
     question: Final = f"What codeword does each document carry? {marker}"
-    with wire_server(lambda _: _chat_completion(identity, backend)) as wire, gateway.scenario() as scenario:
+    with (
+        wire_server(lambda _: Reply(body=linked, content_type="application/pdf")) as pdf_host,
+        wire_server(lambda _: _chat_completion(identity, backend)) as wire,
+        owned_proxy_process(gateway, tmp_path, {}, config=_local_fetch_config(tmp_path)) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
         model: Final = scenario.model(
             model=f"azure/{backend}", api_base=wire.url, api_key=_API_KEY, api_version="2024-10-21"
         )
-        client: Final = anthropic.Anthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
+        client: Final = anthropic.Anthropic(
+            base_url=str(owned.gateway.client.base_url), api_key=owned.gateway.key, max_retries=0
+        )
         message: Final = client.messages.create(
             model=model,
             max_tokens=64,
@@ -87,7 +114,7 @@ def test_anthropic_sdk_pdf_documents_reach_azure_as_file_parts_named_by_title(ga
                             "type": "document",
                             "source": {"type": "base64", "media_type": "application/pdf", "data": untitled},
                         },
-                        {"type": "document", "source": {"type": "url", "url": _URL}},
+                        {"type": "document", "source": {"type": "url", "url": f"{pdf_host.url}/brief.pdf"}},
                         {"type": "text", "text": question},
                     ],
                 }
@@ -101,9 +128,13 @@ def test_anthropic_sdk_pdf_documents_reach_azure_as_file_parts_named_by_title(ga
                 "type": "file",
                 "file": {"filename": "document.pdf", "file_data": f"data:application/pdf;base64,{untitled}"},
             },
-            {"type": "image_url", "image_url": {"url": _URL}},
+            {
+                "type": "file",
+                "file": {"filename": "document.pdf", "file_data": f"data:application/pdf;base64,{encoded(linked)}"},
+            },
             {"type": "text", "text": question},
         ]
+    assert [request.target for request in pdf_host.drain()] == ["/brief.pdf"]
 
 
 @dataclass(frozen=True, slots=True)
