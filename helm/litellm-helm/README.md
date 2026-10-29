@@ -259,3 +259,9 @@ itself.
 `lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
 
 Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published
+
+## Shutdown accounting
+
+`GRACEFUL_SHUTDOWN_TIMEOUT` defaults to 30 seconds. Pending success callbacks share the time remaining since SIGTERM or the first `/health/drain` call. Callback flushing reserves the existing 10-second teardown headroom for cancellation, tracked accounting tasks and persistence. Exhausting this budget can discard callbacks, which is logged
+
+Set `terminationGracePeriodSeconds` to at least `GRACEFUL_SHUTDOWN_TIMEOUT + 10`, allowing additional time for preStop hooks and database writes. This is not a hard shutdown bound or a guarantee of persistence. Database retries retain their own limits, and cancellation-resistant callbacks can remain alive. The existing preStop hook can also be followed by Uvicorn's separate connection drain, as described in `values.yaml`

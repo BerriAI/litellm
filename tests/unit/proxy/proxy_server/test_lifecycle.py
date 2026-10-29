@@ -35,6 +35,7 @@ from typing_extensions import TypedDict
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
+    _proxy_startup_event,
     ProxyStartupEvent,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
@@ -1059,7 +1060,7 @@ def test_otel_global_provider_published_after_callback_init():
     span was orphaned. The publish (``publish_global_otel_v2_provider``) must
     therefore appear after ``_initialize_startup_logging`` in the lifespan source.
     """
-    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    wrapped = getattr(_proxy_startup_event, "__wrapped__", _proxy_startup_event)
     source = inspect.getsource(wrapped)
     init_pos = source.find("ProxyStartupEvent.initialize_startup_logging(")
     publish_pos = source.find("publish_global_otel_v2_provider(")
@@ -1145,7 +1146,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     The call must follow Prisma setup so DB-backed deployments do not false-positive.
     Direct ``_warn_budget_without_db`` tests cover the warning behavior itself.
     """
-    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    wrapped = getattr(_proxy_startup_event, "__wrapped__", _proxy_startup_event)
     source = inspect.getsource(wrapped)
     budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
     warn_pos = source.find("warn_budget_without_db(")
