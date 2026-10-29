@@ -5,7 +5,8 @@ Test to verify the Google GenAI generate_content handler functionality
 
 import asyncio
 import json
-import time
+import logging
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Final
 
@@ -14,11 +15,13 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter, GoogleGenAIStreamWrapper
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from tests._wait_helpers import await_until, wait_until
 
 
 def test_stream_response_when_stream_requested_sync():
@@ -347,16 +350,39 @@ _ANTHROPIC_SSE: Final = "".join(
 )
 
 
-class _FailureCallTypes(CustomLogger):
+class _LoggedEvents(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.call_types: list[str] = []
+        self.events: list[tuple[str, str, str, str | None]] = []
+        self.response_costs: list[float] = []
+        self.session_ids: list[str | None] = []
+
+    def _record(self, outcome: str, kwargs: dict[str, object]) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        self.events.append((outcome, kwargs["call_type"], kwargs["litellm_call_id"], payload["model_group"]))
+        self.response_costs.append(payload["response_cost"])
+        self.session_ids.append(kwargs["litellm_params"].get("litellm_session_id"))
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("success", kwargs)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record("success", kwargs)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.call_types.append(kwargs["call_type"])
+        self._record("failure", kwargs)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.call_types.append(kwargs["call_type"])
+        self._record("failure", kwargs)
+
+
+class _SyncSuccessEvents(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[str, str]] = []
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append((kwargs["call_type"], kwargs["litellm_call_id"]))
 
 
 class _SuccessPayloads(CustomLogger):
@@ -371,6 +397,51 @@ class _SuccessPayloads(CustomLogger):
 @pytest.fixture
 def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+@pytest.fixture
+def _litellm_errors(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCaptureFixture]:
+    verbose_logger.addHandler(caplog.handler)
+    yield caplog
+    verbose_logger.removeHandler(caplog.handler)
+
+
+_ADAPTER_CALL_ID: Final = "generate-content-call"
+_SUCCESS_SSE: Final = _CHAT_SSE.replace(
+    "data: [DONE]",
+    'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[],'
+    '"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\n'
+    "data: [DONE]",
+)
+_INPUT_COST_PER_TOKEN: Final = 0.001
+_OUTPUT_COST_PER_TOKEN: Final = 0.002
+
+
+def _adapter_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "grok-group",
+                "litellm_params": {
+                    "model": "hosted_vllm/grok",
+                    "api_base": "http://upstream.test/v1",
+                    "api_key": "k",
+                    "input_cost_per_token": _INPUT_COST_PER_TOKEN,
+                    "output_cost_per_token": _OUTPUT_COST_PER_TOKEN,
+                },
+            }
+        ]
+    )
+
+
+def _upstream_reply(stream: bool) -> httpx.Response:
+    if stream:
+        return httpx.Response(200, text=_SUCCESS_SSE, headers={"content-type": "text/event-stream"})
+    return httpx.Response(200, json=_CHAT_BODY)
+
+
+def _litellm_error_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 async def _drain(stream: object) -> None:
@@ -528,48 +599,155 @@ async def _adapter_stream_payloads(
     ]
 
 
+@pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
+@pytest.mark.asyncio
+async def test_generate_content_adapter_success_is_logged_once_on_the_request(
+    _httpx_transport: None,
+    _litellm_errors: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    stream: bool,
+):
+    logged = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    per_request_calls: list[tuple[str, str]] = []
+
+    async def per_request_callback(kwargs, completion_response, start_time, end_time):
+        per_request_calls.append((kwargs["call_type"], kwargs["litellm_call_id"]))
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream))
+        response = await getattr(_adapter_router(), entrypoint)(
+            model="grok-group",
+            contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+            litellm_call_id=_ADAPTER_CALL_ID,
+            success_callback=[per_request_callback],
+        )
+        if stream:
+            await _drain(response)
+    await await_until(
+        lambda: bool(logged.events) and bool(per_request_calls), message="the request's success callbacks ran"
+    )
+
+    assert logged.events == [("success", entrypoint, _ADAPTER_CALL_ID, "grok-group")]
+    assert logged.response_costs == [pytest.approx(3 * _INPUT_COST_PER_TOKEN + 1 * _OUTPUT_COST_PER_TOKEN)]
+    assert per_request_calls == [(entrypoint, _ADAPTER_CALL_ID)]
+    assert _litellm_error_messages(_litellm_errors) == []
+
+
+def test_sync_generate_content_adapter_success_is_logged_once_on_the_request(
+    _httpx_transport: None, _litellm_errors: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    logged = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    per_request_calls: list[tuple[str, str]] = []
+
+    def per_request_callback(kwargs, completion_response, start_time, end_time):
+        per_request_calls.append((kwargs["call_type"], kwargs["litellm_call_id"]))
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream=False))
+        _adapter_router().generate_content(
+            model="grok-group",
+            contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+            litellm_call_id=_ADAPTER_CALL_ID,
+            success_callback=[per_request_callback],
+        )
+    wait_until(lambda: bool(logged.events) and bool(per_request_calls), message="the request's success callbacks ran")
+
+    assert logged.events == [("success", "generate_content", _ADAPTER_CALL_ID, "grok-group")]
+    assert logged.response_costs == [pytest.approx(3 * _INPUT_COST_PER_TOKEN + 1 * _OUTPUT_COST_PER_TOKEN)]
+    assert per_request_calls == [("generate_content", _ADAPTER_CALL_ID)]
+    assert _litellm_error_messages(_litellm_errors) == []
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_runs_sync_callbacks_once_on_async_requests(
+    _httpx_transport: None, _litellm_errors: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    logged = _SyncSuccessEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream=False))
+        await _adapter_router().agenerate_content(
+            model="grok-group",
+            contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+            litellm_call_id=_ADAPTER_CALL_ID,
+        )
+    await await_until(lambda: bool(logged.events), message="the sync success callback ran")
+
+    assert logged.events == [("agenerate_content", _ADAPTER_CALL_ID)]
+    assert _litellm_error_messages(_litellm_errors) == []
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_keeps_the_request_no_log_and_session_id(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+):
+    logged = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream=False))
+        for call_id, request_settings in (
+            ("unlogged-call", {"no-log": True}),
+            (_ADAPTER_CALL_ID, {"litellm_session_id": "adapter-session"}),
+        ):
+            await litellm.agenerate_content(
+                model="hosted_vllm/grok",
+                contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+                api_base="http://upstream.test/v1",
+                api_key="k",
+                litellm_call_id=call_id,
+                **request_settings,
+            )
+    await await_until(lambda: bool(logged.events), message="the logged request reached the callback")
+
+    assert [call_id for _, _, call_id, _ in logged.events] == [_ADAPTER_CALL_ID]
+    assert logged.session_ids == ["adapter-session"]
+
+
 @pytest.mark.parametrize("entrypoint", ["agenerate_content", "agenerate_content_stream"])
 @pytest.mark.asyncio
 async def test_generate_content_adapter_failure_is_logged_once(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str
 ):
-    failures = _FailureCallTypes()
-    monkeypatch.setattr(litellm, "callbacks", [failures])
+    logged = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
 
     with respx.mock() as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(
             return_value=httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
         )
         with pytest.raises(litellm.BadRequestError):
-            await getattr(litellm.google_genai, entrypoint)(
-                model="hosted_vllm/grok",
+            await getattr(_adapter_router(), entrypoint)(
+                model="grok-group",
                 contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
-                api_base="http://upstream.test/v1",
-                api_key="k",
+                litellm_call_id=_ADAPTER_CALL_ID,
             )
-    await asyncio.sleep(0.5)
+    await await_until(lambda: bool(logged.events), message="the request's failure was logged")
 
-    assert failures.call_types == ["acompletion"]
+    assert logged.events == [("failure", entrypoint, _ADAPTER_CALL_ID, "grok-group")]
 
 
 def test_sync_generate_content_adapter_failure_is_logged_once(_httpx_transport: None, monkeypatch: pytest.MonkeyPatch):
-    failures = _FailureCallTypes()
-    monkeypatch.setattr(litellm, "callbacks", [failures])
+    logged = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
 
     with respx.mock() as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(
             return_value=httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
         )
         with pytest.raises(litellm.BadRequestError):
-            litellm.google_genai.generate_content(
-                model="hosted_vllm/grok",
+            _adapter_router().generate_content(
+                model="grok-group",
                 contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
-                api_base="http://upstream.test/v1",
-                api_key="k",
+                litellm_call_id=_ADAPTER_CALL_ID,
             )
-    time.sleep(0.5)
+    wait_until(lambda: bool(logged.events), message="the request's failure was logged")
 
-    assert failures.call_types == ["completion"]
+    assert logged.events == [("failure", "generate_content", _ADAPTER_CALL_ID, "grok-group")]
 
 
 def _stream_chunk(content: str | None, finish_reason: str | None, usage: Usage | None = None) -> ModelResponseStream:
