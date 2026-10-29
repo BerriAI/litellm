@@ -10,7 +10,8 @@ routes that already exist are only ever allowed to shrink.
 
 The merge-base counts come from scripts/lint_base_counts.py: the disk cache, then the
 CI artifact published for that commit, then a pass of the current checker over a
-detached worktree at the merge-base with that tree first on PYTHONPATH.
+detached worktree at the merge-base with that tree first on PYTHONPATH and the head
+tree's built Rust bridge extension linked in, since git does not carry it.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 from types import FrameType, MappingProxyType
 from typing import Final, NamedTuple
@@ -43,6 +45,7 @@ REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 CHECKER: Final = REPO_ROOT / "scripts" / "check_openapi_docs.py"
 TARGET: Final = "litellm"
 TERMINATION_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
+NATIVE_EXTENSION_DIR: Final = Path("litellm") / "rust_bridge"
 
 _LINE: Final = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) (?P<code>OA\d+)$")
 _ADDED_LINE: Final = re.compile(r"^\+(?!\+\+)(?P<text>.*)$", re.MULTILINE)
@@ -101,6 +104,20 @@ def _install_termination_handlers() -> None:
             signal.signal(termination, _exit_on_termination)
 
 
+def _built_native_extensions(root: Path) -> tuple[Path, ...]:
+    return tuple(
+        built for suffix in EXTENSION_SUFFIXES if (built := root / NATIVE_EXTENSION_DIR / f"_native{suffix}").is_file()
+    )
+
+
+def _link_native_extensions(head_root: Path, base_root: Path) -> None:
+    base_dir: Final = base_root / NATIVE_EXTENSION_DIR
+    if not base_dir.is_dir():
+        return
+    for built in _built_native_extensions(head_root):
+        (base_dir / built.name).symlink_to(built.resolve())
+
+
 def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* checker over the base tree."""
     _install_termination_handlers()
@@ -108,6 +125,7 @@ def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) 
     worktree: Final = parent / "wt"
     try:
         _run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_root)
+        _link_native_extensions(repo_root, worktree)
         (worktree / "scripts").mkdir(parents=True, exist_ok=True)
         base_checker: Final = worktree / "scripts" / "check_openapi_docs.py"
         shutil.copy(checker, base_checker)
