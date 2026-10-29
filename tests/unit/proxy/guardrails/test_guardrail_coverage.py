@@ -12,17 +12,19 @@ inspection by the relevant guardrail hook:
   not just ``choices[0]``.
 """
 
+from types import SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import Request, Response
 
 import litellm
 from litellm import DualCache
 from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import CallTypesLiteral, Choices, Message, ModelResponse
 
 
 @pytest.fixture
@@ -905,3 +907,78 @@ async def test_google_text_moderation_inspects_multimodal_content(user_api_key):
     )
 
     assert seen_documents == ["hello world"]
+
+
+class _FinanceFlaggingLanguageClient:
+    def __init__(self) -> None:
+        self.moderated_texts: Final[list[str]] = []  # mutable-ok: records what reached Google
+
+    def moderate_text(self, request: SimpleNamespace) -> SimpleNamespace:
+        self.moderated_texts.append(request.document.content)
+        return SimpleNamespace(moderation_categories=[SimpleNamespace(name="Finance", confidence=0.885)])
+
+
+def _google_text_moderation_flagging_finance():
+    from enterprise.enterprise_hooks.google_text_moderation import (
+        ENTERPRISE_GoogleTextModeration,
+    )
+
+    guard: Final = ENTERPRISE_GoogleTextModeration.__new__(ENTERPRISE_GoogleTextModeration)
+    guard.client = _FinanceFlaggingLanguageClient()
+    guard.language_document = lambda content, type_: SimpleNamespace(content=content)
+    guard.moderate_text_request = lambda document: SimpleNamespace(document=document)
+    guard.document_type = "PLAIN_TEXT"
+    guard.finance_confidence_threshold = 0.8
+    return guard
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "data"),
+    [
+        ("aembedding", {"model": "text-embedding-ada-002", "input": "stocks"}),
+        ("embedding", {"model": "text-embedding-ada-002", "input": ["stocks", "mortgage"]}),
+        ("allm_passthrough_route", {"model": "gigachat-embeddings", "endpoint": "embeddings", "input": ["stocks"]}),
+    ],
+)
+async def test_google_text_moderation_leaves_embedding_input_unmoderated(
+    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, data: dict[str, object]
+):
+    guard: Final = _google_text_moderation_flagging_finance()
+
+    await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type)
+
+    assert guard.client.moderated_texts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "data"),
+    [
+        ("acompletion", {"model": "gpt-4o", "messages": [{"role": "user", "content": "stocks"}]}),
+        ("anthropic_messages", {"model": "claude", "messages": [{"role": "user", "content": "stocks"}]}),
+        ("aresponses", {"model": "gpt-4o", "input": "stocks"}),
+        (
+            "allm_passthrough_route",
+            {"model": "gigachat", "endpoint": "chat/completions", "messages": [{"role": "user", "content": "stocks"}]},
+        ),
+        (
+            "allm_passthrough_route",
+            {
+                "model": "gigachat",
+                "endpoint": "chat/completions#embeddings",
+                "messages": [{"role": "user", "content": "stocks"}],
+            },
+        ),
+    ],
+)
+async def test_google_text_moderation_still_blocks_conversations(
+    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, data: dict[str, object]
+):
+    guard: Final = _google_text_moderation_flagging_finance()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type)
+
+    assert exc_info.value.status_code == 400
+    assert guard.client.moderated_texts == ["stocks"]

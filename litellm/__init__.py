@@ -591,7 +591,7 @@ vertex_ai_safety_settings: Optional[dict] = None
 ####### COMPLETION MODELS ###################
 from typing import Set
 
-open_ai_chat_completion_models: Set = set()
+open_ai_chat_completion_models: Set[str] = set()
 open_ai_text_completion_models: Set = set()
 cohere_models: Set = set()
 cohere_chat_models: Set = set()
@@ -619,6 +619,8 @@ vertex_openai_models: Set = set()
 vertex_minimax_models: Set = set()
 vertex_moonshot_models: Set = set()
 vertex_zai_models: Set = set()
+vertex_qwen_models: Final[Set[str]] = set()
+vertex_ai_models: Final[Set[str]] = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -635,6 +637,7 @@ watsonx_models: Set = set()
 gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
+bigmodel_models: Final[set[str]] = set()  # mutable-ok: provider registry is populated and extended at runtime
 deepseek_models: Set = set()
 tencent_models: Set = set()
 runwayml_models: Set = set()
@@ -681,6 +684,8 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
+streamlake_models: Final[Set[str]] = set()
+zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
 opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
@@ -831,6 +836,10 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
         elif value.get("litellm_provider") == "vertex_ai-zai_models":
             key = key.replace("vertex_ai/", "")
             vertex_zai_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-qwen_models":
+            vertex_qwen_models.add(key.removeprefix("vertex_ai/"))
+        elif value.get("litellm_provider") == "vertex_ai":
+            vertex_ai_models.add(key.removeprefix("vertex_ai/"))
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -875,6 +884,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             xai_models.add(key)
         elif value.get("litellm_provider") == "zai":
             zai_models.add(key)
+        elif value.get("litellm_provider") == "bigmodel":
+            bigmodel_models.add(key)
         elif value.get("litellm_provider") == "fal_ai":
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
@@ -969,6 +980,10 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
+        elif value.get("litellm_provider") == "streamlake":
+            streamlake_models.add(key)
+        elif value.get("litellm_provider") == "zerogpu":
+            zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1101,6 +1116,7 @@ model_list = list(
     | text_completion_inception_models
     | xai_models
     | zai_models
+    | bigmodel_models
     | fal_ai_models
     | deepseek_models
     | modelscope_models
@@ -1142,6 +1158,8 @@ model_list = list(
     | publicai_models
     | darkbloom_models
     | openinfer_models
+    | streamlake_models
+    | zerogpu_models
     | v0_models
     | morph_models
     | opencode_go_models
@@ -1196,7 +1214,16 @@ def _build_models_by_provider() -> dict:
         | vertex_deepseek_models
         | vertex_minimax_models
         | vertex_moonshot_models
-        | vertex_zai_models,
+        | vertex_zai_models
+        | vertex_qwen_models
+        | vertex_mistral_models
+        | vertex_llama3_models
+        | vertex_ai_ai21_models
+        | vertex_openai_models
+        | vertex_ai_image_models
+        | vertex_ai_video_models
+        | vertex_embedding_models
+        | vertex_ai_models,
         "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
@@ -1213,6 +1240,7 @@ def _build_models_by_provider() -> dict:
         "text-completion-inception": text_completion_inception_models,
         "xai": xai_models,
         "zai": zai_models,
+        "bigmodel": bigmodel_models,
         "fal_ai": fal_ai_models,
         "deepseek": deepseek_models,
         "tencent": tencent_models,
@@ -1261,6 +1289,8 @@ def _build_models_by_provider() -> dict:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
+        "streamlake": streamlake_models,
+        "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
         "opencode_go": opencode_go_models,
@@ -1331,7 +1361,6 @@ all_embedding_models = (
 )
 
 ####### IMAGE GENERATION MODELS ###################
-openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
@@ -1449,6 +1478,7 @@ from .exceptions import (
     Timeout,
     APIConnectionError,
     UnsupportedParamsError,
+    UnsupportedEndpointError as UnsupportedEndpointError,
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
@@ -1737,6 +1767,9 @@ if TYPE_CHECKING:
     )
     from .llms.lm_studio.decisions.transformation import (
         LMStudioDecisionsConfig as LMStudioDecisionsConfig,
+    )
+    from .llms.ollama.decisions.transformation import (
+        OllamaDecisionsConfig as OllamaDecisionsConfig,
     )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,
