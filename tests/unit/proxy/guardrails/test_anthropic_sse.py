@@ -316,9 +316,20 @@ def test_rewritten_stream_drops_the_verdict_of_a_tool_use_whose_input_the_guardr
     assert rewritten_delta["safeguard_results"] == _safeguard_results({"toolu_untouched": verdict})
 
 
-def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error():
+@pytest.mark.parametrize(
+    ("delivered_content", "upstream_stopped_indices"),
+    [
+        (_upstream_stream({})[:-2], [0]),
+        (_upstream_stream({})[:-3], []),
+        (_upstream_stream({}, tool_uses=(("toolu_cut_off", "Bash"),))[:-3], [0]),
+    ],
+    ids=["text-block-stopped", "text-block-cut-off", "tool-use-block-cut-off"],
+)
+def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error(
+    delivered_content: tuple[bytes, ...], upstream_stopped_indices: list[int]
+):
     upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
-    upstream: Final = (*_upstream_stream({})[:-2], _frame("error", upstream_error))
+    upstream: Final = (*delivered_content, _frame("error", upstream_error))
     assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True)
     assert assembled is not None
     _set_text("call [PHONE]")(assembled)
@@ -330,3 +341,6 @@ def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error(
         "a stream the upstream ended in an error must not be re-emitted as one that completed"
     )
     assert any(payload.get("delta") == {"type": "text_delta", "text": "call [PHONE]"} for _, payload in rewritten)
+    assert [payload["index"] for event, payload in rewritten if event == "content_block_stop"] == (
+        upstream_stopped_indices
+    ), "a block the upstream never finished must not be re-emitted as finished"

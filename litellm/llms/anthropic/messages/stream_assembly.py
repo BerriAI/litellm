@@ -504,6 +504,26 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     return tuple(event for event in split_sse_chunk_into_events(sse_stream) if _is_error_event(event))
 
 
+def anthropic_sse_stopped_block_index(event: str) -> object:
+    return next(
+        (
+            event_data.get("index")
+            for event_data in _parsed_sse_events(event)
+            if event_data.get("type") == "content_block_stop"
+        ),
+        None,
+    )
+
+
+def anthropic_sse_stopped_block_indices(all_chunks: Sequence[object]) -> frozenset[object]:
+    sse_stream: Final = _joined_sse_stream(all_chunks) or ""
+    return frozenset(
+        index
+        for event in split_sse_chunk_into_events(sse_stream)
+        if (index := anthropic_sse_stopped_block_index(event)) is not None
+    )
+
+
 def assemble_anthropic_sse_stream(
     all_chunks: Sequence[object], *, restore_identity: bool = False
 ) -> ModelResponse | None:

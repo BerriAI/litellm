@@ -18,6 +18,8 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_message_delta_fields,
     anthropic_sse_error_events,
     anthropic_sse_event_type,
+    anthropic_sse_stopped_block_index,
+    anthropic_sse_stopped_block_indices,
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
@@ -108,8 +110,12 @@ def _rewritten_message_delta_fields(
 _MESSAGE_END_EVENT_TYPES: Final = frozenset({"message_delta", "message_stop"})
 
 
-def _ends_the_message(chunk: bytes) -> bool:
-    return anthropic_sse_event_type(chunk.decode()) in _MESSAGE_END_EVENT_TYPES
+def _sent_by_the_failed_upstream(chunk: bytes, upstream_stopped_block_indices: frozenset[object]) -> bool:
+    event: Final = chunk.decode()
+    if anthropic_sse_event_type(event) in _MESSAGE_END_EVENT_TYPES:
+        return False
+    stopped_block_index: Final = anthropic_sse_stopped_block_index(event)
+    return stopped_block_index is None or stopped_block_index in upstream_stopped_block_indices
 
 
 def anthropic_sse_chunks_from_response(
@@ -122,7 +128,7 @@ def anthropic_sse_chunks_from_response(
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
     A source stream that ended in an upstream ``error`` event ends with that event again, never
-    with a ``message_delta`` or ``message_stop`` the upstream did not send.
+    with a ``content_block_stop``, ``message_delta``, or ``message_stop`` the upstream did not send.
     """
     from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
@@ -149,7 +155,8 @@ def anthropic_sse_chunks_from_response(
     error_events: Final = anthropic_sse_error_events(source_chunks)
     if not error_events:
         return tuple(rewritten_chunks)
+    upstream_stopped_block_indices: Final = anthropic_sse_stopped_block_indices(source_chunks)
     return (
-        *(chunk for chunk in rewritten_chunks if not _ends_the_message(chunk)),
+        *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, upstream_stopped_block_indices)),
         *(f"{event}\n\n".encode() for event in error_events),
     )
