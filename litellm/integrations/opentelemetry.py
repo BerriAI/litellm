@@ -2274,7 +2274,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             exception: Final = kwargs.get("exception")
             scrubbed: Final = scrubbed_exception_text(kwargs)
 
-            # Record the exception using OTEL's standard method, with the logged text when redaction scrubbed it
+            # Record the exception using OTEL's standard method
             if exception is not None and scrubbed is not None:
                 span.record_exception(
                     exception, attributes={"exception.message": scrubbed[0], "exception.stacktrace": scrubbed[1]}

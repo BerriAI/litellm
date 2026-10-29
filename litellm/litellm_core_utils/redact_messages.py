@@ -452,25 +452,27 @@ _ECHO_FRAGMENT_LENGTH: Final = 24
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 
 
+def _child_values(value: object) -> tuple[object, ...]:
+    if (mapping := _as_mapping(value)) is not None:
+        return tuple(item for key, item in mapping.items() if key not in _STRUCTURAL_KEYS)
+    if (items := _as_items(value)) is not None:
+        return items
+    if isinstance(value, BaseModel):
+        return (value.model_dump(),)
+    return ()
+
+
+def _next_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(itertools.chain.from_iterable(map(_child_values, level)))
+
+
 def request_texts(*values: object) -> frozenset[str]:
     """
     The non-empty strings a request carries under ``values``, skipping structural fields such as ``role``
     and ``type``.
     """
-    texts: Final[set[str]] = set()  # mutable-ok: filled by the walk below
-    pending: Final[list[object]] = list(values)  # mutable-ok: the walk's work stack
-    while pending:
-        value = pending.pop()
-        if isinstance(value, str):
-            if value:
-                texts.add(value)
-        elif (mapping := _as_mapping(value)) is not None:
-            pending.extend(item for key, item in mapping.items() if key not in _STRUCTURAL_KEYS)
-        elif (items := _as_items(value)) is not None:
-            pending.extend(items)
-        elif isinstance(value, BaseModel):
-            pending.append(value.model_dump())
-    return frozenset(texts)
+    levels: Final = itertools.takewhile(bool, itertools.accumulate(itertools.repeat(None), _next_level, initial=values))
+    return frozenset(value for value in itertools.chain.from_iterable(levels) if isinstance(value, str) and value)
 
 
 def failure_request_texts(model_call_details: Mapping[str, object], *originals: object) -> frozenset[str]:

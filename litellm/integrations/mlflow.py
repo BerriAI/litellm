@@ -87,7 +87,7 @@ class MlflowLogger(CustomLogger):
 
             end_time_ns: Final = int(end_time.timestamp() * 1e9)
 
-            # Record exception info as event, with the logged text when redaction scrubbed it
+            # Record exception info as event
             if exception := kwargs.get("exception"):
                 scrubbed: Final = scrubbed_exception_text(kwargs)
                 span.add_event(
