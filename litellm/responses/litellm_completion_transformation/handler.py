@@ -173,8 +173,8 @@ class LiteLLMCompletionTransformationHandler:
         return await self.async_response_api_handler(
             previous_response_client_ids,
             stored_turns,
-            litellm_completion_request=(
-                LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            litellm_completion_request={
+                **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                     model=model,
                     input=bridged.input,
                     responses_api_request=bridged.responses_api_request,
@@ -182,8 +182,9 @@ class LiteLLMCompletionTransformationHandler:
                     stream=stream,
                     extra_headers=extra_headers,
                     **request_kwargs,
-                )
-            ),
+                ),
+                **_chat_verbosity(bridged.responses_api_request),
+            },
             request_input=bridged.input,
             responses_api_request=bridged.responses_api_request,
             **request_kwargs,
