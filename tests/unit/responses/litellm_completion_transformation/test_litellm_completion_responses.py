@@ -4306,6 +4306,8 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._reasoning_active = False
         iterator._pending_response_events = []
         iterator._pending_tool_events = []
+        iterator._annotations_awaiting_message = ()
+        iterator._saw_content_delta = False
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
         iterator._tool_item_id_by_call_id = {}
