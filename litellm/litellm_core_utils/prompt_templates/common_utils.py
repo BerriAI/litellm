@@ -391,6 +391,28 @@ def split_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, objec
     return projection.content, projection.media
 
 
+def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
+    if not isinstance(value, str) or not value.startswith("data:"):
+        return _tpm_media_leaf(value)
+    projection: Final = _tpm_file_media({"file_data": value})
+    return _TPMMediaProjection("" if projection.media else value, projection.media)
+
+
+def _is_json_array(value: object) -> bool:
+    return isinstance(value, (list, tuple))
+
+
+def _tpm_embedding_item(value: object) -> _TPMMediaProjection:
+    return _tpm_media_list(value, _tpm_embedding_leaf) if _is_json_array(value) else _tpm_embedding_leaf(value)
+
+
+def split_embedding_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
+    projection: Final = (
+        _tpm_media_list(value, _tpm_embedding_item) if _is_json_array(value) else _tpm_embedding_leaf(value)
+    )
+    return projection.content, projection.media
+
+
 def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     """Depth-bounded frontier walk over nested content lists, iterative because the repo bans
     recursion; an Anthropic tool_result nests its image parts exactly one level down."""

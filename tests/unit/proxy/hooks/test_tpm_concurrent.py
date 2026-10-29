@@ -3971,6 +3971,103 @@ async def test_media_pre_call_rejects_tight_quota_and_reserves_sufficient_quota(
     assert expected[0] > 1000 and expected[1] >= expected[0]
 
 
+_EMBEDDING_MODEL: Final = "gemini-embedding-2"
+_EMBEDDING_CAPTION: Final = "a red bicycle leaning on a wall"
+
+
+def _embedding_media_uri(kind: str, compressed: bool) -> str:
+    mime: Final = "image/png" if kind == "image" else "audio/wav"
+    return f"data:{mime};base64,{_quota_media_payload(kind, compressed)}"
+
+
+@pytest.mark.parametrize("kind", ["image", "audio"])
+@pytest.mark.parametrize(
+    "shape",
+    ["string", "list", "file_block", "with_caption", "combined"],
+)
+def test_embedding_media_input_is_estimated_independently_of_encoding(
+    rate_limiter: tuple[RateLimitHandler, DualCache], kind: str, shape: str
+) -> None:
+    handler, _ = rate_limiter
+
+    def embedding_request(uri: str) -> dict[str, object]:
+        shapes: Final[dict[str, object]] = {
+            "string": uri,
+            "list": [uri],
+            "file_block": [{"type": "file", "file": {"file_data": uri}}],
+            "with_caption": [_EMBEDDING_CAPTION, uri],
+            "combined": [[_EMBEDDING_CAPTION, uri]],
+        }
+        return {"model": _EMBEDDING_MODEL, "input": shapes[shape]}
+
+    uncompressed: Final = embedding_request(_embedding_media_uri(kind, False))
+    original: Final = copy.deepcopy(uncompressed)
+    estimate: Final = handler._estimate_input_and_output_tokens(uncompressed, call_type="aembedding")
+    assert estimate == handler._estimate_input_and_output_tokens(
+        embedding_request(_embedding_media_uri(kind, True)), call_type="aembedding"
+    )
+    assert 0 < estimate[0] < 2_000 and estimate[1] == 0
+    assert uncompressed == original
+
+
+@pytest.mark.parametrize("kind", ["image", "audio"])
+def test_embedding_media_input_costs_the_same_as_chat_media(
+    rate_limiter: tuple[RateLimitHandler, DualCache], kind: str
+) -> None:
+    handler, _ = rate_limiter
+    uri: Final = _embedding_media_uri(kind, False)
+    chat_block: Final = (
+        {"type": "image_url", "image_url": {"url": uri}}
+        if kind == "image"
+        else {"type": "input_audio", "input_audio": {"data": _quota_media_payload(kind, False), "format": "wav"}}
+    )
+    chat_input_tokens, _ = handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "messages": [{"role": "user", "content": [chat_block]}]},
+        call_type="acompletion",
+    )
+    caption_tokens, _ = handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION]}, call_type="aembedding"
+    )
+
+    assert handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": uri}, call_type="aembedding"
+    ) == (chat_input_tokens, 0)
+    assert handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, uri]}, call_type="aembedding"
+    ) == (caption_tokens + chat_input_tokens, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+async def test_project_token_limit_admits_image_embedding_and_still_rejects_long_text(
+    rate_limiter: tuple[RateLimitHandler, DualCache], limit_field: str
+) -> None:
+    handler, cache = rate_limiter
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-embedding-image-{limit_field}"),
+        project_id=f"proj-embedding-image-{limit_field}",
+        project_metadata={limit_field: {_EMBEDDING_MODEL: 75_000}},
+    )
+    image_uri: Final = _embedding_media_uri("image", False)
+    long_text: Final = "word " * 80_000
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": _EMBEDDING_MODEL, "input": image_uri},
+        call_type="aembedding",
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": _EMBEDDING_MODEL, "input": long_text},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+    assert len(image_uri) > len(long_text)
+
+
 @pytest.mark.asyncio
 async def test_ptu_pre_call_weights_media_input_and_output() -> None:
     cache: Final = DualCache()
