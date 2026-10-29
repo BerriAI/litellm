@@ -151,8 +151,38 @@ async def test_send_during_connect_does_not_open_a_second_connection(message: st
     assert len(connect.calls) == 1
 
 
-@pytest.mark.parametrize("failure", [OSError("network failure"), TimeoutError("connect timeout")])
-async def test_connection_failure_wakes_recv_and_rejects_later_sends(failure: OSError | TimeoutError):
+async def test_cancelled_connect_allows_a_new_configure_attempt():
+    upstream: Final = FakeUpstream()
+    gate: Final = asyncio.Event()
+    connect: Final = RecordingConnect(upstream, gate)
+    backend: Final = ElevenLabsRealtimeBackend(URL, HEADERS, connect=connect)
+    configuring: Final = asyncio.create_task(backend.send(CONFIGURE))
+    await asyncio.sleep(0)
+
+    configuring.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await configuring
+
+    new_gate: Final = asyncio.Event()
+    connect.gate = new_gate
+    retry: Final = asyncio.create_task(backend.send(CONFIGURE))
+    await asyncio.sleep(0)
+    try:
+        assert len(connect.calls) == 2
+    finally:
+        new_gate.set()
+        await asyncio.wait_for(retry, timeout=1)
+
+    await backend.send('{"message_type":"input_audio_chunk"}')
+    assert upstream.sent == ['{"message_type":"input_audio_chunk"}']
+
+
+@pytest.mark.parametrize(
+    "failure", [OSError("network failure"), TimeoutError("connect timeout"), asyncio.TimeoutError("handshake timeout")]
+)
+async def test_connection_failure_wakes_recv_and_rejects_later_sends(
+    failure: OSError | TimeoutError | asyncio.TimeoutError,
+):
     connect: Final = RecordingConnect(FakeUpstream(), failure=failure)
     backend: Final = ElevenLabsRealtimeBackend(URL, HEADERS, connect=connect)
     pending: Final = asyncio.create_task(backend.recv())

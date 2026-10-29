@@ -64,7 +64,7 @@ def _normal_closure() -> ConnectionClosedOK:
     return ConnectionClosedOK(rcvd=Close(1000, ""), sent=None)
 
 
-def _failure_close(error: OSError | TimeoutError | InvalidHandshake) -> Close:
+def _failure_close(error: OSError | TimeoutError | asyncio.TimeoutError | InvalidHandshake) -> Close:
     reason: Final = (
         f"ElevenLabs realtime connection failed (HTTP {error.response.status_code})"
         if isinstance(error, InvalidStatus)
@@ -124,14 +124,14 @@ class ElevenLabsRealtimeBackend:
         self._opening = True
         try:
             opened: Final = await self._connect(f"{self._url}?{query}", self._headers)
-        except (OSError, TimeoutError, InvalidHandshake) as error:
-            self._opening = False
+        except (OSError, TimeoutError, asyncio.TimeoutError, InvalidHandshake) as error:
             if self._closed:
                 raise _normal_closure() from None
             self._failure = _failure_close(error)
             self._ready.set()
             return
-        self._opening = False
+        finally:
+            self._opening = False
         if self._closed:
             await opened.close()
             raise _normal_closure()
