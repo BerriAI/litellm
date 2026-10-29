@@ -8,6 +8,7 @@ Provides:
 
 import base64
 import json
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -24,6 +25,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import get_request_route, is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -58,8 +60,10 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
+from litellm.rag.ingestion.vertex_ai_ingestion import DEFAULT_VERTEX_RAG_LOCATION
 from litellm.rag.main import get_ingestion_class
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -176,6 +180,41 @@ def _ingest_provider_error(vector_store_config: Mapping[str, object]) -> str | N
     except ValueError as error:
         return str(error)
     return None
+
+
+_VERTEX_RAG_CORPUS_NAME: Final = re.compile(r"projects/(?P<project>[^/]+)/locations/(?P<location>[^/]+)/ragCorpora/")
+
+
+def _vertex_target_error(
+    vector_store_config: Mapping[str, object],
+    managed_store: LiteLLM_ManagedVectorStore | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> str | None:
+    if (
+        managed_store is not None
+        or vector_store_config.get("custom_llm_provider") != "vertex_ai"
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or general_settings.get("allow_client_side_credentials") is True
+    ):
+        return None
+    configured_project: Final = litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
+    configured_location: Final = VertexBase.safe_get_vertex_ai_location({}) or DEFAULT_VERTEX_RAG_LOCATION
+    corpus_name: Final = vector_store_config.get("vector_store_id")
+    corpus: Final = _VERTEX_RAG_CORPUS_NAME.match(corpus_name) if isinstance(corpus_name, str) else None
+    requested: Final = (
+        ("vertex_project", vector_store_config.get("vertex_project"), configured_project),
+        ("vertex_location", vector_store_config.get("vertex_location"), configured_location),
+        ("vector_store_id", corpus["project"] if corpus is not None else None, configured_project),
+        ("vector_store_id", corpus["location"] if corpus is not None else None, configured_location),
+    )
+    field: Final = next((name for name, asked, configured in requested if asked and asked != configured), None)
+    if field is None:
+        return None
+    return (
+        f"Rejected Request: {field} picks a Vertex project or region other than the proxy's. "
+        "Use a vector store a proxy admin created, or set general_settings.allow_client_side_credentials"
+    )
 
 
 _MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
@@ -659,6 +698,7 @@ async def rag_ingest(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        general_settings_view,
         llm_router,
         prisma_client,
         proxy_config,
@@ -689,6 +729,11 @@ async def rag_ingest(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
+        vertex_target_error: Final = _vertex_target_error(
+            request_vector_store_config, managed_store, user_api_key_dict, general_settings_view()
+        )
+        if vertex_target_error is not None:
+            raise HTTPException(status_code=400, detail={"error": vertex_target_error})
         base: Final = {
             **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),

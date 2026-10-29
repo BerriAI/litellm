@@ -990,6 +990,123 @@ def test_rag_ingest_unmanaged_store_keeps_the_callers_full_config(client_interna
     assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == caller_config
 
 
+_PROXY_VERTEX_PROJECT: Final = "proxy-project"
+_PROXY_VERTEX_LOCATION: Final = "europe-west4"
+
+
+@pytest.fixture
+def proxy_vertex_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "vertex_project", None)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.setenv("VERTEXAI_PROJECT", _PROXY_VERTEX_PROJECT)
+    monkeypatch.setenv("VERTEXAI_LOCATION", _PROXY_VERTEX_LOCATION)
+
+
+def _vertex_ingest(client: TestClient, vector_store: Mapping[str, str]) -> tuple[httpx.Response, AsyncMock]:
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None, {"vector_store_id": "projects/p/locations/l/ragCorpora/7", "file_id": "file_123"}
+    )
+    with aingest_patch as mock_aingest, registry_patch, _patched_prisma_client(None):
+        response = client.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "vertex_ai", **vector_store}))
+    return response, mock_aingest
+
+
+@pytest.mark.parametrize(
+    "vector_store, field",
+    [
+        ({"vertex_project": "other-project"}, "vertex_project"),
+        ({"vertex_location": "us-east5"}, "vertex_location"),
+        (
+            {"vector_store_id": f"projects/other-project/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7"},
+            "vector_store_id",
+        ),
+        (
+            {
+                "vertex_project": _PROXY_VERTEX_PROJECT,
+                "vector_store_id": f"projects/other-project/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7",
+            },
+            "vector_store_id",
+        ),
+        ({"vector_store_id": f"projects/{_PROXY_VERTEX_PROJECT}/locations/us-east5/ragCorpora/7"}, "vector_store_id"),
+    ],
+    ids=["project_field", "location_field", "corpus_project", "corpus_project_behind_matching_field", "corpus_region"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_refuses_a_key_pointing_the_proxys_vertex_credentials_elsewhere(
+    client_internal_user, vector_store: Mapping[str, str], field: str
+):
+    response, mock_aingest = _vertex_ingest(client_internal_user, vector_store)
+
+    assert response.status_code == 400, response.json()
+    assert response.json()["detail"]["error"].startswith(f"Rejected Request: {field} picks a Vertex project")
+    mock_aingest.assert_not_awaited()
+
+
+def test_rag_ingest_refuses_a_key_naming_a_vertex_project_when_the_proxy_names_none(
+    client_internal_user, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_project", None)
+    monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+
+    response, mock_aingest = _vertex_ingest(client_internal_user, {"vertex_project": "other-project"})
+
+    assert response.status_code == 400, response.json()
+    mock_aingest.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "vector_store",
+    [
+        {},
+        {"vertex_project": _PROXY_VERTEX_PROJECT, "vertex_location": _PROXY_VERTEX_LOCATION},
+        {"vector_store_id": f"projects/{_PROXY_VERTEX_PROJECT}/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7"},
+    ],
+    ids=["proxy_defaults", "same_fields", "corpus_in_the_proxy_project"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_lets_a_key_use_the_proxys_own_vertex_target(client_internal_user, vector_store: Mapping[str, str]):
+    response, mock_aingest = _vertex_ingest(client_internal_user, vector_store)
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
+        "custom_llm_provider": "vertex_ai",
+        **vector_store,
+    }
+
+
+@pytest.mark.parametrize(
+    "user_role, general_settings",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, {}),
+        (LitellmUserRoles.INTERNAL_USER, {"allow_client_side_credentials": True}),
+    ],
+    ids=["proxy_admin", "proxy_wide_opt_in"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_lets_the_admin_choose_another_vertex_target(
+    user_role: LitellmUserRoles, general_settings: Mapping[str, object]
+):
+    caller: Final = UserAPIKeyAuth(user_id="vertex-caller", user_role=user_role)
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: caller
+    vector_store: Final = {
+        "vertex_project": "other-project",
+        "vertex_location": "us-east5",
+        "vector_store_id": "projects/other-project/locations/us-east5/ragCorpora/7",
+    }
+    try:
+        with patch.dict("litellm.proxy.proxy_server.general_settings", general_settings):
+            response, mock_aingest = _vertex_ingest(TestClient(app), vector_store)
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
+        "custom_llm_provider": "vertex_ai",
+        **vector_store,
+    }
+
+
 def test_rag_ingest_db_managed_store_drops_the_callers_credential_name(client_internal_user):
     aingest_patch, registry_patch = _patched_ingest_boundary(
         DB_MANAGED_STORE, {"vector_store_id": "db-store", "file_id": "file_123"}

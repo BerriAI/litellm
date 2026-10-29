@@ -3904,46 +3904,89 @@ def _resolve_vertex_live_target(
     )
 
 
-def _caller_override_of_live_deployment(
+def _requested_vertex_live_target(
+    credentials: VertexPassThroughCredentials, vertex_project: str | None, vertex_location: str | None
+) -> tuple[tuple[str, str | None, str | None], ...]:
+    return (
+        ("vertex_project", vertex_project, credentials.vertex_project),
+        ("vertex_location", vertex_location, credentials.vertex_location),
+    )
+
+
+def _live_target_override_reason(
     target: _VertexLiveTarget,
     vertex_project: str | None,
     vertex_location: str | None,
     allow_client_side_credentials: bool,
 ) -> str | None:
+    if allow_client_side_credentials:
+        return None
     match target:
+        case _ConfiguredVertexLiveTarget(credentials=VertexPassThroughCredentials() as credentials):
+            configured_field: Final = next(
+                (
+                    name
+                    for name, asked, pinned in _requested_vertex_live_target(
+                        credentials, vertex_project, vertex_location
+                    )
+                    if asked and pinned and asked != pinned
+                ),
+                None,
+            )
+            if configured_field is None:
+                return None
+            return (
+                f"Rejected Request: {configured_field} is pinned by default_vertex_config, "
+                "see allow_client_side_credentials"
+            )
         case _ConfiguredVertexLiveTarget():
             return None
         case _DeploymentVertexLiveTarget(credentials=credentials, deployment_params=deployment_params):
-            if allow_client_side_credentials:
-                return None
             opted_in: Final = deployment_clientside_auth_params(deployment_params) or ()
-            requested: Final = (
-                ("vertex_project", vertex_project, credentials.vertex_project),
-                ("vertex_location", vertex_location, credentials.vertex_location),
-            )
-            return next(
-                (name for name, asked, pinned in requested if asked and asked != pinned and name not in opted_in),
+            deployment_field: Final = next(
+                (
+                    name
+                    for name, asked, pinned in _requested_vertex_live_target(
+                        credentials, vertex_project, vertex_location
+                    )
+                    if asked and asked != pinned and name not in opted_in
+                ),
                 None,
             )
+            if deployment_field is None:
+                return None
+            return (
+                f"Rejected Request: {deployment_field} is pinned by the deployment, "
+                "see configurable_clientside_auth_params"
+            )
+
+
+_VERTEX_RESOURCE_PROJECT_AND_LOCATION: Final = re.compile(r"projects/[^/]+/locations/[^/]+/")
 
 
 def _build_vertex_live_setup_model_rewriter(
     vertex_project: str | None,
     vertex_location: str | None,
     llm_router: Router | None,
+    keeps_caller_resource_path: bool,
 ) -> Callable[[str], str] | None:
     """
     Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
 
     Clients address the gateway the way they address LiteLLM (bare id or model alias); Vertex reads anything
-    that is not a ``projects/...`` path as a project name and closes the socket
+    that is not a ``projects/...`` path as a project name and closes the socket. A ``projects/...`` path
+    picks the project the proxy's token is spent on, so it is moved onto the connection's project and region
+    unless ``allow_client_side_credentials`` lets callers choose them
     """
     if vertex_project is None or vertex_location is None:
         return None
 
     def rewrite(setup_model: str) -> str:
         if setup_model.startswith("projects/"):
-            return setup_model
+            resource_prefix: Final = _VERTEX_RESOURCE_PROJECT_AND_LOCATION.match(setup_model)
+            if keeps_caller_resource_path or resource_prefix is None:
+                return setup_model
+            return f"projects/{vertex_project}/locations/{vertex_location}/{setup_model[resource_prefix.end() :]}"
         aliased: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
         return f"projects/{vertex_project}/locations/{vertex_location}/{_vertex_publisher_model_suffix(aliased)}"
 
@@ -4002,18 +4045,15 @@ async def vertex_ai_live_websocket_passthrough(
         vertex_location=vertex_location,
         model=model,
     )
-    overridden_field: Final = _caller_override_of_live_deployment(
+    allow_client_side_credentials: Final = _proxy_general_settings().get("allow_client_side_credentials") is True
+    override_reason: Final = _live_target_override_reason(
         live_target,
         vertex_project=vertex_project,
         vertex_location=vertex_location,
-        allow_client_side_credentials=_proxy_general_settings().get("allow_client_side_credentials") is True,
+        allow_client_side_credentials=allow_client_side_credentials,
     )
-    if overridden_field is not None:
-        await websocket.close(
-            code=1008,
-            reason=f"Rejected Request: {overridden_field} is pinned by the deployment, "
-            "see configurable_clientside_auth_params",
-        )
+    if override_reason is not None:
+        await websocket.close(code=1008, reason=override_reason)
         return
     vertex_credentials_config: Final = live_target.credentials
 
@@ -4091,6 +4131,7 @@ async def vertex_ai_live_websocket_passthrough(
             vertex_project=resolved_project,
             vertex_location=resolved_location,
             llm_router=_get_llm_router(),
+            keeps_caller_resource_path=allow_client_side_credentials,
         ),
     )
 
