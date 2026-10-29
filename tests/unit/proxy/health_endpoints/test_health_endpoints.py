@@ -4123,6 +4123,7 @@ async def _live_narrowed_model_ids(
     user_api_key_dict: UserAPIKeyAuth,
     model: str | None = None,
     model_id: str | None = None,
+    llm_router: Router | None = None,
 ) -> set[str]:
     from fastapi import Response
 
@@ -4133,7 +4134,7 @@ async def _live_narrowed_model_ids(
         return probed, [], {}
 
     with (
-        _proxy_health_globals(model_list, _router_for(model_list)),
+        _proxy_health_globals(model_list, llm_router or _router_for(model_list)),
         patch(  # test-quality-ok: the probe is the provider edge; which deployments reach it is the assertion
             "litellm.proxy.health_check._perform_health_check", side_effect=fake_probe
         ),
@@ -4466,6 +4467,43 @@ async def test_health_endpoint_refuses_the_deployment_a_key_alias_shadows(use_ba
 
     assert refused.value.status_code == 403
     probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
+async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_key_to(
+    caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
+):
+    probed = await _live_narrowed_model_ids(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        caller,
+        model="claude-haiku-5-5",
+        llm_router=_router_with_aliases(model_group_alias),
+    )
+
+    assert probed == {"id-mini"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
+async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_key_to_on_background_cache_path(
+    caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
+):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _PROVIDER_PREFIXED_MODEL_LIST,
+        _router_with_aliases(model_group_alias),
+        use_background_health_checks=True,
+        health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=caller, model="claude-haiku-5-5", model_id=None
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-mini"]
 
 
 @pytest.mark.asyncio

@@ -1217,9 +1217,11 @@ _NOTHING_REACHABLE: Final = _ReachableDeployments(frozenset(), frozenset())
 
 
 async def _deployments_key_may_reach(
-    llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+    llm_model_list: Sequence[object],
+    aliases: CallerAliases,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
 ) -> _ReachableDeployments:
-    aliases: Final = await _caller_aliases(user_api_key_dict)
     candidate_names: Final = _granted_names(user_api_key_dict).union(
         *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list)
     )
@@ -1470,10 +1472,16 @@ async def health_endpoint(
                 detail={"error": "Model list not initialized"},
             )
         restrict_to_allowed_models: Final = not is_admin or not _key_models_unrestricted(user_api_key_dict)
+        aliases: Final = await _caller_aliases(user_api_key_dict) if restrict_to_allowed_models else None
         reachable: Final = (
-            await _deployments_key_may_reach(_OBJECTS.validate_python(llm_model_list), user_api_key_dict, llm_router)
-            if restrict_to_allowed_models
+            await _deployments_key_may_reach(
+                _OBJECTS.validate_python(llm_model_list), aliases, user_api_key_dict, llm_router
+            )
+            if aliases is not None
             else _NOTHING_REACHABLE
+        )
+        requested_model: Final = (
+            _served_group(model, aliases, llm_router) if model is not None and aliases is not None else model
         )
         _llm_model_list: Final = [
             m
@@ -1481,7 +1489,9 @@ async def health_endpoint(
             if not restrict_to_allowed_models
             or _caller_may_probe_deployment(m, reachable, user_api_key_dict.team_id, is_admin)
         ]
-        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id, user_api_key_dict.team_id)
+        targeted_ids: Final = _resolve_targeted_model_ids(
+            _llm_model_list, requested_model, model_id, user_api_key_dict.team_id
+        )
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1539,7 +1549,7 @@ async def health_endpoint(
         else:
             router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
-                target_model=target_model,
+                target_model=target_model if model_id else requested_model,
                 cli_model=None,
                 details=health_check_details,
                 prisma_client=prisma_client,
