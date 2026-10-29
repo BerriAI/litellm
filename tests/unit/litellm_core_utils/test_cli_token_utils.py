@@ -782,6 +782,21 @@ class TestClearCliToken:
         assert clear_cli_token(vault=vault) == SecretStranded()
         assert load_cli_token(vault=vault) is None
 
+    def test_a_keychain_that_kept_the_secret_is_still_warned_about_once_it_is_out_of_reach(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The keychain refused to give up the entry, so the first logout said so. A second logout
+        made after the keychain went out of reach cannot see that entry either, and reading the token
+        file the first logout removed as proof of a clean keychain retracts that warning while the
+        credential is still there."""
+        _write_metadata_only_file(isolated_home)
+        vault = secret_vault_factory(blob=_blob(), erasable=False)
+        assert clear_cli_token(vault=vault) == SecretStranded()
+
+        vault.available = False
+
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
     @pytest.mark.parametrize(
         "failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()]
     )

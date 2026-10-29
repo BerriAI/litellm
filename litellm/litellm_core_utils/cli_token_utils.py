@@ -224,11 +224,11 @@ def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
     """Remove the credential from both stores. Reports whether the keychain is now free of it.
 
     The token file goes whatever the keychain answers, so nothing left on disk reads as a login. A
-    keychain that could not be checked may still hold an entry an earlier login put there, so a
-    logout that had something to end leaves a secret-free note beside the file, and the next logout
-    warns again instead of reading the missing file as a clean keychain. Only a keychain that
-    confirms the erase takes the note away. A file that will not go has its secret taken out where
-    it lies instead.
+    keychain that could not be checked, or that would not give up its entry, may still hold a
+    credential of ours, so a logout that had something to end leaves a secret-free note beside the
+    file, and the next logout warns again instead of reading the missing file as a clean keychain.
+    Only a keychain that confirms the erase takes the note away. A file that will not go has its
+    secret taken out where it lies instead.
     """
     outcome: Final = vault.erase()
     record: Final = _read_token_file()
@@ -255,24 +255,22 @@ def _remove_token_file() -> CredentialNotCleared | None:
     return None
 
 
-def _unchecked_keychain_note_path() -> Path:
-    return Path(get_cli_token_file_path()).with_name("keychain_unchecked")
+def _keychain_not_cleared_note_path() -> Path:
+    return Path(get_cli_token_file_path()).with_name("keychain_not_cleared")
 
 
 def _note_what_the_keychain_answered(outcome: SecretErase, settled: bool) -> None:
-    """Keep the note that a logout left the keychain unchecked for exactly as long as that is true.
+    """Keep the note that a logout left the keychain uncleared for exactly as long as that is true.
 
     The secret is off disk by the time this runs, so a note that will not be written or removed is
     no reason to fail the logout. The warning printed now is then the only one the user gets.
     """
-    note: Final = _unchecked_keychain_note_path()
+    note: Final = _keychain_not_cleared_note_path()
     with suppress(OSError):
         match outcome:
             case SecretErased():
                 note.unlink(missing_ok=True)
-            case SecretStranded():
-                pass
-            case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
+            case SecretStranded() | KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
                 if not settled:
                     ensure_private_dir(note.parent)
                     write_private_bytes(str(note), b"")
@@ -282,7 +280,7 @@ def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) ->
     """Whether the keychain can be trusted to hold no credential of ours once the file is gone.
 
     A keychain that could not be reached is trusted only on a machine with nothing to end: no token
-    file, and no note from an earlier logout that left the keychain unchecked. Even a file holding
+    file, and no note from an earlier logout that left the keychain uncleared. Even a file holding
     its own secret says only that the login which wrote it had no keychain to write to, and the
     login before it may well have had one: the entry that login left outlives both the uninstalled
     package and the file that replaced it. `SecretStranded` is the keychain answering for itself and
@@ -294,7 +292,7 @@ def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) ->
         case SecretStranded():
             return False
         case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
-            return record is None and not os.path.exists(_unchecked_keychain_note_path())
+            return record is None and not os.path.exists(_keychain_not_cleared_note_path())
 
 
 def get_litellm_gateway_api_key(
