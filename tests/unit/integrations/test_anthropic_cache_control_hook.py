@@ -4001,6 +4001,7 @@ class TestChatPathProviderStamp:
 class TestChatPathResolvesTheDeploymentProvider:
     MODEL = "azure_ai/gpt-6-astra"
     AMBIENT_API_BASE = "https://other-deployment.openai.azure.com"
+    FOUNDRY_API_BASE = "https://foundry.services.ai.azure.com"
     UPSTREAM_PROXY_API_BASE = "https://upstream-proxy.example.com"
     POINTS = [{"location": "message", "role": "system"}]
     MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
@@ -4032,29 +4033,37 @@ class TestChatPathResolvesTheDeploymentProvider:
         )
         return out, params
 
-    @pytest.mark.parametrize(
-        "api_base",
-        ["https://foundry.services.ai.azure.com", "https://resource.cognitiveservices.azure.com"],
-    )
-    def test_chat_path_marks_the_deployment_the_same_as_when_told_its_provider(
-        self, monkeypatch: pytest.MonkeyPatch, api_base: str
+    def test_chat_path_stamps_the_breakpoint_on_a_foundry_deployment_while_the_ambient_base_is_azure_openai(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._pin_ambient_api_base(monkeypatch, True)
-        pinned_resolved, pinned_told = self._chat(None, api_base), self._chat("azure_ai", api_base)
-        self._pin_ambient_api_base(monkeypatch, False)
-        unset_resolved, unset_told = self._chat(None, api_base), self._chat("azure_ai", api_base)
-        assert pinned_resolved == pinned_told == unset_resolved == unset_told
-        assert AnthropicCacheControlHook.count_request_cache_breakpoints(pinned_resolved[0]) == 1
-        assert ("prompt_cache_options" in pinned_resolved[1]) == supports_openai_prompt_cache_breakpoint(
-            self.MODEL, "azure_ai"
-        )
+        messages, params = self._chat(None, self.FOUNDRY_API_BASE)
+        assert (messages, params) == self._chat("azure_ai", self.FOUNDRY_API_BASE)
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+        assert ("prompt_cache_options" in params) == supports_openai_prompt_cache_breakpoint(self.MODEL, "azure_ai")
+
+    @pytest.mark.parametrize("pinned", [True, False])
+    @pytest.mark.parametrize(
+        "api_base",
+        [FOUNDRY_API_BASE, "https://resource.cognitiveservices.azure.com", "https://resource.openai.azure.com"],
+    )
+    def test_chat_path_marks_the_deployment_like_the_provider_its_api_base_dispatches_to(
+        self, monkeypatch: pytest.MonkeyPatch, api_base: str, pinned: bool
+    ) -> None:
+        self._pin_ambient_api_base(monkeypatch, pinned)
+        dispatched_provider: Final = litellm.get_llm_provider(model=self.MODEL, api_base=api_base)[1]
+        assert self._chat(None, api_base) == self._chat(dispatched_provider, api_base)
 
     @pytest.mark.parametrize("model", [MODEL, "bedrock_mantle/openai.gpt-5.6-sol"])
+    @pytest.mark.parametrize("set_globally", ["env", "module"])
     def test_chat_path_marks_the_deployment_like_litellm_proxy_when_calls_route_to_one(
-        self, monkeypatch: pytest.MonkeyPatch, model: str
+        self, monkeypatch: pytest.MonkeyPatch, model: str, set_globally: str
     ) -> None:
         self._pin_ambient_api_base(monkeypatch, False)
-        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+        if set_globally == "env":
+            monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+        else:
+            monkeypatch.setattr(litellm, "use_litellm_proxy", True)
         assert self._chat(None, self.UPSTREAM_PROXY_API_BASE, model) == self._chat(
             "litellm_proxy", self.UPSTREAM_PROXY_API_BASE, model
         )
