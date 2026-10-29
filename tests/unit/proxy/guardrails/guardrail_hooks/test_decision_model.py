@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1319,8 +1319,8 @@ async def test_tool_call_in_both_tool_calls_and_structured_messages_is_screened_
     ],
 )
 async def test_decision_model_lists_itself_only_when_it_returned_verdicts(
-    texts: list[str], unreachable: bool, applied: list[str] | None
-):
+    texts: list[str], unreachable: bool, applied: Sequence[str] | None
+) -> None:
     router: Final = _decision_router(probability=0.1)
     if unreachable:
         router.adecisions.side_effect = httpx.ConnectError("unreachable")

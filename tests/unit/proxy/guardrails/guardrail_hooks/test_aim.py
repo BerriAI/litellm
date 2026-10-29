@@ -7,6 +7,9 @@ from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from collections.abc import Mapping, Sequence
+from typing import Final
+from litellm.types.utils import CallTypesLiteral
 import pytest
 import respx
 from httpx import Request, Response
@@ -829,13 +832,17 @@ async def test_aim_streaming_block_stops_after_verified_chunks(monkeypatch: pyte
     ],
 )
 async def test_aim_calls_aim_and_lists_itself_only_when_the_request_has_text(
-    respx_mock: respx.MockRouter, call_type: str, request_fields: dict, aim_calls: int, applied: list[str] | None
-):
-    analyze = respx_mock.post("http://aim.test/fw/v1/analyze").respond(
+    respx_mock: respx.MockRouter,
+    call_type: CallTypesLiteral,
+    request_fields: Mapping[str, object],
+    aim_calls: int,
+    applied: Sequence[str] | None,
+) -> None:
+    analyze: Final = respx_mock.post("http://aim.test/fw/v1/analyze").respond(
         json={"analysis_result": {"analysis_time_ms": 1, "policy_drill_down": {}}, "required_action": None}
     )
-    guardrail = AimGuardrail(api_key="hs-aim-key", api_base="http://aim.test", guardrail_name="aim")
-    metadata: dict[str, object] = {}
+    guardrail: Final = AimGuardrail(api_key="hs-aim-key", api_base="http://aim.test", guardrail_name="aim")
+    metadata: Final[dict[str, object]] = {}
 
     await guardrail.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(),

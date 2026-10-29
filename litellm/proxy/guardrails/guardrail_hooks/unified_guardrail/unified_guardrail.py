@@ -20,10 +20,10 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.cost_calculator import infer_call_type
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import APPLY_GUARDRAIL_ONLY_CALL_TYPES, CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_or_create_metadata_bucket
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -215,16 +215,25 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     }
 
 
-def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
-    if "litellm_metadata" not in data:
-        from litellm.llms.base_llm.guardrail_translation.base_translation import (
-            BaseTranslation,
-        )
+def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: str | None = None) -> None:
+    """Populate data['litellm_metadata'] from user_api_key_dict if absent.
 
-        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            data["litellm_metadata"] = user_metadata
+    Readers pick ``litellm_metadata`` once it exists, so on routes whose bucket is ``metadata`` it starts as a copy.
+    """
+    if "litellm_metadata" in data:
+        return
+    from litellm.llms.base_llm.guardrail_translation.base_translation import (
+        BaseTranslation,
+    )
+
+    user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+    request: Final = cast("Mapping[str, object]", data)  # cast-ok: request bodies are str-keyed
+    route_metadata: Final = (
+        as_str_mapping(request.get("metadata")) if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES else None
+    )
+    seeded: Final = {**route_metadata, **user_metadata} if route_metadata is not None else user_metadata
+    if seeded:
+        data["litellm_metadata"] = seeded
 
 
 class UnifiedLLMGuardrails(CustomLogger):
@@ -287,7 +296,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         translation: Final = mappings[CallTypes(call_type)]()
         endpoint_translation: Final = _as_endpoint_translation(translation)
 
-        _ensure_litellm_metadata(data, user_api_key_dict)
+        _ensure_litellm_metadata(data, user_api_key_dict, call_type)
 
         await _scan_request_attachments(guardrail_to_apply, data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
 
@@ -335,7 +344,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
-        _ensure_litellm_metadata(data, user_api_key_dict)
+        _ensure_litellm_metadata(data, user_api_key_dict, call_type)
 
         return await endpoint_translation.process_input_messages(
             data=data,

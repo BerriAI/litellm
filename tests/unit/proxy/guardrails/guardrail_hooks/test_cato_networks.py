@@ -3,6 +3,9 @@ import json
 import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from collections.abc import Mapping, Sequence
+from typing import Final
+from litellm.types.utils import CallTypesLiteral
 import pytest
 import respx
 from fastapi.exceptions import HTTPException
@@ -2800,13 +2803,17 @@ async def test_cato_still_inspects_every_conversational_call_type(call_type: str
     ],
 )
 async def test_cato_calls_cato_and_lists_itself_only_when_the_request_has_text(
-    respx_mock, call_type, request_fields: dict[str, object], cato_calls, applied
-):
-    analyze = respx_mock.post("http://cato.test/fw/v1/analyze").respond(
+    respx_mock: respx.MockRouter,
+    call_type: CallTypesLiteral,
+    request_fields: Mapping[str, object],
+    cato_calls: int,
+    applied: Sequence[str] | None,
+) -> None:
+    analyze: Final = respx_mock.post("http://cato.test/fw/v1/analyze").respond(
         json={"analysis_result": {}, "required_action": None}
     )
-    guardrail = CatoNetworksGuardrail(api_key="cato-key", api_base="http://cato.test", guardrail_name="cato")
-    metadata: dict[str, object] = {}
+    guardrail: Final = CatoNetworksGuardrail(api_key="cato-key", api_base="http://cato.test", guardrail_name="cato")
+    metadata: Final[dict[str, object]] = {}
 
     await guardrail.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(),

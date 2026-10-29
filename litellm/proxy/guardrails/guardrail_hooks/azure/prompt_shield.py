@@ -229,10 +229,10 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     ) -> GenericGuardrailAPIInputs:
         _billing_usage_stash.set(None)
         usage: Final[dict[str, int]] = {}  # mutable-ok: per-invocation billing accumulator
-        content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
         try:
-            if content:
-                await self.async_make_request(user_prompt=content, usage_accumulator=usage)
+            for text in inputs.get("texts") or ():
+                if text:
+                    await self.async_make_request(user_prompt=text, usage_accumulator=usage)
         finally:
             self._record_billing_usage(usage)
         return inputs

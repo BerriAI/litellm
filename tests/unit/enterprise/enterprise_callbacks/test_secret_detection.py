@@ -1151,27 +1151,81 @@ def test_proxied_traffic_stays_on_native_hooks():
 )
 async def test_proxy_pre_call_hook_redacts_extraction_state_unless_the_key_opted_out(
     monkeypatch: pytest.MonkeyPatch, permissions: dict[str, bool], expected_state: str, listed: bool
-):
+) -> None:
     import litellm
     from litellm.proxy.utils import ProxyLogging
 
     monkeypatch.setattr(litellm, "callbacks", [_guardrail()])
-    key = UserAPIKeyAuth(api_key="sk-9876", permissions=permissions)
-    data = {
+    key: Final = UserAPIKeyAuth(api_key="sk-9876", permissions=permissions)
+    data: Final = {
         "model": "invoice-reader",
         "state": f"my key is {AWS_KEY}",
         "fields": {"total": {"type": "number"}},
         "metadata": {"user_api_key_auth": key},
     }
 
-    result = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+    result: Final = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
         user_api_key_dict=key, data=data, call_type="aextraction"
     )
 
     assert result["state"] == expected_state
-    buckets = (result.get("metadata") or {}, result.get("litellm_metadata") or {})
-    applied = [*buckets[0].get("applied_guardrails", []), *buckets[1].get("applied_guardrails", [])]
+    buckets: Final = (result.get("metadata") or {}, result.get("litellm_metadata") or {})
+    applied: Final = [*buckets[0].get("applied_guardrails", []), *buckets[1].get("applied_guardrails", [])]
     assert ("hide-secrets" in applied) is listed
+
+
+@pytest.mark.asyncio
+async def test_proxy_pre_call_hook_redacts_extraction_state_when_the_request_carries_no_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "callbacks", [_guardrail()])
+
+    result: Final = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={
+            "model": "invoice-reader",
+            "state": f"my key is {AWS_KEY}",
+            "fields": {"total": {"type": "number"}},
+            "metadata": {},
+        },
+        call_type="aextraction",
+    )
+
+    assert result["state"] == "my key is [REDACTED]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "secret_entry",
+    (
+        {"aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
+        {"db_password": "hunter2-Zq9!xk"},
+    ),
+)
+async def test_proxy_pre_call_hook_redacts_a_systemone_secret_stored_under_a_json_key(
+    monkeypatch: pytest.MonkeyPatch, secret_entry: dict[str, str]
+) -> None:
+    import litellm
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "callbacks", [_guardrail()])
+    key: Final = UserAPIKeyAuth(api_key="sk-9876")
+
+    result: Final = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=key,
+        data={
+            "model": "judge",
+            "state": {**secret_entry, "ticket": "refund order 7"},
+            "questions": {"leak": {"type": "noul", "instructions": "Does the state hold a credential?"}},
+            "metadata": {"user_api_key_auth": key},
+        },
+        call_type="asystemone",
+    )
+
+    assert result["state"] == {**dict.fromkeys(secret_entry, "[REDACTED]"), "ticket": "refund order 7"}
 
 
 @pytest.mark.asyncio

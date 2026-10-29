@@ -1,5 +1,7 @@
 import json
 
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final
 import pytest
 import respx
 
@@ -152,10 +154,14 @@ _REQUEST_TEXT_CASES = [
 @pytest.mark.parametrize(("event_hook", "run_hook"), _INPUT_HOOKS)
 @pytest.mark.parametrize(("request_fields", "applied"), _REQUEST_TEXT_CASES)
 async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
-    respx_mock: respx.MockRouter, event_hook, run_hook, request_fields, applied
+    respx_mock: respx.MockRouter,
+    event_hook: str,
+    run_hook: Callable[[IBMGuardrailDetector, Mapping[str, object]], Awaitable[object]],
+    request_fields: Mapping[str, object],
+    applied: Sequence[str] | None,
 ) -> None:
     respx_mock.post(_DETECTOR_SERVER_URL).respond(json=[[]])
-    guardrail = IBMGuardrailDetector(
+    guardrail: Final = IBMGuardrailDetector(
         guardrail_name="ibm-guard",
         auth_token="ibm-token",
         base_url=_BASE_URL,
@@ -164,7 +170,7 @@ async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
         event_hook=event_hook,
         default_on=True,
     )
-    metadata: dict[str, object] = {}
+    metadata: Final[dict[str, object]] = {}
 
     await run_hook(guardrail, {**request_fields, "metadata": metadata})
 
@@ -186,10 +192,10 @@ async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
     ],
 )
 async def test_post_call_hook_lists_the_guardrail_only_when_it_scanned_text(
-    respx_mock: respx.MockRouter, response, applied
+    respx_mock: respx.MockRouter, response: litellm.ModelResponse | Mapping[str, object], applied: Sequence[str] | None
 ) -> None:
     respx_mock.post(_DETECTOR_SERVER_URL).respond(json=[[]])
-    guardrail = IBMGuardrailDetector(
+    guardrail: Final = IBMGuardrailDetector(
         guardrail_name="ibm-guard",
         auth_token="ibm-token",
         base_url=_BASE_URL,
@@ -198,7 +204,7 @@ async def test_post_call_hook_lists_the_guardrail_only_when_it_scanned_text(
         event_hook="post_call",
         default_on=True,
     )
-    metadata: dict[str, object] = {}
+    metadata: Final[dict[str, object]] = {}
 
     await guardrail.async_post_call_success_hook(
         data={"messages": [{"role": "user", "content": "hello"}], "metadata": metadata},

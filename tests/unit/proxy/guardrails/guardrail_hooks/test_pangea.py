@@ -1,6 +1,8 @@
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from collections.abc import Mapping, Sequence
+from typing import Final
 import pytest
 import respx
 from fastapi import HTTPException
@@ -386,15 +388,19 @@ async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
     ],
 )
 async def test_pangea_calls_pangea_and_lists_itself_only_when_the_request_has_messages(
-    respx_mock, call_type, request_fields: dict[str, object], pangea_calls, applied
-):
-    guard = respx_mock.post("https://ai-guard.aws.us.pangea.cloud/v1beta/guard").respond(
+    respx_mock: respx.MockRouter,
+    call_type: str,
+    request_fields: Mapping[str, object],
+    pangea_calls: int,
+    applied: Sequence[str] | None,
+) -> None:
+    guard: Final = respx_mock.post("https://ai-guard.aws.us.pangea.cloud/v1beta/guard").respond(
         json={"result": {"blocked": False, "transformed": False}}
     )
-    guardrail = PangeaHandler(
+    guardrail: Final = PangeaHandler(
         mode="pre_call", guardrail_name="pangea-ai-guard", api_key="pts_pangeatokenid", default_on=True
     )
-    metadata: dict[str, object] = {}
+    metadata: Final[dict[str, object]] = {}
 
     await guardrail.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(),

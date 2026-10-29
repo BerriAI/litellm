@@ -1,21 +1,26 @@
 import json
+import re
 from collections.abc import Iterator, Mapping
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import unappliable_request_rewrite
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_KEY_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
+_JSON_KEY_PREFIX: Final = re.compile(r'("(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"): ')
 _DESCRIBED_ITEM_KEYS: Final = ("choices", "levels")
 _QUESTION_LIST_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, JsonValue], ...]]] = TypeAdapter(
     tuple[Mapping[str, JsonValue], ...]
@@ -75,6 +80,18 @@ def _guardrailed_input(decision_input: JsonValue, guardrailed: Mapping[str, str]
     return [_guardrailed_message(message, guardrailed) for message in decision_input]
 
 
+def _entry_text(key: str, value: str | float | None) -> str:
+    return json.dumps({key: value}, ensure_ascii=False)[1:-1]
+
+
+def _entry_text_forms(key: str, item: JsonValue) -> Iterator[str]:
+    if isinstance(item, (list, dict)):
+        yield key
+        yield from _json_text_forms(item)
+    else:
+        yield _entry_text(key, item)
+
+
 def _json_text_forms(value: JsonValue) -> Iterator[str]:
     match value:
         case bool() | None:
@@ -87,8 +104,7 @@ def _json_text_forms(value: JsonValue) -> Iterator[str]:
             yield from chain.from_iterable(map(_json_text_forms, value))
         case dict():
             for key, item in value.items():
-                yield key
-                yield from _json_text_forms(item)
+                yield from _entry_text_forms(key, item)
 
 
 def _json_texts(value: JsonValue) -> tuple[str, ...]:
@@ -124,13 +140,37 @@ def _guardrailed_json(value: JsonValue, guardrailed: Mapping[str, str], guardrai
         case list():
             return [_guardrailed_json(item, guardrailed, guardrail_name) for item in value]
         case dict():
-            keys: Final = _distinct_keys(tuple(guardrailed.get(key, key) for key in value))
+            entries: Final = tuple(
+                _guardrailed_entry(key, item, guardrailed, guardrail_name) for key, item in value.items()
+            )
+            keys: Final = _distinct_keys(tuple(key for key, _ in entries))
             if len(frozenset(keys)) != len(keys):
                 raise unappliable_request_rewrite(guardrail_name)
-            return {
-                key: _guardrailed_json(item, guardrailed, guardrail_name)
-                for key, item in zip(keys, value.values(), strict=True)
-            }
+            return dict(zip(keys, (item for _, item in entries), strict=True))
+
+
+def _rewritten_value(text: str) -> JsonValue:
+    try:
+        return _JSON_ADAPTER.validate_json(text)
+    except ValidationError:
+        return text
+
+
+def _rewritten_entry(rewritten: str, guardrail_name: str | None) -> tuple[str, JsonValue]:
+    key: Final = _JSON_KEY_PREFIX.match(rewritten)
+    if key is None:
+        raise unappliable_request_rewrite(guardrail_name)
+    return _KEY_ADAPTER.validate_json(key.group(1)), _rewritten_value(rewritten[key.end() :])
+
+
+def _guardrailed_entry(
+    key: str, item: JsonValue, guardrailed: Mapping[str, str], guardrail_name: str | None
+) -> tuple[str, JsonValue]:
+    if isinstance(item, (list, dict)):
+        return guardrailed.get(key, key), _guardrailed_json(item, guardrailed, guardrail_name)
+    text: Final = _entry_text(key, item)
+    rewritten: Final = guardrailed.get(text, text)
+    return (key, item) if rewritten == text else _rewritten_entry(rewritten, guardrail_name)
 
 
 def _instruction_texts(question: Mapping[str, JsonValue]) -> tuple[str, ...]:
@@ -250,6 +290,12 @@ class _DecisionAnswersTranslation(BaseTranslation):
 
 
 class DecisionsHandler(_DecisionAnswersTranslation):
+    def get_structured_messages(
+        self,
+        data: dict[str, object],  # mutable-ok: BaseTranslation hands over the request dict
+    ) -> "list[AllMessageValues] | None":  # mutable-ok: overrides BaseTranslation.get_structured_messages
+        return OpenAIResponsesHandler().get_structured_messages({"input": data.get("input")})
+
     async def process_input_messages(
         self,
         data: dict[str, object],  # mutable-ok: BaseTranslation hands over the proxy's request dict

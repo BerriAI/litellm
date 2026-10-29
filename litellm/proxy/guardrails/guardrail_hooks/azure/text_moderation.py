@@ -161,9 +161,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
-        if content:
-            await self.async_make_request(text=content)
+        for text in inputs.get("texts") or ():
+            if text:
+                await self.async_make_request(text=text)
         return inputs
 
     def check_severity_threshold(self, response: "AzureTextModerationGuardrailResponse") -> Literal[True]:

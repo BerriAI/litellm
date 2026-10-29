@@ -1,8 +1,11 @@
+from functools import reduce
 from typing import Final, Literal
 
 import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
@@ -36,12 +39,25 @@ class _MasksSecrets(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        secrets: Final = {"AKIAIOSFODNN7EXAMPLE": "<AWS_KEY>", "AKIAI44QH8DHBEXAMPLE": "<AWS_KEY>"}
-        return GenericGuardrailAPIInputs(
-            texts=[
-                "<CARD>" if text == "4111111111111111" else secrets.get(text, text) for text in inputs.get("texts", [])
-            ]
+        secrets: Final = (
+            ("AKIAIOSFODNN7EXAMPLE", "<AWS_KEY>"),
+            ("AKIAI44QH8DHBEXAMPLE", "<AWS_KEY>"),
+            ("4111111111111111", "<CARD>"),
         )
+        return GenericGuardrailAPIInputs(
+            texts=[reduce(lambda text, secret: text.replace(*secret), secrets, text) for text in inputs.get("texts", [])]
+        )
+
+
+class _DropsQuotes(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(texts=[text.replace('"', "") for text in inputs.get("texts", [])])
 
 
 class _ReturnsNoTexts(CustomGuardrail):
@@ -149,39 +165,36 @@ async def test_systemone_state_keys_scalars_and_question_text_are_guardrailed() 
         (
             "request",
             (
-                "subject",
-                "refund",
+                '"subject": "refund"',
                 "lines",
                 "order 7",
                 "3",
                 "meta",
-                "id",
-                "ask",
-                "Does the customer want a refund?",
+                '"id": null',
+                '"ask": "Does the customer want a refund?"',
                 "The customer asks for money back",
                 "calm",
-                "level",
-                "angry",
+                '"level": "angry"',
             ),
         )
     ]
     assert {key: value for key, value in result.items() if key != "metadata"} == {
         "model": "judge",
         "state": {
-            "subject [GUARDRAILED]": "refund [GUARDRAILED]",
+            "subject": '"refund" [GUARDRAILED]',
             "lines [GUARDRAILED]": ["order 7 [GUARDRAILED]", "", "3 [GUARDRAILED]", True],
-            "meta [GUARDRAILED]": {"id [GUARDRAILED]": None},
+            "meta [GUARDRAILED]": {"id": "null [GUARDRAILED]"},
         },
         "questions": {
             "refund": {
                 "type": "noul",
-                "instructions": {"ask [GUARDRAILED]": "Does the customer want a refund? [GUARDRAILED]"},
+                "instructions": {"ask": '"Does the customer want a refund?" [GUARDRAILED]'},
             },
             "routed": {
                 "type": "noul",
                 "criteria": {"true": "The customer asks for money back [GUARDRAILED]", "false": None},
             },
-            "tier": {"type": "score", "criteria": ["calm [GUARDRAILED]", {"level [GUARDRAILED]": "angry [GUARDRAILED]"}]},
+            "tier": {"type": "score", "criteria": ["calm [GUARDRAILED]", {"level": '"angry" [GUARDRAILED]'}]},
         },
     }
 
@@ -210,6 +223,18 @@ async def test_systemone_keeps_every_state_entry_when_masked_keys_collide() -> N
     result: Final = await SystemOneHandler().process_input_messages(data, _MasksSecrets(guardrail_name="mask"))
 
     assert result["state"] == {"<AWS_KEY>": "first", "items": 2, "<AWS_KEY>_2": "second"}
+
+
+@pytest.mark.asyncio
+async def test_systemone_rejects_a_rewrite_that_loses_the_state_key() -> None:
+    data: Final = {
+        "model": "judge",
+        "state": {"ticket": "refund order 7"},
+        "questions": {"q": {"type": "noul", "criteria": {}}},
+    }
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await SystemOneHandler().process_input_messages(data, _DropsQuotes(guardrail_name="drops"))
 
 
 @pytest.mark.asyncio
@@ -293,3 +318,23 @@ async def test_decision_answers_are_returned_as_the_provider_sent_them(
 
     assert result is response
     assert guardrail.seen == []
+
+
+def test_router_sees_the_image_in_a_decision_input_routed_by_its_proxy_route() -> None:
+    structured: Final = resolve_structured_messages(
+        messages=None,
+        request_kwargs={
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Is this a cat?"},
+                        {"type": "input_image", "image_url": "https://example.com/cat.png"},
+                    ],
+                }
+            ],
+            "litellm_metadata": {"user_api_key_request_route": "/v1/decisions"},
+        },
+    )
+
+    assert structured is not None and request_contains_image_content(structured)

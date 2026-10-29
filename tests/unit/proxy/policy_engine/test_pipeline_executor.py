@@ -10,6 +10,8 @@ import pickle
 from typing import Literal
 from unittest.mock import MagicMock
 
+from collections.abc import Mapping
+from typing import Final
 import pytest
 
 import litellm
@@ -1137,10 +1139,16 @@ class _PolicyOptOutGuardrail(CustomGuardrail):
     def __init__(self):
         super().__init__(guardrail_name="policy-opt-out", default_on=True)
         self.native_pre_call_ran = False
-        self.scanned = []
+        self.scanned: tuple[str, ...] = ()
 
-    async def apply_guardrail(self, inputs: GenericGuardrailAPIInputs, request_data, input_type, logging_obj=None):
-        self.scanned.extend(inputs.get("texts", []))
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scanned = (*self.scanned, *inputs.get("texts", []))
         return inputs
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
@@ -1167,8 +1175,10 @@ async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_step_scans_extraction_state_through_apply_guardrail_when_opted_out(monkeypatch):
-    guardrail = _PolicyOptOutGuardrail()
+async def test_pipeline_step_scans_extraction_state_through_apply_guardrail_when_opted_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _PolicyOptOutGuardrail()
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     outcome, _, _, _ = await PipelineExecutor._run_step(
@@ -1181,7 +1191,7 @@ async def test_pipeline_step_scans_extraction_state_through_apply_guardrail_when
 
     assert outcome == "pass"
     assert guardrail.native_pre_call_ran is False
-    assert guardrail.scanned == ["invoice from vendor"]
+    assert guardrail.scanned == ("invoice from vendor",)
 
 
 class _TextReturningGuardrail(CustomGuardrail):

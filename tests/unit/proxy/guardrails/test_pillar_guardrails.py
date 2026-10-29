@@ -16,6 +16,8 @@ from unittest.mock import Mock, patch
 import json
 from urllib.parse import unquote
 
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final
 import pytest
 import respx
 from fastapi.exceptions import HTTPException
@@ -1545,12 +1547,16 @@ _INPUT_HOOKS = [
     ],
 )
 async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
-    respx_mock: respx.MockRouter, event_hook, run_hook, request_fields, applied
-):
+    respx_mock: respx.MockRouter,
+    event_hook: str,
+    run_hook: Callable[[PillarGuardrail, Mapping[str, object]], Awaitable[object]],
+    request_fields: Mapping[str, object],
+    applied: Sequence[str] | None,
+) -> None:
     respx_mock.post(url__startswith="https://api.pillar.security/api/v1/protect").respond(
         json={"session_id": "s", "flagged": False, "scanners": {}, "evidence": []}
     )
-    guardrail = PillarGuardrail(
+    guardrail: Final = PillarGuardrail(
         guardrail_name="pillar-test",
         api_key="test-pillar-key",
         api_base="https://api.pillar.security",
@@ -1558,7 +1564,7 @@ async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
         event_hook=event_hook,
         default_on=True,
     )
-    metadata: dict[str, object] = {}
+    metadata: Final[dict[str, object]] = {}
 
     await run_hook(guardrail, {**request_fields, "metadata": metadata})
 

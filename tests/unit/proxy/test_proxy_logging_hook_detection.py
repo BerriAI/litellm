@@ -11,6 +11,7 @@ from litellm.caching import DualCache
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import ToolPermissionGuardrail
@@ -1081,6 +1082,14 @@ class _Metadata(BaseModel):
     applied_guardrails: tuple[str, ...] = ()
 
 
+class _RoutedMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tags: tuple[str, ...] = ()
+    requester_ip_address: str | None = None
+    user_api_key_key_alias: str | None = None
+
+
 def _applied_guardrails(data: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         chain.from_iterable(
@@ -1159,6 +1168,34 @@ async def test_pre_call_hook_scans_decision_and_extraction_text_with_a_native_ho
 
     assert {key: result[key] for key in expected} == expected
     assert guardrail.native_hooks_ran == []
+    assert _applied_guardrails(result) == ("keeps_native",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "request_fields"),
+    (
+        ("aextraction", {"state": f"paid with {_SECRET}", "fields": {"total": {"type": "number"}}}),
+        ("asystemone", {"state": {"ticket": _SECRET}, "questions": {"leak": {"type": "noul", "instructions": "Key?"}}}),
+        ("adecisions", {"input": _SECRET, "questions": [{"type": "predicate", "instructions": "Is it a key?"}]}),
+    ),
+)
+async def test_pre_call_hook_keeps_request_tags_where_the_router_reads_them(
+    monkeypatch: pytest.MonkeyPatch, call_type: CallTypesLiteral, request_fields: Mapping[str, object]
+) -> None:
+    guardrail: Final = _MasksSecretWithNativeHooks(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    result: Final[dict[str, object]] = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", key_alias="billing"),
+        data={"model": "m", **request_fields, "metadata": {"tags": ["prod"], "requester_ip_address": "10.0.0.7"}},
+        call_type=call_type,
+    )
+
+    routed_metadata: Final = _RoutedMetadata.model_validate(result[get_metadata_variable_name_from_kwargs(result)])
+    assert routed_metadata == _RoutedMetadata(
+        tags=("prod",), requester_ip_address="10.0.0.7", user_api_key_key_alias="billing"
+    )
     assert _applied_guardrails(result) == ("keeps_native",)
 
 

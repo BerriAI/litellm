@@ -7,6 +7,8 @@ import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final
 import pytest
 import respx
 
@@ -233,17 +235,21 @@ _INPUT_HOOKS = [
     ],
 )
 async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
-    respx_mock: respx.MockRouter, event_hook, run_hook, request_fields, applied
+    respx_mock: respx.MockRouter,
+    event_hook: str,
+    run_hook: Callable[[DynamoAIGuardrails, Mapping[str, object]], Awaitable[object]],
+    request_fields: Mapping[str, object],
+    applied: Sequence[str] | None,
 ) -> None:
     respx_mock.post(_ANALYZE_URL).respond(json={"finalAction": "NONE", "appliedPolicies": []})
-    guardrail = DynamoAIGuardrails(
+    guardrail: Final = DynamoAIGuardrails(
         guardrail_name="test-dynamoai",
         api_key="test-api-key",
         api_base="https://api.dynamo.ai",
         event_hook=event_hook,
         default_on=True,
     )
-    metadata: dict[str, object] = {}
+    metadata: Final[dict[str, object]] = {}
 
     await run_hook(guardrail, {**request_fields, "metadata": metadata})
 
@@ -260,10 +266,10 @@ async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
     ],
 )
 async def test_post_call_hook_lists_the_guardrail_only_when_it_scanned_text(
-    respx_mock: respx.MockRouter, response, applied
+    respx_mock: respx.MockRouter, response: litellm.ModelResponse | Mapping[str, object], applied: Sequence[str] | None
 ) -> None:
     respx_mock.post(_ANALYZE_URL).respond(json={"finalAction": "NONE", "appliedPolicies": []})
-    metadata: dict[str, object] = {}
+    metadata: Final[dict[str, object]] = {}
 
     await _post_call_guardrail().async_post_call_success_hook(
         data={"messages": [{"role": "user", "content": "hi"}], "metadata": metadata},
