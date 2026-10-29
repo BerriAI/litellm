@@ -12638,6 +12638,11 @@ class Router:
                 model_info = None
 
             deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
+            deployment_prices = (
+                model_info_prices(_configured_model_info(model))
+                if model_info is None
+                else _deployment_prices(model_info)
+            )
 
             # get llm provider
             litellm_model, llm_provider = self._model_group_llm_provider(litellm_params)
@@ -12675,7 +12680,7 @@ class Router:
                         "providers": [llm_provider],
                         "description": model_group_description,
                         **model_info,
-                        **_deployment_prices(model_info),
+                        **deployment_prices,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                         "supported_endpoints": None,
@@ -12709,7 +12714,7 @@ class Router:
                     )
                 ):
                     model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                model_group_info = model_group_info.with_higher_prices(_deployment_prices(model_info))
+                model_group_info = model_group_info.with_higher_prices(deployment_prices)
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
                     and model_info["supports_parallel_function_calling"] is True

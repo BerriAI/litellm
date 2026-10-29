@@ -41,6 +41,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap as _GetModelCostMap
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
@@ -70,6 +71,9 @@ from .utils import (
     MirroredPricingParams,
     ModelResponse,
     StandardLoggingRoutingDecision,
+)
+from .utils import (
+    is_server_derived_pricing_key as _is_server_derived_pricing_key,
 )
 from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
@@ -992,8 +996,12 @@ def _outprices(price: float, listed: object) -> bool:
     return listed_price is None or price > listed_price
 
 
+def _is_billed_price_field(key: str) -> bool:
+    return key in _GetModelCostMap.loaded_model_cost_map_fields() or _is_server_derived_pricing_key(key)
+
+
 def is_usd_price_key(key: str) -> bool:
-    return ("cost_per_" in key or "token_cost" in key) and "_dbu_" not in key
+    return ("cost_per_" in key or "token_cost" in key) and "_dbu_" not in key and _is_billed_price_field(key)
 
 
 def model_info_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:

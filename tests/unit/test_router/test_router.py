@@ -2509,6 +2509,7 @@ def test_model_group_info_reports_every_price_at_the_highest_across_deployments(
             "input_cost_per_token_priority": 6e-06,
             "input_cost_per_token_above_272k_tokens": 4e-06,
             "input_cost_per_token_batches": 1e-06,
+            "input_cost_per_token_above_999k_tokens": 9e-06,
         },
     )
     router: Final = litellm.Router(
@@ -2525,6 +2526,9 @@ def test_model_group_info_reports_every_price_at_the_highest_across_deployments(
                     "input_dbu_cost_per_token": 7e-07,
                     "cost_center": 4021,
                     "cost_allocation_pct": "30",
+                    "internal_chargeback_cost_per_token": 0.5,
+                    "team_cost_per_seat": 40,
+                    "input_cost_per_tokens": 9e-06,
                 },
             }
             for index in deployment_order
@@ -2541,9 +2545,13 @@ def test_model_group_info_reports_every_price_at_the_highest_across_deployments(
         "input_cost_per_token_priority": 6e-06,
         "input_cost_per_token_above_272k_tokens": 8e-06,
         "input_cost_per_token_batches": 1e-06,
+        "input_cost_per_token_above_999k_tokens": 9e-06,
     }
     assert reported.keys().isdisjoint(
         {
+            "internal_chargeback_cost_per_token",
+            "team_cost_per_seat",
+            "input_cost_per_tokens",
             "output_cost_per_video_per_second",
             "output_cost_per_second",
             "search_context_cost_per_query",
@@ -2594,6 +2602,44 @@ def test_model_group_info_lists_cost_map_prices_outside_the_typed_model_info(mon
     reported: Final = info.model_dump()
     assert {key: reported.get(key) for key in cost_map_prices} == cost_map_prices
     assert "input_dbu_cost_per_token" not in reported
+
+
+def test_model_group_info_never_takes_prices_from_a_cost_map_entry_named_like_the_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    group_name: Final = "made-up-group-named-like-a-catalog-model"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group_name,
+                "litellm_params": {"model": "gemini/made-up-unmapped-model", "api_key": "fake"},
+                "model_info": {"id": "self-hosted-deployment", "input_cost_per_token": 1e-07},
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            group_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 5e-06,
+                "input_cost_per_token_priority": 1e-05,
+                "output_cost_per_token_batches": 7e-06,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    info: Final = router.get_model_group_info(model_group=group_name)
+
+    assert info is not None
+    reported: Final = info.model_dump()
+    assert reported["input_cost_per_token"] == 1e-07
+    assert reported.keys().isdisjoint({"input_cost_per_token_priority", "output_cost_per_token_batches"})
 
 
 def test_model_group_info_still_validates_from_attributes():
