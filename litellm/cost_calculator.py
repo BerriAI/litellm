@@ -1649,6 +1649,9 @@ def completion_cost(
             )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
+        caller_set_prices: Final = (
+            explicit_pricing or custom_cost_per_token is not None or custom_cost_per_second is not None
+        )
         custom_priced_request_model: Final = model if custom_pricing is True else None
         configured_cost_per_query: Final = (
             _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
@@ -2019,7 +2022,7 @@ def completion_cost(
                 )
                 model_for_discount = custom_priced_request_model or model
                 if (
-                    not explicit_pricing
+                    not caller_set_prices
                     and (reported_cost := billed_usage_cost(priced_response, custom_llm_provider)) is not None
                 ):
                     return _adjusted_provider_billed_cost(

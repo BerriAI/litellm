@@ -292,6 +292,39 @@ def test_sdk_completion_cost_prices_kyma_at_the_cost_kyma_reports():
     assert litellm.completion_cost(completion_response=response) == pytest.approx(reported_cost)
 
 
+def _kyma_sdk_response(usage: dict[str, float]) -> litellm.ModelResponse:
+    with respx.mock() as upstream:
+        upstream.post(_CHAT_URL).respond(200, json=_kyma_chat_body(usage))
+        response: Final = litellm.completion(model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k")
+    assert isinstance(response, litellm.ModelResponse)
+    return response
+
+
+_KYMA_TOKEN_USAGE: Final = {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+_KYMA_REPORTED_COST: Final = 0.00721
+
+
+def test_sdk_completion_cost_uses_the_callers_token_prices_over_the_cost_kyma_reports():
+    caller_prices: Final = {"input_cost_per_token": 0.5, "output_cost_per_token": 2.0}
+    with_reported_cost: Final = _kyma_sdk_response({**_KYMA_TOKEN_USAGE, "cost": _KYMA_REPORTED_COST})
+    without_reported_cost: Final = _kyma_sdk_response(_KYMA_TOKEN_USAGE)
+
+    assert litellm.completion_cost(
+        completion_response=with_reported_cost, custom_cost_per_token=caller_prices
+    ) == pytest.approx(litellm.completion_cost(completion_response=without_reported_cost, custom_cost_per_token=caller_prices))
+    assert litellm.completion_cost(
+        completion_response=with_reported_cost, custom_cost_per_token=caller_prices
+    ) != pytest.approx(_KYMA_REPORTED_COST)
+
+
+def test_sdk_completion_cost_uses_the_callers_per_second_price_over_the_cost_kyma_reports():
+    response: Final = _kyma_sdk_response({**_KYMA_TOKEN_USAGE, "cost": _KYMA_REPORTED_COST})
+
+    assert litellm.completion_cost(completion_response=response, custom_cost_per_second=50.0) == pytest.approx(
+        50.0 * response._response_ms / 1000
+    )
+
+
 def _with_kyma_discount_and_margin(monkeypatch: pytest.MonkeyPatch) -> float:
     monkeypatch.setattr(litellm, "cost_discount_config", {"kyma": 0.5})
     monkeypatch.setattr(litellm, "cost_margin_config", {"kyma": 0.1})
