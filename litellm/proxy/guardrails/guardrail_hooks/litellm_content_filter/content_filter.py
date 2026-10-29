@@ -191,6 +191,7 @@ class _Redaction:
 class _MaskedText:
     text: str
     redactions: tuple[_Redaction, ...] = ()
+    tracks_redactions: bool = True
 
     def original_span(self, span: tuple[int, int]) -> tuple[int, int]:
         return self._original_position(span[0], is_end=False), self._original_position(span[1], is_end=True)
@@ -212,8 +213,14 @@ class _MaskedText:
         ]
 
     def masked(self, spans: Sequence[tuple[int, int]], tag: str, failed_checksum: Sequence[bool]) -> "_MaskedText":
-        growth: Final = tuple(itertools.accumulate((len(tag) - end + start for start, end in spans), initial=0))
         span_ends: Final = tuple(end for _, end in spans)
+        text_pieces: Final = itertools.chain.from_iterable(
+            (self.text[previous_end:start], tag) for previous_end, (start, _) in zip((0, *span_ends), spans)
+        )
+        text: Final = "".join((*text_pieces, self.text[span_ends[-1] :]))
+        if not self.tracks_redactions:
+            return _MaskedText(text=text, tracks_redactions=False)
+        growth: Final = tuple(itertools.accumulate((len(tag) - end + start for start, end in spans), initial=0))
         absorbed: Final = tuple(self._redactions_overlapping(span) for span in spans)
         dropped: Final = frozenset(itertools.chain.from_iterable(absorbed))
         shifted: Final = (
@@ -234,11 +241,8 @@ class _MaskedText:
             )
             for index, (start, end) in enumerate(spans)
         )
-        text_pieces: Final = itertools.chain.from_iterable(
-            (self.text[previous_end:start], tag) for previous_end, (start, _) in zip((0, *span_ends), spans)
-        )
         return _MaskedText(
-            text="".join((*text_pieces, self.text[span_ends[-1] :])),
+            text=text,
             redactions=tuple(sorted((*shifted, *added), key=lambda redaction: redaction.start)),
         )
 
@@ -1484,15 +1488,18 @@ class ContentFilterGuardrail(CustomGuardrail):
         detections: list[ContentFilterDetection] | None,
         validates_checksums: bool,
     ) -> str:
+        checks_checksums: Final = validates_checksums and any(
+            pattern_entry["validator"] is not None for pattern_entry in self.compiled_patterns
+        )
         checksum_windows: Final = (
-            functools.cache(functools.partial(self._checksum_windows, text)) if validates_checksums else None
+            functools.cache(functools.partial(self._checksum_windows, text)) if checks_checksums else None
         )
         first_pass: Final = functools.reduce(
             lambda so_far, indexed_entry: self._act_on_first_pass_matches(
                 so_far, *indexed_entry, checksum_windows, detections
             ),
             enumerate(self.compiled_patterns),
-            _FirstPass(masked=_MaskedText(text=text)),
+            _FirstPass(masked=_MaskedText(text=text, tracks_redactions=checks_checksums)),
         )
         put_back_text, put_back = first_pass.masked.restored(text)
         if not put_back:
