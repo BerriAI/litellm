@@ -1,13 +1,3 @@
-"""The messages the proxy prints at startup outside its logger, as a container's log pipeline reads them.
-
-A container runtime reads the proxy's stdout through a pipe and keeps every line. This contract boots an owned
-proxy with a search tool configured and a one-second config reload interval, serves a chat request, lets the
-search tools reload job run several times and reads everything the proxy wrote. With the setting off, every
-startup message arrives, the search tools listing once per worker however many reloads ran, and no line
-carries an ANSI color code, since the output is a pipe and not a terminal. With LITELLM_SUPPRESS_STARTUP_OUTPUT
-or litellm_settings.suppress_startup_output on, none of them arrive, in plain and JSON mode alike.
-"""
-
 from __future__ import annotations
 
 import uuid
@@ -135,8 +125,6 @@ def test_startup_messages_reach_a_piped_stdout_once_and_without_color_codes(
 def test_suppress_startup_output_leaves_out_every_startup_message(
     gateway: Gateway, tmp_path: Path, litellm_settings: Mapping[str, JsonValue], overrides: Mapping[str, str]
 ) -> None:
-    """Two workers, so the banner and the feedback box each worker prints before reading the config are covered
-    when the setting is only in the config."""
     workers: Final = 2
     log, search_tool = _boot_reload_and_stop(gateway, tmp_path, litellm_settings, overrides, workers)
 
