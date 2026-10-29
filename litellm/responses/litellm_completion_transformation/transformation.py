@@ -64,6 +64,7 @@ from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
 from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    StoredTurns,
 )
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
@@ -124,6 +125,7 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .client_tool_search import client_tool_search_chat_tool
 from .compaction_items import (
     carries_only_compaction,
     compaction_output_item,
@@ -151,16 +153,17 @@ from .custom_tools import (
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
     CompletionRoute,
+    ToolSearchRouting,
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
-    is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
     tool_search_call_ids,
+    tool_search_routing,
     without_tool_search_calls,
     without_tool_search_uses,
 )
@@ -1342,6 +1345,7 @@ class LiteLLMCompletionResponsesConfig:
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
+        stored_turns: StoredTurns | None = None,
     ) -> dict[str, object]:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1357,6 +1361,7 @@ class LiteLLMCompletionResponsesConfig:
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
             client_response_ids=previous_response_client_ids,
+            stored_turns=stored_turns,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -2818,9 +2823,11 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
-        if tool_type == "tool_search" and validated_tool_search_execution(tool.get("execution")) != "client":
+        if tool_type == "tool_search" and validated_tool_search_execution(tool.get("execution")) == "client":
+            return ResponsesToolChatForm(chat_tools=(client_tool_search_chat_tool(tool),), web_search_options=None)
+        if tool_type == "tool_search":
             return ResponsesToolChatForm(chat_tools=(anthropic_tool_search_chat_tool(),), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "local_shell", "shell", "tool_search"):
+        if tool_type in ("computer_use", "image_generation", "local_shell", "shell"):
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",
@@ -2959,7 +2966,7 @@ class LiteLLMCompletionResponsesConfig:
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
-        tool_search_requested: Final = has_server_tool_search(request_tools)
+        tool_search: Final = tool_search_routing(request_tools)
 
         web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
             chat_completion_response
@@ -2976,7 +2983,7 @@ class LiteLLMCompletionResponsesConfig:
 
                 if (
                     server_tool_call := LiteLLMCompletionResponsesConfig._server_tool_call_item(
-                        tool_id, tool_name, tool_arguments, web_search_calls, tool_search_requested
+                        tool_id, tool_name, tool_arguments, web_search_calls, tool_search
                     )
                 ) is not None:
                     responses_tools.append(server_tool_call)
@@ -3041,14 +3048,15 @@ class LiteLLMCompletionResponsesConfig:
         tool_name: str,
         tool_arguments: str,
         web_search_calls: Mapping[str, ResponseFunctionWebSearch],
-        tool_search_requested: bool,
+        tool_search: ToolSearchRouting,
     ) -> ResponseFunctionWebSearch | OutputToolSearchCall | None:
         web_search_call: Final = web_search_calls.get(tool_id)
         if web_search_call is not None:
             return web_search_call
-        if tool_search_requested and is_anthropic_tool_search_use(tool_id, tool_name):
-            return build_tool_search_call(tool_id, tool_arguments, "completed")
-        return None
+        execution: Final = tool_search.execution_of(tool_id, tool_name)
+        if execution is None:
+            return None
+        return build_tool_search_call(tool_id, tool_arguments, "completed", execution)
 
     @staticmethod
     def _web_search_calls_by_call_id(
@@ -3569,7 +3577,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif choice.message.content is not None:
+            elif choice.message.content is not None or getattr(choice.message, "annotations", None):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3643,13 +3651,13 @@ class LiteLLMCompletionResponsesConfig:
 
         return OutputText(
             type="output_text",
-            text=message.content,
+            text=message.content or "",
             annotations=transformed_annotations,
         )
 
     @staticmethod
     def transform_chat_completion_annotations_to_response_output_annotations(
-        annotations: list[ChatCompletionAnnotation] | None,
+        annotations: Sequence[ChatCompletionAnnotation] | None,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
         response_output_annotations: Final[list[GenericResponseOutputItemContentAnnotation]] = []
 
