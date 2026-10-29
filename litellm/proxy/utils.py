@@ -7909,6 +7909,7 @@ async def send_email(
     receiver_email: str | None = None,
     subject: str | None = None,
     html: str | None = None,
+    raise_on_error: bool = False,
 ):
     """
     smtp_host,
@@ -7962,6 +7963,9 @@ async def send_email(
         )
 
     except Exception as e:
+        if raise_on_error:
+            verbose_proxy_logger.debug("An error occurred while sending the email: %s", e)
+            raise
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
 
 
