@@ -40,6 +40,7 @@ ENV UV_PYTHON_DOWNLOADS=0
 COPY pyproject.toml README.md rust-toolchain.toml ./
 COPY .cargo ./.cargo
 COPY litellm-rust ./litellm-rust
+COPY model_prices_and_context_window.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p litellm/rust_bridge /wheels && \
