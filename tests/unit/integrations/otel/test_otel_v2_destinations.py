@@ -3451,7 +3451,7 @@ class TestLangfuseDestinationFields:
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
         config: Final = OpenTelemetryV2Config()
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         call: Final = replace(
@@ -3491,7 +3491,7 @@ class TestLangfuseDestinationFields:
         capture: Final = _ExporterCapture()
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         call: Final = replace(
@@ -3642,7 +3642,7 @@ class TestLangfuseDestinationFields:
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
         config: Final = OpenTelemetryV2Config()
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         destination: Final = destination_for(
