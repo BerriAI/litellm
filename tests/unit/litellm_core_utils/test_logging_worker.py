@@ -161,6 +161,42 @@ async def test_stop_timeout_keeps_callbacks_observable_until_queue_cleanup_finis
         await worker.stop()
 
 
+@pytest.mark.asyncio
+async def test_overflow_callback_does_not_undercount_the_unfinished_queue() -> None:
+    """A callback rejected by a full queue is run by the aggressive clear. It must not consume a
+    queue.task_done() it never contributed, otherwise flush() returns while a real callback is still
+    running and the shutdown drain cancels it with budget to spare.
+    """
+    worker = LoggingWorker(timeout=5.0, max_queue_size=2, concurrency=1)
+    gates = {name: asyncio.Event() for name in ("first", "second", "third")}
+    completed: list[str] = []
+
+    async def gated(name: str) -> None:
+        await gates[name].wait()
+        completed.append(name)
+
+    async def instant() -> None:
+        completed.append("overflow")
+
+    worker.start()
+    worker.enqueue(gated("first"))
+    await asyncio.sleep(0)
+    worker.enqueue(gated("second"))
+    worker.enqueue(gated("third"))
+    assert worker._queue is not None and worker._queue.full(), "precondition: the queue is full"
+    worker.enqueue(instant())
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    gates["first"].set()
+    gates["second"].set()
+    asyncio.get_running_loop().call_later(0.2, gates["third"].set)
+    await asyncio.wait_for(worker.flush(), timeout=2.0)
+    assert "third" in completed, "flush returned while a queued callback was still unfinished"
+    assert sorted(completed) == ["first", "overflow", "second", "third"]
+    await worker.stop()
+
+
 class TestLoggingWorker:
     """Test cases for LoggingWorker functionality."""
 

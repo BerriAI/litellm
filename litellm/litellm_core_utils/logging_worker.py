@@ -423,23 +423,23 @@ class LoggingWorker:
                 return
 
             extracted_tasks: Final = self._extract_tasks_from_queue()
-
-            # Add new task to extracted tasks to process directly
+            runs: Final = [self._process_single_task(task) for task in extracted_tasks]
             if new_task is not None:
-                self._track_dequeued(new_task)
-                extracted_tasks.append(new_task)
-
-            # Process extracted tasks directly
-            if extracted_tasks:
-                await self._process_extracted_tasks(extracted_tasks)
+                try:
+                    self._queue.put_nowait(new_task)
+                except asyncio.QueueFull:
+                    self._track_dequeued(new_task)
+                    runs.append(self._process_single_task(new_task, counted=False))
+            if runs:
+                await asyncio.gather(*runs)
         except Exception as e:
             verbose_logger.exception("LoggingWorker error during aggressive clear: %s", e)
         finally:
             # Always reset the flag even if an error occurs
             self._aggressive_clear_in_progress = False
 
-    async def _process_single_task(self, task: LoggingTask) -> None:
-        """Process a single task and mark it done."""
+    async def _process_single_task(self, task: LoggingTask, *, counted: bool = True) -> None:
+        """Process a single task; ``counted`` is False for a task the full queue never accepted."""
         if self._queue is None:
             return
 
@@ -453,18 +453,8 @@ class LoggingWorker:
             pass
         finally:
             self._untrack_dequeued(task)
-            self._queue.task_done()
-
-    async def _process_extracted_tasks(self, tasks: list[LoggingTask]) -> None:
-        """
-        Process tasks that were extracted from the queue to make room.
-        Processes them concurrently without semaphore limits for maximum speed.
-        """
-        if not tasks or self._queue is None:
-            return
-
-        # Process all tasks concurrently for maximum speed
-        await asyncio.gather(*[self._process_single_task(task) for task in tasks])
+            if counted:
+                self._queue.task_done()
 
     def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, None, None]) -> None:
         """
