@@ -2289,6 +2289,8 @@ class LiteLLMCompletionResponsesConfig:
             ]
         else:
             content: Final[object] = input_item.get("content")
+            if content is None and input_item.get("role") == "user":
+                return [GenericChatCompletionMessage(role="user", content="")]
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:

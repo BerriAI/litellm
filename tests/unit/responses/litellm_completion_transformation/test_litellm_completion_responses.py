@@ -5782,6 +5782,33 @@ def test_no_cache_control_when_absent():
     assert "cache_control" not in msg
 
 
+@pytest.mark.parametrize(
+    "empty_user_item", ({"role": "user", "content": None}, {"role": "user"}), ids=("null_content", "no_content_key")
+)
+def test_a_user_input_item_without_content_stays_an_empty_user_turn(empty_user_item: dict[str, object]) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "user", "content": "What is 2+2?"},
+                {"role": "assistant", "content": None},
+                {"type": "item_reference", "id": "msg_earlier"},
+                {"role": "assistant", "content": "Four."},
+                empty_user_item,
+            ],
+        ),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+    )
+
+    assert [(message["role"], message.get("content")) for message in result["messages"]] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", ""),
+    ]
+
+
 def test_cache_control_on_function_call_output():
     """cache_control on a function_call_output should be passed through to tool message"""
     TOOL_CALLS_CACHE.set_cache(

@@ -515,18 +515,18 @@ def test_r19_anthropic_native_invoke_forwards_the_turn_verbatim_and_relays_the_s
         assert received["messages"] == [_NO_CONTENT_USER], received
 
 
-def test_r20_responses_lone_input_item_without_content_is_rejected_before_any_peer_call(gateway: Gateway) -> None:
+def test_r20_responses_lone_input_item_without_content_sends_the_placeholder_turn(gateway: Gateway) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire)
         response: Final = gateway.request(
             "POST", "/v1/responses", {"model": model, "input": [_NO_CONTENT_USER], **_EXTRA}
         )
-        assert response.status_code == 400, response.text
-        assert _NO_NON_SYSTEM_MESSAGE in response.text, response.text
-        assert wire.drain() == ()
+        assert response.status_code == 200, response.text
+        _, received = _only_received(wire)
+        assert received["messages"] == [_CONVERSE_PLACEHOLDER], received
 
 
-def test_r21_responses_stream_input_item_without_content_after_an_assistant_item_keeps_the_earlier_turns(
+def test_r21_responses_stream_input_item_without_content_after_an_assistant_item_ends_on_the_placeholder_turn(
     gateway: Gateway,
 ) -> None:
     marker: Final = f"call-{uuid.uuid4().hex}"
@@ -548,7 +548,7 @@ def test_r21_responses_stream_input_item_without_content_after_an_assistant_item
         assert completed["response"]["output"][0]["content"][0]["text"] == _ANSWER, lines
         target, received = _only_received(wire)
         assert target == _STREAM_TARGET, target
-        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED], received
+        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED, _CONVERSE_PLACEHOLDER], received
         (row,) = _success_rows(marker, 1)
         assert row["call_type"] == "aresponses" and row["end_user"] == marker, row
         assert row["request_id"] == _inner_response_id(str(completed["response"]["id"])), (row, completed)
