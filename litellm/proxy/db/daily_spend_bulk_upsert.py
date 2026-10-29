@@ -32,7 +32,7 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
-    team_scoped: bool = False
+    carries_team_id: bool = False
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
@@ -43,7 +43,7 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
         "end_user": DailySpendTable(name="LiteLLM_DailyEndUserSpend", entity_id_column="end_user_id"),
         "agent": DailySpendTable(name="LiteLLM_DailyAgentSpend", entity_id_column="agent_id"),
         "tag": DailySpendTable(
-            name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True, team_scoped=True
+            name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True, carries_team_id=True
         ),
     }
 )
@@ -127,14 +127,9 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
-def _conflict_columns(table: DailySpendTable) -> tuple[str, ...]:
-    """The table's unique constraint, in constraint order."""
-    return (table.entity_id_column, *(("team_id",) if table.team_scoped else ()), *_KEY_COLUMNS)
-
-
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
-    return tuple(_as_text(transaction.get(column)) for column in _conflict_columns(table))
+    return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
 
 
 def _merge(group: Sequence[SpendRow]) -> SpendRow:
@@ -176,17 +171,20 @@ def _row_params(
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
+        *((_as_text(transaction.get("team_id")),) if table.carries_team_id else ()),
     )
 
 
 def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
     return (
         "id",
-        *_conflict_columns(table),
+        table.entity_id_column,
+        *_KEY_COLUMNS,
         "model_group",
         *_COUNTER_COLUMNS,
         *_SPEND_COLUMNS,
         *(("request_id",) if table.carries_request_id else ()),
+        *(("team_id",) if table.carries_team_id else ()),
     )
 
 
@@ -217,11 +215,18 @@ def build_bulk_upsert(
         if table.carries_request_id
         else ""
     )
+    # Rows written by an older proxy, or by a request without a team's virtual key, carry "", so
+    # only a known team overwrites the stored one.
+    team_id_update: Final = (
+        f', "team_id" = COALESCE(NULLIF(EXCLUDED."team_id", \'\'), {quoted_table}."team_id")'
+        if table.carries_team_id
+        else ""
+    )
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted(_conflict_columns(table))}) DO UPDATE SET\n"
-        f"  {increments}{request_id_update},\n"
+        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"  {increments}{request_id_update}{team_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )
     return sql, tuple(value for key, transaction in batch for value in _row_params(table, key, transaction))

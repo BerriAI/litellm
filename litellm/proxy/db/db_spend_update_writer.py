@@ -52,6 +52,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
 from litellm.proxy.db.daily_spend_bulk_upsert import (
@@ -349,6 +350,20 @@ def _parse_spend_log_metadata(payload: Mapping[str, object]) -> SpendLogsMetadat
         )
         return _EMPTY_SPEND_LOG_METADATA
     return parsed
+
+
+def _virtual_key_team_id(kwargs: Mapping[str, object]) -> str:
+    """The team of the virtual key that authenticated the request, or "" for JWT, custom auth, OAuth2,
+    UI sessions, the master key and team-less keys, whose api_key does not pin a tag row to one team."""
+    params: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs.get("litellm_params") or {})
+    candidates: Final = tuple(
+        _SPEND_METADATA_ADAPTER.validate_python(params.get(bucket) or {}).get("user_api_key_auth")
+        for bucket in ("litellm_metadata", "metadata")
+    )
+    auth: Final = next((found for found in candidates if isinstance(found, UserAPIKeyAuth)), None)
+    if auth is None or not auth.via_virtual_key or auth.is_session_token:
+        return ""
+    return auth.team_id or ""
 
 
 def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:
@@ -721,6 +736,7 @@ class DBSpendUpdateWriter:
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                     request_model_access_groups=get_request_model_access_groups(kwargs),
+                    virtual_key_team_id=_virtual_key_team_id(_SPEND_METADATA_ADAPTER.validate_python(kwargs or {})),
                 ),
                 task_name="spend rollups",
             )
@@ -1040,7 +1056,6 @@ class DBSpendUpdateWriter:
             model_group=base.get("model_group"),
             endpoint=base.get("endpoint"),
             mcp_namespaced_tool_name=base.get("mcp_namespaced_tool_name"),
-            team_id=payload.get("team_id") or "",  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
             targets=tuple(
                 DailyBaselineTarget(entity=entity, entity_id=identity)
                 for entity, values in bases
@@ -1146,6 +1161,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
+        virtual_key_team_id: str = "",
     ):
         """
         Runs every spend-update helper for one request. Each helper goes through
@@ -1245,7 +1261,9 @@ class DBSpendUpdateWriter:
         )
         await self._run_spend_update_step(
             "add_spend_log_transaction_to_daily_tag_transaction",
-            self.add_spend_log_transaction_to_daily_tag_transaction(payload=payload_copy, prisma_client=prisma_client),
+            self.add_spend_log_transaction_to_daily_tag_transaction(
+                payload=payload_copy, prisma_client=prisma_client, virtual_key_team_id=virtual_key_team_id
+            ),
             payload=payload_copy,
         )
         await self._enqueue_model_usage_transaction(payload=payload_copy, prisma_client=prisma_client)
@@ -3080,6 +3098,7 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
+        virtual_key_team_id: str = "",
     ) -> None:
         if prisma_client is None:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
@@ -3095,25 +3114,13 @@ class DBSpendUpdateWriter:
             return
 
         request_tags: Final = daily_spend_entity_ids(payload, "tag")
-        # .get, not indexing: the caller swallows exceptions, so a KeyError would silently drop tag spend
-        team_id: Final = payload.get("team_id") or ""  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
         for tag in request_tags:
             if tag is None:
                 continue
             endpoint_str = base_daily_transaction.get("endpoint") or ""
-            daily_transaction_key = json.dumps(
-                [
-                    tag,
-                    team_id,
-                    base_daily_transaction["date"],
-                    payload["api_key"],
-                    payload["model"],
-                    payload["custom_llm_provider"],
-                    endpoint_str,
-                ]
-            )
+            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
             daily_transaction = DailyTagSpendTransaction(
-                tag=tag, team_id=team_id, **base_daily_transaction, request_id=payload["request_id"]
+                tag=tag, team_id=virtual_key_team_id, **base_daily_transaction, request_id=payload["request_id"]
             )
 
             await self.daily_tag_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})

@@ -3,13 +3,11 @@
 import re
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Final
 
 import pytest
 
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
-    DailySpendEntity,
     build_bulk_upsert,
     conflict_key,
     merge_by_conflict_key,
@@ -90,6 +88,8 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
+    # 26 bound columns per row plus the inlined updated_at, so the row count is what
+    # separates one multi-row statement from a hundred single-row ones.
     assert len(params) == 100 * 26
     assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
@@ -101,7 +101,7 @@ def test_conflict_target_is_the_full_unique_constraint():
     conflict_target = re.search(r"ON CONFLICT \(([^)]*)\)", sql)
     assert conflict_target is not None
     assert conflict_target.group(1) == (
-        '"tag", "team_id", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
+        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
     )
 
 
@@ -142,41 +142,6 @@ def test_non_tag_tables_carry_no_request_id_column():
 
     assert "request_id" not in sql
     assert '"user_id"' in sql
-
-
-def test_one_tag_from_two_teams_stays_two_rows() -> None:
-    merged: Final = merge_by_conflict_key(
-        TAG_TABLE, (tag_txn(team_id="team-b", spend=2.0), tag_txn(team_id="team-a", spend=1.0))
-    )
-
-    assert [(txn["team_id"], txn["spend"]) for _, txn in merged] == [("team-a", 1.0), ("team-b", 2.0)], merged
-
-
-def test_an_entry_without_team_id_folds_into_the_unattributed_row() -> None:
-    legacy: Final = tag_txn(spend=0.25)
-    unattributed: Final = tag_txn(team_id="", spend=0.75)
-
-    merged: Final = merge_by_conflict_key(TAG_TABLE, (legacy, unattributed))
-
-    assert len(merged) == 1, merged
-    key, folded = merged[0]
-    assert key[:2] == ("team-a", ""), key
-    assert folded["spend"] == pytest.approx(1.0)
-
-
-@pytest.mark.parametrize("entity", ["user", "team", "org", "end_user", "agent"])
-def test_only_the_tag_table_is_keyed_by_team(entity: DailySpendEntity) -> None:
-    table: Final = DAILY_SPEND_TABLES[entity]
-    row: Final = {**tag_txn(), table.entity_id_column: "id-1"}
-
-    sql, _ = build_bulk_upsert(table, merge_by_conflict_key(table, (row,)))
-
-    conflict_target: Final = re.search(r"ON CONFLICT \(([^)]*)\)", sql)
-    assert conflict_target is not None
-    assert conflict_target.group(1) == (
-        f'"{table.entity_id_column}", "date", "api_key", "model", "custom_llm_provider", '
-        '"mcp_namespaced_tool_name", "endpoint"'
-    )
 
 
 class _RecordingDb:
