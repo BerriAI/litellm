@@ -6335,6 +6335,46 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])
+    async def test_credential_failure_logs_the_named_model_under_vertex_ai(
+        self, monkeypatch, model: str | None, expected_model: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        class _FailureRecorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.request_data: tuple[dict[str, object], ...] = ()
+
+            async def async_post_call_failure_hook(
+                self, request_data, original_exception, user_api_key_dict, traceback_str=None
+            ) -> None:
+                self.request_data = (*self.request_data, request_data)
+
+        recorder: Final = _FailureRecorder()
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        )
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        ensure_token: Final = AsyncMock(side_effect=Exception("Unable to find your credentials"))
+
+        with patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=self._websocket(),
+                model=model,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert [(d["model"], d["custom_llm_provider"]) for d in recorder.request_data] == [
+            (expected_model, "vertex_ai")
+        ]
+
 
 class TestAnthropicProxyRoute:
     """The /anthropic passthrough route: custom auth headers must not clobber the

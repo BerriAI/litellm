@@ -2012,7 +2012,14 @@ async def pass_through_request(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data=e.request_data,
+                request_data=_build_passthrough_failure_request_payload(
+                    parsed_body=e.request_data,
+                    kwargs=None,
+                    logging_obj=None,
+                    custom_llm_provider=custom_llm_provider,
+                    url=url,
+                    builtin_provider_route=builtin_provider_route,
+                ),
             )
         except Exception:
             verbose_proxy_logger.warning(
@@ -2558,6 +2565,7 @@ async def websocket_passthrough_request(
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
     builtin_provider_route: bool = False,
+    model: str | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2572,6 +2580,7 @@ async def websocket_passthrough_request(
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
+        model: The model the caller named before connecting, logged on a failure before the setup frame arrives
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2928,7 +2937,7 @@ async def websocket_passthrough_request(
             user_api_key_dict=user_api_key_dict,
             original_exception=exc,
             request_data=_build_passthrough_failure_request_payload(
-                parsed_body=None,
+                parsed_body=None if model is None else {"model": model},
                 kwargs=kwargs,
                 logging_obj=logging_obj,
                 custom_llm_provider=None,
@@ -2954,7 +2963,7 @@ async def websocket_passthrough_request(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=_build_passthrough_failure_request_payload(
-                parsed_body=None,
+                parsed_body=None if model is None else {"model": model},
                 kwargs=kwargs,
                 logging_obj=logging_obj,
                 custom_llm_provider=None,

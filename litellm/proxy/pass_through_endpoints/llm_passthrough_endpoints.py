@@ -3982,7 +3982,7 @@ async def vertex_ai_live_websocket_passthrough(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data={},
+                request_data={"model": model or "", "custom_llm_provider": litellm.LlmProviders.VERTEX_AI.value},
             )
         if websocket.client_state != WebSocketState.DISCONNECTED:
             await websocket.close(code=1011, reason=VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON)
@@ -4018,6 +4018,7 @@ async def vertex_ai_live_websocket_passthrough(
         endpoint="/vertex_ai/live",
         accept_websocket=False,
         builtin_provider_route=True,
+        model=model,
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,
