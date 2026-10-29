@@ -1474,3 +1474,92 @@ def test_codex_tool_search_output_loading_the_same_tool_twice_sends_it_once(resp
     )
 
     assert [tool["name"] for tool in _sent(route)["tools"]] == ["tool_search", "mcp__codex_apps__calendar_create_event"]
+
+
+def _stored_tool_call_turn(
+    request_id: str, request_input: object, tool_call_id: str, name: str, arguments: str
+) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "codex-session",
+        "proxy_server_request": {"model": _MODEL, "input": request_input, "tools": [_CODEX_TOOL_SEARCH, _SHELL_TOOL]},
+        "response": {
+            "id": request_id,
+            "object": "chat.completion",
+            "created": 0,
+            "model": _MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+
+_SEARCH_TURN: Final = _stored_tool_call_turn(
+    "chatcmpl-search-turn",
+    "Create a calendar event titled Standup.",
+    "search-1",
+    "tool_search",
+    '{"query": "calendar"}',
+)
+_SEARCH_TURN_STORED_AS_RESPONSE: Final = {
+    **_SEARCH_TURN,
+    "response": {"id": "chatcmpl-search-turn", "object": "response", "output": [_CODEX_SEARCH_CALL]},
+}
+_CALENDAR_TURN: Final = _stored_tool_call_turn(
+    "chatcmpl-calendar-turn",
+    [_CODEX_SEARCH_OUTPUT],
+    "toolu_standup",
+    "mcp__codex_apps__calendar_create_event",
+    '{"title": "Standup"}',
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "search_turn", [_SEARCH_TURN, _SEARCH_TURN_STORED_AS_RESPONSE], ids=["chat_completion", "responses_output"]
+)
+async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search_loaded(
+    search_turn: Mapping[str, object],
+) -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([search_turn, _CALENDAR_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[
+                {"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."},
+                {"role": "user", "content": "Now create another event titled Retro."},
+            ],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    sent: Final = json.loads(anthropic.body)
+    assert [tool["name"] for tool in sent["tools"]] == [
+        "tool_search",
+        "shell",
+        "mcp__codex_apps__calendar_create_event",
+    ]
+    assert [
+        [(block["type"], block.get("id") or block.get("tool_use_id")) for block in message["content"]]
+        for message in sent["messages"][1:]
+    ] == [
+        [("tool_use", "search-1")],
+        [("tool_result", "search-1")],
+        [("tool_use", "toolu_standup")],
+        [("tool_result", "toolu_standup"), ("text", None)],
+    ]

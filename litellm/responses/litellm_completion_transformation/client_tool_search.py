@@ -10,7 +10,7 @@ from openai.types.responses.response_input_param import (
     ResponseFunctionToolCallParam,
     ResponseInputItemParam,
 )
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -23,7 +23,12 @@ from litellm.types.llms.openai import (
 from .custom_tools import function_chat_tool
 from .tool_search import CLIENT_TOOL_SEARCH_FUNCTION_NAME, has_client_tool_search
 
-__all__ = ["ClientToolSearchBridge", "bridge_client_tool_search", "client_tool_search_chat_tool"]
+__all__ = [
+    "ClientToolSearchBridge",
+    "bridge_client_tool_search",
+    "client_tool_search_chat_tool",
+    "client_tool_search_loaded_tools",
+]
 
 _DEFAULT_SEARCH_DESCRIPTION: Final = (
     "Search the deferred tools by keyword. The matching tools are loaded and become callable on the next turn."
@@ -105,6 +110,22 @@ def _client_tool_search_item(item: object) -> _ClientToolSearchItem | None:
     if parsed.type not in ("tool_search_call", "tool_search_output") or parsed.execution != "client":
         return None
     return parsed
+
+
+_INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _searched_tools(item: object) -> tuple[Mapping[str, object], ...]:
+    parsed: Final = _client_tool_search_item(item)
+    if parsed is None or parsed.type != "tool_search_output" or not parsed.call_id:
+        return ()
+    return parsed.tools
+
+
+def client_tool_search_loaded_tools(input: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(input, (list, tuple)):
+        return ()
+    return tuple(chain.from_iterable(map(_searched_tools, _INPUT_ITEMS.validate_python(input))))
 
 
 def _tool_spec(tool: object) -> _ToolSpec | None:
@@ -222,6 +243,7 @@ def _bridged_item(item: ResponseInputItemParam) -> ResponseInputItemParam | None
 def bridge_client_tool_search(
     input: str | ResponseInputParam,
     tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+    loaded_earlier: Sequence[Mapping[str, object]] = (),
 ) -> ClientToolSearchBridge:
     existing: Final = tuple(tools or ())
     searches_on_client: Final = has_client_tool_search(existing)
@@ -234,8 +256,7 @@ def bridge_client_tool_search(
         if searches_on_client
         else existing
     )
-    outputs: Final = tuple(item for item in search_items if item.type == "tool_search_output" and item.call_id)
-    loaded: Final = _all_loaded_tools(chain.from_iterable(output.tools for output in outputs))
+    loaded: Final = _all_loaded_tools((*loaded_earlier, *client_tool_search_loaded_tools(input)))
     taken: Final = frozenset(chain.from_iterable(map(_callable_names, eager)))
     bridged_input: Final = (
         input if isinstance(input, str) else [bridged for item in input if (bridged := _bridged_item(item)) is not None]

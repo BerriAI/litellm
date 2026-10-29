@@ -13459,16 +13459,16 @@ def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_r
     ],
 )
 def test_get_search_tool_support_defaults_from_the_provider_and_lets_model_info_override(
-    litellm_params, model_info, expected
+    litellm_params: dict[str, str], model_info: dict[str, bool] | None, expected: bool | None
 ):
-    deployment = {"model_name": "codex-model", "litellm_params": litellm_params}
-    router = litellm.Router(model_list=[{**deployment, "model_info": model_info} if model_info else deployment])
+    deployment: Final = {"model_name": "codex-model", "litellm_params": litellm_params}
+    router: Final = litellm.Router(model_list=[{**deployment, "model_info": model_info} if model_info else deployment])
 
     assert router.get_search_tool_support("codex-model") == (expected,)
 
 
 def test_get_search_tool_support_reports_each_routable_deployment_of_the_group():
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             {"model_name": "mixed", "litellm_params": {"model": "anthropic/claude-fable-5-1"}},
             {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-6-astra"}},

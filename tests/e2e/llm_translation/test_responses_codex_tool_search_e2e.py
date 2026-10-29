@@ -25,7 +25,7 @@ from openai.types.responses import (
     ToolSearchToolParam,
 )
 from proxy_client import ProxyClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
@@ -79,6 +79,8 @@ PROMPT: Final = "Create a calendar event titled Standup. Find the calendar tool 
 
 
 class _CalendarArguments(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     title: str
 
 

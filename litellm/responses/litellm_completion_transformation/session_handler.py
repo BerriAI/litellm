@@ -9,6 +9,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.responses.litellm_completion_transformation.client_tool_search import (
+    bridge_client_tool_search,
+    client_tool_search_loaded_tools,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     holds_compaction_summary,
     input_items,
@@ -253,6 +257,33 @@ class ResponsesSessionHandler:
         )
 
     @staticmethod
+    async def get_client_tool_search_loaded_tools_for_previous_response_id(
+        previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
+    ) -> tuple[Mapping[str, object], ...]:
+        spend_logs: Final = [
+            spend_log
+            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                previous_response_id, client_response_ids
+            )
+            if _is_a_conversation_turn(spend_log)
+        ]
+        turns: Final = _turns_through_referenced_response(
+            spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        )
+        proxy_server_requests: Final = [
+            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
+            for spend_log in spend_logs[:turns]
+        ]
+        return tuple(
+            chain.from_iterable(
+                client_tool_search_loaded_tools(request.get("input"))
+                for request in proxy_server_requests
+                if request is not None
+            )
+        )
+
+    @staticmethod
     def _history_of_turns(
         spend_logs: Sequence["SpendLogsPayload"],
         proxy_server_requests: Sequence[Mapping[str, object] | None],
@@ -310,7 +341,7 @@ class ResponsesSessionHandler:
         if response_input_param:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=response_input_param,
+                    input=bridge_client_tool_search(response_input_param, None).input,
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
@@ -325,7 +356,7 @@ class ResponsesSessionHandler:
         if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=responses_api_output,
+                    input=bridge_client_tool_search(responses_api_output, None).input,
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
