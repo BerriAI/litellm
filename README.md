@@ -148,9 +148,9 @@ response = client.chat.completions.create(
 
 ### Python SDK
 
-Route between two models using a local heuristic classifier. Install `litellm` with `uv add litellm` and set `OPENAI_API_KEY` to a key from the [OpenAI dashboard](https://platform.openai.com/api-keys) with access to both models. Provider calls incur charges.
+[**Docs: Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk)
 
-Save as `autorouter.py`:
+Install with `uv add litellm` and set `OPENAI_API_KEY` for the models below.
 
 ```python
 import asyncio
@@ -159,40 +159,26 @@ from litellm import Router
 router = Router(model_list=[
     {"model_name": "fast", "litellm_params": {"model": "openai/gpt-6-luna"}},
     {"model_name": "capable", "litellm_params": {"model": "openai/gpt-6.1-sol"}},
-    {
-        "model_name": "auto",
-        "litellm_params": {
-            "model": "auto_router/complexity_router",
-            "complexity_router_config": {
-                "classifier_type": "heuristic",
-                "tiers": {
-                    "SIMPLE": "fast", "MEDIUM": "fast",
-                    "COMPLEX": "capable", "REASONING": "capable",
-                },
-                "return_raw_model_name": True,
-            },
-            "complexity_router_default_model": "capable",
+    {"model_name": "auto", "litellm_params": {
+        "model": "auto_router/complexity_router",
+        "complexity_router_config": {
+            "classifier_type": "heuristic",
+            "tiers": {"SIMPLE": "fast", "MEDIUM": "fast",
+                      "COMPLEX": "capable", "REASONING": "capable"},
+            "return_raw_model_name": True,
         },
-    },
+        "complexity_router_default_model": "capable",
+    }},
 ])
-
-async def main():
-    response = await router.acompletion(
-        model="auto",
-        messages=[{"role": "user", "content": "What is 2+2?"}],
-    )
-    print(response.model, response.choices[0].message.content)
-
-asyncio.run(main())
+response = asyncio.run(router.acompletion(
+    model="auto", messages=[{"role": "user", "content": "What is 2+2?"}],
+))
+print(response.model, response.choices[0].message.content)
 ```
-
-Run `uv run python autorouter.py` to print the selected model and its answer. Change the prompt to try different requests. If classification fails, the router uses `capable`.
-
-[**Docs: Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk) - Choose classifiers and configure routing rules.
 
 ### AI Gateway (Proxy Server)
 
-[**Create an Auto Router**](https://docs.litellm.ai/docs/auto_router/setup) in your gateway, then call its model name. For a local gateway with a router named `auto`, set `LITELLM_API_KEY` to your virtual key and run:
+[**Create an Auto Router**](https://docs.litellm.ai/docs/auto_router/setup), then call its model name. Replace `auto` and the URL below with yours, and set `LITELLM_API_KEY` to your virtual key.
 
 ```shell
 curl http://localhost:4000/v1/chat/completions \
@@ -200,8 +186,6 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","messages":[{"role":"user","content":"What is 2+2?"}]}'
 ```
-
-Replace the URL and `auto` with your gateway address and router name. The response contains the answer in `choices[0].message.content`.
 
 </details>
 
