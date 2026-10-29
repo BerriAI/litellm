@@ -2970,8 +2970,17 @@ def test_convert_to_model_response_object_function_output():
     assert result._hidden_params is not None
 
 
-@pytest.mark.parametrize("reported_cost", [float("nan"), float("inf")])
-def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_json(reported_cost: float):
+@pytest.mark.parametrize(
+    "reported_cost",
+    [
+        float("nan"),
+        float("inf"),
+        {"input_tokens_cost": 0.0001, "request_cost": 0.005, "total_cost": float("nan")},
+        {"input_tokens_cost": float("inf"), "request_cost": 0.005, "total_cost": 0.0051},
+    ],
+    ids=["nan", "inf", "breakdown-with-nan-total", "breakdown-with-inf-part"],
+)
+def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_json(reported_cost: object):
     response: Final = convert_to_model_response_object(
         response_object={
             "id": "chatcmpl-non-finite-cost",

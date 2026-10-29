@@ -45,6 +45,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
     field_serializer,
     field_validator,
 )
@@ -1948,6 +1949,19 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
+_COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _is_non_finite_float(value: object) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def _carries_non_finite_number(cost: object) -> bool:
+    if not isinstance(cost, Mapping):
+        return _is_non_finite_float(cost)
+    return any(_is_non_finite_float(member) for member in _COST_BREAKDOWN_ADAPTER.validate_python(cost).values())
+
+
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -2063,7 +2077,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         if cost is None:
             del self.cost
-        elif isinstance(cost, float) and not math.isfinite(cost):
+        elif _carries_non_finite_number(cost):
             verbose_logger.warning("Dropping a non-finite provider usage cost")
             del self.cost
         else:
