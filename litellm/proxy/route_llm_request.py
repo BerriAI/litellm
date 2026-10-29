@@ -448,7 +448,9 @@ def endpoint_unsupported_by_model(
             "user_api_key_team_id": team_id,
         },
     }
-    return not llm_router.get_routable_deployments(model, request_kwargs, call_type=route_type)
+    return bool(llm_router.get_routable_deployments(model, request_kwargs)) and not llm_router.get_routable_deployments(
+        model, request_kwargs, call_type=route_type
+    )
 
 
 class MockTestingParamsDisabledError(HTTPException):
