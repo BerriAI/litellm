@@ -147,9 +147,10 @@ def _tool_without_custom_field(tool: object, hoist_defer_loading: bool, drop_cus
     if not isinstance(tool, dict):
         return tool
 
+    if "custom" not in tool:
+        return tool
+
     tool_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(tool)
-    if "custom" not in tool_dict:
-        return tool_dict
 
     custom: Final = tool_dict["custom"]
     without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
