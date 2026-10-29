@@ -1,13 +1,17 @@
+import asyncio
 import json
+from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
+from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -144,19 +148,32 @@ class PassThroughEndpointLogging:
             from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
             from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost
 
-            await finalize_proxy_response_cost(logging_obj, standard_logging_response_object)
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=self.handle_logging(
-                    logging_obj=logging_obj,
-                    standard_logging_response_object=standard_logging_response_object,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    finalize_before_dispatch=False,
-                    **kwargs,
+            async def finalize_and_enqueue() -> None:
+                await finalize_proxy_response_cost(logging_obj, standard_logging_response_object)
+                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                    async_coroutine=self.handle_logging(
+                        logging_obj=logging_obj,
+                        standard_logging_response_object=standard_logging_response_object,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        cache_hit=cache_hit,
+                        finalize_before_dispatch=False,
+                        **kwargs,
+                    )
                 )
-            )
+                bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
+
+            pending: Final = asyncio.create_task(finalize_and_enqueue())
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                with anyio.CancelScope(shield=True):
+                    while not pending.done():
+                        with suppress(asyncio.CancelledError):
+                            await asyncio.shield(pending)
+                    pending.result()
+                raise
             return
 
         await logging_obj.dispatch_success_handlers(
