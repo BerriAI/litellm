@@ -21,6 +21,7 @@ from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
@@ -695,12 +696,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         ):
             anthropic_messages_optional_request_params.pop("output_format")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
 
+        requested_reasoning_effort: Final = OPAQUE_VALUE.validate_python(
+            anthropic_messages_optional_request_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+        )
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
+        if self._report_reasoning_drops:
+            warn_non_string_reasoning_effort(requested_reasoning_effort, model)
 
         AnthropicModelInfo.maybe_drop_disabled_thinking(
             model=model,

@@ -20,6 +20,9 @@ OpenAIStyleReasoningEffort = Literal["minimal", "low", "medium", "high"]
 _DROP_WARNING: Final = "Dropping %s=%s for model=%r because %s"
 _DROP_PARAMS_DROP_WARNING: Final = "Dropping %s=%s for model=%r (drop_params=True) because %s"
 _NON_NUMERIC_BUDGET_REASON: Final = "it is not a number. Send budget_tokens as an integer to set a reasoning level."
+_NON_STRING_EFFORT_REASON: Final = (
+    "it is not a string. Send reasoning_effort as a level name such as 'high' to set a reasoning level."
+)
 _REASONING_PARAMS: Final = ("reasoning", "reasoning_effort", "thinking")
 OPAQUE_VALUE: Final = TypeAdapter(object)
 
@@ -30,6 +33,14 @@ def warn_dropped_reasoning(
     verbose_logger.warning(
         _DROP_PARAMS_DROP_WARNING if drop_params_gated else _DROP_WARNING, param, reprlib.repr(value), model, reason
     )
+
+
+def warn_non_string_reasoning_effort(value: object, model: str | None) -> None:
+    effort: Final = as_str_mapping(value)
+    requested_level: Final = effort.get("effort") if effort is not None else value
+    if requested_level is None or isinstance(value, str):
+        return
+    warn_dropped_reasoning("reasoning_effort", value, model, _NON_STRING_EFFORT_REASON, drop_params_gated=False)
 
 
 def warn_dropped_reasoning_params(

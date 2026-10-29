@@ -618,6 +618,25 @@ def test_native_baseline_body_drops_a_non_numeric_budget_without_logging_a_drop(
     assert [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()] == []
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_native_baseline_body_drops_a_non_string_reasoning_effort_without_logging_a_drop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request: Final = {
+        "model": "claude-opus-5",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": 5,
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        body: Final = prepare_native_baseline_body(request, "anthropic/claude-opus-5")
+
+    assert body is not None
+    assert "reasoning_effort" not in body
+    assert [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()] == []
+
+
 def test_native_baseline_body_matches_the_sent_body_when_drop_params_meets_an_auto_added_beta(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

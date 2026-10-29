@@ -68,7 +68,8 @@ def _warn_unless_reasoning_prompt_honors(param: str, value: object, model: str) 
     if param == "reasoning_effort" and isinstance(value, str) and value in _DOCUMENTED_MAGISTRAL_EFFORTS:
         return
     thinking: Final = as_str_mapping(value)
-    if param == "thinking" and thinking is not None and thinking.get("type") in _REASONING_ON_THINKING_TYPES:
+    thinking_type: Final = thinking.get("type") if thinking is not None else None
+    if param == "thinking" and isinstance(thinking_type, str) and thinking_type in _REASONING_ON_THINKING_TYPES:
         return
     warn_dropped_reasoning(param, value, model, _REASONING_PROMPT_REASON, drop_params_gated=False)
 

@@ -1677,7 +1677,12 @@ def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str,
 
 @pytest.mark.parametrize(
     "param, value",
-    (("reasoning_effort", "none"), ("reasoning_effort", "xhigh"), ("thinking", {"type": "disabled"})),
+    (
+        ("reasoning_effort", "none"),
+        ("reasoning_effort", "xhigh"),
+        ("thinking", {"type": "disabled"}),
+        ("thinking", {"type": ["enabled"]}),
+    ),
 )
 def test_magistral_reasoning_request_replaced_by_prompt_warns_once(
     param: str, value: object, caplog: pytest.LogCaptureFixture
