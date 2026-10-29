@@ -154,7 +154,7 @@ from litellm.types.completion import (
 )
 from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import STRICT_LITELLM_PARAMS, GenericLiteLLMParams
+from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_strictly
 from litellm.types.utils import (
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
@@ -401,9 +401,7 @@ class _SupplementalProviderParams:
 def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _SupplementalProviderParams:
     supplemental: Final = {key: kwargs[key] for key in SUPPLEMENTAL_KWARGS_KEYS if key in kwargs}
     try:
-        return _SupplementalProviderParams(
-            params=GenericLiteLLMParams.model_validate(supplemental, context=STRICT_LITELLM_PARAMS)
-        )
+        return _SupplementalProviderParams(params=validate_litellm_params_strictly(GenericLiteLLMParams, supplemental))
     except ValidationError as error:
         invalid: Final = tuple(detail for detail in error.errors() if detail["loc"])
         invalid_keys: Final = frozenset(str(detail["loc"][0]) for detail in invalid)

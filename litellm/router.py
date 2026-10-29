@@ -414,7 +414,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
-    STRICT_LITELLM_PARAMS,
     VALID_LITELLM_ENVIRONMENTS,
     AlertingConfig,
     AllowedFailsPolicy,
@@ -451,6 +450,7 @@ from litellm.types.router import (
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
     holds_secret_pointer,
+    validate_litellm_params_strictly,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -704,7 +704,7 @@ def _malformed_request_params_the_deployment_sets(
         if key in request and deployment_params.get(key) is not None
     }
     try:
-        GenericLiteLLMParams.model_validate(overrides, context=STRICT_LITELLM_PARAMS)
+        validate_litellm_params_strictly(GenericLiteLLMParams, overrides)
     except ValidationError as error:
         set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
         policy: Final = drop_policy({**deployment_params, **set_defaults, **request})
@@ -10628,8 +10628,8 @@ class Router:
             merged_params: Final[Mapping[str, object]] = (
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(
-                dict(**merged_params), context=STRICT_LITELLM_PARAMS
+            litellm_params: Final[LiteLLM_Params] = validate_litellm_params_strictly(
+                LiteLLM_Params, dict(**merged_params)
             )
             declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)

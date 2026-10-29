@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from openai import Timeout as SDKTimeout
 from pydantic import (
+    BaseModel,
     BeforeValidator,
     ConfigDict,
     Field,
@@ -530,7 +531,15 @@ def holds_secret_pointer(param_name: str) -> bool:
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
-STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
+_STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
+
+_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+
+
+def validate_litellm_params_strictly(
+    params_model: type[_StrictlyValidatedParams], params: Mapping[str, object]
+) -> _StrictlyValidatedParams:
+    return params_model.model_validate(params, context=_STRICT_LITELLM_PARAMS)
 
 
 def _none_when_malformed_outside_strict_validation(
@@ -539,7 +548,7 @@ def _none_when_malformed_outside_strict_validation(
     try:
         return handler(value)
     except ValidationError:
-        if info.context is STRICT_LITELLM_PARAMS:
+        if info.context is _STRICT_LITELLM_PARAMS:
             raise
         return None
 
