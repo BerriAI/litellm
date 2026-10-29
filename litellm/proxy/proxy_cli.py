@@ -340,6 +340,7 @@ class ProxyInitializationHelpers:
         log_config: str | None = None,
         keepalive_timeout: int | None = None,
         timeout_worker_healthcheck: int | None = None,
+        num_workers: int = 1,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -384,6 +385,12 @@ class ProxyInitializationHelpers:
                 f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
                 f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
                 f"Ignoring the flag.\033[0m",
+            )
+        elif num_workers > 1:
+            print_startup_message(
+                f"\033[1;33mLiteLLM Proxy: uvicorn=={uvicorn.__version__} gives each worker a fixed 5 s to answer "
+                f"its health ping, so a worker that starts slower is killed with 'Child process died'. Install "
+                f"uvicorn>=0.37.0 to get the {DEFAULT_WORKER_HEALTHCHECK_TIMEOUT_SECONDS} s default.\033[0m",
             )
         return uvicorn_args
 
@@ -1667,13 +1674,14 @@ def run_server(
                 f"(pid {metrics_process.pid})\033[0m"
             )
 
-        running_uvicorn: Final = run_gunicorn is False and run_hypercorn is False
+        running_uvicorn: Final = run_gunicorn is False and run_hypercorn is False and run_granian is False
         uvicorn_args: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
             timeout_worker_healthcheck=(timeout_worker_healthcheck if running_uvicorn else None),
+            num_workers=(num_workers if running_uvicorn else 1),
         )
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
