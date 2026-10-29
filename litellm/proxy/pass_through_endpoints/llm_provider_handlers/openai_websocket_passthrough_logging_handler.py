@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage
+from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import WebsocketUpstreamFrameKind
 from litellm.types.utils import LlmProviders, ModelResponse, Usage
 
@@ -43,18 +43,11 @@ class _ModelNamingEvent(BaseModel):
     response: _NamedModel | None = None
 
 
-class _EndedResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    model: str | None = None
-    usage: ResponseAPIUsage | None = None
-
-
 class _ResponsesTurnEndEvent(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: Literal["response.completed", "response.incomplete", "response.failed"]
-    response: _EndedResponse
+    response: ResponsesAPIResponse
 
 
 _MODEL_NAMING_EVENT: Final = TypeAdapter(_ModelNamingEvent)
@@ -70,6 +63,7 @@ class _Billing:
 @dataclass(frozen=True, slots=True)
 class _CompletedTurn:
     model: str
+    response: ResponsesAPIResponse
     usage: Usage
 
 
@@ -136,6 +130,7 @@ def _responses_turn(event: Mapping[str, object], session_model: str) -> _Complet
         return None
     return _CompletedTurn(
         model=ended.response.model or session_model,
+        response=ended.response,
         usage=ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # the one shared Responses usage converter
             ended.response.usage
         ),
@@ -149,23 +144,24 @@ def _responses_billing(messages: WebsocketMessages, model: str, requested_model:
     usage: Final = RealtimeAPITokenUsageProcessor.combine_usage_objects([turn.usage for turn in turns])
     return _Billing(
         usage=usage,
-        cost=sum(_responses_cost(turn.usage, (turn.model, requested_model)) for turn in turns),
+        cost=sum(_responses_cost(turn.response, (turn.model, requested_model)) for turn in turns),
     )
 
 
-def _model_cost(usage: Usage, model: str) -> float | None:
+def _model_cost(response: ResponsesAPIResponse, model: str) -> float | None:
     try:
         return litellm.completion_cost(
-            completion_response=ModelResponse(model=model, usage=usage),
+            completion_response=response,
             model=model,
             custom_llm_provider=OPENAI_WEBSOCKET_PROVIDER,
+            call_type="responses",
         )
     except Exception:  # noqa: BLE001  # completion_cost raises a bare Exception for an unpriced model, and the turn must still log
         return None
 
 
-def _responses_cost(usage: Usage, price_as: Sequence[str | None]) -> float:
-    costs: Final = (_model_cost(usage, model) for model in dict.fromkeys(price_as) if model is not None)
+def _responses_cost(response: ResponsesAPIResponse, price_as: Sequence[str | None]) -> float:
+    costs: Final = (_model_cost(response, model) for model in dict.fromkeys(price_as) if model is not None)
     cost: Final = next((cost for cost in costs if cost), None)
     if cost is None:
         verbose_proxy_logger.warning(

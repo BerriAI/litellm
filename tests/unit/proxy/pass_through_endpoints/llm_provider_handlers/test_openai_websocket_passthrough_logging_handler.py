@@ -4,9 +4,13 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
+    OpenAIPassthroughLoggingHandler,
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
     OpenAIWebsocketPassthroughLoggingHandler,
     openai_websocket_frame_kind,
@@ -45,14 +49,22 @@ def _realtime_response_done(text_in: int, audio_in: int, text_out: int, audio_ou
 
 
 def _responses_completed(
-    model: str, input_tokens: int, output_tokens: int, event: str = "response.completed"
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    event: str = "response.completed",
+    served: Mapping[str, object] = MappingProxyType({}),
 ) -> dict[str, object]:
     return {
         "type": event,
         "response": {
             "id": "resp_fake",
+            "object": "response",
+            "created_at": 1761700000,
             "model": model,
             "status": "completed",
+            "output": [],
+            **served,
             "usage": {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -201,10 +213,7 @@ def test_a_responses_turn_that_names_no_model_is_priced_on_the_session_model():
     handled = _handle(
         [
             _session_created(RESPONSES_MODEL),
-            {
-                "type": "response.completed",
-                "response": {"usage": {"input_tokens": 13, "output_tokens": 5, "total_tokens": 18}},
-            },
+            _responses_completed(RESPONSES_MODEL, input_tokens=13, output_tokens=5, served={"model": None}),
         ],
         url_route="/openai_passthrough/v1/responses",
     )
@@ -355,6 +364,39 @@ def test_a_responses_turn_falls_back_to_the_requested_model_only_when_its_own_ha
     assert expected_cost > 0
     assert handled["kwargs"]["response_cost"] == pytest.approx(expected_cost)
     assert handled["kwargs"]["model"] == turn_model
+
+
+def _http_passthrough_cost(response: Mapping[str, object]) -> float:
+    http_response = httpx.Response(
+        200, json=response, request=httpx.Request("POST", "https://api.openai.com/v1/responses")
+    )
+    _, cost = OpenAIPassthroughLoggingHandler._build_responses_api_response_and_cost(
+        RESPONSES_MODEL, http_response, _logging_obj(), "openai"
+    )
+    return cost
+
+
+@pytest.mark.parametrize(
+    "served",
+    [
+        {"service_tier": "priority"},
+        {"output": [{"type": "web_search_call", "id": "ws_fake", "status": "completed", "action": {"type": "search"}}]},
+    ],
+    ids=["priority_tier", "hosted_web_search"],
+)
+def test_a_responses_turn_costs_what_the_http_passthrough_charges_for_the_same_response(served):
+    """
+    The provider bills a turn by the tier that served it and the hosted tools it
+    called, not only its tokens, so a websocket turn has to cost exactly what the
+    same response costs over HTTP, never the cheaper token-only price.
+    """
+    turn = _responses_completed(RESPONSES_MODEL, input_tokens=13, output_tokens=5, served=served)
+    plain_turn = _responses_completed(RESPONSES_MODEL, input_tokens=13, output_tokens=5)
+
+    handled = _handle([turn], url_route="/openai_passthrough/v1/responses")
+
+    assert handled["kwargs"]["response_cost"] == pytest.approx(_http_passthrough_cost(turn["response"]))
+    assert handled["kwargs"]["response_cost"] > _http_passthrough_cost(plain_turn["response"])
 
 
 @pytest.mark.parametrize(

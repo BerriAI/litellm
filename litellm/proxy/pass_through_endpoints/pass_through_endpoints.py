@@ -2743,6 +2743,14 @@ def _session_end_needs_a_row(
     return "starts_turn" in kinds or (ledger.logged_turns == 0 and bool(kinds - {"opens_session"}))
 
 
+def _turn_in_flight(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None, unlogged_frames: Sequence[Mapping[str, object]]
+) -> bool:
+    return upstream_frame_kind is not None and any(
+        upstream_frame_kind(frame) == "starts_turn" for frame in unlogged_frames
+    )
+
+
 async def _relay_client_frame(
     websocket: WebSocket,
     upstream_ws: ClientConnection,
@@ -2765,6 +2773,7 @@ async def _relay_client_frame(
 
 
 _EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging_payload", "custom_llm_provider"})
+WALKOUT_TURN_DRAIN_SECONDS: Final = 600.0
 
 
 async def websocket_passthrough_request(
@@ -2779,6 +2788,7 @@ async def websocket_passthrough_request(
     setup_model_rewriter: Callable[[str], str] | None = None,
     client_frame_model_gate: WebsocketFrameModelGate | None = None,
     upstream_frame_kind: WebsocketUpstreamFrameClassifier | None = None,
+    walkout_turn_drain_seconds: float = WALKOUT_TURN_DRAIN_SECONDS,
 ):
     """
     WebSocket passthrough request handler.
@@ -2795,6 +2805,8 @@ async def websocket_passthrough_request(
         client_frame_model_gate: Optional per-frame check of every model a client frame names
         upstream_frame_kind: Optional sort of upstream frames into the one that ends a billable turn and the ones
             that open the session, so each turn logs its own spend and keeps the session's provider-named model
+        walkout_turn_drain_seconds: How long to keep reading a turn the provider is still running after the client
+            left, so the provider's usage for it still reaches spend
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -3019,7 +3031,8 @@ async def websocket_passthrough_request(
                         message = await websocket.receive()
                         message_type = message.get("type")
                         if message_type == "websocket.disconnect":
-                            await upstream_ws.close()
+                            if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                                await upstream_ws.close()
                             break
 
                         text_data: str | None = message.get("text")
@@ -3147,11 +3160,17 @@ async def websocket_passthrough_request(
             async def relay_upstream_frame(upstream_message: str | bytes) -> None:
                 record_upstream_frame(upstream_message)
                 if not _client_socket_is_open(websocket):
+                    if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                        await upstream_ws.close()
                     return
-                if isinstance(upstream_message, bytes):
-                    await websocket.send_bytes(upstream_message)
-                else:
-                    await websocket.send_text(upstream_message)
+                try:
+                    if isinstance(upstream_message, bytes):
+                        await websocket.send_bytes(upstream_message)
+                    else:
+                        await websocket.send_text(upstream_message)
+                except WebSocketDisconnect:
+                    if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                        raise
 
             async def forward_upstream_to_client() -> Close | None:
                 try:
@@ -3176,12 +3195,15 @@ async def websocket_passthrough_request(
                     raise
 
             # Create tasks for bidirectional message forwarding
-            tasks: Final = [
-                asyncio.create_task(forward_client_to_upstream()),
-                asyncio.create_task(forward_upstream_to_client()),
-            ]
+            client_task: Final = asyncio.create_task(forward_client_to_upstream())
+            upstream_task: Final = asyncio.create_task(forward_upstream_to_client())
+            tasks: Final = (client_task, upstream_task)
 
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if client_task.done() and _turn_in_flight(upstream_frame_kind, websocket_messages):
+                await asyncio.wait((upstream_task,), timeout=walkout_turn_drain_seconds)
+            done: Final = tuple(task for task in tasks if task.done())
+            pending: Final = tuple(task for task in tasks if not task.done())
 
             # Cancel remaining tasks
             for task in pending:
