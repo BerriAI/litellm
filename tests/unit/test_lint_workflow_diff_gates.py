@@ -6,11 +6,11 @@ import os
 import re
 import shlex
 import subprocess
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import pytest
 import yaml
@@ -18,13 +18,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 WORKFLOW: Final = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "test-linting.yml"
 WORKFLOWS_DIR: Final = WORKFLOW.parent
+REPO_ROOT: Final = WORKFLOW.parents[2]
 DIFF_GATE: Final = re.compile(r'git diff --name-only --diff-filter=\w+ "\$GATE_BASE_SHA" HEAD -- (.+?) \|')
 GATES: Final = tuple(tuple(shlex.split(gate.group(1))) for gate in DIFF_GATE.finditer(WORKFLOW.read_text()))
 PYTHON_GATES: Final = tuple(gate for gate in GATES if gate[0].startswith(":(glob)"))
 REPOSITORY: Final = "BerriAI/litellm"
-BASE_REFS: Final = ("main", "litellm_/stacked")
+UI_DASHBOARD: Final = "ui/litellm-dashboard"
+STACKED_BASE_REF: Final = "litellm_/stacked"
+RELEASE_BASE_REF: Final = "stable/next"
+BASE_REFS: Final = ("main", STACKED_BASE_REF, RELEASE_BASE_REF)
 GITHUB_EXPRESSION: Final = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
-MERGE_BASE_ASSIGNMENT: Final = re.compile(r"^\s*(\w+)=.*merge_base_commit.*$", re.MULTILINE)
 FAKE_GH: Final = r"""#!/usr/bin/env bash
 set -euo pipefail
 endpoint=${2%%\?*}
@@ -36,6 +39,8 @@ case "$1 $endpoint ${3-} ${4-}" in
     git -C "$UPSTREAM" merge-base "$(commit "${basehead%%...*}")" "$(commit "${basehead#*...}")" ;;
   "api pulls/1 --jq .base.ref")
     printf '%s\n' "$LIVE_BASE_REF" ;;
+  "api branches/"*" --silent ")
+    commit "refs/heads/${endpoint#branches/}" > /dev/null ;;
   "api branches/"*" --jq .commit.sha")
     commit "refs/heads/${endpoint#branches/}" ;;
   "api pulls/1/reviews --paginate --slurp")
@@ -44,6 +49,9 @@ case "$1 $endpoint ${3-} ${4-}" in
     echo "fake gh cannot answer: $*" >&2
     exit 64 ;;
 esac
+"""
+FAKE_ARGV_RECORDER: Final = r"""#!/usr/bin/env bash
+printf '%s\n' "$@" > "$RUNNER_TEMP/$(basename "$0").argv"
 """
 
 
@@ -58,9 +66,22 @@ class WorkflowStep(BaseModel):
     run: str = ""
 
 
+class RunDefaults(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    working_directory: str = Field(default=".", alias="working-directory")
+
+
+class JobDefaults(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    run: RunDefaults = Field(default_factory=RunDefaults)
+
+
 class WorkflowJob(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    defaults: JobDefaults = Field(default_factory=JobDefaults)
     steps: tuple[WorkflowStep, ...] = ()
 
 
@@ -86,9 +107,14 @@ class Workflow(BaseModel):
 @dataclass(frozen=True, slots=True)
 class MergeBaseStep:
     workflow: str
-    label: str
+    job_id: str
+    job: WorkflowJob
     step: WorkflowStep
     base_branches: tuple[str, ...]
+
+    @property
+    def job_key(self) -> str:
+        return f"{self.workflow}:{self.job_id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +122,51 @@ class StaleBaseUpstream:
     path: Path
     stale_base: str
     head: str
+    tip_by_ref: Mapping[str, str]
     merge_base_by_ref: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class Runner:
+    root: Path
+    upstream: StaleBaseUpstream
+    live_base_ref: str
+    context: Mapping[str, str]
+
+    @property
+    def checkout(self) -> Path:
+        return self.root / "checkout"
+
+    @property
+    def tools(self) -> Path:
+        return self.root / "bin"
+
+    @property
+    def temp(self) -> Path:
+        return self.root / "runner_temp"
+
+    @property
+    def github_output(self) -> Path:
+        return self.root / "github_output"
+
+    @property
+    def github_env(self) -> Path:
+        return self.root / "github_env"
+
+
+@dataclass(frozen=True, slots=True)
+class StepRun:
+    step: MergeBaseStep
+    runner: Runner
+
+
+Observation: TypeAlias = str | frozenset[str] | tuple[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class Consumer:
+    observe: Callable[[StepRun], Observation]
+    expect: Callable[[StaleBaseUpstream, str], Observation]
 
 
 def _workflow(path: Path) -> Workflow:
@@ -107,7 +177,7 @@ def _merge_base_steps_in(path: Path) -> Iterator[MergeBaseStep]:
     workflow: Final = _workflow(path)
     for job_id, job in workflow.jobs.items():
         yield from (
-            MergeBaseStep(path.name, f"{path.name}:{job_id}:{step.name}", step, workflow.on.pull_request.branches)
+            MergeBaseStep(path.name, job_id, job, step, workflow.on.pull_request.branches)
             for step in job.steps
             if "merge_base_commit" in step.run
         )
@@ -206,47 +276,64 @@ def test_e2e_harness_gate_fires_on_any_e2e_or_harness_file_its_dependency_manife
     assert selected == frozenset({trigger})
 
 
-def _github_context(expression: str, pull_request: Mapping[str, str]) -> str:
-    match expression.split(".", 3):
-        case ["github", "repository"]:
-            return REPOSITORY
-        case ["github", "token"]:
-            return "fake-token"
-        case ["github", "event", "pull_request", field] if field in pull_request:
-            return pull_request[field]
-        case _:
-            pytest.fail(f"the fake event has no value for ${{{{ {expression} }}}}")
+def _event_context(pull_request: Mapping[str, str]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            "github.repository": REPOSITORY,
+            "github.token": "fake-token",
+            **{f"github.event.pull_request.{field}": value for field, value in pull_request.items()},
+        }
+    )
 
 
-def _resolved(text: str, pull_request: Mapping[str, str]) -> str:
-    return GITHUB_EXPRESSION.sub(lambda expression: _github_context(expression.group(1), pull_request), text)
+def _context_value(context: Mapping[str, str], expression: str) -> str:
+    if expression not in context:
+        pytest.fail(f"the fake runner has no value for ${{{{ {expression} }}}}")
+    return context[expression]
 
 
-def _run_step_script(
-    script: str,
-    step: WorkflowStep,
-    pull_request: Mapping[str, str],
-    live_base_ref: str,
-    upstream: Path,
-    cwd: Path,
-    tmp_path: Path,
-) -> None:
-    fake_gh: Final = tmp_path / "bin" / "gh"
-    fake_gh.parent.mkdir()
-    fake_gh.write_text(FAKE_GH)
-    fake_gh.chmod(0o755)
+def _resolved(text: str, context: Mapping[str, str]) -> str:
+    return GITHUB_EXPRESSION.sub(lambda expression: _context_value(context, expression.group(1)), text)
+
+
+def _install_tool(path: Path, script: str) -> None:
+    path.write_text(script)
+    path.chmod(0o755)
+
+
+def _runner(tmp_path: Path, upstream: StaleBaseUpstream, pull_request: Mapping[str, str], live_base_ref: str) -> Runner:
+    runner: Final = Runner(tmp_path, upstream, live_base_ref, _event_context(pull_request))
+    runner.tools.mkdir()
+    runner.temp.mkdir()
+    for name, script in (("gh", FAKE_GH), ("npm", FAKE_ARGV_RECORDER), ("uv", FAKE_ARGV_RECORDER)):
+        _install_tool(runner.tools / name, script)
+    return runner
+
+
+def _check_out_like_the_job(job: WorkflowJob, runner: Runner) -> None:
+    checkout: Final = next(step for step in job.steps if step.uses.startswith("actions/checkout@"))
+    ref: Final = _resolved(checkout.with_.get("ref", "${{ github.event.pull_request.head.sha }}"), runner.context)
+    _git(runner.root, "init", "-q", str(runner.checkout))
+    _git(runner.checkout, "remote", "add", "origin", f"file://{runner.upstream.path}")
+    _git(runner.checkout, "fetch", "-q", "--no-tags", "--depth=1", "origin", ref)
+    _git(runner.checkout, "checkout", "-q", "--detach", "FETCH_HEAD")
+
+
+def _run_step(step: WorkflowStep, job: WorkflowJob, context: Mapping[str, str], runner: Runner) -> None:
     result: Final = subprocess.run(
-        ["bash", "-e", "-c", _resolved(script, pull_request)],
-        cwd=cwd,
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _resolved(step.run, context)],
+        cwd=runner.checkout / job.defaults.run.working_directory,
         env={
-            **{name: _resolved(value, pull_request) for name, value in step.env.items()},
-            "PATH": f"{fake_gh.parent}{os.pathsep}{os.environ['PATH']}",
-            "HOME": str(tmp_path),
+            **{name: _resolved(value, context) for name, value in step.env.items()},
+            "PATH": f"{runner.tools}{os.pathsep}{os.environ['PATH']}",
+            "HOME": str(runner.root),
             "GITHUB_REPOSITORY": REPOSITORY,
-            "GITHUB_OUTPUT": str(tmp_path / "github_output"),
-            "RUNNER_TEMP": str(tmp_path),
-            "UPSTREAM": str(upstream),
-            "LIVE_BASE_REF": live_base_ref,
+            "GITHUB_WORKSPACE": str(REPO_ROOT),
+            "GITHUB_OUTPUT": str(runner.github_output),
+            "GITHUB_ENV": str(runner.github_env),
+            "RUNNER_TEMP": str(runner.temp),
+            "UPSTREAM": str(runner.upstream.path),
+            "LIVE_BASE_REF": runner.live_base_ref,
         },
         capture_output=True,
         text=True,
@@ -255,42 +342,100 @@ def _run_step_script(
     assert result.returncode == 0, result.stderr
 
 
-def _merge_base_assigned_by(
-    step: MergeBaseStep, pull_request: Mapping[str, str], live_base_ref: str, upstream: Path, tmp_path: Path
-) -> str:
-    assignment: Final = MERGE_BASE_ASSIGNMENT.search(step.step.run)
-    assert assignment is not None, f"{step.label} never assigns the merge base to a variable"
-    script: Final = f'{step.step.run[: assignment.end()]}\nprintf %s "${assignment.group(1)}" > merge_base\n'
-    _run_step_script(script, step.step, pull_request, live_base_ref, upstream, tmp_path, tmp_path)
-    return (tmp_path / "merge_base").read_text()
+def _key_values(path: Path) -> Mapping[str, str]:
+    return MappingProxyType(
+        {key: value for key, _, value in (line.partition("=") for line in path.read_text().splitlines())}
+    )
+
+
+def _argv_recorded(runner: Runner, tool: str) -> tuple[str, ...]:
+    return tuple((runner.temp / f"{tool}.argv").read_text().splitlines())
+
+
+def _gate_base_exported(run: StepRun) -> str:
+    return _key_values(run.runner.github_env)["GATE_BASE_SHA"]
+
+
+def _ui_files_queued_for_prettier(run: StepRun) -> frozenset[str]:
+    return frozenset((run.runner.temp / "prettier_files.txt").read_text().splitlines())
+
+
+def _ui_files_passed_to_vitest_related(run: StepRun) -> frozenset[str]:
+    argv: Final = _argv_recorded(run.runner, "npm")
+    return frozenset(argv[argv.index("related") + 1 : argv.index("--run")])
+
+
+def _guard_base_argument_and_checkout(run: StepRun) -> tuple[str, str]:
+    guard: Final = next(step for step in run.step.job.steps if step.name == "Run the guard")
+    outputs: Final = {
+        f"steps.{run.step.step.id}.outputs.{name}": value
+        for name, value in _key_values(run.runner.github_output).items()
+    }
+    _run_step(guard, run.step.job, MappingProxyType({**run.runner.context, **outputs}), run.runner)
+    argv: Final = _argv_recorded(run.runner, "uv")
+    return argv[argv.index("--base") + 1], _sha(run.runner.checkout, "HEAD")
+
+
+def _merge_base(upstream: StaleBaseUpstream, ref: str) -> str:
+    return upstream.merge_base_by_ref[ref]
+
+
+def _ui_files_changed_since_merge_base(upstream: StaleBaseUpstream, ref: str) -> frozenset[str]:
+    merge_base: Final = upstream.merge_base_by_ref[ref]
+    changed: Final = _git(upstream.path, "diff", "--name-only", f"--relative={UI_DASHBOARD}", merge_base, upstream.head)
+    return frozenset(changed.split())
+
+
+def _merge_base_and_tip(upstream: StaleBaseUpstream, ref: str) -> tuple[str, str]:
+    return upstream.merge_base_by_ref[ref], upstream.tip_by_ref[ref]
+
+
+CONSUMERS: Final = MappingProxyType(
+    {
+        "test-linting.yml:python": Consumer(_gate_base_exported, _merge_base),
+        "test-linting.yml:ui": Consumer(_ui_files_queued_for_prettier, _ui_files_changed_since_merge_base),
+        "test-unit.yml:ui-unit": Consumer(_ui_files_passed_to_vitest_related, _ui_files_changed_since_merge_base),
+        "spend-logs-guard.yml:spend-logs-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
+        "cost-map-guard.yml:cost-map-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
+    }
+)
 
 
 def _sha(repo: Path, revision: str) -> str:
     return _git(repo, "rev-parse", revision).strip()
 
 
+def _commit_ui_file(repo: Path, name: str) -> None:
+    target: Final = repo / UI_DASHBOARD / "src" / f"{name}.ts"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"export const {name} = 1;\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", name)
+
+
 @pytest.fixture(scope="module")
 def upstream(tmp_path_factory: pytest.TempPathFactory) -> StaleBaseUpstream:
     path: Final = tmp_path_factory.mktemp("upstream")
-    for args in (
-        ("init", "-q", "-b", "main"),
-        ("config", "user.email", "t@t"),
-        ("config", "user.name", "t"),
-        ("commit", "-q", "--allow-empty", "-m", "main when the pull request was opened"),
-        ("branch", "feature"),
-        ("commit", "-q", "--allow-empty", "-m", "main since"),
-        ("checkout", "-q", "-b", BASE_REFS[1]),
-        ("commit", "-q", "--allow-empty", "-m", "stacked base since"),
-        ("checkout", "-q", "feature"),
-        ("commit", "-q", "--allow-empty", "-m", "pull request work"),
-        ("merge", "-q", "--no-ff", "-m", "merge the newer base", BASE_REFS[1]),
-    ):
-        _git(path, *args)
+    _git(path, "init", "-q", "-b", "main")
+    _git(path, "config", "user.email", "t@t")
+    _git(path, "config", "user.name", "t")
+    _commit_ui_file(path, "main_when_the_pull_request_was_opened")
+    _git(path, "branch", "feature")
+    _git(path, "branch", RELEASE_BASE_REF)
+    _commit_ui_file(path, "main_since")
+    _git(path, "checkout", "-q", "-b", STACKED_BASE_REF)
+    _commit_ui_file(path, "stacked_base_since")
+    _git(path, "checkout", "-q", "feature")
+    _commit_ui_file(path, "pull_request_work")
+    _git(path, "merge", "-q", "--no-ff", "-m", "merge the newer base", STACKED_BASE_REF)
     return StaleBaseUpstream(
         path=path,
         stale_base=_sha(path, "main~1"),
         head=_sha(path, "feature"),
-        merge_base_by_ref=MappingProxyType({ref: _sha(path, ref) for ref in BASE_REFS}),
+        tip_by_ref=MappingProxyType({ref: _sha(path, ref) for ref in BASE_REFS}),
+        merge_base_by_ref=MappingProxyType(
+            {ref: _git(path, "merge-base", ref, "feature").strip() for ref in BASE_REFS}
+        ),
     )
 
 
@@ -306,47 +451,39 @@ def _runs_for(step: MergeBaseStep, base_ref: str) -> bool:
 
 
 BASE_REF_CASES: Final = (
-    ("main", BASE_REFS[0], BASE_REFS[0]),
-    ("stacked", BASE_REFS[1], BASE_REFS[1]),
-    ("rerun_after_the_stacked_base_was_deleted", "litellm_deleted_after_merge", BASE_REFS[0]),
-    ("rerun_after_a_retarget_off_main", BASE_REFS[0], BASE_REFS[1]),
+    ("main", "main", "main"),
+    ("stacked", STACKED_BASE_REF, STACKED_BASE_REF),
+    ("rerun_after_the_stacked_base_was_deleted", "litellm_deleted_after_merge", "main"),
+    ("rerun_after_a_retarget_off_main_to_a_stacked_branch", "main", STACKED_BASE_REF),
+    ("rerun_after_a_retarget_off_main_to_a_release_branch", "main", RELEASE_BASE_REF),
 )
 MERGE_BASE_CASES: Final = tuple(
-    pytest.param(step, event_base_ref, live_base_ref, id=f"{step.label}-{case}")
+    pytest.param(step, event_base_ref, live_base_ref, id=f"{step.job_key}:{step.step.name}-{case}")
     for step, (case, event_base_ref, live_base_ref) in itertools.product(MERGE_BASE_STEPS, BASE_REF_CASES)
     if _runs_for(step, event_base_ref)
 )
 
 
 @pytest.mark.parametrize(("step", "event_base_ref", "live_base_ref"), MERGE_BASE_CASES)
-def test_merge_base_step_measures_from_the_current_tip_of_a_base_branch_its_workflow_runs_for(
+def test_merge_base_step_hands_its_consumer_the_events_base_unless_that_branch_is_gone(
     upstream: StaleBaseUpstream, tmp_path: Path, step: MergeBaseStep, event_base_ref: str, live_base_ref: str
 ) -> None:
     pull_request: Final = MappingProxyType(
-        {"number": "1", "base.ref": event_base_ref, "base.sha": upstream.stale_base, "head.sha": upstream.head}
+        {
+            "number": "1",
+            "base.ref": event_base_ref,
+            "base.sha": upstream.stale_base,
+            "head.sha": upstream.head,
+            "head.ref": "feature",
+            "user.type": "User",
+        }
     )
-    merge_base: Final = _merge_base_assigned_by(step, pull_request, live_base_ref, upstream.path, tmp_path)
-    measured_ref: Final = live_base_ref if _runs_for(step, live_base_ref) else event_base_ref
-    assert merge_base == upstream.merge_base_by_ref[measured_ref]
-
-
-@pytest.mark.parametrize("workflow_name", ("spend-logs-guard.yml", "cost-map-guard.yml"))
-def test_guard_runs_its_script_from_the_base_branch_tip_rather_than_the_events_stale_base(
-    upstream: StaleBaseUpstream, tmp_path: Path, workflow_name: str
-) -> None:
-    pull_request: Final = MappingProxyType(
-        {"number": "1", "base.ref": BASE_REFS[0], "base.sha": upstream.stale_base, "head.sha": upstream.head}
-    )
-    (job,) = _workflow(WORKFLOWS_DIR / workflow_name).jobs.values()
-    checkout: Final = next(step for step in job.steps if step.uses.startswith("actions/checkout@"))
-    revisions: Final = next(step for step in job.steps if step.id == "revisions")
-    runner: Final = tmp_path / "runner"
-    _git(tmp_path, "init", "-q", str(runner))
-    _git(runner, "remote", "add", "origin", f"file://{upstream.path}")
-    _git(runner, "fetch", "-q", "--no-tags", "origin", _resolved(checkout.with_["ref"], pull_request))
-    _git(runner, "checkout", "-q", "--detach", "FETCH_HEAD")
-    _run_step_script(revisions.run, revisions, pull_request, BASE_REFS[0], upstream.path, runner, tmp_path)
-    assert _sha(runner, "HEAD") == _sha(upstream.path, BASE_REFS[0])
+    runner: Final = _runner(tmp_path, upstream, pull_request, live_base_ref)
+    _check_out_like_the_job(step.job, runner)
+    _run_step(step.step, step.job, runner.context, runner)
+    consumer: Final = CONSUMERS[step.job_key]
+    measured_ref: Final = event_base_ref if event_base_ref in upstream.tip_by_ref else live_base_ref
+    assert consumer.observe(StepRun(step, runner)) == consumer.expect(upstream, measured_ref)
 
 
 UI_API_TYPES_DETECT: Final[str] = next(
