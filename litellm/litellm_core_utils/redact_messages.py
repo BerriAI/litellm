@@ -524,14 +524,13 @@ def scrubbed_error_information(
 ) -> StandardLoggingPayloadErrorInformation:
     """``error_information`` with the request's ``texts`` scrubbed out of its message and traceback. The type,
     status code and every other field carry no prompt and are left as they are."""
-    scrubbed: Final = error_information.copy()
-    error_message: Final = scrubbed.get("error_message")
-    if isinstance(error_message, str):
-        scrubbed["error_message"] = scrub_request_text(error_message, texts)
-    traceback_text: Final = scrubbed.get("traceback")
-    if isinstance(traceback_text, str):
-        scrubbed["traceback"] = scrub_request_text(traceback_text, texts)
-    return scrubbed
+    error_message: Final = error_information.get("error_message")
+    traceback_text: Final = error_information.get("traceback")
+    return {
+        **error_information,
+        "error_message": error_message if error_message is None else scrub_request_text(error_message, texts),
+        "traceback": traceback_text if traceback_text is None else scrub_request_text(traceback_text, texts),
+    }
 
 
 def _with_scrubbed_text(
