@@ -8156,6 +8156,19 @@ def _passthrough_kwargs_for_reservation(
     )
 
 
+@pytest.mark.parametrize(("via_virtual_key", "expected"), [(True, "team-a"), (False, "")])
+def test_pass_through_tag_spend_keeps_the_virtual_key_team(via_virtual_key: bool, expected: str) -> None:
+    from litellm.proxy.db.db_spend_update_writer import _virtual_key_team_id
+
+    auth: Final = UserAPIKeyAuth(api_key="a" * 64, team_id="team-a").model_copy(
+        update={"via_virtual_key": via_virtual_key}
+    )
+
+    kwargs: Final = _passthrough_kwargs_for_reservation(auth)
+
+    assert _virtual_key_team_id(kwargs) == expected
+
+
 async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
     from datetime import datetime
 
