@@ -20,6 +20,17 @@ _ENDPOINT_PATHS: Final = TypeAdapter(tuple[str, ...])
 BATCH_ENDPOINT: Final = "/v1/batch"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
+BATCH_API_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.acreate_file.value,
+        CallTypes.aretrieve_batch.value,
+        CallTypes.acancel_batch.value,
+        CallTypes.afile_content.value,
+        CallTypes.afile_delete.value,
+        CallTypes.afile_list.value,
+    }
+)
+
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
 _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
@@ -108,6 +119,19 @@ def _deployment_provider(deployment: Mapping[str, object]) -> str | None:
 
 def _cannot_run_batches(deployment: Mapping[str, object], provider: str | None) -> bool:
     return provider in _AZURE_PROVIDERS and not is_batch_capable(deployment)
+
+
+def _serves_only_batches(deployment: Mapping[str, object]) -> bool:
+    return is_batch_capable(deployment) and _deployment_provider(deployment) in _AZURE_PROVIDERS
+
+
+def without_batch_only_deployments(
+    deployments: Sequence[_DeploymentT], call_type: str | None
+) -> Sequence[_DeploymentT]:
+    if is_batch_create_routing() or call_type in BATCH_API_CALL_TYPES:
+        return deployments
+    serving: Final = [deployment for deployment in deployments if not _serves_only_batches(deployment)]
+    return serving or deployments
 
 
 def without_deployments_that_cannot_batch(

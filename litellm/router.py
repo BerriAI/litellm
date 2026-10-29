@@ -115,6 +115,7 @@ from litellm.litellm_core_utils.batch_utils import (
     is_batch_retrieve_call_type,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
+    without_batch_only_deployments,
     without_deployments_that_cannot_batch,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
@@ -458,6 +459,7 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
+    CallTypes,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
@@ -7423,13 +7425,14 @@ class Router:
 
             verbose_router_logger.debug("Inside _atext_completion()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            healthy_deployments: Final = await self.async_get_healthy_deployments(
-                model=model,
-                messages=[{"role": "user", "content": "files-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-                parent_otel_span=parent_otel_span,
-            )
+            with self._route_capability_pin(CallTypes.acreate_file.value):
+                healthy_deployments: Final = await self.async_get_healthy_deployments(
+                    model=model,
+                    messages=[{"role": "user", "content": "files-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                    parent_otel_span=parent_otel_span,
+                )
 
             async def create_file_for_deployment(deployment: dict) -> OpenAIFileObject:
                 from litellm.litellm_core_utils.core_helpers import safe_deep_copy
@@ -7726,15 +7729,16 @@ class Router:
             requested_model_group: Final = model
             metadata_variable_name: Final = get_router_metadata_variable_name(function_name="aretrieve_batch")
             if model is not None:
-                filtered_model_list: (
-                    list[DeploymentTypedDict] | list[dict] | dict | None
-                ) = await self.async_get_healthy_deployments(
-                    model=model,
-                    messages=[{"role": "user", "content": "retrieve-api-fake-text"}],
-                    specific_deployment=kwargs.pop("specific_deployment", None),
-                    request_kwargs=kwargs,
-                    parent_otel_span=parent_otel_span,
-                )
+                with self._route_capability_pin(CallTypes.aretrieve_batch.value):
+                    filtered_model_list: (
+                        list[DeploymentTypedDict] | list[dict] | dict | None
+                    ) = await self.async_get_healthy_deployments(
+                        model=model,
+                        messages=[{"role": "user", "content": "retrieve-api-fake-text"}],
+                        specific_deployment=kwargs.pop("specific_deployment", None),
+                        request_kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
+                    )
             else:
                 filtered_model_list = self.get_model_list()
             if filtered_model_list is None:
@@ -7860,12 +7864,13 @@ class Router:
         try:
             verbose_router_logger.debug("Inside _acancel_batch()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self.async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "batch-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with self._route_capability_pin(CallTypes.acancel_batch.value):
+                deployment: Final = await self.async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "batch-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
 
             selected_deployment_id: Final = (deployment.get("model_info") or {}).get("id")
             data: Final = deployment["litellm_params"].copy()
@@ -15202,6 +15207,16 @@ class Router:
                 model,
             )
         )
+        healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: batch-only filter narrows
+            healthy_deployments
+            if isinstance(healthy_deployments, dict)
+            else list(
+                without_batch_only_deployments(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    _routed_call_type.get(),
+                )
+            )
+        )
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -16470,6 +16485,16 @@ class Router:
             self._without_deployments_that_cannot_serve_route(
                 healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
                 model,
+            )
+        )
+        healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: batch-only filter narrows
+            healthy_deployments
+            if isinstance(healthy_deployments, dict)
+            else list(
+                without_batch_only_deployments(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    _routed_call_type.get(),
+                )
             )
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
