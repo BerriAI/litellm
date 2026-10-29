@@ -37,18 +37,6 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     LITELLM_CLI_SOURCE_IDENTIFIER,
 )
-from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
-    PROXY_API_AUDIENCE,
-    MintedProxyCredential,
-    MintProxyCredential,
-    SessionSigning,
-    proxy_credential_response,
-    refresh_proxy_credential,
-    resolve_session_signing,
-    revoke_session_refresh_token,
-)
-from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import SessionPrincipal
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -58,6 +46,18 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
+from litellm.proxy.mcp_server.gateway_dcr_flow import (
+    PROXY_API_AUDIENCE,
+    MintedProxyCredential,
+    MintProxyCredential,
+    SessionSigning,
+    proxy_credential_response,
+    refresh_proxy_credential,
+    resolve_session_signing,
+    revoke_session_refresh_token,
+)
+from litellm.proxy.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
+from litellm.proxy.mcp_server.outbound_credentials.session_token import SessionPrincipal
 from litellm.proxy.proxy_server import model_list
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -340,7 +340,7 @@ async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
 
 
 def _proxy_credential_minter() -> MintProxyCredential:
-    from litellm.proxy._experimental.mcp_server.proxy_api_credentials import mint_proxy_credential
+    from litellm.proxy.mcp_server.proxy_api_credentials import mint_proxy_credential
 
     return mint_proxy_credential
 

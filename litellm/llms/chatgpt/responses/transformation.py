@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from openai.types.responses.response_input_param import ResponseInputItemParam
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -10,6 +11,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.sse_output_recovery import (
@@ -40,6 +42,16 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+
+
+def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItemParam:
+    # The Codex backend 400s on {"type": "message", "role": "system"} items ("System messages are not
+    # allowed") but accepts role=developer in the same position, which is what the Codex CLI sends.
+    if item.get("role") != "system":
+        return item
+    return cast(  # cast-ok: only the role changes, and developer is valid wherever system is
+        ResponseInputItemParam, {**item, "role": "developer"}
+    )
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -101,7 +113,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> dict:
         request: Final = super().transform_responses_api_request(
             model,
-            [{"role": "user", "content": input}] if isinstance(input, str) else input,
+            [{"role": "user", "content": input}]
+            if isinstance(input, str)
+            else [_system_item_as_developer(item) for item in input],
             response_api_optional_request_params,
             litellm_params,
             headers,
@@ -186,7 +200,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         error_message = None
         streamed_output_items: Final[dict[int, dict[str, object]]] = {}
         text_only_output_items: Final[dict[int, dict[str, object]]] = {}
-        for chunk in body_text.splitlines():
+        for chunk in split_sse_lines(body_text):
             parsed_chunk = parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
                 continue
