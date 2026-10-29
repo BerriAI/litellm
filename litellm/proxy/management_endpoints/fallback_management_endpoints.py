@@ -19,6 +19,7 @@ from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import fallback_target_model_name
 from litellm.proxy.auth.model_checks import get_all_fallbacks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import PrismaClient, evict_config_param, invalidate_config_param
@@ -42,7 +43,7 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackGetResponse,
     FallbackResponse,
 )
-from litellm.types.router import ContentPolicyFallbackRules
+from litellm.types.router import ContentPolicyFallbackRule, ContentPolicyFallbackRules
 
 router: Final = APIRouter()
 
@@ -51,7 +52,8 @@ FallbackRule = dict[str, list[str]]
 StoredFallback = Annotated[FallbackRule | dict[str, object] | str, Field(union_mode="left_to_right")]
 _STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
 _JSON_RULES: Final = TypeAdapter(list[JsonValue])
-_CONTENT_POLICY_FALLBACK_RULES: Final = TypeAdapter(ContentPolicyFallbackRules)
+_OPTIONAL_JSON_RULES: Final[TypeAdapter[Sequence[JsonValue] | None]] = TypeAdapter(Sequence[JsonValue] | None)
+_CONTENT_POLICY_FALLBACK_RULE: Final[TypeAdapter[ContentPolicyFallbackRule]] = TypeAdapter(ContentPolicyFallbackRule)
 
 
 def _rule_covers(entry: StoredFallback, model: str) -> bool:
@@ -65,19 +67,38 @@ def _layered_over_config_rules(
     return [*runtime_rules, *(rule for rule in config_rules if covered.isdisjoint(rule))]
 
 
-def apply_content_policy_fallbacks(llm_router: "Router", rules: object) -> None:
+def _log_ignored_content_policy_rules(rules: object, error: ValidationError) -> None:
+    verbose_proxy_logger.error(
+        "Ignoring invalid content_policy_fallbacks %r from config/DB, every other rule still applies. "
+        "Fix it through POST /fallback, /config/update, or the config file: %s",
+        rules,
+        error,
+    )
+
+
+def _valid_content_policy_rule(rule: JsonValue) -> ContentPolicyFallbackRule | None:
     try:
-        runtime_rules: Final = _CONTENT_POLICY_FALLBACK_RULES.validate_python(rules)
-        config_rules: Final = _CONTENT_POLICY_FALLBACK_RULES.validate_python(
-            litellm.content_policy_fallbacks or []  # pyright: ignore[reportUnknownMemberType]  # untyped module list
-        )
-    except ValidationError as invalid_rules:
-        verbose_proxy_logger.error(
-            "Ignoring invalid content_policy_fallbacks from config/DB, all other router settings still apply. "
-            "Fix the content policy fallbacks in the Admin UI or config to load them: %s",
-            invalid_rules,
-        )
-        return
+        return _CONTENT_POLICY_FALLBACK_RULE.validate_python(rule)
+    except ValidationError as invalid_rule:
+        _log_ignored_content_policy_rules(rule, invalid_rule)
+        return None
+
+
+def _valid_content_policy_rules(rules: object) -> ContentPolicyFallbackRules:
+    try:
+        candidates: Final = _OPTIONAL_JSON_RULES.validate_python(rules) or ()
+    except ValidationError as not_a_rule_list:
+        _log_ignored_content_policy_rules(rules, not_a_rule_list)
+        return ()
+    validated: Final = (_valid_content_policy_rule(candidate) for candidate in candidates)
+    return tuple(rule for rule in validated if rule is not None)
+
+
+def apply_content_policy_fallbacks(llm_router: "Router", rules: object) -> None:
+    runtime_rules: Final = _valid_content_policy_rules(rules)
+    config_rules: Final = _valid_content_policy_rules(
+        litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
+    )
     layered_rules: Final = _layered_over_config_rules(runtime_rules, config_rules)
     llm_router.update_settings(content_policy_fallbacks=layered_rules)  # pyright: ignore[reportUnknownMemberType]  # untyped kwargs
 
@@ -286,7 +307,10 @@ async def get_fallback(
             )
 
         # Get fallbacks using the existing utility function
-        fallback_models: Final = get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
+        fallback_targets: Final = get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
+        fallback_models: Final = [
+            name for target in fallback_targets if (name := fallback_target_model_name(target)) is not None
+        ]
 
         if not fallback_models:
             raise HTTPException(

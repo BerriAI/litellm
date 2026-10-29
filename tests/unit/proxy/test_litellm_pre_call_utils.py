@@ -10072,7 +10072,9 @@ class TestResolveUserProviderCredentials:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
-    async def test_key_router_settings_fallback_loads_per_user_tokens(self, monkeypatch, fallback_key):
+    async def test_key_router_settings_fallback_loads_per_user_tokens(
+        self, monkeypatch: pytest.MonkeyPatch, fallback_key: str
+    ):
         """The proxy forwards key/team router_settings fallback lists into the
         request after discovery, so discovery must read every one of them."""
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request

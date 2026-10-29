@@ -12,7 +12,7 @@ import copy
 import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -356,6 +356,41 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert after_create.fallback_models == ["team-fallback"]
         assert after_delete.fallback_models == ["team-fallback"]
+
+    async def test_a_content_policy_write_applies_beside_an_invalid_stored_rule(self) -> None:
+        router: Final = _team_router()
+        stored: Final = _StoredRouterSettings({"content_policy_fallbacks": [MALFORMED_GATEWAY_RULE]})
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            await create_fallback(
+                FallbackCreateRequest(
+                    model="team-primary", fallback_models=["team-fallback"], fallback_type="content_policy"
+                ),
+                MagicMock(),
+            )
+            after_create: Final = await get_fallback("team-primary", "content_policy", MagicMock())
+
+        assert after_create.fallback_models == ["team-fallback"]
+
+    @pytest.mark.parametrize(
+        ("fallback_type", "router_setting"),
+        [("general", "fallbacks"), ("content_policy", "content_policy_fallbacks")],
+    )
+    async def test_get_names_the_model_of_a_dict_target(
+        self, fallback_type: Literal["general", "content_policy"], router_setting: str
+    ) -> None:
+        router: Final = _team_router()
+        router.update_settings(
+            **{router_setting: [{"team-primary": [{"model": "gpt-5.4-mini", "api_key": "sk-test"}, "team-fallback"]}]}
+        )
+        with patch("litellm.proxy.proxy_server.llm_router", router):
+            response: Final = await get_fallback("team-primary", fallback_type, MagicMock())
+
+        assert response.fallback_models == ["gpt-5.4-mini", "team-fallback"]
 
     async def test_a_create_keeps_a_rule_another_instance_stored_since_this_one_last_read(self) -> None:
         stored: Final = _StoredRouterSettings({})

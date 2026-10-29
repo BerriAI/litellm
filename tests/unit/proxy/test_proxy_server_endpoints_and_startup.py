@@ -5656,16 +5656,56 @@ async def test_db_content_policy_fallbacks_layer_over_the_litellm_settings_rules
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stored_rules", ["oops", [{"primary": "backup"}], [["backup"]]])
-async def test_invalid_db_content_policy_fallbacks_keep_the_router_rules(stored_rules: object):
-    router: Final = _content_policy_router(content_policy_fallbacks=[{"primary": ["backup"]}])
+@pytest.mark.parametrize(
+    "invalid_rule",
+    [{"secondary": "backup"}, ["backup"], dict[str, list[str]](), {"secondary": ["backup"], "primary": ["secondary"]}],
+)
+async def test_an_invalid_db_content_policy_rule_skips_only_itself(monkeypatch: pytest.MonkeyPatch, invalid_rule: object):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
+    router: Final = _content_policy_router()
 
     await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
-        llm_router=router, prisma_client=_router_settings_row(stored_rules)
+        llm_router=router, prisma_client=_router_settings_row([invalid_rule, {"secondary": ["backup"]}])
     )
 
     assert router.allowed_fails == 7
     assert await _answer_after_content_policy_refusal(router) == "backup answered"
+    assert await _answer_after_content_policy_refusal(router, "secondary") == "backup answered"
+
+
+@pytest.mark.asyncio
+async def test_a_db_content_policy_value_that_is_not_a_list_keeps_the_litellm_settings_rules(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row("oops")
+    )
+
+    assert router.allowed_fails == 7
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+
+
+@pytest.mark.asyncio
+async def test_config_file_content_policy_fallbacks_stay_the_only_rules_after_a_db_sync(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"secondary": ["backup"]}])
+    file_rules: Final = [{"primary": ["backup"]}]
+    router: Final = _content_policy_router(content_policy_fallbacks=file_rules)
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    proxy_config.router_settings.load_yaml({"content_policy_fallbacks": file_rules})
+
+    await proxy_config._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row([{"secondary": ["backup"]}])
+    )
+
+    assert router.allowed_fails == 7
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+    with pytest.raises(litellm.ContentPolicyViolationError):
+        await _answer_after_content_policy_refusal(router, "secondary")
 
 
 @pytest.mark.asyncio
@@ -5714,7 +5754,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     combined_settings = ChainMap(*(call.kwargs for call in reversed(mock_router.update_settings.call_args_list)))
     assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
     assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
-    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings.get("content_policy_fallbacks") != [{"gpt-oss-120b": ["other-model"]}]
     assert combined_settings["num_retries"] == 3
 
 
@@ -10055,7 +10095,15 @@ def test_update_config_validates_content_policy_fallbacks_like_fallbacks(
 ):
     client, prisma, restore = _update_config_setup(initial_rows={"router_settings": {"num_retries": 2}})
     rule: Final = [{"gpt-5.4-mini": ["gpt-5.4-nano", {"model": "gpt-5.4-nano", "temperature": 1}]}]
-    malformed: Final = ("oops", 5, [1, 2], [{"gpt-5.4-mini": "gpt-5.4-nano"}], [{"gpt-5.4-mini": ["gpt-5.4-nano", 7]}])
+    malformed: Final = (
+        "oops",
+        5,
+        [1, 2],
+        [{"gpt-5.4-mini": "gpt-5.4-nano"}],
+        [{"gpt-5.4-mini": ["gpt-5.4-nano", 7]}],
+        [dict[str, list[str]]()],
+        [{"gpt-5.4-mini": ["gpt-5.4-nano"], "gpt-5.4": ["gpt-5.4-nano"]}],
+    )
     try:
         rejected: Final = tuple(
             client.post("/config/update", json={"router_settings": {"content_policy_fallbacks": value}}).status_code

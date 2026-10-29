@@ -185,7 +185,10 @@ OptionalPreCallChecks = list[
 ]
 
 
-ContentPolicyFallbackRules: TypeAlias = Sequence[Mapping[str, Sequence[str | Mapping[str, JsonValue]]]]
+ContentPolicyFallbackRule: TypeAlias = Annotated[
+    Mapping[str, Sequence[str | Mapping[str, JsonValue]]], Field(min_length=1, max_length=1)
+]
+ContentPolicyFallbackRules: TypeAlias = Sequence[ContentPolicyFallbackRule]
 
 
 class UpdateRouterConfig(LiteLLMBaseModel):
