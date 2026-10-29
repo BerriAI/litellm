@@ -61,8 +61,8 @@ def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
     tokenizer. A name the router does not index counts as written."""
     if llm_router is None:
         return (model,)
-    group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
-    served: Final = served_openai_models(llm_router.deployments_named(group) or ())
+    group: Final = resolve_model_group_alias(llm_router.registry().aliases(), model) or model  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
+    served: Final = served_openai_models(llm_router.registry().deployments(group, source="named") or ())
     if not served:
         return (model,)
     openai_served: Final = tuple(served_model for served_model in served if served_model is not None)

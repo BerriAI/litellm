@@ -1310,13 +1310,13 @@ async def test_get_deployments_by_model_id():
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
     )
-    mock_router.get_deployment.return_value = mock_deployment
+    mock_router.registry.return_value.deployment.return_value = mock_deployment
 
     result = await get_deployments_by_model("model-123", mock_router)
 
     assert len(result) == 1
     assert result[0] == mock_deployment
-    mock_router.get_deployment.assert_called_once_with(model_id="model-123")
+    mock_router.registry.return_value.deployment.assert_called_once_with("model-123")
 
 
 @pytest.mark.asyncio
@@ -1335,8 +1335,8 @@ async def test_get_deployments_by_model_name():
     mock_router = Mock()
 
     # Setup mock to not find by model_id but find by model_name
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = [
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = [
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-key"},
@@ -1349,8 +1349,8 @@ async def test_get_deployments_by_model_name():
     assert len(result) == 1
     assert result[0].model_name == "gpt-3.5-turbo"
     assert isinstance(result[0], Deployment)
-    mock_router.get_deployment.assert_called_once_with(model_id="gpt-3.5-turbo")
-    mock_router.get_model_list.assert_called_once_with(model_name="gpt-3.5-turbo")
+    mock_router.registry.return_value.deployment.assert_called_once_with("gpt-3.5-turbo")
+    mock_router.registry.return_value.deployments.assert_called_once_with("gpt-3.5-turbo")
 
 
 @pytest.mark.asyncio
@@ -1368,15 +1368,15 @@ async def test_get_deployments_by_model_not_found():
     mock_router = Mock()
 
     # Setup mock to not find model by either method
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = None
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = None
 
     result = await get_deployments_by_model("nonexistent-model", mock_router)
 
     assert len(result) == 0
     assert result == []
-    mock_router.get_deployment.assert_called_once_with(model_id="nonexistent-model")
-    mock_router.get_model_list.assert_called_once_with(model_name="nonexistent-model")
+    mock_router.registry.return_value.deployment.assert_called_once_with("nonexistent-model")
+    mock_router.registry.return_value.deployments.assert_called_once_with("nonexistent-model")
 
 
 @pytest.mark.asyncio
