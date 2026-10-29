@@ -330,7 +330,9 @@ async def test_extract_tags_nested_metadata_allowlisted(clean_env):
     ids=["mirrored call", "direct call with a client flag"],
 )
 @pytest.mark.asyncio
-async def test_extract_tags_takes_the_silent_experiment_flag_only_from_the_router(clean_env, metadata, expected_tag):
+async def test_extract_tags_takes_the_silent_experiment_flag_only_from_the_router(
+    clean_env: None, metadata: dict[str, object], expected_tag: str | None
+):
     logger: Final = DatadogCostManagementLogger(cost_tag_keys=["is_silent_experiment"])
     log: Final = StandardLoggingPayload(
         custom_llm_provider="openai",

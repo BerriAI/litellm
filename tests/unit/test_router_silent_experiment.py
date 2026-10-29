@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Mapping
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -27,9 +27,13 @@ class _RecordingLogger(CustomLogger):
         self.failure_kwargs: list[dict[str, object]] = []
         self._logged: Final = threading.Condition()
 
-    def _record(self, calls: list[dict[str, object]], kwargs: dict[str, object]) -> None:
+    def _record(self, outcome: Literal["success", "failure"], kwargs: dict[str, object]) -> None:
         with self._logged:
-            calls.append(kwargs)
+            match outcome:
+                case "success":
+                    self.success_kwargs.append(kwargs)
+                case "failure":
+                    self.failure_kwargs.append(kwargs)
             self._logged.notify_all()
 
     async def async_log_success_event(
@@ -39,7 +43,7 @@ class _RecordingLogger(CustomLogger):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        self._record(self.success_kwargs, kwargs)
+        self._record("success", kwargs)
 
     async def async_log_failure_event(
         self,
@@ -48,7 +52,7 @@ class _RecordingLogger(CustomLogger):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        self._record(self.failure_kwargs, kwargs)
+        self._record("failure", kwargs)
 
     def wait_until(self, logged_enough: Callable[[], bool], timeout: float = 30.0) -> None:
         with self._logged:
@@ -70,7 +74,7 @@ class _SyncAndAsyncRecordingLogger(_RecordingLogger):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        self._record(self.success_kwargs, kwargs)
+        self._record("success", kwargs)
 
 
 async def _settle_shared_logging_worker() -> None:
@@ -396,7 +400,9 @@ def test_standard_logging_payload_marks_only_the_mirrored_calls_on_the_sync_path
     )
     assert response.choices[0].message.content == "pong"
     sync_and_async_recording_logger.wait_until(
-        lambda: _silent_flag_by_group(sync_and_async_recording_logger).keys() >= {"primary-model", "shadow-a", "shadow-b"}
+        lambda: (
+            _silent_flag_by_group(sync_and_async_recording_logger).keys() >= {"primary-model", "shadow-a", "shadow-b"}
+        )
     )
 
     assert _silent_flag_by_group(sync_and_async_recording_logger) == {
@@ -435,7 +441,10 @@ async def test_a_failed_mirrored_call_reaches_failure_callbacks_marked_as_mirror
     await asyncio.to_thread(recording_logger.wait_until, lambda: len(recording_logger.failure_kwargs) >= 1)
 
     assert {
-        (call["standard_logging_object"]["model_group"], call["standard_logging_object"]["metadata"].get("is_silent_experiment"))
+        (
+            call["standard_logging_object"]["model_group"],
+            call["standard_logging_object"]["metadata"].get("is_silent_experiment"),
+        )
         for call in recording_logger.failure_kwargs
     } == {("shadow-a", True)}
 
@@ -995,7 +1004,11 @@ async def test_calls_a_callback_starts_while_logging_a_mirrored_call_are_not_mar
             },
             {
                 "model_name": "shadow-a",
-                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake-key", "mock_response": shadow_outcome},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "fake-key",
+                    "mock_response": shadow_outcome,
+                },
             },
         ]
     )

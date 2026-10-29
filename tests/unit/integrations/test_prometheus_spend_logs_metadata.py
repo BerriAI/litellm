@@ -229,7 +229,9 @@ def test_project_alias_accessible_without_prefix(monkeypatch):
     ids=["mirrored call", "direct call with a client flag"],
 )
 def test_silent_experiment_label_comes_only_from_the_router_flag(
-    monkeypatch, standard_logging_metadata, expected_labels
+    monkeypatch: pytest.MonkeyPatch,
+    standard_logging_metadata: dict[str, object],
+    expected_labels: dict[str, str],
 ):
     monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", ["metadata.is_silent_experiment"])
 
