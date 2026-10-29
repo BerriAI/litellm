@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.bug_report import (
@@ -5870,6 +5871,7 @@ class TestCancelOnDisconnect:
         logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
+        logging_obj.finalized_cost = None
 
         processor = ProxyBaseLLMRequestProcessing(
             data={"model": "fake-model", "litellm_logging_obj": logging_obj}
@@ -6308,6 +6310,7 @@ class TestAllmPassthroughStreamingProviderGate:
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "call-123"
         logging_obj.cost_breakdown = None
+        logging_obj.finalized_cost = None
         data = {
             "custom_llm_provider": custom_llm_provider,
             "endpoint": endpoint,
@@ -7125,13 +7128,11 @@ class TestResponseCostHeaderForTypedDictResponses:
     """
 
     def _build_logging_obj(self, *, model_call_details, response_cost_calculator):
-        logging_obj = MagicMock()
-        logging_obj.litellm_call_id = "call-lit4076"
-        logging_obj.cost_breakdown = None
-        logging_obj.model_call_details = model_call_details
+        logging_obj = Logging(model="unknown", messages=[], stream=False, call_type="acompletion",
+            start_time=datetime.datetime(2026, 1, 1), litellm_call_id="header-call", function_id="header-function")
+        logging_obj.update_environment_variables(model="unknown", litellm_params={}, optional_params={})
+        logging_obj.model_call_details.update(model_call_details)
         logging_obj.response_cost_calculator = response_cost_calculator
-        logging_obj.enqueue_deferred_logging = None
-        logging_obj._on_deferred_stream_complete = None
         return logging_obj
 
     async def _drive_non_streaming(
@@ -7516,15 +7517,11 @@ class TestCostHeadersForCallsPricedAtZero:
 
     @staticmethod
     def _logging_obj(*, call_type, recovered_cost=0.0):
-        logging_obj = MagicMock()
-        logging_obj.litellm_call_id = "call-lit5602"
-        logging_obj.call_type = call_type
-        logging_obj.litellm_params = {}
-        logging_obj.cost_breakdown = None
-        logging_obj.model_call_details = {"response_cost": recovered_cost}
+        logging_obj = Logging(model="unknown", messages=[], stream=False, call_type=call_type,
+            start_time=datetime.datetime(2026, 1, 1), litellm_call_id="zero-cost-call", function_id="zero-cost-function")
+        logging_obj.update_environment_variables(model="unknown", litellm_params={}, optional_params={})
+        logging_obj.model_call_details["response_cost"] = recovered_cost
         logging_obj.response_cost_calculator = MagicMock(return_value=recovered_cost)
-        logging_obj.enqueue_deferred_logging = None
-        logging_obj._on_deferred_stream_complete = None
         return logging_obj
 
     async def _drive(self, *, monkeypatch, response, logging_obj, route_type):
@@ -11279,6 +11276,7 @@ class TestPostCallMaskedOutputReachesDeferredLogging:
         logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
+        logging_obj.finalized_cost = None
         logging_obj.model_call_details = {}
         recorded_at_enqueue: dict[str, object] = {}
         logging_obj.enqueue_deferred_logging = lambda: recorded_at_enqueue.update(logging_obj.model_call_details)
@@ -11366,6 +11364,7 @@ class TestStreamingResponseHeadersFollowFallback:
         logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
+        logging_obj.finalized_cost = None
 
         processor = ProxyBaseLLMRequestProcessing(
             data={"model": "oa-midfail", "stream": True, "litellm_logging_obj": logging_obj}
@@ -11429,6 +11428,7 @@ class TestStreamingResponseHeadersFollowFallback:
         logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
+        logging_obj.finalized_cost = None
         processor_data["litellm_logging_obj"] = logging_obj
         processor = ProxyBaseLLMRequestProcessing(data=processor_data)
 
@@ -11483,6 +11483,7 @@ class TestStreamingResponseHeadersFollowFallback:
         logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
+        logging_obj.finalized_cost = None
         processor = ProxyBaseLLMRequestProcessing(
             data={"model": "oa", "stream": True, "litellm_logging_obj": logging_obj}
         )

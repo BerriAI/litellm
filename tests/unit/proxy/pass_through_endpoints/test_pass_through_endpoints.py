@@ -6037,7 +6037,7 @@ async def test_pass_through_request_claims_the_budget_reservation_only_when_its_
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
         ) as mock_processing,
-        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
+        patch("litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER") as mock_worker,
     ):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -6091,7 +6091,7 @@ async def test_pass_through_request_leaves_the_budget_reservation_for_the_reques
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
         ) as mock_processing,
-        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
+        patch("litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER") as mock_worker,
     ):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -10472,3 +10472,51 @@ async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
     metadata = _update_metadata_with_tags_in_header(request, {})
     assert metadata["tags"] == ["existing", "usecase:a"]
     assert await read_request_body(request) == {"model": "qa-model"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flat_cost", "upstream_cost", "expected"),
+    [(0.5, None, 0.5), (0.0, None, 0.0), (0.5, "0.75", 0.75), (0.5, "0", 0.0)],
+)
+async def test_passthrough_header_and_callback_share_finalized_cost(
+    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    observed: Final = asyncio.get_running_loop().create_future()
+
+    class Observer(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observed.set_result(kwargs["standard_logging_object"])
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [Observer()])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    upstream_headers: Final = (
+        {} if upstream_cost is None else {"x-litellm-response-cost": upstream_cost, "x-litellm-total-tokens": "12"}
+    )
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+
+    client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
+    try:
+        request: Final = Request({
+            "type": "http", "method": "GET", "path": "/passthrough-relay/results",
+            "headers": [], "query_string": b"", "scheme": "http", "server": ("test", 80),
+        })
+        result: Final = await pass_through_request(
+            request=request, target="http://cost-upstream.invalid/results", custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
+        )
+        payload: Final = await asyncio.wait_for(observed, timeout=10)
+        await GLOBAL_LOGGING_WORKER.flush()
+        assert result.status_code == 200
+        assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
+        assert payload["response_cost"] == pytest.approx(expected)
+        assert payload["cost_finalized"] is True
+        if upstream_cost is not None:
+            assert payload["total_tokens"] == 12
+    finally:
+        cleanup()
+        await client.aclose()

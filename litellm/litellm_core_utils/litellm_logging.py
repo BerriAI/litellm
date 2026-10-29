@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import asyncio
 import copy
 import datetime
 import functools
@@ -96,6 +97,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
 )
+from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
@@ -811,6 +813,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
+        self.finalized_cost: FinalizedCost | None = None
+        self.cost_finalization_lock = asyncio.Lock()
+        self.deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None = None
         self.billed_token_rates: BilledTokenRates | None = None
         self._provider_reported_cost: float | None = None
 
@@ -872,6 +877,9 @@ class Logging(LiteLLMLoggingBaseClass):
             "current_attempt_api_call_start_time": None,
             "litellm_params": litellm_params,
         }
+        new_call.finalized_cost = None
+        new_call.cost_finalization_lock = asyncio.Lock()
+        new_call.deferred_success_result = None
         new_call.streaming_chunks = []
         new_call.sync_streaming_chunks = []
         return new_call
@@ -2807,12 +2815,16 @@ class Logging(LiteLLMLoggingBaseClass):
                     logging_result, "_hidden_params", {}
                 )
 
-        if self.model_call_details.get("cache_hit") is True:
+        if self.finalized_cost is not None:
+            self.model_call_details["response_cost"] = self.finalized_cost.amount
+        elif self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
-        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
+        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and (
+            existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+        ):
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
             # Do not preserve 0 from failure_handler on intermediate router retries.
@@ -2931,7 +2943,7 @@ class Logging(LiteLLMLoggingBaseClass):
         standard_logging_object: StandardLoggingPayload | None = None,
         build_logging_payload: bool = True,
     ) -> tuple[datetime.datetime, datetime.datetime, object]:
-        prepared: Final = self._prepare_success_logging(
+        prepared: Final = self.prepare_success_logging(
             result=result,
             start_time=start_time,
             end_time=end_time,
@@ -2942,7 +2954,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return prepared[0], prepared[1], prepared[2]
 
-    def _prepare_success_logging(
+    def prepare_success_logging(
         self,
         result: object,
         start_time: datetime.datetime | None,
@@ -3002,6 +3014,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             if (
                 litellm.max_budget
+                and publish_logging_payload
                 and self.stream is False
                 and result is not None
                 and isinstance(result, dict)
@@ -3032,10 +3045,17 @@ class Logging(LiteLLMLoggingBaseClass):
         publish_logging_payload: bool,
     ) -> StandardLoggingPayload | None:
         if standard_logging_object is not None:
+            effective_payload: Final = (
+                self.finalized_cost.logging_payload(standard_logging_object)
+                if self.finalized_cost is not None
+                else standard_logging_object
+            )
+            if self.finalized_cost is not None:
+                self.model_call_details["response_cost"] = self.finalized_cost.amount
             if not publish_logging_payload:
-                return standard_logging_object.copy()
-            self.model_call_details["standard_logging_object"] = standard_logging_object
-            return standard_logging_object
+                return effective_payload.copy()
+            self.model_call_details["standard_logging_object"] = effective_payload
+            return effective_payload
         if result is None or self.stream is True:
             # Streaming reaches here before its cost is known, so the cost
             # is seeded to None, but only when nothing has already
@@ -3276,7 +3296,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
-        start_time, end_time, result, request_logging_payload = self._prepare_success_logging(
+        start_time, end_time, result, request_logging_payload = self.prepare_success_logging(
             start_time=start_time,
             end_time=end_time,
             result=result,
@@ -7458,7 +7478,11 @@ def get_standard_logging_object_payload(
         raw_response_cost: Final = kwargs.get("response_cost")
         llm_response_cost: Final[float] = raw_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
-        response_cost: Final[float] = llm_response_cost + guardrail_cost
+        response_cost: Final[float] = (
+            logging_obj.finalized_cost.amount
+            if logging_obj.finalized_cost is not None
+            else llm_response_cost + guardrail_cost
+        )
 
         # clean up litellm hidden params
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
@@ -7525,13 +7549,17 @@ def get_standard_logging_object_payload(
         ):
             model_name = response_model_name
 
-        request_cost_breakdown: Final = cost_breakdown_with_guardrail(
-            (
-                _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
-                if uncached_price is not None
-                else logging_obj.cost_breakdown
-            ),
-            guardrail_cost,
+        request_cost_breakdown: Final = (
+            logging_obj.finalized_cost.logging_breakdown()
+            if logging_obj.finalized_cost is not None
+            else cost_breakdown_with_guardrail(
+                (
+                    _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
+                    if uncached_price is not None
+                    else logging_obj.cost_breakdown
+                ),
+                guardrail_cost,
+            )
         )
         captured_baseline: Final = logging_obj.baseline_observation
         autorouter_savings: Final = (
@@ -7588,6 +7616,7 @@ def get_standard_logging_object_payload(
             model=model_name,
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
+            cost_finalized=logging_obj.finalized_cost is not None,
             response_cost=response_cost,
             cost_breakdown=request_cost_breakdown,
             autorouter_savings=autorouter_savings,

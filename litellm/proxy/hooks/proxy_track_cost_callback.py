@@ -637,7 +637,10 @@ class _ProxyDBLogger(CustomLogger):
                     counter=proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache,
                     now=datetime.now(timezone.utc),
                 )
-                if litellm.apply_search_free_tier and sl_object is not None and priced_cost is not None
+                if litellm.apply_search_free_tier
+                and sl_object is not None
+                and priced_cost is not None
+                and not sl_object.get("cost_finalized", False)
                 else priced_cost
             )
             tags: Final = _get_request_tags_for_cost_tracking(

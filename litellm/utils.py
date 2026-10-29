@@ -1478,7 +1478,7 @@ def function_setup(
         raise e
 
 
-def _dispatch_success_logging(
+def dispatch_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
     start_time: datetime.datetime,
@@ -1496,11 +1496,12 @@ def _dispatch_success_logging(
         end_time=end_time,
         is_completion_with_fallbacks=is_completion_with_fallbacks,
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls(
-        result=result,
-        start_time=start_time,
-        end_time=end_time,
-    )
+    if not logging_obj.defer_async_logging:
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
 
 def _schedule_async_success_logging(
@@ -1525,6 +1526,10 @@ def _schedule_async_success_logging(
         return
 
     def _enqueue_async_logging() -> None:
+        if logging_obj.defer_async_logging:
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=result, start_time=start_time, end_time=end_time
+            )
         logging_obj.mark_async_success_log_enqueued()
         asyncio.create_task(
             _client_async_logging_helper(
@@ -1541,6 +1546,11 @@ def _schedule_async_success_logging(
         return
     if logging_obj.enqueue_deferred_logging is not None:
         return
+    logging_obj.deferred_success_result = (  # rebind-ok: capture the innermost wrapper before dispatch
+        result,
+        start_time,
+        end_time,
+    )
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
 
 
@@ -2374,7 +2384,7 @@ def client(original_function):
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
-                _dispatch_success_logging(
+                dispatch_success_logging(
                     logging_obj=logging_obj,
                     result=result,
                     start_time=start_time,
@@ -2397,7 +2407,7 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            _dispatch_success_logging(
+            dispatch_success_logging(
                 logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,
