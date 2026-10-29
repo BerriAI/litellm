@@ -541,7 +541,14 @@ async def test_a_routed_resume_requested_in_extra_query_gets_the_deployment_stre
 
 
 @pytest.mark.asyncio
-async def test_a_routed_plain_retrieve_on_a_deployment_that_forces_stream_answers_the_response_object() -> None:
+@pytest.mark.parametrize(
+    ("deployment_stream", "router_defaults"),
+    [({"stream": True}, None), ({}, {"stream": True})],
+    ids=["deployment_forces_stream", "router_default_forces_stream"],
+)
+async def test_a_routed_plain_retrieve_where_config_forces_stream_answers_the_response_object(
+    deployment_stream: dict[str, bool], router_defaults: dict[str, bool] | None
+) -> None:
     router: Final = litellm.Router(
         model_list=[
             {
@@ -550,10 +557,11 @@ async def test_a_routed_plain_retrieve_on_a_deployment_that_forces_stream_answer
                     "model": "openai/gpt-5.5",
                     "api_key": "sk-test",
                     "api_base": "https://api.openai.com/v1",
-                    "stream": True,
+                    **deployment_stream,
                 },
             }
-        ]
+        ],
+        default_litellm_params=router_defaults,
     )
     with respx.mock() as mock_router:
         route: Final = _retrieve_route(mock_router, "openai").mock(

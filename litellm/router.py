@@ -4833,7 +4833,7 @@ class Router:
         Handles inserting this as either "metadata" or "litellm_metadata" depending on the metadata_variable_name
         """
         # 1) copy your defaults and pull out metadata
-        defaults: Final = self.default_litellm_params.copy()
+        defaults: Final = dict(without_retrieve_stream_defaults(self.default_litellm_params, kwargs))
         metadata_defaults: Final = defaults.pop("metadata", {}) or {}
 
         # 2) add any non-metadata defaults that aren't already in kwargs
