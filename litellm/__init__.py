@@ -39,6 +39,7 @@ from litellm._logging import (
     turn_on_json,
     log_level,
 )
+from litellm._logging import suppress_startup_output as suppress_startup_output
 import re
 from litellm.constants import (
     DEFAULT_BATCH_SIZE,

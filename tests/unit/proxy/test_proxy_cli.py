@@ -215,6 +215,23 @@ class TestProxyInitializationHelpers:
         )
         assert args["timeout_worker_healthcheck"] == 30
 
+    def test_an_old_uvicorn_drops_worker_healthcheck_and_warns_with_startup_output_suppressed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class _UvicornConfigWithoutWorkerHealthcheck:
+            def __init__(self, app=None):
+                pass
+
+        monkeypatch.setattr(litellm, "suppress_startup_output", True)
+        monkeypatch.setattr(litellm, "json_logs", False)
+        with patch("uvicorn.Config", _UvicornConfigWithoutWorkerHealthcheck):
+            args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000, timeout_worker_healthcheck=15
+            )
+
+        assert "timeout_worker_healthcheck" not in args
+        assert "--timeout_worker_healthcheck requires uvicorn>=0.37.0" in capsys.readouterr().out
+
     def test_get_reload_options_no_config_still_watches_env(self):
         opts = ProxyInitializationHelpers._get_reload_options(None)
         assert opts["reload"] is True
@@ -1835,10 +1852,9 @@ class TestProxyInitializationHelpers:
         assert "uvicorn exits" not in warning
 
     @patch("uvicorn.run")
-    @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     def test_single_worker_max_requests_warning_printed_on_uvicorn(
-        self, mock_setup_db, mock_print, mock_uvicorn_run
+        self, mock_setup_db, mock_uvicorn_run
     ):
         """uvicorn single-worker startup prints the does-not-recycle warning"""
         from click.testing import CliRunner
@@ -1881,11 +1897,8 @@ class TestProxyInitializationHelpers:
             assert (
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
-            assert any(
-                "--max_requests_before_restart 123 with --num_workers 1" in str(c)
-                and "uvicorn exits the process" in str(c)
-                for c in mock_print.call_args_list
-            )
+            assert "--max_requests_before_restart 123 with --num_workers 1" in result.output
+            assert "uvicorn exits the process" in result.output
 
     @patch("litellm.proxy.proxy_cli.start_query_engine_reaper")
     @patch("uvicorn.run")
@@ -1942,10 +1955,9 @@ class TestProxyInitializationHelpers:
 
     @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.run_gunicorn_server")
     @patch("uvicorn.run")
-    @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     def test_single_worker_max_requests_warning_printed_on_gunicorn(
-        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_run_gunicorn
+        self, mock_setup_db, mock_uvicorn_run, mock_run_gunicorn
     ):
         """--run_gunicorn single-worker startup prints the gunicorn warning variant"""
         from click.testing import CliRunner
@@ -1989,11 +2001,8 @@ class TestProxyInitializationHelpers:
             assert (
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
-            assert any(
-                "--max_requests_before_restart 123 with --num_workers 1" in str(c)
-                and "gunicorn accepts no connections" in str(c)
-                for c in mock_print.call_args_list
-            )
+            assert "--max_requests_before_restart 123 with --num_workers 1" in result.output
+            assert "gunicorn accepts no connections" in result.output
 
     @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.init_hypercorn_server")
     @patch("uvicorn.run")
@@ -2149,7 +2158,7 @@ class TestProxyInitializationHelpers:
         assert [call.args for call in reserved_before_run] == [("the gunicorn master",)]
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
-    def test_gunicorn_jitter_without_base_warns(self):
+    def test_gunicorn_jitter_without_base_warns(self, capsys: pytest.CaptureFixture[str]):
         """gunicorn path warns when jitter is set without --max_requests_before_restart"""
         pytest.importorskip("gunicorn")
 
@@ -2160,7 +2169,6 @@ class TestProxyInitializationHelpers:
 
         with (
             patch("gunicorn.app.base.BaseApplication.run", capture_run),
-            patch("builtins.print") as mock_print,
             patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
                 "litellm.proxy.proxy_cli.start_query_engine_reaper"
             ),
@@ -2178,7 +2186,7 @@ class TestProxyInitializationHelpers:
 
         assert "max_requests" not in captured["options"]
         assert "max_requests_jitter" not in captured["options"]
-        assert any("has no effect" in str(c) for c in mock_print.call_args_list)
+        assert "has no effect" in capsys.readouterr().out
 
     def test_apply_uvicorn_jitter_sets_arg_when_supported(self):
         class _NewUvicornConfig:
@@ -2194,16 +2202,13 @@ class TestProxyInitializationHelpers:
             )
         assert uvicorn_args["limit_max_requests_jitter"] == 50
 
-    def test_apply_uvicorn_jitter_skipped_on_old_uvicorn(self):
+    def test_apply_uvicorn_jitter_skipped_on_old_uvicorn(self, capsys: pytest.CaptureFixture[str]):
         class _FakeUvicornConfig:
             def __init__(self, limit_max_requests=None):
                 pass
 
         uvicorn_args: dict = {}
-        with (
-            patch("uvicorn.Config", _FakeUvicornConfig),
-            patch("builtins.print") as mock_print,
-        ):
+        with patch("uvicorn.Config", _FakeUvicornConfig):
             ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
                 uvicorn_args=uvicorn_args,
                 max_requests_before_restart=1000,
@@ -2211,19 +2216,18 @@ class TestProxyInitializationHelpers:
             )
 
         assert "limit_max_requests_jitter" not in uvicorn_args
-        assert any("0.41.0" in str(c) for c in mock_print.call_args_list)
+        assert "0.41.0" in capsys.readouterr().out
 
-    def test_apply_uvicorn_jitter_without_base_warns(self):
+    def test_apply_uvicorn_jitter_without_base_warns(self, capsys: pytest.CaptureFixture[str]):
         uvicorn_args: dict = {}
-        with patch("builtins.print") as mock_print:
-            ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
-                uvicorn_args=uvicorn_args,
-                max_requests_before_restart=None,
-                jitter=50,
-            )
+        ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+            uvicorn_args=uvicorn_args,
+            max_requests_before_restart=None,
+            jitter=50,
+        )
 
         assert "limit_max_requests_jitter" not in uvicorn_args
-        assert any("has no effect" in str(c) for c in mock_print.call_args_list)
+        assert "has no effect" in capsys.readouterr().out
 
     @patch.dict(os.environ, {}, clear=True)
     def test_construct_database_url_from_env_vars(self):
@@ -2648,9 +2652,55 @@ class TestRunServerDbSetup:
             assert exit_info.value.code == 1
             assert "a database URL is set but the prisma CLI is neither on PATH nor importable" in out
             assert "pip install 'litellm[extra_proxy]'" in out
+            assert "\x1b[" not in out
         else:
             assert "prisma CLI" not in out
             assert "Setup complete" in out
+
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes", return_value=True)
+    def test_a_pgbouncer_that_cannot_start_stops_the_cli_with_an_uncolored_error_off_a_terminal(
+        self,
+        mock_build_indexes,
+        mock_setup_database,
+        mock_atexit_register,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=ProxyConfig,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("DATABASE_URL", "DIRECT_URL", "LITELLM_PGBOUNCER_", "DISABLE_SCHEMA_UPDATE"))
+        }
+        pgbouncer_env: Final = {
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
+            "LITELLM_PGBOUNCER_ENABLED": "true",
+            "LITELLM_PGBOUNCER_BINARY": str(tmp_path / "missing-pgbouncer"),
+        }
+
+        with (
+            patch.dict(os.environ, {**clean_env, **pgbouncer_env}, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        error: Final = capsys.readouterr().err
+        assert exit_info.value.code == 1
+        assert "LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer could not start" in error
+        assert "\x1b[" not in error
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -2726,6 +2776,7 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        capsys,
     ):
         """A sqlite DATABASE_URL must exit immediately, before any prisma call,
         instead of stalling on a migration against the postgresql-only schema."""
@@ -2764,6 +2815,9 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_not_called()
+        err: Final = capsys.readouterr().err
+        assert "sqlite" in err
+        assert "\x1b[" not in err
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -2824,6 +2878,51 @@ class TestRunServerDbSetup:
 
         mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
         assert "--use_v2_migration_resolver is deprecated" not in capsys.readouterr().out
+
+    @patch("subprocess.run", return_value=MagicMock(returncode=0))
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
+    def test_the_deprecated_v2_resolver_flag_warns_with_startup_output_suppressed(
+        self,
+        mock_build_indexes,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=ProxyConfig,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER", "DISABLE_SCHEMA_UPDATE")
+        }
+        monkeypatch.setattr(litellm, "suppress_startup_output", True)
+        monkeypatch.setattr(litellm, "json_logs", False)
+
+        with (
+            patch.dict(
+                os.environ, {**clean_env, "DATABASE_URL": "postgresql://test:test@localhost:5432/test"}, clear=True
+            ),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+        ):
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_v2_migration_resolver"], standalone_mode=False
+            )
+
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+        assert "--use_v2_migration_resolver is deprecated and has no effect" in capsys.readouterr().out
 
     @pytest.mark.parametrize(
         ("arguments", "environment", "warned"),
@@ -3968,11 +4067,104 @@ def _boot_from_config_file(config_path: Path, *flags: str) -> str | None:
         return os.environ.get("JSON_LOGS")
 
 
+COUNTING_SECRET_MANAGER_MODULE: Final = """
+import os
+
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+
+
+class CountingSecretManager(CustomSecretManager):
+    def __init__(self):
+        super().__init__()
+        self._log("constructed")
+
+    @staticmethod
+    def _log(event):
+        with open(os.environ["SECRET_READ_LOG"], "a") as f:
+            f.write(event + "\\n")
+
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self._log(secret_name)
+        return "from-secret-manager"
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self._log(secret_name)
+        return "from-secret-manager"
+"""
+
+SECRET_MANAGER_BACKED_CONFIG: Final = """
+model_list:
+  - model_name: my-model
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_key: os.environ/MY_PROVIDER_KEY
+
+litellm_settings:
+  suppress_startup_output: true
+
+general_settings:
+  key_management_system: custom
+  key_management_settings:
+    custom_secret_manager: counting_secret_manager.CountingSecretManager
+    hosted_keys:
+      - MY_PROVIDER_KEY
+"""
+
+
 class TestJsonLogsConfigReachesSpawnedWorkers:
     """`litellm_settings.json_logs: true` turns JSON on inside the CLI process, but the workers that
     uvicorn or granian spawn are fresh interpreters that pick plain or JSON from the JSON_LOGS
     environment variable at import. The CLI has to export it, or every worker logs plain text until
-    its own load_config reaches the key."""
+    its own load_config reaches the key. `suppress_startup_output` has the same problem with the banner
+    each worker prints before its load_config."""
+
+    @staticmethod
+    def _write_config(path: Path, litellm_settings: dict[str, object]) -> Path:
+        path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+        return path
+
+    @staticmethod
+    def _env_after_boot(
+        name: str,
+        config: Path | None = None,
+        config_file_path_env: Path | None = None,
+        extra_env: dict[str, str] | None = None,
+        proxy_config_class: object = None,
+    ) -> str | None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=proxy_config_class or ProxyConfig,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in (
+                "DATABASE_URL",
+                "DIRECT_URL",
+                "JSON_LOGS",
+                "LITELLM_SUPPRESS_STARTUP_OUTPUT",
+                "CONFIG_FILE_PATH",
+                "LITELLM_CONFIG_BUCKET_NAME",
+            )
+        }
+        config_env: Final = {} if config_file_path_env is None else {"CONFIG_FILE_PATH": str(config_file_path_env)}
+        config_args: Final = [] if config is None else ["--config", str(config)]
+        with (
+            patch.dict(os.environ, {**clean_env, **config_env, **(extra_env or {})}, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch("atexit.register"),
+            patch("litellm.turn_on_json"),  # test-quality-ok: it swaps every logger handler in this pytest worker
+        ):
+            run_server.main([*config_args, "--local", "--skip_server_startup"], standalone_mode=False)
+            return os.environ.get(name)
 
     def test_json_logs_true_exports_json_logs_to_spawned_workers(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3991,11 +4183,126 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
 
         assert _boot_from_config_file(config_path) is None
 
+    @pytest.mark.parametrize("litellm_settings", [[], "", 0, False])
+    @pytest.mark.parametrize("via_config_file_path_env", [False, True])
+    def test_an_empty_litellm_settings_still_boots(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, litellm_settings: object, via_config_file_path_env: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        config_file: Final = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+        exported: Final = (
+            self._env_after_boot("LITELLM_SUPPRESS_STARTUP_OUTPUT", config_file_path_env=config_file)
+            if via_config_file_path_env
+            else self._env_after_boot("LITELLM_SUPPRESS_STARTUP_OUTPUT", config=config_file)
+        )
+        assert exported is None
+
+    @pytest.mark.parametrize(("setting", "exported"), [(True, "true"), ("true", None), (False, None)])
+    def test_only_a_boolean_suppress_startup_output_reaches_spawned_workers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: object, exported: str | None
+    ) -> None:
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        config: Final = self._write_config(tmp_path / "config.yaml", {"suppress_startup_output": setting})
+        assert self._env_after_boot("LITELLM_SUPPRESS_STARTUP_OUTPUT", config=config) == exported
+
+    @pytest.mark.parametrize(("name", "exported"), [("LITELLM_SUPPRESS_STARTUP_OUTPUT", "true"), ("JSON_LOGS", None)])
+    def test_a_config_named_by_CONFIG_FILE_PATH_passes_only_suppress_startup_output_to_spawned_workers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, exported: str | None
+    ) -> None:
+        """Its json_logs stays the workers' own to read, as before, so uvicorn's lines keep their plain format."""
+        monkeypatch.setattr(litellm, "json_logs", False)
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        settings: Final[dict[str, object]] = {"json_logs": True, "suppress_startup_output": True}
+        config_file: Final = self._write_config(tmp_path / "config.yaml", settings)
+        assert self._env_after_boot(name, config_file_path_env=config_file) == exported
+
+    def test_a_CONFIG_FILE_PATH_quiet_config_wins_over_a_cli_config_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Workers load CONFIG_FILE_PATH ahead of --config, so its key quiets the CLI when both are set."""
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        cli_config: Final = self._write_config(tmp_path / "cli.yaml", {})
+        env_config: Final = self._write_config(tmp_path / "env.yaml", {"suppress_startup_output": True})
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT", config=cli_config, config_file_path_env=env_config
+        )
+        assert exported == "true"
+
+    @pytest.mark.parametrize(
+        ("config_file", "env_file", "extra_env"),
+        [
+            ("config.yaml", "missing.yaml", {}),
+            ("config.json", "config.json", {}),
+            ("config.yaml", "config.yaml", {"LITELLM_CONFIG_BUCKET_NAME": "litellm-configs"}),
+        ],
+        ids=["missing-file", "not-yaml", "bucket-config"],
+    )
+    def test_a_CONFIG_FILE_PATH_workers_skip_is_skipped_by_the_cli_too(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        config_file: str,
+        env_file: str,
+        extra_env: dict[str, str],
+    ) -> None:
+        """Workers load CONFIG_FILE_PATH only when it names a YAML file and no config bucket is set, and a boot
+        with any other value starts, so the CLI reads nothing from it either instead of failing the boot."""
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        self._write_config(tmp_path / config_file, {"suppress_startup_output": True})
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT", config_file_path_env=tmp_path / env_file, extra_env=extra_env
+        )
+        assert exported is None
+
+    def test_a_CONFIG_FILE_PATH_boot_reads_no_secret_before_the_workers_do(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The CLI takes only the suppress key from CONFIG_FILE_PATH, so a config backed by a secret manager is
+        read from it once per worker, as before, not once more by the CLI."""
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        monkeypatch.setattr(litellm, "secret_manager_client", None)
+        monkeypatch.setattr(litellm, "_key_management_system", None)
+        monkeypatch.setattr(litellm, "_key_management_settings", litellm._key_management_settings)
+        reads: Final = tmp_path / "secret_reads.log"
+        (tmp_path / "counting_secret_manager.py").write_text(COUNTING_SECRET_MANAGER_MODULE)
+        config_file: Final = tmp_path / "config.yaml"
+        config_file.write_text(SECRET_MANAGER_BACKED_CONFIG)
+
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT",
+            config_file_path_env=config_file,
+            extra_env={"SECRET_READ_LOG": str(reads)},
+            proxy_config_class=ProxyConfig,
+        )
+
+        assert exported == "true"
+        assert not reads.exists(), reads.read_text()
+
+    def test_a_CONFIG_FILE_PATH_key_set_in_an_included_file_reaches_spawned_workers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        self._write_config(tmp_path / "quiet.yaml", {"suppress_startup_output": True})
+        config_file: Final = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"include": ["quiet.yaml"], "model_list": []}))
+
+        exported: Final = self._env_after_boot(
+            "LITELLM_SUPPRESS_STARTUP_OUTPUT", config_file_path_env=config_file, proxy_config_class=ProxyConfig
+        )
+
+        assert exported == "true"
+
 
 class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
     """With a config file, the `--enforce_prisma_migration_check` deprecation notice waits until the config
-    is read, so a `json_logs: true` set only there makes it a JSON record. It is printed once either way,
-    and a boot whose config read fails still prints it before the error, as it did before the wait."""
+    is read, so a `json_logs: true` set only there makes it a JSON record, while `suppress_startup_output: true`
+    leaves it, since it is a warning. Otherwise it is printed once, and a boot whose config read fails still
+    prints it before the error, as it did before the wait."""
 
     NOTICE: Final = "--enforce_prisma_migration_check is deprecated and has no effect"
     FLAG: Final = "--enforce_prisma_migration_check"
@@ -4035,13 +4342,26 @@ class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:
         assert len(notice_lines) == 1, notice_lines
         assert self.NOTICE in json.loads(notice_lines[0])["message"]
 
+    @pytest.mark.parametrize("json_logs", [False, True])
+    def test_a_config_only_suppress_startup_output_keeps_the_notice(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "json_logs", json_logs)
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": {"suppress_startup_output": True}}))
+
+        _boot_from_config_file(config_path, self.FLAG)
+
+        assert capsys.readouterr().out.count(self.NOTICE) == 1
+
 
 def test_granian_flag_notices_are_json_records_in_json_mode(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     """The yellow notices for the flags Granian ignores (`--max_requests_before_restart`, `--ciphers`) are
-    printed while the launcher starts; with json_logs on they are INFO records on stdout like every other
-    line, not plaintext between the records."""
+    printed while the launcher starts; with json_logs on they are WARNING records on stdout after the INFO
+    start line, not plaintext between the records."""
     pytest.importorskip("granian")
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
@@ -4072,4 +4392,4 @@ def test_granian_flag_notices_are_json_records_in_json_mode(
         "(Granian uses workers_lifetime in seconds, not a per-request limit).",
         "LiteLLM: --ciphers is not applied when using --run_granian.",
     ]
-    assert {record["level"] for record in records} == {"INFO"}
+    assert [record["level"] for record in records] == ["INFO", "WARNING", "WARNING"]
