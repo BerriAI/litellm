@@ -216,6 +216,7 @@ describe("provider_info_helpers", () => {
         Providers.COMPACTIFAI,
         Providers.CORALBRICKS,
         Providers.DATAROBOT,
+        Providers.DecisionModels,
         Providers.DOCKER_MODEL_RUNNER,
         Providers.DOTPROMPT,
         Providers.EMPOWER,
@@ -557,6 +558,16 @@ describe("provider_info_helpers", () => {
       expect(getProviderModels(Providers.Nace, modelMap)).toEqual(["nace/drex-latest"]);
       expect(getProviderLogoAndName("nace").displayName).toBe("Nace");
       expect(getPlaceholder("Nace")).toBe("nace/drex-latest");
+    });
+
+    it("lists Decision Models decision models and resolves the provider name and model placeholder", () => {
+      const modelMap = {
+        "decisionmodels/s1-fast": { litellm_provider: "decisionmodels", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels("DecisionModels" as Providers, modelMap)).toEqual(["decisionmodels/s1-fast"]);
+      expect(getProviderLogoAndName("decisionmodels").displayName).toBe("Decision Models");
+      expect(getPlaceholder("DecisionModels")).toBe("decisionmodels/s1-fast");
     });
 
     it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
