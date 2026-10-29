@@ -86,10 +86,15 @@ def http2_enabled() -> bool:
     return litellm.http2 is True or str_to_bool(os.getenv("LITELLM_HTTP2", "False")) is True
 
 
-def http2_disabled() -> bool:
-    from litellm.secret_managers.main import str_to_bool
+_HTTP2_OFF_VALUES: Final = frozenset({"false", "0", "no", "off"})
 
-    return litellm.http2 is False or str_to_bool(os.getenv("LITELLM_HTTP2")) is False
+
+def _is_http2_off(value: bool | str | None) -> bool:
+    return value is False or (isinstance(value, str) and value.strip().lower() in _HTTP2_OFF_VALUES)
+
+
+def http2_disabled() -> bool:
+    return _is_http2_off(litellm.http2) or _is_http2_off(os.getenv("LITELLM_HTTP2"))
 
 
 def _resolve_http2(provider_default: bool, ssl_verify: VerifyTypes | None) -> bool:
@@ -465,6 +470,11 @@ def get_ssl_configuration(
         return _ssl_context_cache[cache_key]
 
     return ssl_verify
+
+
+def _httpx_default_verify_unless_configured(verify: VerifyTypes) -> VerifyTypes:
+    litellm_defaults: Final = (get_ssl_configuration(True), get_ssl_configuration(True, http2=True))
+    return True if any(verify is default for default in litellm_defaults) else verify
 
 
 _shared_realtime_ssl_context: bool | str | ssl.SSLContext | None = None
@@ -1438,15 +1448,20 @@ class AsyncHTTPHandler:
         - [Default] Otherwise it will return None
         """
         local_address: Final = _IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None
+        transport_verify: Final = (
+            _httpx_default_verify_unless_configured(verify)
+            if litellm.force_ipv4 and not AsyncHTTPHandler.should_use_aiohttp_transport()
+            else verify
+        )
         if http2 or http2_enabled():
             return AsyncHTTP2ConnectionSpread(
                 lambda lane_limits: AsyncHTTPTransport(
-                    local_address=local_address, verify=verify, cert=cert, http2=True, limits=lane_limits
+                    local_address=local_address, verify=transport_verify, cert=cert, http2=True, limits=lane_limits
                 ),
                 limits,
             )
         if litellm.force_ipv4:
-            return AsyncHTTPTransport(local_address=local_address, verify=verify, cert=cert, limits=limits)
+            return AsyncHTTPTransport(local_address=local_address, verify=transport_verify, cert=cert, limits=limits)
         return None
 
     @staticmethod
@@ -1790,7 +1805,12 @@ class HTTPHandler:
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS, verify=verify, cert=cert, http2=http2)
+            return HTTPTransport(
+                local_address=_IPV4_LOCAL_ADDRESS,
+                verify=_httpx_default_verify_unless_configured(verify),
+                cert=cert,
+                http2=http2,
+            )
         return getattr(litellm, "sync_transport", None)
 
     @staticmethod

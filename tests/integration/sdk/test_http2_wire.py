@@ -9,6 +9,7 @@ import json
 import queue
 import socket
 import ssl
+import subprocess
 import threading
 import time
 from collections.abc import Callable, Generator, Iterator
@@ -40,6 +41,7 @@ from integration._support.vertex import service_account_json
 STREAM_CHUNKS: Final = 3
 HELD_SEARCHES: Final = 150
 HOLD_SECONDS: Final = 10.0
+PROBED_HEADERS: Final = frozenset({b"te", b"keep-alive", b"connection", b"proxy-connection", b"upgrade", b"x-probe"})
 VERTEX_SERVING_CONFIG_PATH: Final = (
     "/v1/projects/p/locations/global/collections/default_collection/engines/e/servingConfigs/default_search"
 )
@@ -48,6 +50,7 @@ VERTEX_SERVING_CONFIG_PATH: Final = (
 @dataclass(frozen=True, slots=True)
 class PeerLog:
     held_arrivals: queue.SimpleQueue[int] = field(default_factory=queue.SimpleQueue)
+    all_held_arrived: asyncio.Event = field(default_factory=asyncio.Event)
     token_requests: queue.SimpleQueue[str] = field(default_factory=queue.SimpleQueue)
     counted_client_ports: queue.SimpleQueue[int] = field(default_factory=queue.SimpleQueue)
 
@@ -122,6 +125,10 @@ async def _peer(log: PeerLog, scope: Scope, receive: ASGIReceiveCallable, send: 
         log.counted_client_ports.put(counted_client[1] if counted_client else 0)
         await _send_json(send, {"results": [{"id": "counted"}]})
         return
+    if scope["path"].startswith("/headers/") and scope["path"].endswith(":search"):
+        seen: Final = sorted(name.decode() for name, _ in scope["headers"] if name in PROBED_HEADERS)
+        await _send_json(send, {"results": [{"id": f"http/{version}"}, *({"id": name} for name in seen)]})
+        return
     if scope["path"].endswith(":search"):
         await _send_json(send, {"results": [{"id": f"http/{version}"}]})
         return
@@ -144,10 +151,12 @@ async def _peer(log: PeerLog, scope: Scope, receive: ASGIReceiveCallable, send: 
 
 async def _hold_until_all_arrive(log: PeerLog, client_port: int) -> str:
     log.held_arrivals.put(client_port)
-    deadline: Final = time.monotonic() + HOLD_SECONDS
-    while log.held_arrivals.qsize() < HELD_SEARCHES and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
-    return "held-together" if log.held_arrivals.qsize() >= HELD_SEARCHES else "released-alone"
+    if log.held_arrivals.qsize() >= HELD_SEARCHES:
+        log.all_held_arrived.set()
+    waiter: Final = asyncio.ensure_future(log.all_held_arrived.wait())
+    await asyncio.wait((waiter,), timeout=HOLD_SECONDS)
+    waiter.cancel()
+    return "held-together" if log.all_held_arrived.is_set() else "released-alone"
 
 
 async def _send_json(send: ASGISendCallable, body: dict[str, object]) -> None:
@@ -191,11 +200,11 @@ def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TlsPeer
     thread.join(timeout=10)
 
 
-def _async_exchange(base_url: str) -> Observed:
+def _async_exchange(base_url: str, ssl_verify: bool | None = False) -> Observed:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     async def _run() -> Observed:
-        handler: Final = AsyncHTTPHandler(ssl_verify=False)
+        handler: Final = AsyncHTTPHandler(ssl_verify=ssl_verify)
         try:
             response: Final = await handler.client.post(f"{base_url}/echo", json={"ping": "pong"})
             async with handler.client.stream("POST", f"{base_url}/stream", json={}) as stream_response:
@@ -211,10 +220,10 @@ def _async_exchange(base_url: str) -> Observed:
     return asyncio.run(_run())
 
 
-def _sync_exchange(base_url: str) -> Observed:
+def _sync_exchange(base_url: str, ssl_verify: bool | None = False) -> Observed:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    handler: Final = HTTPHandler(ssl_verify=False)
+    handler: Final = HTTPHandler(ssl_verify=ssl_verify)
     try:
         response: Final = handler.client.post(f"{base_url}/echo", json={"ping": "pong"})
         with handler.client.stream("POST", f"{base_url}/stream", json={}) as stream_response:
@@ -292,7 +301,10 @@ def _vertex_search_file_ids(
 
 
 async def _avertex_search_file_ids(
-    peer: TlsPeer, search_url: str | None = None, ssl_verify: ssl.SSLContext | None = None
+    peer: TlsPeer,
+    search_url: str | None = None,
+    ssl_verify: ssl.SSLContext | None = None,
+    extra_headers: dict[str, object] | None = None,
 ) -> list[str | None]:
     import litellm
 
@@ -304,6 +316,7 @@ async def _avertex_search_file_ids(
         vertex_credentials=service_account_json("p", peer.url),
         vertex_project="p",
         ssl_verify=ssl_verify,
+        extra_headers=extra_headers,
     )
     return [result.get("file_id") for result in response.get("data") or ()]
 
@@ -383,21 +396,48 @@ def test_vertex_search_over_forced_ipv4_trusts_the_configured_ca(
     assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/2"]
 
 
+@pytest.mark.parametrize("off", ["False", "0", "no", " OFF "])
 def test_explicit_http2_off_keeps_vertex_search_on_http1(
-    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, off: str
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    monkeypatch.setenv("LITELLM_HTTP2", off)
+    assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/1.1"]
+
+
+@pytest.mark.parametrize("off", [False, "false"])
+def test_http2_setting_off_keeps_vertex_search_on_http1(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, off: bool | str
 ) -> None:
     import litellm
 
     _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
-    monkeypatch.setenv("LITELLM_HTTP2", "False")
-    assert _vertex_search_file_ids(http2_tls_peer) == ["http/1.1"]
+    monkeypatch.setattr(litellm, "http2", off)
     assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/1.1"]
 
-    monkeypatch.delenv("LITELLM_HTTP2")
-    monkeypatch.setattr(litellm, "http2", False)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    assert _vertex_search_file_ids(http2_tls_peer) == ["http/1.1"]
-    assert asyncio.run(_avertex_search_file_ids(http2_tls_peer)) == ["http/1.1"]
+
+@pytest.mark.parametrize(
+    ("te", "forwarded"), [("gzip", ["http/2", "x-probe"]), ("trailers", ["http/2", "te", "x-probe"])]
+)
+def test_async_vertex_search_over_http2_sends_no_connection_specific_headers(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, te: str, forwarded: list[str]
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    received: Final = asyncio.run(
+        _avertex_search_file_ids(
+            http2_tls_peer,
+            search_url=f"{http2_tls_peer.url}/headers",
+            extra_headers={
+                "TE": te,
+                "Keep-Alive": "timeout=5",
+                "Connection": "keep-alive",
+                "Proxy-Connection": "keep-alive",
+                "Upgrade": "h2c",
+                "X-Probe": "kept",
+            },
+        )
+    )
+    assert received == forwarded
 
 
 def _alpn_offered_by(context: ssl.SSLContext, peer: TlsPeer) -> str | None:
@@ -663,6 +703,30 @@ def test_forced_ipv4_handlers_honour_ssl_verify_false(monkeypatch: pytest.Monkey
         _set_http2(monkeypatch, enabled)
         _assert_negotiated(_async_exchange(http2_tls_peer.url), enabled)
         _assert_negotiated(_sync_exchange(http2_tls_peer.url), enabled)
+
+
+def _ca_dir_holding(cert_file: Path, ca_dir: Path) -> Path:
+    subject_hash: Final = subprocess.run(
+        ["openssl", "x509", "-hash", "-noout", "-in", str(cert_file)], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (ca_dir / f"{subject_hash}.0").write_bytes(cert_file.read_bytes())
+    return ca_dir
+
+
+def test_forced_ipv4_handlers_trust_a_ca_found_only_in_ssl_cert_dir(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, tmp_path: Path
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setenv("SSL_CERT_DIR", str(_ca_dir_holding(http2_tls_peer.cert_file, tmp_path)))
+    for enabled in (False, True):
+        _set_http2(monkeypatch, enabled)
+        _assert_negotiated(_async_exchange(http2_tls_peer.url, ssl_verify=None), enabled)
+        _assert_negotiated(_sync_exchange(http2_tls_peer.url, ssl_verify=None), enabled)
 
 
 def test_vertex_search_over_forced_ipv4_presents_the_client_certificate(

@@ -356,13 +356,14 @@ async def test_a_client_serving_a_request_is_not_closed_when_its_grace_window_en
 
 
 @pytest.mark.asyncio
-async def test_the_aiohttp_backed_handler_is_not_closed_mid_request():
-    """The default async path is aiohttp-backed, whose pool accounts for its own leases."""
+@pytest.mark.parametrize("http2", [False, True], ids=["aiohttp", "http2-connection-spread"])
+async def test_a_handler_is_not_closed_mid_request(http2: bool):
+    """Both async handler paths account for their own leases: aiohttp's pool and the HTTP/2 connection spread."""
     server = await asyncio.start_server(_trickling_upstream, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     clock = FakeClock()
     closer = make_closer(clock)
-    handler = AsyncHTTPHandler()
+    handler = AsyncHTTPHandler(http2=http2)
     held_client = handler.client
 
     closer.mark_owned(handler)

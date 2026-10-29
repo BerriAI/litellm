@@ -139,6 +139,9 @@ def _has_connection_in_flight(client: object) -> bool:
         if getattr(getattr(client, "connection_pool", None), "_in_use_connections", None):
             return True
         transport: Final = _transport_of(client)
+        spread_in_flight: Final[object] = getattr(transport, "has_request_in_flight", None)
+        if callable(spread_in_flight):
+            return bool(spread_in_flight())
         pooled_busy: Final = _pool_has_busy_connection(transport)
         if pooled_busy is not None:
             return pooled_busy

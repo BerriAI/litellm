@@ -74,6 +74,21 @@ class _AsyncReleasingStream(httpx.AsyncByteStream):
         await self._stream.aclose()
 
 
+def _allowed_over_http2(name: bytes, value: bytes) -> bool:
+    return name.lower() != b"te" or value.strip().lower() == b"trailers"
+
+
+def _without_te_codings(request: httpx.Request) -> httpx.Request:
+    if request.url.scheme != "https":
+        return request
+    kept: Final = tuple((name, value) for name, value in request.headers.raw if _allowed_over_http2(name, value))
+    if len(kept) == len(request.headers.raw):
+        return request
+    return httpx.Request(
+        request.method, request.url, headers=kept, stream=request.stream, extensions=request.extensions
+    )
+
+
 def _with_stream(response: httpx.Response, stream: httpx.AsyncByteStream) -> httpx.Response:
     return httpx.Response(response.status_code, headers=response.headers, stream=stream, extensions=response.extensions)
 
@@ -90,7 +105,7 @@ class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         lane: Final = self._lanes.acquire()
         try:
-            response: Final = await lane.transport.handle_async_request(request)
+            response: Final = await lane.transport.handle_async_request(_without_te_codings(request))
         except BaseException:
             lane.release()
             raise
@@ -99,6 +114,9 @@ class AsyncHTTP2ConnectionSpread(httpx.AsyncBaseTransport):
             lane.release()
             return response
         return _with_stream(response, _AsyncReleasingStream(stream, lane.release))
+
+    def has_request_in_flight(self) -> bool:
+        return any(lane.in_flight > 0 for lane in self._lanes.lanes)
 
     async def aclose(self) -> None:
         for lane in self._lanes.lanes:
