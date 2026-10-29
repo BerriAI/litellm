@@ -4,6 +4,7 @@ import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,10 +14,10 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
+from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
 )
-from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+from litellm.llms.anthropic.messages.native.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
 )
 from litellm.proxy._types import (
@@ -3233,7 +3234,7 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
     async def one_chunk(user_api_key_dict, response, request_data):
         yield {"content": "hi"}
 
-    streaming_logging_obj = MagicMock()
+    streaming_logging_obj: Final = MagicMock(spec=ProxyLogging)
     streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
     streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
         side_effect=lambda **kwargs: kwargs["response"]

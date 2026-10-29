@@ -5,6 +5,9 @@ import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 
+import { relativeTimeOptions, type RelativeTimeOption } from "./date_range_presets";
+export { relativeTimeOptions, type RelativeTimeOption } from "./date_range_presets";
+
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
   onValueChange: (value: DateRangePickerValue, presetShortLabel: string | null) => void;
@@ -15,55 +18,6 @@ interface AdvancedDatePickerProps {
   align?: "left" | "right";
   compact?: boolean;
 }
-
-export interface RelativeTimeOption {
-  label: string;
-  shortLabel: string;
-  getValue: () => { from: Date; to: Date };
-}
-
-export const relativeTimeOptions: readonly RelativeTimeOption[] = [
-  {
-    label: "Today",
-    shortLabel: "today",
-    getValue: () => ({
-      from: moment().startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Last 7 days",
-    shortLabel: "7d",
-    getValue: () => ({
-      from: moment().subtract(7, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Last 30 days",
-    shortLabel: "30d",
-    getValue: () => ({
-      from: moment().subtract(30, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Month to date",
-    shortLabel: "MTD",
-    getValue: () => ({
-      from: moment().startOf("month").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Year to date",
-    shortLabel: "YTD",
-    getValue: () => ({
-      from: moment().startOf("year").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-];
 
 export function matchRelativeTimeOption(value: DateRangePickerValue): RelativeTimeOption | undefined {
   const { from, to } = value;
@@ -107,8 +61,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   // Update selected option when value changes
   useEffect(() => {
     const matchingOption = getMatchingOption(value);
-    setSelectedOption(matchingOption);
-  }, [value, getMatchingOption]);
+    setSelectedOption(presetShortLabel ?? matchingOption);
+  }, [value, presetShortLabel, getMatchingOption]);
 
   // Validation logic - simplified for dates only
   const validateDateRange = useCallback(() => {
@@ -230,13 +184,13 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
           // Check if this matches any preset option
           const matchingOption = getMatchingOption(newValue);
-          setSelectedOption(matchingOption);
+          setSelectedOption(pickedPreset ?? matchingOption);
         }
       }
     } catch (error) {
       console.warn("Invalid date format:", error);
     }
-  }, [startDate, endDate, validation.isValid, getMatchingOption]);
+  }, [startDate, endDate, validation.isValid, getMatchingOption, pickedPreset]);
 
   // Update tempValue when inputs change
   useEffect(() => {
@@ -275,7 +229,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
     // Reset selected option
     const matchingOption = getMatchingOption(value);
-    setSelectedOption(matchingOption);
+    setSelectedOption(presetShortLabel ?? matchingOption);
     setPickedPreset(presetShortLabel ?? null);
 
     setIsOpen(false);

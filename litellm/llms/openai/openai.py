@@ -44,11 +44,12 @@ from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     convert_to_model_response_object,
+    get_base_model_from_metadata,
 )
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_5_transformation import OpenAIGPT5Config
+from .chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
@@ -557,7 +558,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except openai.BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=True)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=True,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             raise e
 
@@ -604,7 +610,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except openai.BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=False)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=False,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             if raw_response is not None:
                 raise Exception(

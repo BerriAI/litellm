@@ -45,6 +45,7 @@ _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_na
 
 BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
 _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -76,7 +77,7 @@ class GetAnthropicBetaHeadersConfig:
             }
 
     @staticmethod
-    def _check_is_valid_dict(fetched_config: dict) -> bool:
+    def _check_is_valid_dict(fetched_config: object) -> bool:
         """Check if fetched config is a non-empty dict with expected structure."""
         if not isinstance(fetched_config, dict):
             verbose_logger.warning(
@@ -110,7 +111,7 @@ class GetAnthropicBetaHeadersConfig:
         return True
 
     @classmethod
-    def validate_beta_headers_config(cls, fetched_config: dict) -> bool:
+    def validate_beta_headers_config(cls, fetched_config: object) -> bool:
         """
         Validate the integrity of a fetched beta headers config.
 
@@ -119,7 +120,7 @@ class GetAnthropicBetaHeadersConfig:
         return cls._check_is_valid_dict(fetched_config)
 
     @staticmethod
-    def fetch_remote_beta_headers_config(url: str, timeout: int = 5) -> dict:
+    def fetch_remote_beta_headers_config(url: str, timeout: int = 5) -> object:
         """
         Fetch the beta headers config from a remote URL.
 
@@ -128,7 +129,7 @@ class GetAnthropicBetaHeadersConfig:
         """
         response: Final = httpx.get(url, timeout=timeout)
         response.raise_for_status()
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
 
 def get_beta_headers_config(url: str) -> dict:
@@ -161,7 +162,9 @@ def get_beta_headers_config(url: str) -> dict:
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
 
     # Validate the fetched config
-    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content):
+    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content) or not isinstance(
+        content, dict
+    ):
         verbose_logger.warning(
             "LiteLLM: Fetched beta headers config failed integrity check. Using local backup instead. url=%s",
             url,

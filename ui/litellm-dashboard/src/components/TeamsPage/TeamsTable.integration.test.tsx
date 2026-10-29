@@ -112,8 +112,28 @@ it("renders a team row with alias, organization, and spend/budget", async () => 
     expect(screen.getByText("Acme Team")).toBeInTheDocument();
     expect(screen.getByText("Test Organization")).toBeInTheDocument();
     expect(screen.getByText("$42.50")).toBeInTheDocument();
-    expect(screen.getByText("of $100.00")).toBeInTheDocument();
+    expect(screen.getByText("/ $100.00")).toBeInTheDocument();
   });
+});
+
+it("renders caller membership spend and budget in the team row", async () => {
+  mockUseTeamsTable.mockReturnValue(
+    teamsResult([
+      {
+        ...mockTeam,
+        caller_membership: {
+          spend: 50,
+          max_budget: 100,
+          budget_reset_at: "2026-10-20T12:00:00Z",
+        },
+      },
+    ]),
+  );
+  renderTable();
+
+  expect(await screen.findByText("My Spend")).toBeInTheDocument();
+  expect(screen.getByText("$50.00")).toBeInTheDocument();
+  expect(screen.getByText("Resets Oct 20, 2026 UTC")).toBeInTheDocument();
 });
 
 it("renders the Resources cell with member, model, and key counts", () => {
@@ -154,7 +174,7 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
 
   it("sorts by the backend team_alias field (not the label) when the Team header is clicked", async () => {
     renderTable();
-    fireEvent.click(screen.getByText("Team").closest("button") as HTMLElement);
+    fireEvent.click(within(screen.getByRole("columnheader", { name: "Team" })).getByRole("button"));
 
     await waitFor(() => {
       expect(mockUseTeamsTable).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "team_alias" }));

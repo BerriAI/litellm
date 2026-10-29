@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -43,7 +45,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
         include_guardrails_info: bool | None = None,
         provide_citations: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

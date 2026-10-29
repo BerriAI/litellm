@@ -423,10 +423,8 @@ class SpendLogCleanup:
         partition_manager: SpendLogsPartitionManager | None = None,
         *,
         clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ):
         self._clock = clock
-        self._sleep = sleep
         self.retention_seconds: int | None = None
         self.partition_manager = partition_manager or SpendLogsPartitionManager()
         from litellm.proxy.proxy_server import general_settings as default_settings
@@ -650,7 +648,7 @@ class SpendLogCleanup:
     async def _probe_once_settled(
         self, prisma_client: PrismaClient, deadline: float, attempts_left: int
     ) -> StorageProbe | None:
-        await self._sleep(_STATS_SETTLE_SECONDS)
+        await asyncio.sleep(_STATS_SETTLE_SECONDS)
         refreshed: Final = await self._probe_storage(prisma_client, deadline)
         if refreshed is None or not refreshed.stats_are_stale or attempts_left <= 1:
             return refreshed
@@ -726,7 +724,8 @@ class SpendLogCleanup:
         remaining_ms: Final = int((deadline - self._clock()) * 1000)
         return max(1, min(int(self.batch_timeout_seconds * 1000), remaining_ms))
 
-    def _group_deadline(self, overall_deadline: float, groups_remaining: int) -> float:
+    @staticmethod
+    def _group_deadline(overall_deadline: float, groups_remaining: int, now: float) -> float:
         """
         Give each pending cleanup group an equal share of the time left.
 
@@ -735,10 +734,9 @@ class SpendLogCleanup:
         """
         if groups_remaining == 1:
             return overall_deadline
-        current_time: Final = self._clock()
-        if current_time >= overall_deadline:
+        if now >= overall_deadline:
             return overall_deadline
-        return current_time + (overall_deadline - current_time) / groups_remaining
+        return now + (overall_deadline - now) / groups_remaining
 
     def _remaining_timeout_ms(self, deadline: float) -> RemainingTimeoutMs:
         """
@@ -910,7 +908,7 @@ class SpendLogCleanup:
                     return await self._finish_table(
                         prisma_client, cutoff_date, table_name, time_column, total_deleted, "aborted", deadline
                     )
-                await self._sleep(SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS)
+                await asyncio.sleep(SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS)
                 continue
 
             if batch_result is None:
@@ -938,7 +936,7 @@ class SpendLogCleanup:
             _record_run_batch(deleted_count)
 
             # Add a small sleep to prevent overwhelming the database
-            await self._sleep(0.1)
+            await asyncio.sleep(0.1)
 
     async def _finish_table(
         self,
@@ -1086,7 +1084,7 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
         logs_result: Final = await self._delete_old_logs(
-            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2)
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
         )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
@@ -1322,11 +1320,11 @@ class SpendLogCleanup:
             except Exception:  # noqa: BLE001  # retained observations are retried by the next cleanup job
                 verbose_proxy_logger.warning("Auto-router baseline retention remains pending")
         sessions_result: Final = await self._delete_old_autorouter_session_rows(
-            prisma_client, session_cutoff, self._group_deadline(deadline, 3)
+            prisma_client, session_cutoff, self._group_deadline(deadline, 3, self._clock())
         )
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
         user_sessions_result: Final = await self._delete_old_autorouter_user_session_rows(
-            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
+            prisma_client, session_cutoff, self._group_deadline(deadline, 2, self._clock())
         )
         verbose_proxy_logger.info(
             "Deleted %s expired auto-router user session rollup rows", user_sessions_result.rows_deleted
@@ -1510,7 +1508,7 @@ class SpendLogCleanup:
             spend_log_results: Final = (
                 await self._clean_spend_log_tables(
                     prisma_client,
-                    self._group_deadline(deadline, configured_group_count),
+                    self._group_deadline(deadline, configured_group_count, self._clock()),
                 )
                 if delete_spend_logs and self.retention_seconds is not None
                 else ()
@@ -1530,7 +1528,7 @@ class SpendLogCleanup:
                 await self._clean_session_rollup(
                     prisma_client,
                     autorouter_retention_seconds,
-                    self._group_deadline(deadline, remaining_groups_after_spend_logs),
+                    self._group_deadline(deadline, remaining_groups_after_spend_logs, self._clock()),
                 )
                 if autorouter_retention_seconds is not None
                 else ()
@@ -1539,7 +1537,7 @@ class SpendLogCleanup:
                 await self._clean_health_checks(
                     prisma_client,
                     health_check_retention_seconds,
-                    self._group_deadline(deadline, remaining_groups_after_sessions),
+                    self._group_deadline(deadline, remaining_groups_after_sessions, self._clock()),
                 )
                 if health_check_retention_seconds is not None
                 else ()
@@ -1548,7 +1546,7 @@ class SpendLogCleanup:
                 await self._clean_daily_tag_spend(
                     prisma_client,
                     daily_tag_spend_retention_seconds,
-                    self._group_deadline(deadline, 1 + size_group),
+                    self._group_deadline(deadline, 1 + size_group, self._clock()),
                 )
                 if daily_tag_spend_retention_seconds is not None
                 else ()
