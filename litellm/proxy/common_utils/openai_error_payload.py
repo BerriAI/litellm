@@ -43,11 +43,13 @@ def attribute_of(value: object, name: str, default: object = None) -> object:
 
 
 def error_status_code(exc: object, default: int) -> int:
-    """The HTTP status an exception carries as ``status_code`` or, the way ``ProxyException``
-    stores it, as a stringified ``code``; ``default`` when it carries neither."""
+    """The HTTP status an exception carries as ``status_code`` (an int or a decimal string) or, the
+    way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
     carried: Final = attribute_of(exc, "status_code")
     if isinstance(carried, int) and not isinstance(carried, bool):
         return carried
+    if isinstance(carried, str) and carried.isdecimal():
+        return int(carried)
     stringified: Final = attribute_of(exc, "code")
     return int(stringified) if isinstance(stringified, str) and stringified.isdecimal() else default
 
@@ -133,12 +135,17 @@ def _is_failover_refusal(exc: Exception) -> bool:
 
 def openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
     answered_status: Final = int(proxy_exception_status_code(message, str(status_code)))
-    return ProxyException(
-        message=message,
-        type=_catch_all_error_type(exc, answered_status),
-        param=openai_error_param(exc),
-        code=answered_status,
-    )
+    return _proxy_exception(exc, message, answered_status, _catch_all_error_type(exc, answered_status))
+
+
+def status_typed_proxy_exception(exc: HTTPException) -> ProxyException:
+    message: Final = str(exc.detail)
+    answered_status: Final = int(proxy_exception_status_code(message, str(exc.status_code)))
+    return _proxy_exception(exc, message, answered_status, openai_error_type(exc, answered_status))
+
+
+def _proxy_exception(exc: Exception, message: str, answered_status: int, error_type: str) -> ProxyException:
+    return ProxyException(message=message, type=error_type, param=openai_error_param(exc), code=answered_status)
 
 
 def _catch_all_error_type(exc: Exception, status_code: int) -> str:

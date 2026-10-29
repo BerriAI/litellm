@@ -111,15 +111,30 @@ def test_the_default_status_stands_when_the_exception_carries_none(default: int)
     assert error_status_code(ValueError("boom"), default) == default
 
 
-@pytest.mark.parametrize("carried_status", [True, False, "429", None, 429.0])
-def test_a_non_int_carried_status_falls_back_to_the_default(carried_status: object):
-    """True is an int in Python but not an HTTP status, and a stringified one would break
-    every caller that compares the code numerically."""
+@pytest.mark.parametrize("carried_status", [True, False, "slow down", "", None, 429.0])
+def test_a_carried_status_that_is_not_a_status_falls_back_to_the_default(carried_status: object):
+    """True is an int in Python but not an HTTP status."""
 
     class _Carrier(Exception):
         status_code = carried_status
 
     assert error_status_code(_Carrier("boom"), 500) == 500
+
+
+def test_a_status_carried_as_a_decimal_string_is_answered_as_that_status():
+    """Provider stream-error chunks pass the vendor's code through as a string ``status_code``,
+    and the shared handler used to answer it as is, so dropping it turned a rate limit into a 500."""
+
+    class _Carrier(Exception):
+        status_code = "429"
+
+    assert error_status_code(_Carrier("slow down"), 500) == 429
+    assert proxy_exception_for(_Carrier("slow down"), default_status_code=500).to_dict() == {
+        "message": "slow down",
+        "type": "rate_limit_error",
+        "param": None,
+        "code": "429",
+    }
 
 
 def test_a_proxy_exception_keeps_the_status_it_was_raised_with():
