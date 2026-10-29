@@ -76,8 +76,8 @@ class LoggingWorker:
         self._queue: asyncio.Queue[LoggingTask] | None = None
         self._worker_task: asyncio.Task[None] | None = None
         self._running_tasks: set[asyncio.Task[None]] = set()
-        self._overflow_tasks: set[asyncio.Task[None]] = set()
-        self._pending_enqueues: dict[int, LoggingTask] = {}
+        self._overflow_tasks: set[asyncio.Task[None]] = set()  # mutable-ok: done callbacks discard refs
+        self._pending_enqueues: dict[int, LoggingTask] = {}  # mutable-ok: retries and shutdown share callback ownership
         self._retry_sleep = retry_sleep
         self._dequeued_tasks: dict[int, LoggingTask] = {}  # mutable-ok: refs so flush can rescue never-started tasks
         self._sem: asyncio.Semaphore | None = None
