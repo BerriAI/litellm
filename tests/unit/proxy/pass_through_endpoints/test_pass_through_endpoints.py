@@ -7555,7 +7555,7 @@ async def _run_vertex_live_gated_passthrough(
     """Drive /vertex_ai/live with the real frame gate, returning the client and upstream sockets"""
     upstream_ws = RecordingUpstreamWebSocket()
     websocket, _ = await _run_vertex_live_gated_session(
-        AsyncMock(side_effect=[*client_frames, {"type": "websocket.disconnect"}]),
+        _client_websocket(AsyncMock(side_effect=[*client_frames, {"type": "websocket.disconnect"}])),
         upstream_ws,
         valid_token,
         llm_router or _vertex_live_router(),
@@ -7564,7 +7564,7 @@ async def _run_vertex_live_gated_passthrough(
 
 
 async def _run_vertex_live_gated_session(
-    receive: Callable[[], Awaitable[Mapping[str, str | bytes]]],
+    websocket: MagicMock,
     upstream_ws: "RecordingUpstreamWebSocket | ScriptedUpstreamWebSocket",
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router,
@@ -7573,8 +7573,6 @@ async def _run_vertex_live_gated_session(
         _build_vertex_live_client_frame_gate,
         _build_vertex_live_setup_model_rewriter,
     )
-
-    websocket = _client_websocket(receive)
 
     with _patched_websocket_passthrough_environment(upstream_ws) as environment:
         await websocket_passthrough_request(
@@ -8330,7 +8328,7 @@ async def test_vertex_live_turns_served_before_a_refused_frame_are_still_billed(
         yield _setup_frame("gemini-3-pro-live")
 
     websocket, environment = await _run_vertex_live_gated_session(
-        client_frames().__anext__,
+        _client_websocket(client_frames().__anext__),
         upstream_ws,
         UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
         _vertex_live_router(),
@@ -8342,6 +8340,66 @@ async def test_vertex_live_turns_served_before_a_refused_frame_are_still_billed(
     upstream_ws.close.assert_awaited()
     environment.logging_worker.ensure_initialized_and_enqueue.assert_called_once()
     assert environment.enqueued_handler.call_args.kwargs["logging_obj"].model == "gemini-live-2.5-flash"
+    environment.proxy_logging.post_call_success_hook.assert_awaited_once()
+    environment.proxy_logging.post_call_failure_hook.assert_not_awaited()
+
+
+class StreamingUpstreamWebSocket(ScriptedUpstreamWebSocket):
+    """An upstream that sends the given frames in order, then keeps streaming model output until it is closed"""
+
+    async def recv(self, decode: bool = True) -> str | None:
+        frame: Final = next(self._frames, None)
+        if frame is not None:
+            return frame
+        self.sent_every_frame.set()
+        await asyncio.sleep(0)
+        return json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "still talking"}]}}})
+
+
+def _client_websocket_with_a_close_handshake(receive) -> MagicMock:
+    """A client socket that, like Starlette's, refuses sends once its close starts and yields while closing"""
+    from starlette.websockets import WebSocketState
+
+    websocket: Final = _client_websocket(receive)
+
+    async def close(*args: object, **kwargs: object) -> None:
+        websocket.application_state = WebSocketState.DISCONNECTED
+        for _ in range(ClosableUpstreamWebSocket.CLOSE_HANDSHAKE_YIELDS):
+            await asyncio.sleep(0)
+
+    async def send_text(data: str) -> None:
+        if websocket.application_state == WebSocketState.DISCONNECTED:
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+
+    websocket.close = AsyncMock(side_effect=close)
+    websocket.send_text = AsyncMock(side_effect=send_text)
+    return websocket
+
+
+@pytest.mark.asyncio
+async def test_vertex_live_turns_served_before_a_frame_refused_mid_stream_are_still_billed():
+    upstream_ws: Final = StreamingUpstreamWebSocket(
+        (
+            json.dumps({"setupComplete": {}}),
+            json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 60}}),
+        )
+    )
+
+    async def client_frames() -> AsyncIterator[dict[str, str]]:
+        yield _setup_frame("gemini-live-2.5-flash")
+        await upstream_ws.sent_every_frame.wait()
+        yield _setup_frame("gemini-3-pro-live")
+
+    websocket, environment = await _run_vertex_live_gated_session(
+        _client_websocket_with_a_close_handshake(client_frames().__anext__),
+        upstream_ws,
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+        _vertex_live_router(),
+    )
+
+    reason: Final = _policy_close_reason(websocket)
+    assert reason is not None and "gemini-3-pro-live" in reason
+    upstream_ws.close.assert_awaited()
     environment.proxy_logging.post_call_success_hook.assert_awaited_once()
     environment.proxy_logging.post_call_failure_hook.assert_not_awaited()
 

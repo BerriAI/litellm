@@ -2519,7 +2519,6 @@ class WebsocketClientFrameGate(Protocol):
 
 
 async def _relay_client_frame(
-    websocket: WebSocket,
     upstream_ws: ClientConnection,
     checked_frame: str | bytes,
     forwarded_frame: str | bytes,
@@ -2529,14 +2528,12 @@ async def _relay_client_frame(
     """Forward one client frame upstream, or refuse it and hand back the denial that ended the session.
 
     The denial travels out so the caller reports a failed session instead of leaving the success hooks to
-    record a refusal as a success, and tearing the upstream down is the caller's job: awaiting that close
-    here lets the upstream reader finish first, which cancels this task mid-close and loses the denial
+    record a refusal as a success, and closing either socket is the caller's job: awaiting a close here lets
+    the upstream reader finish first, which cancels this task mid-close and loses the denial
     """
     refusal: Final = None if gate is None else await gate(checked_frame, valid_token)
     if refusal is None:
         await upstream_ws.send(forwarded_frame)
-        return None
-    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(refusal.message))
     return refusal
 
 
@@ -2715,7 +2712,6 @@ async def websocket_passthrough_request(
                         if text_data is not None:
                             if (
                                 text_refusal := await _relay_client_frame(
-                                    websocket,
                                     upstream_ws,
                                     text_data,
                                     _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter),
@@ -2783,7 +2779,6 @@ async def websocket_passthrough_request(
                         elif bytes_data is not None:
                             if (
                                 bytes_refusal := await _relay_client_frame(
-                                    websocket,
                                     upstream_ws,
                                     bytes_data,
                                     bytes_data,
@@ -2873,6 +2868,9 @@ async def websocket_passthrough_request(
                 (result for result in task_results if isinstance(result, ProxyException)), None
             )
             if client_frame_refusal is not None:
+                await websocket.close(
+                    code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(client_frame_refusal.message)
+                )
                 await upstream_ws.close()
             if client_frame_refusal is not None and not websocket_messages:
                 await log_failure(client_frame_refusal)
