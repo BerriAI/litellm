@@ -9404,91 +9404,6 @@ def test_anthropic_messages_pt_cost_grows_linearly_with_parallel_native_tool_use
     assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool uses"
 
 
-_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-
-
-@pytest.mark.parametrize(
-    "block",
-    [
-        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _PNG_BASE64}},
-        {"type": "search_result", "source": "https://example.com", "title": "t", "content": [{"type": "text", "text": "abc"}]},
-        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "hello"}},
-    ],
-    ids=["image", "search_result", "document"],
-)
-@pytest.mark.parametrize("llm_provider", ["anthropic", "bedrock", "vertex_ai", "snowflake"])
-def test_anthropic_messages_pt_forwards_native_anthropic_user_blocks(block, llm_provider):
-    messages = [{"role": "user", "content": [{"type": "text", "text": "read this"}, block]}]
-
-    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider=llm_provider)
-
-    assert result[0]["content"] == [{"type": "text", "text": "read this"}, block]
-
-
-def test_anthropic_messages_pt_inlines_a_native_url_image_for_a_base64_only_dialect(monkeypatch):
-    from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
-
-    mock_client = MagicMock()
-    mock_client.get.return_value = httpx.Response(
-        200, content=base64.b64decode(_PNG_BASE64), headers={"Content-Type": "image/png"}
-    )
-    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
-    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
-    in_memory_cache.flush_cache()
-    block = {
-        "type": "image",
-        "source": {"type": "url", "url": "https://example.com/cat.png"},
-        "cache_control": {"type": "ephemeral"},
-    }
-
-    result = anthropic_messages_pt(
-        messages=[{"role": "user", "content": [block]}], model="claude-sonnet-5", llm_provider="vertex_ai"
-    )
-
-    assert result[0]["content"] == [
-        {
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": _PNG_BASE64},
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-
-
-@pytest.mark.parametrize("modify_params", [False, True])
-@pytest.mark.parametrize("llm_provider", ["anthropic", "snowflake"])
-def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_native_tool_result(
-    monkeypatch, modify_params, llm_provider
-):
-    monkeypatch.setattr(litellm, "modify_params", modify_params)
-    messages = [
-        {"role": "user", "content": "what is the weather"},
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "text", "text": "checking"},
-                {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {"city": "Paris"}},
-            ],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "sunny"}],
-        },
-    ]
-
-    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider=llm_provider)
-
-    assert result[1:] == [
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "text", "text": "checking"},
-                {"type": "tool_use", "id": "functions_get_weather_0", "name": "get_weather", "input": {"city": "Paris"}},
-            ],
-        },
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_get_weather_0", "content": "sunny"}]},
-    ]
-
-
 def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_tool_message_under_modify_params(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", True)
     messages = [
@@ -9503,24 +9418,6 @@ def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_tool_messag
         {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}]},
     ]
-
-
-def test_anthropic_messages_pt_drops_a_native_tool_result_the_previous_turn_never_called():
-    messages = [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "hello"},
-        {
-            "role": "user",
-            "content": [
-                {"type": "tool_result", "tool_use_id": "toolu_missing", "content": "sunny"},
-                {"type": "text", "text": "and now?"},
-            ],
-        },
-    ]
-
-    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
-
-    assert result[2] == {"role": "user", "content": [{"type": "text", "text": "and now?"}]}
 
 
 def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monkeypatch):

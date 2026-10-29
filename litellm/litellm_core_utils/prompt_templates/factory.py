@@ -3062,38 +3062,6 @@ def _cache_breakpoint_placeholder(
     return (_empty_text_placeholder(message),)
 
 
-_NATIVE_ANTHROPIC_USER_BLOCK_TYPES: Final = frozenset({"document", "image", "search_result", "tool_result"})
-
-
-def _tool_use_ids_of_the_latest_turn(new_messages: Sequence[object]) -> frozenset[str]:
-    latest: Final = new_messages[-1] if new_messages else None
-    blocks: Final = parts_of(message_field(latest, "content")) if message_field(latest, "role") == "assistant" else ()
-    return frozenset(native_tool_use_id(block) for block in blocks if message_field(block, "type") == "tool_use")
-
-
-def _native_anthropic_user_block(
-    block: Mapping[str, object], previous_turn_tool_use_ids: frozenset[str], inline_base64_media: bool
-) -> AnthropicMessagesUserMessageValues | None:
-    match block:
-        case {"type": "image", "source": {"type": "url", "url": str() as url}} if inline_base64_media:
-            inlined: Final = create_anthropic_image_param(url, is_bedrock_invoke=True)
-            add_cache_control_to_content(anthropic_content_element=inlined, original_content_element=block)
-            return inlined
-        case {"type": "tool_result", "tool_use_id": str() as tool_use_id}:
-            sanitized_id: Final = sanitize_anthropic_tool_use_id(tool_use_id)
-            if sanitized_id not in previous_turn_tool_use_ids:
-                return None
-            return cast(  # cast-ok: the client sent this tool_result in Anthropic's own wire shape
-                AnthropicMessagesToolResultParam, {**block, "tool_use_id": sanitized_id}
-            )
-        case {"type": "document" | "image" | "search_result"}:
-            return cast(  # cast-ok: the client sent this block in Anthropic's own wire shape
-                AnthropicMessagesUserMessageValues, dict(block)
-            )
-        case _:
-            return None
-
-
 def _empty_user_turn_placeholder(span: Sequence[AllMessageValues]) -> AnthropicMessagesTextParam | None:
     empty_user_message: Final = next(
         (message for message in reversed(span) if message["role"] == "user" and not message.get("content")), None
@@ -3159,7 +3127,6 @@ def anthropic_messages_pt(
     while msg_i < len(messages):
         user_content: list[AnthropicMessagesUserMessageValues] = []
         init_msg_i = msg_i
-        previous_turn_tool_use_ids = _tool_use_ids_of_the_latest_turn(new_messages)
         if isinstance(messages[msg_i], BaseModel):
             messages[msg_i] = dict(messages[msg_i])
         ## MERGE CONSECUTIVE USER CONTENT ##
@@ -3219,13 +3186,15 @@ def anthropic_messages_pt(
                             _content_element = cast(AnthropicMessagesTextParam, _content_element)
 
                             user_content.append(_content_element)
-                        elif m.get("type", "") in _NATIVE_ANTHROPIC_USER_BLOCK_TYPES:
-                            if (
-                                native_block := _native_anthropic_user_block(
-                                    m, previous_turn_tool_use_ids, inline_base64_media
-                                )
-                            ) is not None:
-                                user_content.append(native_block)
+                        elif m.get("type", "") == "document":
+                            _document_content_element = cast(
+                                AnthropicMessagesDocumentParam,
+                                add_cache_control_to_content(
+                                    anthropic_content_element=cast(AnthropicMessagesDocumentParam, m),
+                                    original_content_element=dict(m),
+                                ),
+                            )
+                            user_content.append(_document_content_element)
                         elif m.get("type", "") == "file":
                             _file_content_element = anthropic_process_openai_file_message(
                                 cast(ChatCompletionFileObject, m)
