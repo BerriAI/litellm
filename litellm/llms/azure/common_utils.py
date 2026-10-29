@@ -10,7 +10,7 @@ from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -60,6 +60,16 @@ class _AzureClientLimits(TypedDict, total=False):
 
 
 _AZURE_CLIENT_LIMITS_ADAPTER: Final = TypeAdapter(_AzureClientLimits)
+_AZURE_CLIENT_MAX_RETRIES_ADAPTER: Final = TypeAdapter(int)
+
+
+def _azure_client_max_retries(configured: object) -> int:
+    if configured is None:
+        return DEFAULT_MAX_RETRIES
+    try:
+        return _AZURE_CLIENT_MAX_RETRIES_ADAPTER.validate_python(configured)
+    except ValidationError:
+        return DEFAULT_MAX_RETRIES
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -576,7 +586,6 @@ class BaseAzureLLM(BaseOpenAILLM):
         call_args: Final = dict(locals())
         _lp: Final = litellm_params or {}
         client_limits: Final = _AZURE_CLIENT_LIMITS_ADAPTER.validate_python(_lp)
-        configured_max_retries: Final = client_limits.get("max_retries")
         _ad_provider: Final = _lp.get("azure_ad_token_provider")
         _ad_token: Final = _lp.get("azure_ad_token")
         _client_secret: Final = _lp.get("client_secret")
@@ -584,7 +593,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         client_initialization_params: Final = {
             **call_args,
             "is_async": _is_async,
-            "max_retries": DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries,
+            "max_retries": _azure_client_max_retries(client_limits.get("max_retries")),
             "timeout": client_limits.get("timeout"),
             "azure_ad_token": (hashlib.sha256(_ad_token.encode()).hexdigest() if isinstance(_ad_token, str) else None),
             "azure_ad_token_provider": (
@@ -724,8 +733,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
 
-        configured_max_retries: Final = litellm_params.get("max_retries")
-        max_retries: Final = DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries
+        max_retries: Final = _azure_client_max_retries(litellm_params.get("max_retries"))
         timeout: Final = litellm_params.get("timeout")
         if not api_key and azure_ad_token_provider is None and tenant_id and client_id and client_secret:
             verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")

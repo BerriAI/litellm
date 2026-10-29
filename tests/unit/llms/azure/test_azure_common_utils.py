@@ -499,6 +499,56 @@ def test_default_max_retries_setting_reaches_azure_audio_clients(monkeypatch: py
     assert rate_limited.call_count == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("form_max_retries", "expected_first_call_attempts"),
+    [
+        pytest.param("0", 1, id="numeric-string-means-no-retries"),
+        pytest.param("abc", litellm.constants.DEFAULT_MAX_RETRIES + 1, id="malformed-string-keeps-default-retries"),
+    ],
+)
+async def test_azure_transcription_form_string_max_retries_works_and_does_not_break_later_calls(
+    monkeypatch: pytest.MonkeyPatch, form_max_retries: str, expected_first_call_attempts: int
+) -> None:
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    upstream: Final = respx.Router(assert_all_mocked=True)
+    rate_limited: Final = upstream.route().respond(
+        429, json={"error": {"message": "rate limited"}}, headers={"retry-after-ms": "1"}
+    )
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(upstream.handler))
+    monkeypatch.setattr(litellm, "aclient_session", async_http)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "whisper",
+                "litellm_params": {
+                    "model": "azure/whisper",
+                    "api_key": "test-key",
+                    "api_base": "https://form-retry-test.openai.azure.com",
+                    "api_version": "2024-02-01",
+                },
+            }
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    audio: Final = ("hello.wav", b"RIFF0000WAVEfmt ", "audio/wav")
+
+    try:
+        with pytest.raises(litellm.RateLimitError):
+            await router.atranscription(file=audio, model="whisper", max_retries=form_max_retries)
+        attempts_with_form_value: Final = rate_limited.call_count
+        with pytest.raises(litellm.RateLimitError):
+            await router.atranscription(file=audio, model="whisper")
+    finally:
+        await async_http.aclose()
+
+    assert attempts_with_form_value == expected_first_call_attempts
+    assert rate_limited.call_count - attempts_with_form_value == 1
+
+
 @pytest.mark.parametrize(
     ("call_timeout", "configured_request_timeout", "expected_read_timeout"),
     [
