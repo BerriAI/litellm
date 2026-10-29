@@ -1196,6 +1196,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
                 "type": "array",
                 "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
             },
+            "reasoning_modes": {"type": "array", "items": {"type": "string"}},
+            "reasoning_contexts": {"type": "array", "items": {"type": "string"}},
             "default_reasoning_effort": {
                 "type": "string",
                 "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],

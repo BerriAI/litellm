@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import math
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -10,9 +11,18 @@ from typing import Final
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, held, list_value, object_value, string_value
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    delete_key_if_present,
+    eventually,
+    held,
+    list_value,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows, write_rows
-from integration._support.otlp_sink import decode_spans
+from integration._support.otlp_sink import Span, decode_spans
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Request, wire_server
 from integration.caching.response_cache_case import entry_key, redis_store
@@ -642,6 +652,15 @@ def _key_budget(scenario: Scenario, budget_owner: str, model_budget: JsonValue) 
     return {}
 
 
+def _assert_the_next_create_exceeds_the_model_budget(scenario: Scenario, key: str, model: str) -> None:
+    refused: Final = eventually(
+        lambda: _next_create(scenario, key, model),
+        lambda response: response.status_code != 200,
+        seconds=SPEND_LANDING_SECONDS,
+    )
+    assert f"exceeded budget for model={model}" in refused.text, refused.text
+
+
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("budget_owner", ["key", "team", "user", "budget_tier"])
 def test_a_billed_background_response_counts_toward_its_creators_project_and_model_budget(
@@ -663,12 +682,24 @@ def test_a_billed_background_response_counts_toward_its_creators_project_and_mod
             lambda spends: spends[0] > 0 and costs(spends[0])(spends[1]),
             seconds=SPEND_LANDING_SECONDS,
         )
-        refused: Final = eventually(
-            lambda: _next_create(scenario, key, upstream.model),
-            lambda response: response.status_code != 200,
-            seconds=SPEND_LANDING_SECONDS,
+        _assert_the_next_create_exceeds_the_model_budget(scenario, key, upstream.model)
+
+
+@pytest.mark.timeout(240)
+def test_a_billed_background_response_on_a_team_model_counts_toward_the_budget_of_the_model_name_it_was_created_with(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"), model_info={"team_id": team_id})
+        key: Final = scenario.key(
+            team_id=team_id, model_max_budget={upstream.model: {"max_budget": PRICE / 2, "budget_duration": "1d"}}
         )
-        assert f"exceeded budget for model={upstream.model}" in refused.text, refused.text
+        response_id: Final = create_background_response(scenario, key, upstream.model)
+        read: Final = read_response(gateway, key, response_id)
+        assert (read,) in (settling_reads("completed", 1), free_reads("completed", 1))
+        eventually(lambda: key_spend(key), lambda spend: spend > 0, seconds=SPEND_LANDING_SECONDS)
+        _assert_the_next_create_exceeds_the_model_budget(scenario, key, upstream.model)
 
 
 @pytest.mark.timeout(240)
@@ -838,7 +869,7 @@ LANGFUSE_COST: Final = "langfuse.observation.cost_details"
 _LANGFUSE_COST_DETAILS: Final = TypeAdapter(dict[str, float])
 
 
-def _langfuse_callback(host: str) -> dict[str, JsonValue]:
+def _langfuse_callback(host: str, **callback_vars: JsonValue) -> dict[str, JsonValue]:
     return {
         "callback_name": "langfuse",
         "callback_type": "success",
@@ -846,12 +877,17 @@ def _langfuse_callback(host: str) -> dict[str, JsonValue]:
             "langfuse_public_key": LANGFUSE_PUBLIC_KEY,
             "langfuse_secret_key": LANGFUSE_SECRET_KEY,
             "langfuse_host": host,
+            **callback_vars,
         },
     }
 
 
+def _logging_to(langfuse_url: str, **callback_vars: JsonValue) -> dict[str, JsonValue]:
+    return {"logging": [_langfuse_callback(langfuse_url, **callback_vars)]}
+
+
 def _key_with_its_own_logging(scenario: Scenario, langfuse_url: str) -> str:
-    return scenario.key(metadata={"logging": [_langfuse_callback(langfuse_url)]})
+    return scenario.key(metadata=_logging_to(langfuse_url))
 
 
 def _key_in_a_team_with_logging(scenario: Scenario, langfuse_url: str) -> str:
@@ -871,17 +907,33 @@ def _trace_exports(langfuse: Recorder) -> tuple[Request, ...]:
     return tuple(request for request in langfuse.requests() if request.target.startswith(LANGFUSE_TRACES_PATH))
 
 
-def _exported_costs(langfuse: Recorder) -> tuple[float, ...]:
-    spans: Final = tuple(
+def _exported_spans(langfuse: Recorder) -> tuple[Span, ...]:
+    return tuple(
         chain.from_iterable(
             decode_spans(export.body, export.headers.get("content-type", "")) for export in _trace_exports(langfuse)
         )
     )
-    return tuple(
-        _LANGFUSE_COST_DETAILS.validate_json(string_value(span["attributes"][LANGFUSE_COST]))["total"]
-        for span in spans
-        if LANGFUSE_COST in span["attributes"]
-    )
+
+
+def _span_cost(span: Span) -> float | None:
+    cost_details: Final = span["attributes"].get(LANGFUSE_COST)
+    return None if cost_details is None else _LANGFUSE_COST_DETAILS.validate_json(string_value(cost_details))["total"]
+
+
+def _exported_costs(langfuse: Recorder) -> tuple[float, ...]:
+    return tuple(cost for cost in map(_span_cost, _exported_spans(langfuse)) if cost is not None)
+
+
+def _priced_spans(langfuse: Recorder) -> tuple[Span, ...]:
+    return tuple(span for span in _exported_spans(langfuse) if (_span_cost(span) or 0.0) > 0)
+
+
+def _billed_once(langfuse: Recorder, seconds: float) -> Span:
+    priced: Final = eventually(lambda: _priced_spans(langfuse), lambda spans: len(spans) > 0, seconds=seconds)
+    costs: Final = tuple(_span_cost(span) or 0.0 for span in priced)
+    assert len(costs) == 1, costs
+    assert math.isclose(costs[0], PRICE), costs
+    return priced[0]
 
 
 @pytest.mark.timeout(240)
@@ -904,3 +956,133 @@ def test_the_billed_cost_reaches_the_langfuse_project_set_on_the_creating_key_or
         assert [cost for cost in exported if cost > 0] == [pytest.approx(PRICE)]
         credentials: Final = base64.b64encode(f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()).decode()
         assert {export.headers.get("authorization") for export in _trace_exports(langfuse)} == {f"Basic {credentials}"}
+
+
+@pytest.mark.timeout(240)
+def test_the_billed_cost_reaches_the_creating_keys_langfuse_project_and_never_the_readers(gateway: Gateway) -> None:
+    with (
+        wire_server(langfuse_sink) as creator_wire,
+        wire_server(langfuse_sink) as reader_wire,
+        gateway.scenario() as scenario,
+    ):
+        creator_langfuse: Final = Recorder(creator_wire)
+        reader_langfuse: Final = Recorder(reader_wire)
+        team_id: Final = scenario.team()
+        user_id: Final = scenario.member(team_id)
+        creator: Final = scenario.key(team_id=team_id, user_id=user_id, metadata=_logging_to(creator_wire.url))
+        reader: Final = scenario.key(team_id=team_id, user_id=user_id, metadata=_logging_to(reader_wire.url))
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"))
+        response_id: Final = create_background_response(scenario, creator, upstream.model)
+        reads: Final = tuple(read_response(gateway, reader, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
+        _billed_once(creator_langfuse, SPEND_LANDING_SECONDS)
+        eventually(lambda: _trace_exports(reader_langfuse), lambda exports: len(exports) > 0)
+        assert _priced_spans(reader_langfuse) == ()
+
+
+MESSAGE_LOGGING: Final[Mapping[str, Mapping[str, JsonValue]]] = {
+    "logged": {},
+    "redacted": {"turn_off_message_logging": "true"},
+}
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("message_logging", MESSAGE_LOGGING.keys())
+def test_the_billed_observation_carries_the_response_text_only_when_the_creating_key_keeps_message_logging(
+    gateway: Gateway, message_logging: str
+) -> None:
+    with wire_server(langfuse_sink) as wire, gateway.scenario() as scenario:
+        langfuse: Final = Recorder(wire)
+        key: Final = scenario.key(metadata=_logging_to(wire.url, **MESSAGE_LOGGING[message_logging]))
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"))
+        response_id: Final = create_background_response(scenario, key, upstream.model)
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
+        billed: Final = _billed_once(langfuse, SPEND_LANDING_SECONDS)
+        assert ("pong" in json.dumps(billed["attributes"])) is (message_logging == "logged"), billed["attributes"]
+
+
+def _generated_key(scenario: Scenario, **fields: JsonValue) -> str:
+    key: Final = string_value(scenario.gateway.post("/key/generate", fields)["key"])
+    scenario.cleanups.callback(delete_key_if_present, scenario.gateway, key)
+    return key
+
+
+def _delete_team_if_present(gateway: Gateway, team_id: str) -> None:
+    if gateway.rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,)):
+        gateway.post("/team/delete", {"team_ids": [team_id]})
+
+
+Retirement = Callable[[Scenario, str, str], tuple[str, Callable[[], object]]]
+
+
+def _rotated_with_grace_then_relogged(
+    scenario: Scenario, billed_url: str, stale_url: str
+) -> tuple[str, Callable[[], object]]:
+    key: Final = _generated_key(scenario, metadata=_logging_to(stale_url))
+
+    def rotate() -> None:
+        rotated: Final = string_value(
+            scenario.gateway.post("/key/regenerate", {"key": key, "grace_period": "1h"})["key"]
+        )
+        scenario.cleanups.callback(delete_key_if_present, scenario.gateway, rotated)
+        scenario.gateway.post("/key/update", {"key": rotated, "metadata": _logging_to(billed_url)})
+
+    return key, rotate
+
+
+def _deleted_key(scenario: Scenario, billed_url: str, _stale_url: str) -> tuple[str, Callable[[], object]]:
+    key: Final = _generated_key(scenario, metadata=_logging_to(billed_url))
+    return key, lambda: scenario.gateway.post("/key/delete", {"keys": [key]})
+
+
+def _deleted_team(scenario: Scenario, billed_url: str, _stale_url: str) -> tuple[str, Callable[[], object]]:
+    team_id: Final = string_value(
+        scenario.gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}"})["team_id"]
+    )
+    scenario.cleanups.callback(_delete_team_if_present, scenario.gateway, team_id)
+    added: Final = scenario.gateway.request("POST", f"/team/{team_id}/callback", _langfuse_callback(billed_url))
+    assert added.status_code == 200, added.text
+    key: Final = _generated_key(scenario, team_id=team_id)
+    return key, lambda: scenario.gateway.post("/team/delete", {"team_ids": [team_id]})
+
+
+RETIREMENTS: Final[Mapping[str, Retirement]] = {
+    "key_rotated_with_grace": _rotated_with_grace_then_relogged,
+    "key_deleted": _deleted_key,
+    "team_deleted": _deleted_team,
+}
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("retired", RETIREMENTS.keys())
+def test_a_retired_creators_billed_cost_reaches_its_own_langfuse_project(gateway: Gateway, retired: str) -> None:
+    with (
+        wire_server(langfuse_sink) as billed_wire,
+        wire_server(langfuse_sink) as stale_wire,
+        gateway.scenario() as scenario,
+    ):
+        billed_langfuse: Final = Recorder(billed_wire)
+        stale_langfuse: Final = Recorder(stale_wire)
+        key, retire = RETIREMENTS[retired](scenario, billed_wire.url, stale_wire.url)
+        upstream: Final = scripted_upstream(scenario, background_routes("queued"))
+        response_id: Final = create_background_response(scenario, key, upstream.model)
+        retire()
+        upstream.script(background_routes("completed"))
+        _billed_once(billed_langfuse, ONE_POLL_SECONDS + SPEND_LANDING_SECONDS)
+        assert [row["status"] for row in managed_rows(response_id)] == ["completed"]
+        assert _priced_spans(stale_langfuse) == ()
+
+
+@pytest.mark.timeout(240)
+def test_a_creator_whose_langfuse_keys_resolve_to_nothing_is_still_billed_once(gateway: Gateway) -> None:
+    unset: Final = f"os.environ/INTEGRATION_UNSET_LANGFUSE_{uuid.uuid4().hex.upper()}"
+    with wire_server(langfuse_sink) as wire, gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata=_logging_to(wire.url, langfuse_public_key=unset, langfuse_secret_key=unset))
+        upstream: Final = scripted_upstream(scenario, background_routes("completed"))
+        response_id: Final = create_background_response(scenario, key, upstream.model)
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
+        assert_charged_exactly(lambda: key_spend(key), PRICE)
+        assert math.isclose(number(one_charged_row(upstream.model_id)["spend"]), PRICE)
+        assert [row["status"] for row in managed_rows(response_id)] == ["completed"]
