@@ -484,6 +484,29 @@ async def test_proxy_frame_model_gate_releases_the_budget_it_reserved_for_the_ch
 
 
 @pytest.mark.asyncio
+async def test_proxy_frame_model_gate_does_not_count_the_sessions_own_reservation_as_key_spend():
+    """
+    The upgrade reserves up to the key's remaining budget for the session, and the key budget check
+    counts open reservations as spend, so a frame checked while that reservation is open is refused
+    on a key with budget left, where an HTTP call with the same key goes through.
+    """
+    connect_reservation: Final[dict[str, object]] = {"reserved_cost": 0.0001, "entries": []}
+    socket: Final = WebSocket(
+        {"type": "websocket", "state": {"budget_reservation": connect_reservation}}, receive=AsyncMock(), send=AsyncMock()
+    )
+
+    async def key_budget_check(websocket: object, model: str) -> UserAPIKeyAuth:
+        if connect_reservation.get("finalized") is not True:
+            raise litellm.BudgetExceededError(current_cost=0.0001, max_budget=0.0001)
+        return UserAPIKeyAuth(models=["gpt-5.4-mini"])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):  # test-quality-ok: the model checks need no database
+        verdict: Final = await _proxy_frame_model_gate(key_budget_check)(socket, "gpt-5.4-mini")
+
+    assert verdict == WebsocketFrameModelAllowed(access_groups=())
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "denial, error_type, message",
     [

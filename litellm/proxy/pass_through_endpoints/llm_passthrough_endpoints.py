@@ -3401,7 +3401,7 @@ def _gateway_remaps_model(model: str, frame_auth: UserAPIKeyAuth, llm_router: Ro
     )
     targets: Final = (
         *(aliases.get(model) for aliases in alias_maps),
-        llm_router.get_model_from_alias(model) if llm_router is not None else None,
+        llm_router.registry().resolve(model, kind="alias") if llm_router is not None else None,
     )
     return any(target not in (None, model) for target in targets)
 
@@ -3425,6 +3425,10 @@ def _proxy_frame_model_gate(
     from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
 
     async def authorize(websocket: WebSocket, model: str) -> WebsocketFrameModelVerdict:
+        connect_reservation: Final = attribute_or_none(websocket.state, "budget_reservation")
+        await release_or_invalidate_budget_reservation(
+            budget_reservation=connect_reservation if isinstance(connect_reservation, dict) else None
+        )
         frame_auth: Final = await authorize_frame_model(websocket, model)
         access_groups: Final = tuple(frame_auth.matched_model_access_groups or ())
         llm_router: Final = proxy_server.llm_router

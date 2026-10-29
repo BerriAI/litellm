@@ -8224,6 +8224,97 @@ async def test_websocket_passthrough_charges_pipelined_turns_to_the_frame_that_a
     assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-5.4-mini", "gpt-5.4"]
 
 
+def _responses_error(code: str) -> str:
+    return json.dumps({"type": "error", "status": 400, "error": {"type": "invalid_request_error", "code": code}})
+
+
+def _on_lane(frame: str, stream_id: str) -> str:
+    return json.dumps({**json.loads(frame), "stream_id": stream_id})
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_charges_turns_after_a_refused_frame_to_the_frames_that_asked_for_them():
+    """
+    The provider answers a response.create it cannot run, one naming no model
+    or a stale previous_response_id, with an error event and keeps the socket
+    open. Those frames never run, so each later turn still has to reach spend
+    under the groups and model its own frame asked for.
+    """
+    gate = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "input": "hi"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4", "previous_response_id": "resp_gone"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4-mini"}),
+            json.dumps({"type": "response.create", "model": "gpt-5.4"}),
+        ],
+        answered_by='"response.completed"',
+        answers_due=(0, 0, 0, 0, 2),
+    )
+    upstream_ws = ScriptedUpstreamWebSocket(
+        replies=[
+            [_responses_error("missing_required_parameter")],
+            [_responses_error("previous_response_not_found")],
+            _responses_turn("gpt-5.4-mini-2099-01-01"),
+            _responses_turn("gpt-5.4-2099-01-01"),
+        ]
+    )
+
+    relayed = await _relay_turns(client, upstream_ws, gate)
+
+    rows = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-5.4-mini", "gpt-5.4"]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-a"],
+        ["tier-b"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_charges_turns_on_parallel_lanes_to_the_frame_that_asked_for_each():
+    """
+    A client can put each response.create on its own stream_id lane, and the
+    provider runs lanes side by side, so a later frame's turn can end first.
+    Each turn still has to reach spend on its own row, under the groups and
+    model its own frame asked for.
+    """
+    gate = RecordingFrameModelGate(
+        groups=MappingProxyType({"gpt-5.4-mini": ("tier-a",), "gpt-5.4": ("tier-b",)}),
+    )
+    client = _turn_taking_client(
+        [
+            json.dumps({"type": "response.create", "stream_id": "slow", "model": "gpt-5.4"}),
+            json.dumps({"type": "response.create", "stream_id": "fast", "model": "gpt-5.4-mini"}),
+        ],
+        answered_by='"response.completed"',
+        answers_due=(0, 0, 2),
+    )
+    upstream_ws = ScriptedUpstreamWebSocket(
+        replies=[
+            [_on_lane(_responses_turn_started("gpt-5.4"), "slow")],
+            [
+                *(_on_lane(frame, "fast") for frame in _responses_turn("gpt-5.4-mini")),
+                _on_lane(_responses_turn_ended("gpt-5.4"), "slow"),
+            ],
+        ]
+    )
+
+    relayed = await _relay_turns(client, upstream_ws, gate)
+
+    rows = [logged.kwargs for logged in relayed.success_handler.call_args_list]
+    assert [[(frame["stream_id"], frame["response"]["model"]) for frame in row["response_body"]] for row in rows] == [
+        [("fast", "gpt-5.4-mini"), ("fast", "gpt-5.4-mini")],
+        [("slow", "gpt-5.4"), ("slow", "gpt-5.4")],
+    ]
+    assert [row["litellm_params"]["metadata"]["model_group"] for row in rows] == ["gpt-5.4-mini", "gpt-5.4"]
+    assert [row["litellm_params"]["metadata"][MODEL_ACCESS_GROUP_METADATA_KEY] for row in rows] == [
+        ["tier-a"],
+        ["tier-b"],
+    ]
+
+
 @pytest.mark.asyncio
 async def test_websocket_passthrough_charges_realtime_turns_to_the_session_the_key_opened():
     """

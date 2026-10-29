@@ -409,7 +409,7 @@ def test_a_responses_turn_costs_what_the_http_passthrough_charges_for_the_same_r
         ("session.created", "opens_session"),
         ("response.created", "starts_turn"),
         ("response.output_text.delta", "relayed"),
-        ("error", "relayed"),
+        ("error", "refuses_turn"),
     ],
 )
 def test_each_frame_is_classified_by_what_it_does_to_a_turn(frame_type, kind):

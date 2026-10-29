@@ -23,6 +23,7 @@ OPENAI_WEBSOCKET_PROVIDER: Final = LlmProviders.OPENAI.value
 
 _SESSION_CREATED: Final = "session.created"
 _RESPONSE_CREATED: Final = "response.created"
+_ERROR: Final = "error"
 _REALTIME_RESPONSE_DONE: Final = "response.done"
 _RESPONSES_TURN_ENDS: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
 _TURN_ENDS: Final = _RESPONSES_TURN_ENDS | {_REALTIME_RESPONSE_DONE}
@@ -96,6 +97,8 @@ def openai_websocket_frame_kind(frame: Mapping[str, object]) -> WebsocketUpstrea
         return "opens_session"
     if frame_type == _RESPONSE_CREATED:
         return "starts_turn"
+    if frame_type == _ERROR:
+        return "refuses_turn"
     return "relayed"
 
 

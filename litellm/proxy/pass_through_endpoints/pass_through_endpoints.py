@@ -2549,6 +2549,7 @@ class _TurnAuthorization:
 class _ForwardClientFrame:
     starts_turn: bool
     turn: _TurnAuthorization | None
+    lane: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2559,17 +2560,18 @@ class _RefuseClientFrame:
 @dataclass(frozen=True, slots=True)
 class _ClientFrameRequests:
     starts_turn: bool
+    lane: str | None
     turn_model: str | None
     models: tuple[str, ...]
     unverifiable_model_refusal: str | None
 
 
 _NO_CLIENT_FRAME_REQUESTS: Final = _ClientFrameRequests(
-    starts_turn=False, turn_model=None, models=(), unverifiable_model_refusal=None
+    starts_turn=False, lane=None, turn_model=None, models=(), unverifiable_model_refusal=None
 )
-_FORWARD_WITHOUT_TURN: Final = _ForwardClientFrame(starts_turn=False, turn=None)
+_FORWARD_WITHOUT_TURN: Final = _ForwardClientFrame(starts_turn=False, turn=None, lane=None)
 _TURN_STARTING_FRAME: Final = "response.create"
-_FRAME_TEXT_WORTH_PARSING: Final = ('"model"', '"prompt"', '"tools"', "\\")
+_FRAME_TEXT_WORTH_PARSING: Final = (f'"{_TURN_STARTING_FRAME}"', '"model"', '"prompt"', '"tools"', "\\")
 _TURN_MODEL_PLACEMENTS: Final = (("model",), ("response", "model"), ("session", "model"))
 _TRANSCRIPTION_MODEL_PLACEMENTS: Final = (
     ("session", "input_audio_transcription", "model"),
@@ -2592,6 +2594,22 @@ _FIRST_SENTENCE: Final = re.compile(r".*?[.!?](?=\s|$)")
 
 def _may_name_a_model(text_data: str) -> bool:
     return any(marker in text_data for marker in _FRAME_TEXT_WORTH_PARSING)
+
+
+def _frame_lane(frame: Mapping[str, object]) -> str | None:
+    stream_id: Final = frame.get("stream_id")
+    return stream_id if isinstance(stream_id, str) else None
+
+
+def _frames_of_lane(lane: str | None) -> Callable[[Mapping[str, object]], bool]:
+    def in_lane(frame: Mapping[str, object]) -> bool:
+        return _frame_lane(frame) == lane
+
+    return in_lane
+
+
+def _every_frame(_frame: Mapping[str, object]) -> bool:
+    return True
 
 
 def _nested_frame(frame: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:
@@ -2635,6 +2653,7 @@ def _client_frame_requests(frame_data: str | bytes) -> _ClientFrameRequests:
     tool_models: Final = (model for model in (tool.get("model") for tool in tools) if isinstance(model, str))
     return _ClientFrameRequests(
         starts_turn=frame.get("type") == _TURN_STARTING_FRAME,
+        lane=_frame_lane(frame),
         turn_model=next(iter(turn_models), None),
         models=tuple(
             dict.fromkeys((*turn_models, *_placed_models(frame, _TRANSCRIPTION_MODEL_PLACEMENTS), *tool_models))
@@ -2666,6 +2685,7 @@ async def _client_frame_verdict(
     allowed: Final = tuple(verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelAllowed))
     return _ForwardClientFrame(
         starts_turn=requests.starts_turn,
+        lane=requests.lane,
         turn=(
             _TurnAuthorization(requested_model=requests.turn_model, access_groups=allowed[0].access_groups)
             if requests.turn_model is not None and allowed
@@ -2704,37 +2724,45 @@ def _opening_model(target: str) -> str | None:
 
 
 class _WebsocketTurnLedger:
-    """The groups that authorized each turn not yet logged, when the next row starts, and how many rows were logged.
+    """The groups that authorized each turn not yet logged in each lane, when the next row starts, and how many rows
+    were logged.
 
-    The provider runs a socket's response.create frames one at a time in the order they were sent, so each row is
-    charged to the groups that allowed the oldest turn still unlogged. A realtime session keeps the model it opened on,
-    so its rows stay charged to the groups that opened it.
+    The provider runs the response.create frames of one lane (one stream_id, or none) one at a time in the order they
+    were sent, and runs separate lanes side by side, so each row is charged to the groups that allowed the oldest turn
+    still unlogged in its lane. A turn the provider refuses with an error event never runs, so it leaves its lane
+    unlogged. A realtime session keeps the model it opened on, so its rows stay charged to the groups that opened it.
     """
 
     def __init__(self, opening: _TurnAuthorization, started: datetime) -> None:
         self.opening = opening
-        self.queued_turns: tuple[_TurnAuthorization | None, ...] = ()
+        self.queued_turns: Mapping[str | None, tuple[_TurnAuthorization | None, ...]] = MappingProxyType({})
         self.session_opened = False
         self.started = started
         self.logged_turns = 0
 
-    @property
-    def current(self) -> _TurnAuthorization:
-        oldest: Final = self.queued_turns[0] if self.queued_turns else None
+    def current(self, lane: str | None) -> _TurnAuthorization:
+        oldest: Final = next(iter(self.queued_turns.get(lane, ())), None)
         return self.opening if oldest is None else oldest
 
-    def queue_turn(self, turn: _TurnAuthorization | None) -> None:
+    def queue_turn(self, lane: str | None, turn: _TurnAuthorization | None) -> None:
         if not self.session_opened:
-            self.queued_turns = (*self.queued_turns, turn)
+            self.queued_turns = MappingProxyType({**self.queued_turns, lane: (*self.queued_turns.get(lane, ()), turn)})
 
     def open_session(self) -> None:
         self.session_opened = True
-        self.queued_turns = ()
+        self.queued_turns = MappingProxyType({})
 
-    def close_turn(self, end_time: datetime) -> None:
+    def close_turn(self, lane: str | None, end_time: datetime) -> None:
         self.logged_turns += 1
         self.started = end_time
-        self.queued_turns = self.queued_turns[1:]
+        self._forget_turn(lane, 0)
+
+    def drop_refused_turn(self, lane: str | None, lane_is_running_a_turn: bool) -> None:
+        self._forget_turn(lane, 1 if lane_is_running_a_turn else 0)
+
+    def _forget_turn(self, lane: str | None, position: int) -> None:
+        turns: Final = self.queued_turns.get(lane, ())
+        self.queued_turns = MappingProxyType({**self.queued_turns, lane: (*turns[:position], *turns[position + 1 :])})
 
 
 def _session_end_needs_a_row(
@@ -2758,6 +2786,13 @@ def _turn_in_flight(
     )
 
 
+def _lanes_in_flight(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier, unlogged_frames: Sequence[Mapping[str, object]]
+) -> tuple[str | None, ...]:
+    started: Final = (frame for frame in unlogged_frames if upstream_frame_kind(frame) == "starts_turn")
+    return tuple(dict.fromkeys(map(_frame_lane, started)))
+
+
 async def _relay_client_frame(
     websocket: WebSocket,
     upstream_ws: ClientConnection,
@@ -2771,8 +2806,8 @@ async def _relay_client_frame(
     match verdict:
         case _RefuseClientFrame(refusal=refusal):
             await _refuse_client_frame(websocket, upstream_ws, refusal)
-        case _ForwardClientFrame(starts_turn=True, turn=turn):
-            ledger.queue_turn(turn)
+        case _ForwardClientFrame(starts_turn=True, turn=turn, lane=lane):
+            ledger.queue_turn(lane, turn)
             await upstream_ws.send(forwarded_frame)
         case _ForwardClientFrame():
             await upstream_ws.send(forwarded_frame)
@@ -2957,12 +2992,15 @@ async def websocket_passthrough_request(
         call_payload: PassthroughStandardLoggingPayload,
         call_kwargs: Mapping[str, object],
         end_time: datetime,
+        lane: str | None,
+        in_row: Callable[[Mapping[str, object]], bool],
     ) -> None:
-        frames: Final = list(websocket_messages)
+        all_frames: Final = list(websocket_messages)
+        frames: Final = [frame for frame in all_frames if in_row(frame)]
         websocket_messages[:] = (
             ()
             if upstream_frame_kind is None
-            else (frame for frame in frames if upstream_frame_kind(frame) == "opens_session")
+            else (frame for frame in all_frames if not in_row(frame) or upstream_frame_kind(frame) == "opens_session")
         )
         logged_payload: Final[PassthroughStandardLoggingPayload] = {
             **call_payload,
@@ -2970,7 +3008,7 @@ async def websocket_passthrough_request(
             "end_time": end_time,
         }
         if client_frame_model_gate is not None:
-            _stamp_billed_turn(call_kwargs, ledger.current)
+            _stamp_billed_turn(call_kwargs, ledger.current(lane))
         success_kwargs: Final = {
             key: value for key, value in call_kwargs.items() if key not in _EXPLICIT_SUCCESS_KWARGS
         }
@@ -2993,10 +3031,10 @@ async def websocket_passthrough_request(
         )
         bind_budget_reservation_to_callbacks(call_logging.litellm_params)
 
-    def log_turn() -> None:
+    def log_turn(lane: str | None, in_row: Callable[[Mapping[str, object]], bool]) -> None:
         end_time: Final = datetime.now()
         if ledger.logged_turns == 0:
-            log_frames(logging_obj, passthrough_logging_payload, kwargs, end_time)
+            log_frames(logging_obj, passthrough_logging_payload, kwargs, end_time, lane, in_row)
         else:
             turn_call_id: Final = str(uuid.uuid4())
             turn_logging: Final = new_call_logging(ledger.started, turn_call_id)
@@ -3008,8 +3046,8 @@ async def websocket_passthrough_request(
                 turn_logging,
             )
             start_call_logging(turn_logging, turn_kwargs)
-            log_frames(turn_logging, turn_payload, turn_kwargs, end_time)
-        ledger.close_turn(end_time)
+            log_frames(turn_logging, turn_payload, turn_kwargs, end_time, lane, in_row)
+        ledger.close_turn(lane, end_time)
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
     websocket_hook_data: Final = guardrail_request_data_with_streaming(MappingProxyType({}), is_streaming=True)
@@ -3160,7 +3198,12 @@ async def websocket_passthrough_request(
                     case "opens_session":
                         ledger.open_session()
                     case "ends_turn":
-                        log_turn()
+                        log_turn(_frame_lane(message_data), _frames_of_lane(_frame_lane(message_data)))
+                    case "refuses_turn" if upstream_frame_kind is not None:
+                        lane: Final = _frame_lane(message_data)
+                        ledger.drop_refused_turn(
+                            lane, lane in _lanes_in_flight(upstream_frame_kind, websocket_messages)
+                        )
                     case _:
                         pass
 
@@ -3234,7 +3277,10 @@ async def websocket_passthrough_request(
                 )
 
             if _session_end_needs_a_row(upstream_frame_kind, websocket_messages, ledger):
-                log_turn()
+                lanes_in_flight: Final = (
+                    () if upstream_frame_kind is None else _lanes_in_flight(upstream_frame_kind, websocket_messages)
+                )
+                log_turn(next(iter(lanes_in_flight), None), _every_frame)
 
             # Call the proxy logging success hook
             if proxy_logging_obj:
