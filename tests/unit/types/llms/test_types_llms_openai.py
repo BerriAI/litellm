@@ -8,14 +8,19 @@ import pytest
 
 import json
 
+from openai.types.responses.response_usage import ResponseUsage as OpenAIResponseUsage
+
 import litellm
 from litellm.types.llms.openai import (
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
     HttpxBinaryResponseContent,
+    InputTokensDetails,
     OpenAIChatCompletionLogprobsContent,
     OpenAIModerationResponse,
     OpenAIVideoObject,
+    OutputTokensDetails,
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
@@ -799,3 +804,19 @@ def test_rebuilding_a_dumped_responses_answer_keeps_the_tool_search_call_keys(ex
     rebuilt: Final = ResponsesAPIResponse(**answer.model_dump())
 
     assert rebuilt.model_dump()["output"] == [search_call]
+
+
+@pytest.mark.parametrize(("cache_write_tokens", "reported"), ((None, 0), (7, 7)))
+def test_responses_usage_dump_matches_the_openai_sdk_usage_schema(cache_write_tokens: int | None, reported: int) -> None:
+    usage: Final = ResponseAPIUsage(
+        input_tokens=10,
+        output_tokens=2,
+        total_tokens=12,
+        input_tokens_details=InputTokensDetails(cached_tokens=5, cache_write_tokens=cache_write_tokens),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+    )
+
+    sdk_usage: Final = OpenAIResponseUsage.model_validate(usage.model_dump(exclude_none=True))
+
+    assert sdk_usage.input_tokens_details.cache_write_tokens == reported
+    assert sdk_usage.input_tokens_details.cached_tokens == 5

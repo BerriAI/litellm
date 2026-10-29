@@ -1414,13 +1414,20 @@ class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
-    cache_write_tokens: int | None = Field(default=None, exclude_if=_is_none)
+    cache_write_tokens: int | None = None
     cache_write_tokens_details: CacheWriteTokensDetails | None = Field(default=None, exclude_if=_is_none)
     image_tokens: int | None = None
     text_tokens: int | None = None
     video_tokens: int | None = None
 
     model_config = {"extra": "allow"}
+
+    @model_serializer(mode="wrap")
+    def _report_unreported_cache_writes_as_zero(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        serialized: Final[Mapping[str, object]] = handler(self)
+        return {**serialized, "cache_write_tokens": self.cache_write_tokens or 0}
 
 
 class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):

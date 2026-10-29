@@ -84,7 +84,10 @@ def _prompt_tokens_details_wrapper(details: object) -> PromptTokensDetailsWrappe
     if _is_object_dict(details):
         input_details: Final = InputTokensDetails.model_validate(details)
         return PromptTokensDetailsWrapper(
-            **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+            **{
+                **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+                "cache_write_tokens": input_details.cache_write_tokens,
+            },
             cache_creation_token_details=_cache_write_lifetimes(input_details.cache_write_tokens_details),
         )
     return PromptTokensDetailsWrapper(
