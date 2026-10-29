@@ -12,7 +12,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import json
 from collections.abc import Callable
-from itertools import accumulate, chain, islice
+from itertools import accumulate, chain, islice, product
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1727,10 +1727,10 @@ async def test_streamed_citations_match_the_completed_message(
 
     output: Final = events[-1].response.output
     completed_message_indexes: Final = [index for index, item in enumerate(output) if item.type == "message"]
-    completed_annotation_lists: Final = (output[index].content[0].annotations for index in completed_message_indexes)
-    completed_annotations: Final = [
-        annotation.model_dump() for annotation in chain.from_iterable(completed_annotation_lists)
-    ]
+    completed_citations: Final = chain.from_iterable(
+        output[index].content[0].annotations for index in completed_message_indexes
+    )
+    completed_annotations: Final = [annotation.model_dump() for annotation in completed_citations]
     streamed_message_indexes: Final = [event.output_index for event in events if _is_message_item(event)]
     citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
     reasoning_done: Final = [
@@ -1745,7 +1745,7 @@ async def test_streamed_citations_match_the_completed_message(
     assert sorted(set(streamed_message_indexes)) == completed_message_indexes
     assert all(event.output_index in completed_message_indexes for event in citations)
     assert len(reasoning_done) == sum(item.type == "reasoning" for item in output)
-    assert max(reasoning_done, default=-1) < min(message_added, default=len(events))
+    assert all(index < added for index, added in product(reasoning_done, message_added))
 
 
 def _empty_text_citation_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
@@ -1793,7 +1793,6 @@ def test_disconnect_after_a_held_citation_still_bills_it() -> None:
     incomplete: Final = iterator.partial_response_on_disconnect()
 
     assert incomplete is not None
-    message_annotations: Final = (
-        item.content[0].annotations for item in incomplete.response.output if item.type == "message"
-    )
-    assert [annotation.url for annotation in chain.from_iterable(message_annotations)] == ["https://example.com"]
+    messages: Final = [item for item in incomplete.response.output if item.type == "message"]
+    annotations: Final = chain.from_iterable(message.content[0].annotations for message in messages)
+    assert [annotation.url for annotation in annotations] == ["https://example.com"]
