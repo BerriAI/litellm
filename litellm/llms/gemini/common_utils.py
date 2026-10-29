@@ -2,19 +2,40 @@ import base64
 import datetime
 import json
 import math
-from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from collections.abc import Iterable, Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Final, cast
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
+
+# 2.5 Flash has no configurable imageSize and supports ten aspect ratios, excluding these four
+# https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/2-5-flash-image
+_GEMINI_2_5_FLASH_MODEL_FAMILY: Final = "2.5-flash"
+_GEMINI_2_5_FLASH_UNSUPPORTED_ASPECT_RATIOS: Final = frozenset(("1:4", "4:1", "1:8", "8:1"))
+
+# 3.1 Flash supports the 512 tier, while other Gemini image models start at 1K
+# https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-1-flash-image
+_GEMINI_512_IMAGE_SIZE_MODEL: Final = "gemini-3.1-flash-image"
+
+# Flash Lite supports only 1K, even when the requested dimensions are larger
+# https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-1-flash-lite-image
+_GEMINI_1K_ONLY_IMAGE_SIZE_MODEL: Final = "gemini-3.1-flash-lite-image"
+
+# LiteLLM chooses the nearest resolution tier using the side length of a square with the same total number of pixels
+# as the requested image
+_GEMINI_IMAGE_SIZE_1K_THRESHOLD: Final = (512 + 1024) // 2
+_GEMINI_IMAGE_SIZE_2K_THRESHOLD: Final = (1024 + 2048) // 2
+_GEMINI_IMAGE_SIZE_4K_THRESHOLD: Final = (2048 + 4096) // 2
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
@@ -103,8 +124,8 @@ def map_openai_size_to_gemini_image_config(size: str, model: str) -> dict[str, s
         return None
 
     width, height = dimensions
-    image_config: Final = {"aspectRatio": _map_dimensions_to_gemini_aspect_ratio(width, height)}
-    image_size: Final = _map_dimensions_to_gemini_image_size(width, height)
+    image_config: Final = {"aspectRatio": _map_dimensions_to_gemini_aspect_ratio(width, height, model)}
+    image_size: Final = _map_dimensions_to_gemini_image_size(width, height, model)
     if is_gemini_image_model(model):
         if supports_gemini_image_size(model):
             image_config["imageSize"] = image_size
@@ -121,7 +142,7 @@ def supports_gemini_image_size(model: str) -> bool:
             return bool(value)
     except Exception:
         pass
-    return "2.5-flash" not in model
+    return _GEMINI_2_5_FLASH_MODEL_FAMILY not in model
 
 
 def is_gemini_image_model(model: str) -> bool:
@@ -331,24 +352,36 @@ def _parse_openai_image_size(size: str) -> tuple[int, int] | None:
     return width, height
 
 
-def _map_dimensions_to_gemini_aspect_ratio(width: int, height: int) -> str:
-    if (width, height) in GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO:
-        return GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO[(width, height)]
+def _map_dimensions_to_gemini_aspect_ratio(width: int, height: int, model: str) -> str:
+    aspect_ratios: Final = tuple(
+        ratio
+        for ratio in GEMINI_IMAGE_ASPECT_RATIOS
+        if _GEMINI_2_5_FLASH_MODEL_FAMILY not in model or ratio not in _GEMINI_2_5_FLASH_UNSUPPORTED_ASPECT_RATIOS
+    )
+    known_ratio: Final = GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO.get((width, height))
+    if known_ratio is not None and known_ratio in aspect_ratios:
+        return known_ratio
 
     requested_ratio: Final = width / height
     return min(
-        GEMINI_IMAGE_ASPECT_RATIOS,
+        aspect_ratios,
         key=lambda aspect_ratio: abs(math.log(GEMINI_IMAGE_ASPECT_RATIOS[aspect_ratio] / requested_ratio)),
     )
 
 
-def _map_dimensions_to_gemini_image_size(width: int, height: int) -> str:
-    effective_square_side: Final = math.sqrt(width * height)
-    if effective_square_side < 768:
-        return "512"
-    if effective_square_side < 1536:
+def _map_dimensions_to_gemini_image_size(width: int, height: int, model: str) -> str:
+    if _GEMINI_1K_ONLY_IMAGE_SIZE_MODEL in model:
         return "1K"
-    if effective_square_side < 3072:
+
+    effective_square_side: Final = math.sqrt(width * height)
+    if effective_square_side < _GEMINI_IMAGE_SIZE_1K_THRESHOLD:
+        if is_gemini_image_model(model) and _GEMINI_512_IMAGE_SIZE_MODEL not in model:
+            return "1K"
+        else:
+            return "512"
+    if effective_square_side < _GEMINI_IMAGE_SIZE_2K_THRESHOLD:
+        return "1K"
+    if effective_square_side < _GEMINI_IMAGE_SIZE_4K_THRESHOLD:
         return "2K"
     return "4K"
 
@@ -376,7 +409,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return "v1beta"
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def get_api_base(api_base: str | None = None) -> str:
         return api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
 
     @staticmethod
@@ -387,7 +420,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> str | None:
         return model.replace("gemini/", "")
 
-    def process_model_name(self, models: list[dict[str, str]]) -> list[str]:
+    def process_model_name(self, models: Iterable[Mapping[str, str]]) -> list[str]:
         litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
@@ -399,13 +432,13 @@ class GeminiModelInfo(BaseLLMModelInfo):
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(api_key)
         endpoint: Final = f"/{self.api_version}/models"
-        if api_base is None or api_key is None:
+        if api_key is None:
             raise ValueError(
                 "GEMINI_API_BASE or GEMINI_API_KEY/GOOGLE_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
 
         response: Final = litellm.module_level_client.get(
-            url=f"{api_base}{endpoint}",
+            url=join_api_base(api_base, endpoint),
             headers={"x-goog-api-key": api_key},
         )
 
@@ -414,9 +447,11 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final[list[dict[str, str]]] = response.json()["models"]
+        listing: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+            Mapping[str, Iterable[Mapping[str, str]]], _JSON_VALUE.validate_python(response.json())
+        )
 
-        litellm_model_names: Final = self.process_model_name(models)
+        litellm_model_names: Final = self.process_model_name(listing["models"])
         return litellm_model_names
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -497,25 +532,38 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
+        chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
         from litellm.llms.vertex_ai.count_tokens.context import (
             VertexGeminiCountContextError,
+            count_context_edits,
             count_context_error_response,
             gemini_count_contents,
             inference_request_view,
+            malformed_tool_result_text_count_error,
             provider_error_response,
             unconvertible_messages_error,
             vertex_gemini_count_context,
         )
 
-        request_view: Final = inference_request_view(messages or [], system, messages_format)
-        count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
+        request_view: Final = await inference_request_view(
+            messages or [],
+            system,
+            messages_format,
+            count_context_edits(context_management, tools, (deployment or {}).get("litellm_params", {}), model_to_use),
+        )
+        if isinstance(request_view, VertexGeminiCountContextError):
+            return count_context_error_response(request_view, request_model, model_to_use)
+        count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools, model=model_to_use)
         if isinstance(count_context, VertexGeminiCountContextError):
             return count_context_error_response(count_context, request_model, model_to_use)
-        blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+        blocks_error: Final = unconvertible_messages_error(
+            request_view.messages, messages_format
+        ) or malformed_tool_result_text_count_error(messages, messages_format, deployment)
         if blocks_error is not None:
             return count_context_error_response(blocks_error, request_model, model_to_use)
 

@@ -49,7 +49,7 @@ from integration.cost_calculation.cost_tracking_case import JsonResponse, SseRes
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 DAY: Final = 86400
 HOUR: Final = 3600

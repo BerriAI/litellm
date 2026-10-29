@@ -59,25 +59,13 @@ async def test_provider_failure_is_terminal_and_shared_with_callbacks(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "options",
-    (
-        {"stream": True},
-        {"extra_body": {"provider_option": True}},
-        {"mock_response": "mock"},
-        {"num_retries": 1},
-        {"use_chat_completions_api": True},
-        {"model_list": []},
-    ),
-)
-async def test_unsupported_requests_fail_before_callbacks_and_provider_io(
-    server: RecordingServer, options: dict[str, object]
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_a_native_decline_reaches_the_dispatcher_before_provider_io(
+    server: RecordingServer, asynchronous: bool
 ) -> None:
-    recorder: Final = RecordingLogger()
     server.expected_requests = 0
 
-    with pytest.raises(RuntimeError, match="declined the request"):
-        await call(server, callbacks=[recorder], **options)
+    with pytest.raises(RuntimeError, match="declined the request: native Python responses streaming"):
+        await call(server, asynchronous=asynchronous, stream=True)
 
     assert not server.requests
-    assert not recorder.events

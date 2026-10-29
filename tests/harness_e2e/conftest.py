@@ -1,6 +1,6 @@
 """Fixtures for the litellm.agent() end-to-end tests.
 
-These run the real harness runtimes (claude, codex, opencode, deepagents) against a real
+These run the real harness runtimes (claude, codex, opencode, pi, deepagents) against a real
 LiteLLM AI Gateway, routed with the `litellm_proxy/` model prefix. They skip unless
 LITELLM_PROXY_API_BASE and LITELLM_PROXY_API_KEY are set. Model groups can be overridden
 per harness with HARNESS_E2E_MODEL_<HARNESS>.
@@ -23,6 +23,7 @@ DEFAULT_MODEL_GROUPS = {
     Harness.CLAUDE_CODE: "claude-haiku-4-5-20251001",
     Harness.CODEX: "bedrock_mantle/openai.gpt-5.4",
     Harness.OPENCODE: "claude-haiku-4-5-20251001",
+    Harness.PI: "claude-haiku-4-5-20251001",
     Harness.DEEPAGENTS: "claude-haiku-4-5-20251001",
 }
 
@@ -30,6 +31,7 @@ BINARIES = {
     Harness.CLAUDE_CODE: "claude",
     Harness.CODEX: "codex",
     Harness.OPENCODE: "opencode",
+    Harness.PI: "pi",
 }
 
 requires_gateway = pytest.mark.skipif(
@@ -62,7 +64,7 @@ def harness_params() -> list:
                 not harness_available(h), reason=f"{h.value} runtime not installed"
             ),
         )
-        for h in Harness
+        for h in DEFAULT_MODEL_GROUPS
     ]
 
 

@@ -54,7 +54,7 @@ from tests.integration._support.process import (
 from tests.integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 WORKERS: Final = 2
 BURST: Final = 20
@@ -114,12 +114,10 @@ TRANSCRIPT_FIELDS: Final = (
     pytest.param({"transcript": {"text": "a"}}, id="object"),
 )
 VOICE_UPDATE: Final[dict[str, JsonValue]] = {"type": "realtime", "instructions": "answer briefly"}
-VOICE_UPDATE_FORWARDED: Final[dict[str, JsonValue]] = {
-    "type": "realtime",
-    "instructions": "answer briefly",
-    "audio": {"input": {"turn_detection": {"create_response": False}}},
+VOICE_UPDATE_GATED: Final[dict[str, JsonValue]] = {
+    **VOICE_UPDATE,
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
-TURN_DETECTION_TYPE_MISSING: Final = "Missing required parameter: 'session.audio.input.turn_detection.type'."
 INJECTED_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
@@ -982,15 +980,15 @@ def test_list_mode_transcript_guardrail_still_turns_auto_response_off_and_answer
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             RESPONSE_DONE,
         ), session
         assert session.transcript_fields == ({"transcript": TRANSCRIPT},), session
-        assert session.error_messages == (TURN_DETECTION_TYPE_MISSING,), session
+        assert session.error_messages == (), session
         assert _sent(observed) == (
             _update_frame(INJECTED_UPDATE),
-            _update_frame(VOICE_UPDATE_FORWARDED),
+            _update_frame(VOICE_UPDATE_GATED),
             COMMIT,
             PROXY_RESPONSE_CREATE,
         ), _sent(observed)

@@ -3,22 +3,25 @@
 import asyncio
 import base64
 import importlib
+import io
 import json
 import os
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
-from concurrent.futures import Future, wait
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
-from typing import Final
-from unittest.mock import MagicMock
+from queue import SimpleQueue
+from typing import Final, cast
+from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
 import pytest
 import tiktoken
+from PIL import Image
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers
 
 from unittest.mock import AsyncMock, patch
@@ -27,7 +30,7 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
@@ -35,10 +38,15 @@ from litellm.litellm_core_utils.token_counter import (
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
     calculate_img_tokens,
+    estimate_image_tokens,
     high_detail_image_token_upper_bound,
+    is_openai_model,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import SelectTokenizerResponse
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -515,6 +523,219 @@ def test_token_counter_skips_non_mapping_tools():
     assert mixed_tokens == valid_tokens
 
 
+_WEATHER_FUNCTION: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string", "description": "City name"}},
+        "required": ["location"],
+    },
+}
+_TIME_FUNCTION: Final = {
+    "name": "get_time",
+    "description": "Get the local time for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+_WEB_SEARCH_FUNCTION: Final = {
+    "name": "web_search",
+    "description": "Search the web",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
+
+
+def _openai_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": function}
+
+
+def _anthropic_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"name": function["name"], "description": function["description"], "input_schema": function["parameters"]}
+
+
+_USER_MESSAGES: Final = ({"role": "user", "content": "What is the weather in Paris today?"},)
+_SYSTEM_AND_USER_MESSAGES: Final = ({"role": "system", "content": "You are a helpful assistant."}, *_USER_MESSAGES)
+
+
+@pytest.mark.parametrize("tool_shape", [_openai_tool, _anthropic_tool])
+@pytest.mark.parametrize(
+    ("model", "messages", "functions", "billed_prompt_tokens"),
+    [
+        # usage.prompt_tokens billed for this request by Azure AI Foundry DeepSeek-V4-Flash-0731,
+        # Databricks databricks-qwen35-122b-a10b and DashScope qwen3.5-plus on 2026-10-17
+        ("DeepSeek-V4-Flash-0731", _USER_MESSAGES, (_WEATHER_FUNCTION,), 295),
+        ("DeepSeek-V4-Flash-0731", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 348),
+        ("DeepSeek-V4-Flash-0731", _SYSTEM_AND_USER_MESSAGES, (_WEATHER_FUNCTION,), 300),
+        ("databricks-qwen35-122b-a10b", _USER_MESSAGES, (_WEATHER_FUNCTION,), 289),
+        ("databricks-qwen35-122b-a10b", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 352),
+        ("databricks-qwen35-122b-a10b", _SYSTEM_AND_USER_MESSAGES, (_WEATHER_FUNCTION,), 296),
+        ("qwen3.5-plus", _USER_MESSAGES, (_WEATHER_FUNCTION,), 284),
+        ("qwen3.5-plus", _USER_MESSAGES, (_WEATHER_FUNCTION, _TIME_FUNCTION), 342),
+    ],
+)
+def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
+    tool_shape: Callable[[Mapping[str, object]], dict[str, object]],
+    model: str,
+    messages: tuple[dict[str, str], ...],
+    functions: tuple[Mapping[str, object], ...],
+    billed_prompt_tokens: int,
+):
+    counted: Final = token_counter_new(
+        model=model,
+        messages=list(messages),
+        tools=[tool_shape(function) for function in functions],
+    )
+
+    assert abs(counted - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+@pytest.mark.parametrize(
+    ("model", "counted_like"),
+    [
+        ("DeepSeek-V4-Pro", "DeepSeek-V4-Flash-0731"),
+        ("accounts/fireworks/models/deepseek-v4-flash", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-chat", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-chat:free", "DeepSeek-V4-Flash-0731"),
+        ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
+        ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
+        ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
+        ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
+        ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
+        ("qwen3-235b-a22b", "mistral-large-latest"),
+    ],
+)
+def test_token_counter_counts_tools_by_the_models_chat_template_family(model: str, counted_like: str):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION), _openai_tool(_TIME_FUNCTION)]
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools) == token_counter_new(
+        model=counted_like, messages=list(_USER_MESSAGES), tools=tools
+    )
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize(
+    "builtin_tool",
+    [
+        {"type": "web_search_preview"},
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {"name": "web_search"},
+    ],
+)
+def test_token_counter_skips_tools_not_sent_as_functions_for_chat_template_families(
+    model: str, builtin_tool: dict[str, object]
+):
+    weather_tool: Final = _openai_tool(_WEATHER_FUNCTION)
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool]) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES)
+    )
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[builtin_tool, weather_tool]
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[weather_tool])
+
+
+def _responses_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", **function}
+
+
+def _gemini_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"function_declarations": [function]}
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize("function", [_WEATHER_FUNCTION, _WEB_SEARCH_FUNCTION])
+@pytest.mark.parametrize("tool_shape", [_responses_tool, _gemini_tool])
+def test_token_counter_counts_function_tools_like_chat_completions_tools_for_chat_template_families(
+    model: str, function: Mapping[str, object], tool_shape: Callable[[Mapping[str, object]], dict[str, object]]
+):
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[tool_shape(function)]
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool(function)])
+
+
+# Azure AI Foundry DeepSeek-V4-Flash-0731 billed 295 prompt tokens for the weather tool with each of
+# these tool_choice values on 2026-10-17, the same as without one
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected_tool_choice"),
+    [
+        pytest.param({"type": "auto"}, None, id="anthropic-auto"),
+        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "none"}, "none", id="anthropic-none"),
+        pytest.param(
+            {"type": "tool", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="anthropic-tool",
+        ),
+        pytest.param(
+            {"type": "function", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="responses-function",
+        ),
+    ],
+)
+def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
+    tool_choice: Mapping[str, object], expected_tool_choice: str | Mapping[str, object] | None
+) -> None:
+    messages: Final = cast(list[AllMessageValues], list(_USER_MESSAGES))
+    tools: Final = cast(list[ChatCompletionToolParam], [_openai_tool(_WEATHER_FUNCTION)])
+
+    assert token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=expected_tool_choice
+    )
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize(
+    "anthropic_tool",
+    [
+        {"name": "get_weather", "input_schema": _WEATHER_FUNCTION["parameters"]},
+        _anthropic_tool(_WEATHER_FUNCTION),
+        {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "custom": {"eager_input_streaming": True}},
+        _anthropic_tool(_WEB_SEARCH_FUNCTION),
+    ],
+)
+def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
+    model: str, anthropic_tool: dict[str, object]
+):
+    sent_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai([anthropic_tool])  # pyright: ignore[reportArgumentType]  # raw Anthropic tool dict
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[anthropic_tool]) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=sent_tools
+    )
+
+
+# Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
+# request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
+# either way (both read on Hugging Face on 2026-10-17)
+@pytest.mark.parametrize(
+    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+)
+def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
+    model: str, implicit_system_turn_tokens: int
+):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+    system_cost_with_tools: Final = token_counter_new(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES), tools=tools
+    ) - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+    system_cost_without_tools: Final = token_counter_new(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES)
+    ) - token_counter_new(model=model, messages=list(_USER_MESSAGES))
+
+    assert system_cost_with_tools == system_cost_without_tools - implicit_system_turn_tokens
+
+
 class NeedsToleranceUpdateError(Exception):
     """Custom exception to mark tests that have improved"""
 
@@ -758,10 +979,18 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import (
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
+    _HuggingFaceTokenizerLoadFailure,
+    _HuggingFaceTokenizerLoadOutcomes,
+    _return_huggingface_tokenizer,
+    _select_tokenizer_helper,
+    claude_json_str,
+    encoding,
+)
 
 # Clear the cache at module load to ensure clean state
-_load_huggingface_tokenizer.cache_clear()
+_HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 class TestTokenizerSelection(unittest.TestCase):
@@ -772,7 +1001,7 @@ class TestTokenizerSelection(unittest.TestCase):
         @lru_cache, which can cause cache hits from previous tests when running with
         --dist=loadscope (tests from same file run on same worker).
         """
-        _load_huggingface_tokenizer.cache_clear()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
     @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
@@ -855,6 +1084,492 @@ class TestTokenizerSelection(unittest.TestCase):
             assert result["tokenizer"] == encoding
         finally:
             monkeypatch.undo()
+
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
+    def test_failed_huggingface_tokenizer_download_is_not_retried_on_every_count(
+        self, mock_from_pretrained: MagicMock
+    ):
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+        try:
+            mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
+            model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+            text: Final = "Count the tokens for this message."
+            expected: Final = len(encoding.encode(text, disallowed_special=()))
+
+            first_count: Final = litellm.token_counter(model=model, text=text)
+            first_attempts: Final = mock_from_pretrained.call_count
+            second_count: Final = litellm.token_counter(model=model, text=text)
+
+            assert first_attempts > 0
+            assert mock_from_pretrained.call_count == first_attempts
+            assert first_count == expected
+            assert second_count == expected
+        finally:
+            _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+_CODE_SAMPLE: Final = "    for item in items:\n        total += item.price * item.quantity\n" * 20
+
+
+def _deepseek_token_ids(text: str) -> list[int]:
+    deepseek_tokenizer: Final = Tokenizer.from_str(
+        importlib.resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("deepseek_tokenizer.json")
+        .read_text(encoding="utf-8")
+    )
+    return deepseek_tokenizer.encode(text).ids
+
+
+def _deepseek_token_count(text: str) -> int:
+    return len(_deepseek_token_ids(text))
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "azure_ai/DeepSeek-V4-Flash-0731",
+        "deepseek/deepseek-v4-pro",
+        "fireworks_ai/deepseek-v4p1-flash",
+        "bedrock/us-east-1/deepseek.v3.2",
+        "together_ai/deepseek-ai/DeepSeek-V3.1",
+        "databricks/databricks-deepseek-v4-flash-0731",
+        "replicate/deepseek-ai/deepseek-v3",
+        "deepseek-chat",
+        "deepseek/deepseek-reasoner",
+        "openrouter/deepseek/deepseek-chat-v3-0324",
+        "openrouter/deepseek/deepseek-chat:free",
+    ],
+)
+def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_tokenizer(model: str):
+    expected: Final = _deepseek_token_count(_CODE_SAMPLE)
+
+    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_CODE_SAMPLE))
+    assert litellm.token_counter(model=model, text=_CODE_SAMPLE) == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
+)
+def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
+    assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
+
+
+def test_encode_and_decode_use_deepseeks_token_ids_for_deepseek_v4():
+    token_ids: Final = encode(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE)
+
+    assert token_ids == _deepseek_token_ids(_CODE_SAMPLE)
+    assert decode(model="deepseek/deepseek-v4-flash", tokens=token_ids) == _CODE_SAMPLE
+
+
+def test_disable_hf_tokenizer_download_keeps_deepseek_v4_on_cl100k(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+
+    counted: Final = litellm.token_counter(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE)
+
+    assert counted != _deepseek_token_count(_CODE_SAMPLE)
+    assert counted == litellm.token_counter(model="", text=_CODE_SAMPLE)
+
+
+@pytest.mark.parametrize("model", ["llama-2-7b", "meta-llama/llama-3-8b-instruct"])
+def test_offline_mode_counts_downloaded_tokenizer_models_with_tiktoken(monkeypatch: pytest.MonkeyPatch, model: str):
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained") as from_pretrained:
+        result: Final = _select_tokenizer_helper(model)
+
+    from_pretrained.assert_not_called()
+    assert result["type"] == "openai_tokenizer"
+
+
+def test_offline_mode_keeps_deepseek_v4_on_its_bundled_tokenizer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+    assert litellm.token_counter(model="deepseek/deepseek-v4-flash", text=_CODE_SAMPLE) == _deepseek_token_count(
+        _CODE_SAMPLE
+    )
+
+
+def test_concurrent_first_deepseek_counts_share_one_loaded_tokenizer():
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    start: Final = threading.Barrier(8)
+
+    def first_tokenizer(_: int) -> object:
+        start.wait()
+        return _select_tokenizer_helper("deepseek/deepseek-v4-flash")["tokenizer"]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        tokenizers: Final = tuple(pool.map(first_tokenizer, range(8)))
+
+    assert len({id(tokenizer) for tokenizer in tokenizers}) == 1
+
+
+def test_remembered_tokenizer_failure_warns_once_instead_of_on_every_count(caplog: pytest.LogCaptureFixture):
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    try:
+        with (
+            patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")),
+            caplog.at_level("WARNING", logger="LiteLLM"),
+        ):
+            types: Final = tuple(_select_tokenizer_helper(model)["type"] for _ in range(3))
+        fallback_warnings: Final = [r for r in caplog.records if "token counts may be approximate" in r.getMessage()]
+        assert types == ("openai_tokenizer",) * 3
+        assert len(fallback_warnings) == 1
+    finally:
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+def test_download_that_fails_after_another_count_loaded_the_tokenizer_counts_with_it():
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    slow_download_started: Final = threading.Event()
+    loading_count_finished: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if threading.current_thread().name.startswith("slow-download"):
+            slow_download_started.set()
+            loading_count_finished.wait(timeout=5)
+            raise RuntimeError("HF rate limited")
+        return sentinel.tokenizer
+
+    try:
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download):
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="slow-download") as pool:
+                slow_count: Final = pool.submit(_select_tokenizer_helper, model)
+                assert slow_download_started.wait(timeout=5)
+                loading_count: Final = _select_tokenizer_helper(model)
+                loading_count_finished.set()
+                slow_count_tokenizer: Final = slow_count.result(timeout=5)["tokenizer"]
+            later_counts: Final = tuple(_select_tokenizer_helper(model) for _ in range(3))
+        assert slow_count_tokenizer is sentinel.tokenizer
+        assert loading_count["tokenizer"] is sentinel.tokenizer
+        assert tuple(count["tokenizer"] for count in later_counts) == (sentinel.tokenizer,) * 3
+    finally:
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+def test_loaded_tokenizer_serves_later_counts_without_downloading_it_again():
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    try:
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+            loaded: Final = _select_tokenizer_helper(model)
+        with patch(
+            "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF rate limited")
+        ) as from_pretrained:
+            later_counts: Final = tuple(_select_tokenizer_helper(model) for _ in range(3))
+        assert loaded["tokenizer"] is sentinel.tokenizer
+        assert tuple(count["tokenizer"] for count in later_counts) == (sentinel.tokenizer,) * 3
+        assert from_pretrained.call_count == 0
+    finally:
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+def _run_now(retry: Callable[[], None]) -> None:
+    retry()
+
+
+def _start_retry_resolving(ended: Future[None]) -> Callable[[Callable[[], None]], None]:
+    def start(retry: Callable[[], None]) -> None:
+        def run_then_resolve() -> None:
+            retry()
+            ended.set_result(None)
+
+        threading.Thread(target=run_then_resolve, daemon=True).start()
+
+    return start
+
+
+def _eventually(probe: Callable[[], bool]) -> bool:
+    deadline: Final = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if probe():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_failed_download_is_retried_once_per_window_until_it_loads():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=299.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_run_now)
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            clock.return_value = 322.0
+            raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF rate limited")
+        return sentinel.tokenizer
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained:
+        first: Final = _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 1
+        inside_the_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        downloads_inside_the_window: Final = from_pretrained.call_count
+        clock.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        claimant: Final = _return_huggingface_tokenizer(model, outcomes)
+        inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        downloads_inside_the_next_window: Final = from_pretrained.call_count
+        clock.return_value = 322.0 + 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        after_the_second_retry: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert isinstance(first, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_window, _HuggingFaceTokenizerLoadFailure)
+    assert downloads_inside_the_window == 1
+    assert isinstance(claimant, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert downloads_inside_the_next_window == 2
+    assert from_pretrained.call_count == 3
+    assert after_the_second_retry == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_retry_after_the_window_runs_in_the_background_while_every_count_answers_at_once():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock)
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        return sentinel.tokenizer
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 3 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(4))
+        assert retry_started.wait(timeout=5)
+        clock.return_value = 9 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        later_counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(2))
+        downloads_while_retry_runs: Final = from_pretrained.call_count
+        retry_released.set()
+        retried: Final = _eventually(
+            lambda: _return_huggingface_tokenizer(model, outcomes)
+            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+        )
+    assert all(
+        isinstance(count, _HuggingFaceTokenizerLoadFailure)
+        for count in counts_while_retry_runs + later_counts_while_retry_runs
+    )
+    assert downloads_while_retry_runs == 2
+    assert retried
+    assert from_pretrained.call_count == 2
+
+
+def test_download_from_before_the_first_failure_ending_during_a_retry_leaves_it_the_only_retry():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock)
+    early_download_started: Final = threading.Event()
+    early_download_released: Final = threading.Event()
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            early_download_started.set()
+            early_download_released.wait(timeout=5)
+            raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        return sentinel.tokenizer
+
+    with (
+        patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
+        ThreadPoolExecutor(max_workers=1) as early_pool,
+    ):
+        early_count: Final = early_pool.submit(_return_huggingface_tokenizer, model, outcomes)
+        assert early_download_started.wait(timeout=5)
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
+        _return_huggingface_tokenizer(model, outcomes)
+        assert retry_started.wait(timeout=5)
+        early_download_released.set()
+        early: Final = early_count.result(timeout=5)
+        clock.return_value = 5 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
+        downloads_while_retry_runs: Final = from_pretrained.call_count
+        retry_released.set()
+        retried: Final = _eventually(
+            lambda: _return_huggingface_tokenizer(model, outcomes)
+            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+        )
+    assert isinstance(early, _HuggingFaceTokenizerLoadFailure)
+    assert all(isinstance(count, _HuggingFaceTokenizerLoadFailure) for count in counts_while_retry_runs)
+    assert downloads_while_retry_runs == 3
+    assert retried
+
+
+def test_retry_failing_after_an_earlier_download_loaded_the_tokenizer_keeps_it():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    retry_ended: Final = Future[None]()
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_start_retry_resolving(retry_ended))
+    early_download_started: Final = threading.Event()
+    early_download_released: Final = threading.Event()
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            early_download_started.set()
+            early_download_released.wait(timeout=5)
+            return sentinel.tokenizer
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        raise RuntimeError("HF rate limited")
+
+    with (
+        patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
+        ThreadPoolExecutor(max_workers=1) as early_pool,
+    ):
+        early_count: Final = early_pool.submit(_return_huggingface_tokenizer, model, outcomes)
+        assert early_download_started.wait(timeout=5)
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        assert retry_started.wait(timeout=5)
+        early_download_released.set()
+        early: Final = early_count.result(timeout=5)
+        retry_released.set()
+        retry_ended.result(timeout=5)
+        later_counts: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
+    loaded: Final = {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+    assert early == loaded
+    assert from_pretrained.call_count == 3
+    assert later_counts == (loaded,) * 3
+
+
+class _NativePanic(BaseException):
+    pass
+
+
+def _fork_guard_error() -> BaseException:
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+
+    return ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+
+
+def _native_panic() -> BaseException:
+    return _NativePanic("tokenizer parser panicked")
+
+
+@pytest.mark.parametrize("escaping_error", (_fork_guard_error, _native_panic), ids=("fork_guard", "native_panic"))
+def test_retry_that_raises_past_failure_handling_still_retries_after_the_next_window(
+    escaping_error: Callable[[], BaseException],
+):
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    error: Final = escaping_error()
+    retries: Final = SimpleQueue[Future[None]]()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="tokenizer-retry") as pool:
+
+        def start_retry(retry: Callable[[], None]) -> None:
+            retries.put(pool.submit(retry))
+
+        outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_retry)
+        with patch(
+            "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+        ) as from_pretrained:
+            _return_huggingface_tokenizer(model, outcomes)
+            clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            from_pretrained.side_effect = error
+            _return_huggingface_tokenizer(model, outcomes)
+            raised: Final = retries.get(timeout=5).exception(timeout=5)
+            from_pretrained.side_effect = None
+            from_pretrained.return_value = sentinel.tokenizer
+            inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+            no_retry_inside_the_next_window: Final = retries.empty()
+            clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            _return_huggingface_tokenizer(model, outcomes)
+            retries.get(timeout=5).result(timeout=5)
+            after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert raised is error
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert no_retry_inside_the_next_window
+    assert from_pretrained.call_count == 3
+    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_process_forked_during_a_retry_starts_its_own_retry_instead_of_waiting_on_the_parents():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    pid: Final = MagicMock(return_value=100)
+    start_retry: Final = MagicMock()
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_retry, pid=pid)
+    with patch(
+        "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+    ) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        _return_huggingface_tokenizer(model, outcomes)
+        retries_started_by_the_parent: Final = start_retry.call_count
+        pid.return_value = 101
+        from_pretrained.side_effect = None
+        from_pretrained.return_value = sentinel.tokenizer
+        _return_huggingface_tokenizer(model, outcomes)
+        start_retry.call_args.args[0]()
+        in_the_forked_process: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert retries_started_by_the_parent == 1
+    assert start_retry.call_count == 2
+    assert in_the_forked_process == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_retry_thread_that_cannot_start_answers_the_count_and_retries_after_the_next_window():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    thread_starts: Final = MagicMock(side_effect=(RuntimeError("can't start new thread"), None))
+
+    def start_thread_then_retry(retry: Callable[[], None]) -> None:
+        thread_starts()
+        retry()
+
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_thread_then_retry)
+    with patch(
+        "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+    ) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        when_the_thread_cannot_start: Final = _return_huggingface_tokenizer(model, outcomes)
+        from_pretrained.side_effect = None
+        from_pretrained.return_value = sentinel.tokenizer
+        inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert isinstance(when_the_thread_cannot_start, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert from_pretrained.call_count == 2
+    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
+def test_fork_guard_error_while_loading_a_tokenizer_is_raised_and_not_remembered():
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    forked: Final = ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+    try:
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=forked):
+            with pytest.raises(ForkedAfterNativeRuntimeStarted):
+                _select_tokenizer_helper(model)
+        with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+            loaded: Final = _select_tokenizer_helper(model)
+        assert loaded["type"] == "huggingface_tokenizer"
+        assert loaded["tokenizer"] is sentinel.tokenizer
+    finally:
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 def test_token_counter_with_anthropic_tool_use():
@@ -1401,6 +2116,34 @@ def test_anthropic_image_block_with_empty_base64_data():
     assert tokens > 0
 
 
+def test_token_counter_counts_anthropic_search_result_text() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.invalid/notes",
+        "title": "Project notes",
+        "content": [{"type": "text", "text": "The code word is 7f3a."}],
+        "citations": {"enabled": True},
+    }
+
+    assert _count_content_list(len, [search_result], False, None) == len(
+        "https://example.invalid/notesProject notesThe code word is 7f3a."
+    )
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(nested: bool) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    unknown: Final = {"type": "future_block"}
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [unknown]}] if nested else [unknown]
+
+    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+        _count_content_list(len, content, False, None)
+    assert _count_content_list(len, content, False, 7) == 7
+
+
 def test_anthropic_image_block_without_source_raises():
     """An `image` block with no `source` raises, matching the OpenAI `image_url`-without-`url` behavior."""
     from litellm.litellm_core_utils.token_counter import _count_content_list
@@ -1625,6 +2368,71 @@ def _png_data_url(width: int, height: int) -> str:
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
 
 
+@pytest.mark.parametrize(
+    ("width", "height", "expected"), [(256, 256, 262), (512, 512, 262), (768, 768, 772), (1024, 1024, 772)]
+)
+@pytest.mark.parametrize("detail", [None, "auto", "high"])
+def test_inline_auto_images_count_high_detail_tiles(width: int, height: int, expected: int, detail: str | None) -> None:
+    image_url = {"url": _png_data_url(width, height)}
+    if detail is not None:
+        image_url["detail"] = detail
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": image_url}]}]
+
+    assert token_counter_new(model="gpt-4o", messages=messages) == expected
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG", "GIF", "WEBP"])
+def test_inline_auto_images_read_supported_formats(image_format: str) -> None:
+    output = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(output, format=image_format)
+    url = f"data:image/{image_format.lower()};base64," + base64.b64encode(output.getvalue()).decode()
+
+    assert calculate_img_tokens(url) == 765
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "https://example.com/image.png",
+        "http://127.0.0.1/image.png",
+        "http://169.254.169.254/latest/meta-data/",
+        "file:///etc/passwd",
+        "data:application/pdf;base64,JVBERi0xLjQK",
+        "data:image/png;base64,%%%",
+        "data:image/png;base64,iVBORw0KGgo=",
+        "data:image/jpeg;base64,/9j/4AAQ",
+        "data:image/png,not-base64",
+        "",
+        _png_data_url(0, 1024),
+        _png_data_url(1024, 0),
+    ],
+)
+def test_auto_image_fallback_does_not_fetch_urls_or_raise(data: str) -> None:
+    # The unit suite disables sockets; a fetch must also not be attempted and swallowed.
+    with patch("httpx.Client.get", side_effect=AssertionError("auto counting must not fetch URLs")) as get:
+        assert calculate_img_tokens(data) == 85
+    get.assert_not_called()
+
+
+def test_auto_image_decode_respects_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    counter = importlib.import_module("litellm.litellm_core_utils.token_counter")
+    monkeypatch.setattr(counter, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 24 / (1024 * 1024))
+
+    with patch("base64.b64decode", side_effect=AssertionError("oversized input must not be decoded")) as decode:
+        assert calculate_img_tokens(_png_data_url(1024, 1024)) == 85
+    decode.assert_not_called()
+
+
+def test_low_and_default_image_counts_skip_inline_decoding() -> None:
+    with patch("base64.b64decode", side_effect=AssertionError("fixed counts must not decode")) as decode:
+        assert calculate_img_tokens(_png_data_url(1024, 1024), mode="low") == 85
+        assert (
+            calculate_img_tokens(_png_data_url(1024, 1024), use_default_image_token_count=True)
+            == litellm.constants.DEFAULT_IMAGE_TOKEN_COUNT
+        )
+    decode.assert_not_called()
+
+
 @pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])
 def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int, height: int) -> None:
     assert calculate_img_tokens(_png_data_url(width, height), mode="high") <= high_detail_image_token_upper_bound()
@@ -1633,6 +2441,136 @@ def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int,
 def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
     assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
     assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()
+
+
+# Image sizing verified 2026-10-28: https://developers.openai.com/api/docs/guides/images-vision
+# and https://platform.claude.com/docs/en/build-with-claude/vision-coordinates
+@pytest.mark.parametrize(
+    ("model", "width", "height", "detail", "expected"),
+    [
+        ("gpt-4o-mini", 1024, 1024, "low", 2833),
+        ("gpt-4o-mini", 1024, 1024, "high", 25501),
+        ("gpt-5.1", 512, 512, "auto", 210),
+        ("gpt-6-astra", 2048, 2048, "high", 3000),
+        ("gpt-6-astra", 4096, 512, "high", 2458),
+        ("gpt-6-astra", 2048, 2048, "auto", 4916),
+        ("gpt-5.6-sol", 2048, 2048, "low", 308),
+        ("gpt-5.5", 6400, 6400, "original", 12000),
+        ("gpt-5.4-mini", 2048, 2048, "low", 4916),
+        ("gpt-5.4-nano", 2048, 2048, "auto", 3000),
+        ("gpt-5.2", 4096, 512, "auto", 615),
+        ("gpt-4.1-mini-2025-04-14", 1024, 1024, "low", 1659),
+        ("claude-haiku-5-5", 200, 200, "auto", 64),
+        ("anthropic/claude-haiku-5-5", 1024, 1024, "auto", 1369),
+        ("claude-haiku-5-5", 1920, 1080, "low", 2691),
+        ("claude-haiku-4-5", 1920, 1080, "auto", 1560),
+        ("claude-haiku-4-5", 1075, 1520, "auto", 1551),
+        ("claude-haiku-5-5", 3840, 2160, "auto", 4784),
+        ("claude-haiku-5-5", 8000, 100, "auto", 184),
+    ],
+)
+def test_image_estimate_uses_model_resolution_and_detail(
+    model: str, width: int, height: int, detail: str, expected: int
+) -> None:
+    assert estimate_image_tokens(model, _png_data_url(width, height), detail) == expected
+
+
+@pytest.mark.parametrize(
+    ("models", "fallback", "expected_model"),
+    [
+        (("azure/deployment-prod",), "gpt-4o", "gpt-4o"),
+        (("openai/gpt-4o",), "gpt-4o-mini", "gpt-4o"),
+        (("azure/deployment-prod", "openai/gpt-4o"), "gpt-4o-mini", "gpt-4o-mini"),
+        (("openai/gpt-4o", "openrouter/openai/gpt-4o-mini"), None, "gpt-4o-mini"),
+        (("azure_ai/openai/gpt-6-astra",), None, "gpt-6-astra"),
+        (("azure/gpt-41",), None, "gpt-4.1"),
+        (("azure/eu/gpt-4o-mini",), None, "gpt-4o-mini"),
+        (("unknown", "gpt-4o-mini"), None, "gpt-4o-mini"),
+        ((), "gpt-6-astra", "gpt-6-astra"),
+        (("other/gpt-4o-mini",), None, "unregistered-model"),
+        (("azure/opaque/gpt-4o-mini",), None, "unregistered-model"),
+        (("bedrock/anthropic.claude-haiku-5-5",), None, "claude-haiku-5-5"),
+        (("bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",), None, "claude-haiku-4-5"),
+        (("vertex_ai/claude-haiku-5-5@default",), None, "claude-haiku-5-5"),
+        (("azure_ai/claude-haiku-5-5",), None, "claude-haiku-5-5"),
+        (("anthropic/claude-haiku-5-5", "openai/gpt-4o"), "gpt-4o-mini", "claude-haiku-5-5"),
+        (("other/claude-haiku-5-5",), None, "unregistered-model"),
+    ],
+)
+def test_image_estimate_prefers_each_backend_policy_over_the_requested_model(
+    models: tuple[str, ...], fallback: str | None, expected_model: str
+) -> None:
+    data: Final = _png_data_url(1024, 1024)
+    assert estimate_image_tokens(models, data, "high", fallback_model=fallback) == estimate_image_tokens(
+        expected_model, data, "high"
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "detail"),
+    [
+        ("unknown", "high"),
+        ("claude-unregistered", "auto"),
+        ("gpt-4o", "original"),
+        ("gpt-5.2", "original"),
+        ("gpt-6-astra", "invalid"),
+    ],
+)
+def test_image_estimate_preserves_default_when_policy_is_unavailable(model: str, detail: str) -> None:
+    assert (
+        estimate_image_tokens(model, _png_data_url(1024, 1024), detail) == litellm.constants.DEFAULT_IMAGE_TOKEN_COUNT
+    )
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "https://image.invalid/photo.png",
+        "data:image/png;base64,invalid!",
+        "data:application/octet-stream;base64,bm90LWFuLWltYWdl",
+        "data:image/jpeg;base64,/9j/4AAQ",
+        "data:image/webp;base64,UklGRgAAAABXRUJQ",
+        _png_data_url(0, 1024),
+    ],
+)
+# Accepted patch limits verified 2026-10-28: https://developers.openai.com/api/docs/guides/images-vision
+# and https://platform.claude.com/docs/en/build-with-claude/vision
+@pytest.mark.parametrize(
+    ("model", "detail", "bound"),
+    [
+        ("gpt-4o", "high", high_detail_image_token_upper_bound()),
+        ("gpt-6-astra", "high", 3000),
+        ("gpt-6-astra", "auto", 36000),
+        ("claude-haiku-5-5", "auto", 4784),
+        ("claude-haiku-4-5", "auto", 1568),
+    ],
+)
+def test_image_estimate_uses_bounded_fallback_without_fetching_media(
+    data: str, model: str, detail: str, bound: int
+) -> None:
+    with patch("httpx.Client.send") as send:
+        estimate: Final = estimate_image_tokens(model, data, detail)
+    send.assert_not_called()
+    assert estimate == bound
+    assert estimate > estimate_image_tokens(model, _png_data_url(1024, 1024), detail)
+
+
+@pytest.mark.parametrize("container", ["PNG", "JPEG", "GIF", "WEBP"])
+def test_image_estimate_depends_on_dimensions_and_not_compressed_payload_size(container: str) -> None:
+    output: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(output, format=container)
+    data: Final = "data:application/octet-stream;base64," + base64.b64encode(output.getvalue()).decode()
+    assert estimate_image_tokens("gpt-6-astra", data) == estimate_image_tokens("gpt-6-astra", _png_data_url(1024, 1024))
+
+
+def test_image_estimate_bounds_header_decoding_for_large_inline_payloads() -> None:
+    header: Final = base64.b64decode(_png_data_url(1024, 1024).split(",", 1)[1])
+    data: Final = "data:image/png;base64," + base64.b64encode(header + b"\0" * 4_000_000).decode()
+    with patch("base64.b64decode", wraps=base64.b64decode) as decode_header:
+        estimate: Final = estimate_image_tokens("gpt-6-astra", data)
+    assert estimate == estimate_image_tokens("gpt-6-astra", _png_data_url(1024, 1024))
+    assert decode_header.call_count == 1
+    assert len(decode_header.call_args.args[0]) <= 65_536
 
 
 HUB_SETUP_SCRIPT: Final = """
@@ -1673,6 +2611,27 @@ print(json.dumps({
 HUB_ROUND_TRIP_SCRIPT: Final = HUB_SETUP_SCRIPT + """
 tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
 print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
+"""
+
+HUB_RETRY_DURING_EXIT_SCRIPT: Final = HUB_SETUP_SCRIPT + """
+import threading
+import time
+from litellm.utils import _HuggingFaceTokenizerLoadOutcomes, _return_huggingface_tokenizer
+retry_reached_hub = threading.Event()
+def answer_once_the_process_is_exiting(request):
+    retry_reached_hub.set()
+    while threading.main_thread().is_alive():
+        time.sleep(0.01)
+    time.sleep(0.5)
+    return handle(request)
+now = [0.0]
+outcomes = _HuggingFaceTokenizerLoadOutcomes(clock=lambda: now[0])
+model = "meta-llama/llama-3-70b-instruct"
+_return_huggingface_tokenizer(model, outcomes)
+huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(answer_once_the_process_is_exiting)))
+now[0] = 3600.0
+_return_huggingface_tokenizer(model, outcomes)
+print(json.dumps({"retry_reached_hub": retry_reached_hub.wait(timeout=60)}))
 """
 
 
@@ -1737,6 +2696,10 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
     }
 
 
+def test_process_exits_cleanly_while_a_background_tokenizer_retry_is_downloading(tmp_path: Path) -> None:
+    assert _run_in_memory_hub(HUB_RETRY_DURING_EXIT_SCRIPT, {}, "", tmp_path) == {"retry_reached_hub": True}
+
+
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
     text_value: Final = "A tokenizer fallback should preserve the model encoding."
     custom_count: Final = _get_exact_count_function("gpt-3.5-turbo", {})(text_value)
@@ -1770,14 +2733,17 @@ _THRESHOLD_TEST_TOOLS: Final = [
 ]
 
 
-def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold() -> None:
+@pytest.mark.parametrize(
+    "model", ["claude-3-5-sonnet-20240620", "DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"]
+)
+def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold(model: str) -> None:
     """The threshold check is the same arithmetic as token_counter(...) >= threshold, including the
     tools and system-message adjustments, so the boundary values must agree exactly."""
     from litellm.litellm_core_utils.token_counter import messages_reach_token_count
 
     messages = _threshold_test_messages(turns=12)
     total = token_counter_new(
-        model="claude-3-5-sonnet-20240620",
+        model=model,
         messages=messages,
         tools=_THRESHOLD_TEST_TOOLS,
         use_default_image_token_count=True,
@@ -1785,7 +2751,7 @@ def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold
     assert total > 100
     for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
         assert messages_reach_token_count(
-            model="claude-3-5-sonnet-20240620",
+            model=model,
             messages=messages,
             threshold=threshold,
             tools=_THRESHOLD_TEST_TOOLS,
@@ -1949,3 +2915,95 @@ def test_get_modified_max_tokens_leaves_a_gemini_4_long_decode_budget_alone(monk
         )
         == 200_000
     )
+
+
+_MULTILINGUAL_SAMPLE: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+        "azure/gpt-41",
+        "azure/gpt-5.1",
+        "openai/gpt-5.1",
+        "openai/gpt-4o",
+        "gpt-41",
+        "eu/gpt-6.1-sol",
+        "azure/eu/gpt-6.1-sol",
+        "azure/gpt-5.1-chat",
+        "azure/gpt-6.1-sol-2026-09-29",
+        "openai/gpt-6.1-sol-2026-09-29",
+        "azure_ai/gpt-6.1-sol",
+        "chatgpt/gpt-6.1-sol",
+        "perplexity/openai/gpt-5",
+    ],
+)
+def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200k(model: str):
+    expected: Final = len(tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE))
+
+    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE))
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == expected, (
+        f"{model} should count with o200k_base. OpenAI's /v1/responses/input_tokens gave gpt-5, gpt-5.1, gpt-6-sol, "
+        "gpt-6-luna, gpt-6-astra, gpt-6.1-sol and gpt-6.1-terra the same count on this sample, checked 2026-10-28"
+    )
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.9", "chatgpt/gpt-5.3-instant", "azure/gpt-5.9-mini"])
+def test_token_counter_counts_unlisted_openai_names_with_the_encoding_tiktoken_gives_them(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.encoding_for_model(model.rsplit("/", 1)[-1]).encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize("model", ["gpt-6.2", "openai/gpt-6.2", "azure/gpt-6.2-mini", "azure/eu/o9-mini", "gpt-10"])
+def test_token_counter_counts_unlisted_names_of_newer_openai_releases_with_o200k(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "groq/qwen3-32b",
+        "openai/my-llama",
+        "text-embedding-ada-002-v2",
+        "azure/gpt-4",
+        "azure/my-deployment",
+        "azure/ada",
+        "azure/mistral-large-latest",
+        "azure/command-r-plus",
+        "azure_ai/mistral-large-latest",
+    ],
+)
+def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k_models(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+def test_openai_model_check_holds_while_openai_models_are_registered_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "azure/azure-only-chat-model", {"litellm_provider": "azure", "mode": "chat"})
+    registered: Final = tuple(f"concurrently-registered-model-{index}" for index in range(200))
+    checked: Final = threading.Semaphore(0)
+
+    def register() -> None:
+        for name in registered:
+            if not checked.acquire(timeout=10):
+                return
+            litellm.open_ai_chat_completion_models.add(name)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            registering: Final = pool.submit(register)
+            while not registering.done():
+                assert not is_openai_model("azure-only-chat-model")
+                checked.release()
+            registering.result()
+    finally:
+        litellm.open_ai_chat_completion_models.difference_update(registered)

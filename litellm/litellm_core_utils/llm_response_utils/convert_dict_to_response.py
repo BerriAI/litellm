@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionThinkingBlock,
     ImageURLListItem,
@@ -57,6 +58,31 @@ from .get_headers import get_response_headers
 _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+_ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_provider_specific_annotation(annotation: object) -> bool:
+    match annotation:
+        case {"type": "url_citation"}:
+            return False
+        case {"type": _}:
+            return True
+        case _:
+            return False
+
+
+def _annotation_entries(annotations: object) -> tuple[object, ...]:
+    return _ANNOTATION_ENTRIES.validate_python(annotations) if isinstance(annotations, list) else ()
+
+
+def partition_annotations(annotations: object) -> tuple[object, tuple[object, ...]]:
+    entries: Final = _annotation_entries(annotations)
+    others: Final = tuple(annotation for annotation in entries if _is_provider_specific_annotation(annotation))
+    if not others:
+        return annotations, ()
+    return [annotation for annotation in entries if not _is_provider_specific_annotation(annotation)] or None, others
 
 
 def _normalize_images_for_message(
@@ -251,14 +277,7 @@ async def convert_to_streaming_response_async(
         setattr(
             model_response_object,
             "usage",
-            Usage(
-                completion_tokens=response_object["usage"].get("completion_tokens", 0),
-                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-                total_tokens=response_object["usage"].get("total_tokens", 0),
-                completion_tokens_details=_cached_completion_tokens_details(
-                    _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
-                ),
-            ),
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
@@ -345,12 +364,10 @@ def convert_to_streaming_response(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
-        model_response_object.usage.completion_tokens_details = _cached_completion_tokens_details(
-            _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
+        setattr(
+            model_response_object,
+            "usage",
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
@@ -414,13 +431,28 @@ class _CachedMessageProviderFields(TypedDict, total=False):
 
 
 class _CachedUsageDetails(TypedDict, total=False):
+    completion_tokens: ReadOnly[object]
+    prompt_tokens: ReadOnly[object]
+    total_tokens: ReadOnly[object]
     completion_tokens_details: ReadOnly[object]
+    prompt_tokens_details: ReadOnly[object]
+    cache_read_input_tokens: ReadOnly[object]
+    cache_creation_input_tokens: ReadOnly[object]
+
+
+class _PromptCacheTokenCounts(TypedDict, total=False):
+    cache_read_input_tokens: ReadOnly[int]
+    cache_creation_input_tokens: ReadOnly[int]
 
 
 _CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
 _CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
 _FIELD_MAP: Final = TypeAdapter(dict[str, object])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
+_PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
+_PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
+_TOKEN_COUNT: Final = TypeAdapter(int)
+_PROMPT_CACHE_TOKEN_FIELDS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
 
 
 def _cached_provider_specific_fields(message: _CachedMessageProviderFields) -> Mapping[str, object] | None:
@@ -436,6 +468,44 @@ def _cached_completion_tokens_details(usage: _CachedUsageDetails) -> CompletionT
         return _COMPLETION_TOKENS_DETAILS.validate_python(details)
     except ValidationError:
         return None
+
+
+def _cached_prompt_tokens_details(usage: _CachedUsageDetails) -> PromptTokensDetailsWrapper | None:
+    details: Final = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _PROMPT_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
+
+
+def _cached_token_count(count: object) -> int | None:
+    try:
+        return _TOKEN_COUNT.validate_python(count)
+    except ValidationError:
+        return None
+
+
+def _cached_prompt_cache_token_counts(usage: _CachedUsageDetails) -> _PromptCacheTokenCounts:
+    return _PROMPT_CACHE_TOKEN_COUNTS.validate_python(
+        {
+            field: count
+            for field in _PROMPT_CACHE_TOKEN_FIELDS
+            if (count := _cached_token_count(usage.get(field))) is not None
+        }
+    )
+
+
+def _replayed_usage(usage: _CachedUsageDetails) -> Usage:
+    return Usage(
+        completion_tokens=_cached_token_count(usage.get("completion_tokens")) or 0,
+        prompt_tokens=_cached_token_count(usage.get("prompt_tokens")) or 0,
+        total_tokens=_cached_token_count(usage.get("total_tokens")) or 0,
+        completion_tokens_details=_cached_completion_tokens_details(usage),
+        prompt_tokens_details=_cached_prompt_tokens_details(usage),
+        **_cached_prompt_cache_token_counts(usage),
+    )
 
 
 def handle_invalid_parallel_tool_calls(
@@ -743,6 +813,9 @@ def convert_to_model_response_object(
                     provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
                     for f in choice["message"].keys() - _MESSAGE_FIELDS:
                         provider_specific_fields[f] = choice["message"][f]
+                    annotations, other_annotations = partition_annotations(choice["message"].get("annotations", None))
+                    if other_annotations:
+                        provider_specific_fields["annotations"] = list(other_annotations)
 
                     # Handle reasoning models that display `reasoning_content` within `content`
                     reasoning_content, content = extract_reasoning_content(choice["message"])
@@ -765,7 +838,9 @@ def convert_to_model_response_object(
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         reasoning_items=choice["message"].get("reasoning_items", None),
-                        annotations=choice["message"].get("annotations", None),
+                        annotations=cast(  # cast-ok: provider annotation dicts pass through whole, keeping keys such as url_citation.content
+                            list[ChatCompletionAnnotation] | None, annotations
+                        ),
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)

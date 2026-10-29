@@ -19,6 +19,7 @@ from pydantic import ConfigDict, Field
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_prompt_caching_savings,
     generic_cost_per_token,
@@ -69,7 +70,9 @@ def _resolve_model(model: str | None, custom_llm_provider: str | None) -> _Model
     if not model:
         return None
     try:
-        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        resolved_model, provider = resolve_model_and_provider_for_metadata(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
     except Exception as e:  # noqa: BLE001  # get_llm_provider raises for unroutable names; degrade to an unavailable estimate
         verbose_proxy_logger.debug(
             "savings: cannot resolve provider for model=%s custom_llm_provider=%s (%s)", model, custom_llm_provider, e
@@ -90,7 +93,7 @@ def _effective_model_info(router: "Router | None", deployment_id: str | None, mo
     if router is None or deployment_id is None:
         return None
     try:
-        return router.get_deployment_model_info(deployment_id, model)
+        return router.cached_deployment_model_info(deployment_id, model)
     except Exception as e:  # noqa: BLE001  # a dashboard metric must not fail the spend write
         verbose_proxy_logger.debug("savings: no deployment pricing for %s (%s)", model, e)
         return None

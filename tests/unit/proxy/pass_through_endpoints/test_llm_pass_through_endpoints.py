@@ -33,7 +33,9 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, 
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
 from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
+from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
@@ -156,63 +158,30 @@ class TestBaseOpenAIPassThroughHandler:
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
-    def test_append_openai_beta_header(self):
-        print("\nTesting _append_openai_beta_header method...")
+    def test_assemble_headers_keeps_the_operators_openai_beta_over_the_clients(self):
+        client_request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/azure/v1/agents/sessions",
+                "headers": [(b"openai-beta", b"agents=v1")],
+                "query_string": b"",
+            }
+        )
 
-        # Create mock requests with different paths
-        assistants_request = MagicMock(spec=Request)
-        assistants_request.url = MagicMock()
-        assistants_request.url.path = "/v1/threads/thread_123456/messages"
+        assembled: Final = BaseOpenAIPassThroughHandler._assemble_headers(
+            api_key="sk-upstream",
+            endpoint="v1/agents/sessions",
+            request=client_request,
+            custom_llm_provider=litellm.LlmProviders.AZURE_AI,
+            extra_headers={"OpenAI-Beta": "agents=v2"},
+        )
 
-        non_assistants_request = MagicMock(spec=Request)
-        non_assistants_request.url = MagicMock()
-        non_assistants_request.url.path = "/v1/chat/completions"
-
-        headers = {"authorization": "Bearer test_key"}
-
-        # Test with assistants API request
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistants_request)
-        print(f"Assistants API request: Added header: {result}")
-        assert result["OpenAI-Beta"] == "assistants=v2"
-
-        # Test with non-assistants API request
-        headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, non_assistants_request)
-        print(f"Non-assistants API request: Headers: {result}")
-        assert "OpenAI-Beta" not in result
-
-        # Test with assistant in the path
-        assistant_request = MagicMock(spec=Request)
-        assistant_request.url = MagicMock()
-        assistant_request.url.path = "/v1/assistants/asst_123456"
-
-        headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistant_request)
-        print(f"Assistant API request: Added header: {result}")
-        assert result["OpenAI-Beta"] == "assistants=v2"
-
-    def test_assemble_headers(self):
-        print("\nTesting _assemble_headers method...")
-
-        # Mock request
-        mock_request = MagicMock(spec=Request)
-        api_key = "test_api_key"
-
-        # Patch the _append_openai_beta_header method to avoid testing it again
-        with patch.object(
-            BaseOpenAIPassThroughHandler,
-            "_append_openai_beta_header",
-            return_value={
-                "authorization": "Bearer test_api_key",
-                "api-key": "test_api_key",
-                "test-header": "value",
-            },
-        ):
-            result = BaseOpenAIPassThroughHandler._assemble_headers(api_key, mock_request)
-            print(f"Assembled headers: {result}")
-            assert result["authorization"] == "Bearer test_api_key"
-            assert result["api-key"] == "test_api_key"
-            assert result["test-header"] == "value"
+        assert assembled == {
+            "authorization": "Bearer sk-upstream",
+            "api-key": "sk-upstream",
+            "OpenAI-Beta": "agents=v2",
+        }
 
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
@@ -369,6 +338,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -468,6 +438,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.parametrize(
@@ -563,6 +534,7 @@ class TestVertexAIPassThroughHandler:
                 target=f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
+                upstream_headers_filter=mock.ANY,
             )
 
     @pytest.mark.asyncio
@@ -2138,6 +2110,47 @@ class TestBedrockPassthroughAwsErrors:
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
     @pytest.mark.asyncio
+    async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = BedrockError(
+            status_code=400,
+            message="requestMetadata can contain a maximum of 16 items",
+            headers={"x-amzn-errortype": "ValidationException"},
+        )
+
+        with pytest.raises(AwsErrorTypeProxyException) as exc_info:
+            await self._answer(error)
+
+        assert exc_info.value.aws_error_type == "ValidationException"
+        assert "requestMetadata can contain a maximum of 16 items" in exc_info.value.error.message
+        assert exc_info.value.error.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_error_without_an_aws_error_type_keeps_the_proxy_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(BedrockError(status_code=400, message="bad request"))
+
+        assert exc_info.value.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_error_with_a_non_ascii_header_value_keeps_the_proxy_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = HTTPException(status_code=403, detail="model not allowed", headers={"x-model-group": "modèle"})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),
         (
@@ -2472,6 +2485,48 @@ class TestBedrockAgentRuntimePassthroughVirtualKeyLeak:
         assert self._names_matching(upstream, "x-forwarded-key") == []
         assert self._names_matching(upstream, "x-operator-token") == []
         assert upstream["x-request-id"] == "trace-2"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    for ambient in TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV:
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ak")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "sk")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_REGION_NAME")
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b'{"retrievalQuery": {"text": "hi"}}', "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/bedrock/knowledgebases/KB1234567/retrieve",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive=receive,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        retrieve: Final = upstream.post(
+            "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/KB1234567/retrieve"
+        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        _ = await bedrock_proxy_route(
+            endpoint="knowledgebases/KB1234567/retrieve",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-caller"),
+        )
+
+    assert vault.read.is_set()
+    assert not vault.read_on_loop.is_set()
+    assert retrieve.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256")
 
 
 class TestLLMPassthroughFactoryProxyRoute:
@@ -3969,6 +4024,129 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
         assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
 
 
+@pytest.mark.parametrize(
+    ("method", "client_base_path", "path", "client_headers", "upstream_openai_beta"),
+    [
+        pytest.param(
+            "POST", "/openai/v1", "/agents/sessions", {"OpenAI-Beta": "agents=v1"}, ["agents=v1"], id="sdk_agents"
+        ),
+        pytest.param(
+            "GET",
+            "/openai_passthrough/v1",
+            "/agents/sessions/sess_123/events",
+            {"OpenAI-Beta": "agents=v1"},
+            ["agents=v1"],
+            id="sdk_agents_events",
+        ),
+        pytest.param("POST", "/openai/v1", "/agents/sessions", {}, ["agents=v1"], id="agents_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/agents/sessions",
+            {"OpenAI-Beta": "agents=v2"},
+            ["agents=v2"],
+            id="client_value_beats_route_default",
+        ),
+        pytest.param("POST", "/openai", "/agents/sessions", {}, ["agents=v1"], id="agents_default_without_v1"),
+        pytest.param("GET", "/openai_passthrough/v1", "/vaults", {}, ["agents=v1"], id="vaults_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/chatkit/sessions",
+            {"OpenAI-Beta": "chatkit_beta=v1"},
+            ["chatkit_beta=v1"],
+            id="sdk_chatkit",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/agents/sessions",
+            {"OpenAI-Beta": "agents=v1", "x-pass-openai-beta": "agents=v2"},
+            ["agents=v2"],
+            id="x_pass_wins",
+        ),
+        pytest.param("POST", "/openai/v1", "/chatkit/threads", {}, [], id="chatkit_threads_no_default"),
+        pytest.param("POST", "/openai/v1", "/assistants", {}, ["assistants=v2"], id="assistants_default"),
+        pytest.param("POST", "/openai/v1", "/threads/thread_123/messages", {}, ["assistants=v2"], id="threads_default"),
+        pytest.param("POST", "/openai/v1", "/chat/completions", {}, [], id="no_beta"),
+        pytest.param(
+            "POST",
+            "/openai_passthrough/v1",
+            "/responses",
+            {"OpenAI-Beta": "12345"},
+            [],
+            id="client_beta_dropped_off_beta_paths",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/chat/completions",
+            {"OpenAI-Beta": "assistants=v2"},
+            [],
+            id="client_beta_dropped_on_chat_completions",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/threads/thread_123/messages",
+            {"OpenAI-Beta": "assistants=v1"},
+            ["assistants=v2"],
+            id="assistants_client_beta_replaced",
+        ),
+    ],
+)
+def test_openai_passthrough_sends_the_openai_beta_header_upstream(
+    openai_passthrough_client: TestClient,
+    method: str,
+    client_base_path: str,
+    path: str,
+    client_headers: dict[str, str],
+    upstream_openai_beta: list[str],
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.request(method, f"https://api.openai.com/v1{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response: Final = openai_passthrough_client.request(method, f"{client_base_path}{path}", headers=client_headers)
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers.get_list("openai-beta") == upstream_openai_beta
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "client_headers", "upstream_openai_beta"),
+    [
+        pytest.param("GET", "/openai/v1/vector_stores", {"OpenAI-Beta": "assistants=v2"}, [], id="client_beta_dropped"),
+        pytest.param("POST", "/v1/agents/sessions", {}, [], id="no_agents_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1/threads/thread_123/messages",
+            {"OpenAI-Beta": "assistants=v1"},
+            ["assistants=v2"],
+            id="assistants_default_kept",
+        ),
+    ],
+)
+def test_azure_passthrough_keeps_its_own_openai_beta_rule(
+    openai_passthrough_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    client_headers: dict[str, str],
+    upstream_openai_beta: list[str],
+) -> None:
+    monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.request(method, f"https://operator.openai.azure.com{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response: Final = openai_passthrough_client.request(method, f"/azure{path}", headers=client_headers)
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers.get_list("openai-beta") == upstream_openai_beta
+
+
 @pytest.fixture
 def openai_wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     from litellm.llms.openai.workload_identity import _workload_identity_auth
@@ -4269,6 +4447,7 @@ class TestVertexRawPredictStreamingClassification:
                 "type": "http",
                 "method": "POST",
                 "path": f"/vertex_ai/{endpoint}",
+                "path_params": {"endpoint": endpoint},
                 "headers": [
                     (b"content-type", b"application/json"),
                     (b"x-litellm-api-key", b"test-key"),
@@ -7159,6 +7338,187 @@ async def test_bedrock_count_tokens_error_forwards_provider_headers():
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-count-tokens-500"
+
+
+_BEDROCK_COUNT_ALIAS: Final = "count-log-bedrock"
+_BEDROCK_COUNT_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+async def _bedrock_native_count(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, aws_reply: httpx.Response
+) -> dict[str, object]:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": _BEDROCK_COUNT_ALIAS,
+                    "litellm_params": {
+                        "model": _BEDROCK_COUNT_MODEL,
+                        "aws_region_name": "us-east-1",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                    },
+                    "model_info": {"id": "count-log-bedrock-deployment"},
+                }
+            ]
+        ),
+    )
+    respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path__regex=r"/count-tokens$").mock(
+        return_value=aws_reply
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-count")],
+        }
+    )
+    return await handle_bedrock_count_tokens(
+        endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=MagicMock(),
+        request_body={"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_model(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    result: Final = await _bedrock_native_count(monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}))
+
+    assert result == {"input_tokens": 12}
+    assert len(respx_mock.calls) == 1
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-count",
+            "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_id": "count-log-bedrock-deployment",
+            "model_used": "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "input_tokens": 12,
+            "count_source": "provider",
+            "status_code": 200,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_count_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    rejected: Final = httpx.Response(400, json={"message": "The provided model doesn't support counting tokens."})
+    with pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(monkeypatch, respx_mock, rejected)
+
+    assert exc_info.value.status_code == 400
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-count",
+            "request_model": _BEDROCK_COUNT_ALIAS,
+            "model_id": "count-log-bedrock-deployment",
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answers(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-no-model")],
+        }
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-no-model",
+            "request_model": None,
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_validation_error_and_logs_it(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/bedrock/model/us/count-tokens",
+            "headers": [(b"x-litellm-call-id", b"bedrock-native-region-only")],
+        }
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint="model/us/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"model": "us"},
+        )
+
+    assert exc_info.value.detail == {
+        "error": "CountTokens processing error: Request must contain content to count tokens"
+    }
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "bedrock-native-region-only",
+            "request_model": "us",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": exc_info.value.status_code,
+        },
+    )
 
 
 class _AzureGroupRouter:

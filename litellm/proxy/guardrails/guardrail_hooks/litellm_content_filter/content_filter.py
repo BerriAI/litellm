@@ -6,16 +6,17 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import contextvars
 import itertools
 import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, cast
 
 import yaml
 from fastapi import HTTPException
@@ -39,6 +40,7 @@ from litellm.proxy.guardrails.content_filter_data import (
 )
 from litellm.types.utils import (
     CallTypes,
+    Delta,
     Function,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
@@ -46,10 +48,14 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 
 from litellm.types.guardrails import (
     BlockedWord,
@@ -76,6 +82,8 @@ from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_StreamItemT: Final = TypeVar("_StreamItemT")
+_JSON_ENTRIES: Final = TypeAdapter(list[object])
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
@@ -100,6 +108,13 @@ WORD_NUMBER_SEQUENCE_PATTERN: Final = re.compile(
     re.IGNORECASE,
 )
 WORD_NUMBER_TOKEN_FINDER: Final = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
+
+_logging_only_scan_guardrail: Final[contextvars.ContextVar["ContentFilterGuardrail | None"]] = contextvars.ContextVar(
+    "litellm_content_filter_logging_only_scan", default=None
+)
+_logging_only_scan_would_reject: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_content_filter_logging_only_scan_would_reject", default=False
+)
 
 
 class ConditionalCategoryConfig(TypedDict):
@@ -129,6 +144,26 @@ class _CategoryConfigView(TypedDict):
     category_file: str | None
 
 
+def _streamed_choice_content(choice: StreamingChoices | TextChoices) -> str | None:
+    if isinstance(choice, TextChoices):
+        return choice.text if isinstance(choice.text, str) else ""
+    delta: Final = getattr(choice, "delta", None)
+    if not delta:
+        return None
+    content: Final = getattr(delta, "content", None)
+    return content if isinstance(content, str) else ""
+
+
+def _streamed_choices(item: object) -> Sequence[StreamingChoices | TextChoices]:
+    if isinstance(item, (ModelResponseStream, TextCompletionResponse)):
+        return item.choices
+    return ()
+
+
+def _is_choiceless_chunk(item: object) -> bool:
+    return isinstance(item, (ModelResponseStream, TextCompletionResponse)) and not item.choices
+
+
 @dataclass(frozen=True, slots=True)
 class _StreamedChoiceState:
     buffered_text: str = ""
@@ -136,6 +171,52 @@ class _StreamedChoiceState:
     committed_detections: tuple[ContentFilterDetection, ...] = ()
     latest_detections: tuple[ContentFilterDetection, ...] = ()
     next_trim_len: int = 0
+    finished: bool = False
+
+
+def _end_of_stream_chunk(
+    last_item: object, state_by_choice: Mapping[int, _StreamedChoiceState]
+) -> ModelResponseStream | TextCompletionResponse | None:
+    unfinished: Final = tuple(index for index, state in state_by_choice.items() if not state.finished)
+    if not unfinished:
+        return None
+    if isinstance(last_item, TextCompletionResponse):
+        return TextCompletionResponse(
+            id=last_item.id,
+            created=last_item.created,
+            model=last_item.model,
+            object="text_completion",
+            choices=[TextChoices(index=index, text="") for index in unfinished],
+        ).model_copy(update={"usage": None})
+    if isinstance(last_item, ModelResponseStream):
+        return ModelResponseStream(
+            id=last_item.id,
+            created=last_item.created,
+            model=last_item.model,
+            choices=[StreamingChoices(index=index, delta=Delta(content="")) for index in unfinished],
+        )
+    return None
+
+
+async def _stream_then_end_of_stream_chunk(
+    response: AsyncIterable[_StreamItemT], end_of_stream_chunk: Callable[[_StreamItemT], _StreamItemT | None]
+) -> AsyncGenerator[tuple[_StreamItemT, bool], None]:
+    last_item: _StreamItemT | None = None  # rebind-ok: the end-of-stream chunk copies the last chunk's id and model
+    held_items: tuple[_StreamItemT, ...] = ()  # rebind-ok: the usage chunk must stay after the end-of-stream chunk
+    async for item in response:
+        last_item = item
+        if _is_choiceless_chunk(item):
+            held_items = (*held_items, item)
+            continue
+        for held_item in held_items:
+            yield held_item, False
+        held_items = ()
+        yield item, False
+    closing_item: Final = None if last_item is None else end_of_stream_chunk(last_item)
+    if closing_item is not None:
+        yield closing_item, True
+    for held_item in held_items:
+        yield held_item, False
 
 
 @dataclass(frozen=True, slots=True)
@@ -690,9 +771,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         Severity mapping: 4,3 -> high; 2 -> medium; 1 -> low.
         """
         with open(file_path, "r") as f:
-            entries = json.load(f)
-        if not isinstance(entries, list):
-            entries = [entries]
+            decoded: Final = _DECODED_ARGUMENTS.validate_python(json.load(f))
+        entries: Final = _JSON_ENTRIES.validate_python(decoded) if isinstance(decoded, list) else [decoded]
         # Derive category name from filename (e.g. harm_toxic_abuse.json -> harm_toxic_abuse)
         category_name: Final = os.path.splitext(os.path.basename(file_path))[0]
         severity_map: Final = {4: "high", 3: "high", 2: "medium", 1: "low"}
@@ -797,7 +877,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         try:
             with open(file_path, "r") as f:
-                data: Final = yaml.safe_load(f)
+                data: Final = _DECODED_ARGUMENTS.validate_python(yaml.safe_load(f))
 
             if not isinstance(data, dict) or "blocked_words" not in data:
                 raise ValueError("Invalid format: file must contain 'blocked_words' key with list of words")
@@ -1209,6 +1289,18 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
+    def _is_logging_only_scan(self) -> bool:
+        return _logging_only_scan_guardrail.get() is self
+
+    def _enforces_block(self, action: ContentFilterAction) -> bool:
+        return action == ContentFilterAction.BLOCK and not self._is_logging_only_scan()
+
+    @staticmethod
+    def _asks_to_block(detection: ContentFilterDetection) -> bool:
+        if detection["type"] == "competitor_intent":
+            return detection["action_hint"] in ("refuse", "reframe")
+        return detection["action"] == ContentFilterAction.BLOCK.value
+
     def _handle_conditional_match(
         self,
         matched_phrase: str,
@@ -1228,7 +1320,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(category_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg: Final = (
                 f"Content blocked: {category_name} conditional match '{matched_phrase}' detected (severity: {severity})"
             )
@@ -1269,7 +1361,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(category_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg = f"Content blocked: {category_name} category keyword '{keyword}' detected (severity: {severity})"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
@@ -1312,7 +1404,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(pattern_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg: Final = f"Content blocked: {pattern_name} pattern detected"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
@@ -1346,7 +1438,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             }
             detections.append(blocked_word_detection)
 
-        if action == ContentFilterAction.BLOCK:
+        if self._enforces_block(action):
             error_msg = f"Content blocked: keyword '{keyword}' detected"
             if description:
                 error_msg += f" ({description})"
@@ -1619,7 +1711,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         - Number of entities masked
         - Whether the guardrail blocked the request (max risk)
         """
-        if status == "guardrail_intervened":
+        if status in ("guardrail_intervened", "guardrail_flagged"):
             return 10.0
 
         total_masked: Final = sum(masked_entity_count.values()) if masked_entity_count else 0
@@ -1665,6 +1757,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         }
         detections.append(detection)
 
+        if self._is_logging_only_scan():
+            return
         if action_hint_val == "refuse":
             msg = "Content blocked: competitor comparison or ranking intent detected."
             if self._competitor_intent_checker and getattr(
@@ -1763,18 +1857,18 @@ class ContentFilterGuardrail(CustomGuardrail):
             return raw_name
         return None
 
+    def _reject(self, error: str) -> None:
+        """Raise the 400 an enforcing mode returns, or note it on the leg a logging_only scan is observing."""
+        if self._is_logging_only_scan():
+            _logging_only_scan_would_reject.set(True)
+            return
+        raise HTTPException(status_code=400, detail={"error": error})
+
     def _assert_argument_label_clean(
         self, text: str, detections: list[ContentFilterDetection], context_label: str
     ) -> None:
         if self._filter_single_text(text, detections=detections) != text:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field"
-                    )
-                },
-            )
+            self._reject(f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field")
 
     def _filter_argument_value(
         self,
@@ -1784,10 +1878,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         depth: int = 0,
     ) -> object:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Content blocked: {context_label} arguments exceed the maximum nesting depth"},
-            )
+            self._reject(f"Content blocked: {context_label} arguments exceed the maximum nesting depth")
+            return value
         if isinstance(value, str):
             return self._filter_single_text(value, detections=detections)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -1874,6 +1966,21 @@ class ContentFilterGuardrail(CustomGuardrail):
             if filtered_arguments != arguments:
                 self._set_tool_call_arguments(tool_call, filtered_arguments)
 
+    async def _scan_logged_call(
+        self,
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
+        response: object | None,
+        translation: "BaseTranslation",
+        output_translation: "BaseTranslation",
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
+    ) -> None:
+        """Scan the logged call with every BLOCK match recorded instead of raised."""
+        token: Final = _logging_only_scan_guardrail.set(self)
+        try:
+            await super()._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
+        finally:
+            _logging_only_scan_guardrail.reset(token)
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -1904,6 +2011,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
         exception_str: str = ""
+        would_reject_token: Final = _logging_only_scan_would_reject.set(False)
 
         try:
             texts: Final = inputs.get("texts", [])
@@ -1947,11 +2055,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise e
         finally:
+            would_reject: Final = _logging_only_scan_would_reject.get() or any(map(self._asks_to_block, detections))
+            _logging_only_scan_would_reject.reset(would_reject_token)
             # Log guardrail information
             self._log_guardrail_information(
                 request_data=request_data,
                 detections=detections,
-                status=status,
+                status="guardrail_flagged" if status == "success" and would_reject else status,
                 start_time=start_time,
                 masked_entity_count=masked_entity_count,
                 exception_str=exception_str,
@@ -2065,72 +2175,75 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
         try:
-            async for item in response:
-                if isinstance(item, ModelResponseStream) and item.choices:
-                    for choice in item.choices:
-                        if not (hasattr(choice, "delta") and choice.delta):
-                            continue
+            async for item, stream_ended in _stream_then_end_of_stream_chunk(
+                response, lambda last_item: _end_of_stream_chunk(last_item, state_by_choice)
+            ):
+                for choice in _streamed_choices(item):
+                    new_content = _streamed_choice_content(choice)
+                    if new_content is None:
+                        continue
 
-                        choice_index = getattr(choice, "index", 0)
-                        if not isinstance(choice_index, int):
-                            choice_index = 0
+                    choice_index = getattr(choice, "index", 0)
+                    if not isinstance(choice_index, int):
+                        choice_index = 0
 
-                        content = getattr(choice.delta, "content", None)
-                        is_final = bool(getattr(choice, "finish_reason", None))
-                        new_content = content if isinstance(content, str) else ""
-                        if not new_content and not is_final:
-                            continue
+                    is_final = stream_ended or bool(getattr(choice, "finish_reason", None))
+                    if not new_content and not is_final:
+                        continue
 
-                        previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
-                        buffered_text = previous_state.buffered_text + new_content
-                        if not buffered_text:
-                            continue
+                    previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
+                    buffered_text = previous_state.buffered_text + new_content
+                    if not buffered_text:
+                        continue
 
-                        # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                        text_to_scan = buffered_text + (" " if is_final else "")
-                        choice_detections: list[ContentFilterDetection] = []
-                        scan_started = time.perf_counter()
+                    # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
+                    text_to_scan = buffered_text + (" " if is_final else "")
+                    choice_detections: list[ContentFilterDetection] = []
+                    scan_started = time.perf_counter()
 
-                        try:
-                            masked_text = self._filter_single_text(text_to_scan, detections=choice_detections)
-                            if is_final and masked_text.endswith(" "):
-                                masked_text = masked_text[:-1]
-                            latest_detections = tuple(choice_detections)
-                        except HTTPException:
-                            state_by_choice[choice_index] = replace(
-                                previous_state, latest_detections=tuple(choice_detections)
-                            )
-                            raise
-                        except Exception as e:
-                            verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
-                            masked_text = text_to_scan  # Fallback to current text
-                            latest_detections = previous_state.latest_detections
-                        finally:
-                            scan_seconds += time.perf_counter() - scan_started
-
-                        safe_to_yield_len = max(
-                            previous_state.yielded_masked_text_len,
-                            len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
+                    try:
+                        masked_text = self._filter_single_text(text_to_scan, detections=choice_detections)
+                        if is_final and masked_text.endswith(" "):
+                            masked_text = masked_text[:-1]
+                        latest_detections = tuple(choice_detections)
+                    except HTTPException:
+                        state_by_choice[choice_index] = replace(
+                            previous_state, latest_detections=tuple(choice_detections)
                         )
-                        choice.delta.content = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
-                        next_state = replace(
-                            previous_state,
-                            buffered_text=buffered_text,
-                            yielded_masked_text_len=safe_to_yield_len,
-                            latest_detections=latest_detections,
-                        )
-                        if is_final:
-                            state_by_choice[choice_index] = next_state
-                            continue
+                        raise
+                    except Exception as e:
+                        verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
+                        masked_text = text_to_scan  # Fallback to current text
+                        latest_detections = previous_state.latest_detections
+                    finally:
+                        scan_seconds += time.perf_counter() - scan_started
 
-                        trim_started = time.perf_counter()
-                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
-                        scan_seconds += time.perf_counter() - trim_started
+                    safe_to_yield_len = max(
+                        previous_state.yielded_masked_text_len,
+                        len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
+                    )
+                    released_text = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
+                    if isinstance(choice, TextChoices):
+                        choice.text = released_text
+                    else:
+                        choice.delta.content = released_text
+                    next_state = replace(
+                        previous_state,
+                        buffered_text=buffered_text,
+                        yielded_masked_text_len=safe_to_yield_len,
+                        latest_detections=latest_detections,
+                    )
+                    if is_final:
+                        state_by_choice[choice_index] = replace(next_state, finished=True)
+                        continue
 
-                    yield item
-                else:
-                    # Not a ModelResponseStream or no choices - yield as is
-                    yield item
+                    trim_started = time.perf_counter()
+                    state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
+                    scan_seconds += time.perf_counter() - trim_started
+
+                if stream_ended and not any(_streamed_choice_content(choice) for choice in _streamed_choices(item)):
+                    continue
+                yield item
         except HTTPException:
             status = "guardrail_intervened"
             raise

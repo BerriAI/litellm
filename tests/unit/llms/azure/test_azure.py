@@ -6,7 +6,7 @@ import os
 import time
 from collections.abc import Mapping
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import httpx
 import pytest
@@ -291,11 +291,9 @@ def test_get_azure_ad_token_from_username_password(mock_get_bearer_token_provide
 
     mock_credential.assert_called_once_with(client_id=client_id, username=username, password=password)
 
-    mock_get_bearer_token_provider.assert_called_once_with(
-        mock_credential.return_value, "https://cognitiveservices.azure.com/.default"
-    )
+    mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
 
-    assert result == mock_token_provider
+    assert result() == "mock-token"
 
 
 def test_azure_openai_gpt_4o_naming(monkeypatch):
@@ -313,7 +311,7 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
         number: str = Field(description="total number of days in a week")
         days: list[str] = Field(description="name of days in a week")
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
+    with patch.object(client, "post") as mock_post:
         try:
             completion(
                 model="azure/gpt4o",
@@ -326,9 +324,9 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
 
         mock_post.assert_called_once()
 
-        print(mock_post.call_args.kwargs)
+        print(mock_post.call_args.kwargs["body"])
 
-        assert "tool_calls" not in mock_post.call_args.kwargs
+        assert "tool_calls" not in mock_post.call_args.kwargs["body"]
 
 
 @pytest.mark.parametrize(
@@ -382,7 +380,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
         }
     ]
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
+    with patch.object(client, "post") as mock_post:
         mock_post.return_value.headers = {}
         mock_post.return_value.parse.return_value = litellm.ModelResponse(
             choices=[{"message": {"role": "assistant", "content": InvestigationOutput().model_dump_json()}}]
@@ -411,9 +409,9 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
         mock_post.assert_called_once()
 
         if api_version == "2024-10-21":
-            assert "response_format" in mock_post.call_args.kwargs
+            assert "response_format" in mock_post.call_args.kwargs["body"]
         else:
-            assert "response_format" not in mock_post.call_args.kwargs
+            assert "response_format" not in mock_post.call_args.kwargs["body"]
         assert response.choices[0].message.content == InvestigationOutput().model_dump_json()
 
 

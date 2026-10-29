@@ -57,7 +57,7 @@ _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():
     os.environ.setdefault(_key, _value)
 
-from prometheus_client import make_asgi_app
+from prometheus_client import CollectorRegistry, Counter, make_asgi_app
 
 # gateway/ and backend/ live at the repo root, not inside litellm/.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -71,6 +71,7 @@ from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
@@ -353,6 +354,26 @@ def test_gateway_trim_keeps_metrics_mount():
     trimmed = [r for r in routes if _is_gateway_route(r)]
     assert metrics_mount in trimmed, \
         "/metrics Mount must survive the gateway route trim"
+
+
+@pytest.mark.parametrize("enabled", (False, True))
+def test_backend_serves_metrics_after_startup_when_enabled(enabled: bool) -> None:
+    registry: Final = CollectorRegistry()
+    failures: Final = Counter("litellm_postgres_failed_requests", "Failed database requests", registry=registry)
+    failures.inc(2)
+
+    @asynccontextmanager
+    async def lifespan(application: Starlette) -> AsyncGenerator[None, None]:
+        if enabled:
+            application.mount("/metrics", make_metrics_asgi_app(registry))
+        yield
+
+    application: Final = FastAPI(lifespan=partial(_backend_lifespan, lifespan=lifespan))
+    with TestClient(application) as client:
+        response: Final = client.get("/metrics")
+        assert response.status_code == (200 if enabled else 404), response.text
+        if enabled:
+            assert "litellm_postgres_failed_requests_total 2.0\n" in response.text
 
 
 def test_gateway_drops_ui_and_swagger_mounts():

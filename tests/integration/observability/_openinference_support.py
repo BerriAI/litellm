@@ -5,7 +5,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from pathlib import Path
 from typing import Final
@@ -312,7 +312,7 @@ def _chat_caller_stream_usage_event(event: dict[str, JsonValue], model: str) -> 
         "object": event["object"],
         "created": 1,
         "model": model,
-        "choices": [{"index": 0, "delta": {}}],
+        "choices": [],
         "usage": {**_json_object_value(event["usage"]), "cost": 4.05e-6},
     }
 
@@ -386,13 +386,14 @@ def _responses_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, 
     }
 
 
-def _responses_stream_caller_body(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
+def _responses_stream_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, JsonValue]:
     response_id: Final = body.get("id")
     assert isinstance(response_id, str), body
     usage: Final = _json_object_value(body["usage"]) if body.get("status") == "completed" else {}
     return {
         **body,
         "id": "<response-id>",
+        "model": model,
         **({"usage": {**usage, "cost": 4.05e-06}} if usage else {}),
     }
 
@@ -413,7 +414,7 @@ def _responses_caller_stream(reply: Reply, model: str) -> tuple[dict[str, JsonVa
             **event,
             "model": model,
             **(
-                {"response": _responses_stream_caller_body(_json_object_value(event["response"]))}
+                {"response": _responses_stream_caller_body(_json_object_value(event["response"]), model)}
                 if "response" in event
                 else {}
             ),
@@ -854,11 +855,7 @@ def _rig(
                 if fresh_client_connections
                 else owned.gateway.client
             )
-            proxy: Final = Gateway(
-                client=proxy_client,
-                key=owned.gateway.key,
-                upstream_url=owned.gateway.upstream_url,
-            )
+            proxy: Final = replace(owned.gateway, client=proxy_client)
             scenario: Final = resources.enter_context(proxy.scenario())
             model: Final = scenario.model(
                 model=model_name,
