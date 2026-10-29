@@ -2821,6 +2821,137 @@ class TestStructuredWriteBackKeepsToolResults:
         ]
 
 
+_PDF_DOCUMENT: Final = {
+    "type": "document",
+    "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+    "title": "Invoice",
+}
+
+
+class TestStructuredWriteBackKeepsTheClientsBlocks:
+    """A rewrite sends every block the guardrail never saw, or saw only in a lossy form, as the client sent it."""
+
+    @pytest.mark.parametrize(
+        "block",
+        [_PDF_DOCUMENT, _URL_DOCUMENT, _TEXT_DOCUMENT, _SEARCH_RESULT],
+        ids=["base64-pdf-document", "url-document", "text-document", "search-result"],
+    )
+    async def test_a_masked_user_turn_keeps_its_other_blocks_in_place(self, block):
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [block, {"type": "text", "text": "Summarize it. Email: bob@example.com"}]}
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"] == [
+            {"role": "user", "content": [block, {"type": "text", "text": "Summarize it. Email: <EMAIL>"}]}
+        ]
+
+    async def test_a_masked_conversation_keeps_the_web_search_blocks_of_an_earlier_answer(self):
+        answer = [
+            {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "weather"}},
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/forecast",
+                        "title": "Forecast",
+                        "encrypted_content": "EqgfCioIARgBIiQ3",
+                    }
+                ],
+            },
+            {"type": "text", "text": "It is sunny."},
+        ]
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": "What is the weather? I am bob@example.com"},
+                {"role": "assistant", "content": answer},
+                {"role": "user", "content": "Thanks"},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"] == [
+            {"role": "user", "content": [{"type": "text", "text": "What is the weather? I am <EMAIL>"}]},
+            {"role": "assistant", "content": answer},
+            {"role": "user", "content": [{"type": "text", "text": "Thanks"}]},
+        ]
+
+    async def test_a_tool_result_and_the_text_after_it_stay_one_message(self):
+        data = {
+            "model": "claude-fable-5",
+            "messages": TestStructuredWriteBackKeepsToolResults._claude_code_tool_search_turns(
+                "fetched for bob@example.com"
+            ),
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert [message["role"] for message in data["messages"]] == ["user", "assistant", "user"]
+        assert data["messages"][2]["content"] == [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "fetched for <EMAIL>"},
+            {"type": "text", "text": "Now fetch the page."},
+        ]
+
+    @pytest.mark.parametrize(
+        ("messages", "replacement_messages", "expected_messages"),
+        [
+            (
+                [{"role": "user", "content": [_SEARCH_RESULT, {"type": "text", "text": "secret"}]}],
+                [{"role": "user", "content": "masked"}, {"role": "user", "content": "note"}],
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            _SEARCH_RESULT,
+                            {"type": "text", "text": "masked"},
+                            {"type": "text", "text": "note"},
+                        ],
+                    }
+                ],
+            ),
+            (
+                [{"role": "user", "content": "first"}, {"role": "user", "content": "second"}],
+                [{"role": "user", "content": "summary"}],
+                [{"role": "user", "content": [{"type": "text", "text": "summary"}]}],
+            ),
+            (
+                [
+                    {"role": "user", "content": [_SEARCH_RESULT, {"type": "text", "text": "first"}]},
+                    {"role": "assistant", "content": "ok"},
+                    {"role": "user", "content": "second"},
+                ],
+                [{"role": "user", "content": "summary"}],
+                [{"role": "user", "content": [{"type": "text", "text": "summary"}]}],
+            ),
+        ],
+        ids=["added-text-ends-the-turn", "emptied-message-is-dropped", "changed-turns-move-no-block"],
+    )
+    async def test_a_rewrite_fills_the_client_turns_only_while_the_turns_line_up(
+        self, messages, replacement_messages, expected_messages
+    ):
+        data = {"model": "claude-fable-5", "messages": messages}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockCompactingGuardrail(replacement_messages=replacement_messages)
+        )
+
+        assert data["messages"] == expected_messages
+
+
 class NamelessComputerToolGuardrail(CustomGuardrail):
     """Guardrail that appends an OpenAI-format computer tool without a function name."""
 

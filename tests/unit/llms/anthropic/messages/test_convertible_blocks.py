@@ -9,7 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.messages.convertible_blocks import (
     malformed_tool_result_text_error,
-    restore_client_tool_results,
+    restore_client_blocks,
     unconvertible_anthropic_blocks,
     unconvertible_blocks_error,
 )
@@ -245,7 +245,7 @@ def test_a_tool_result_part_comes_back_from_the_client_only_when_the_scan_never_
 ) -> None:
     original: Final = _tool_result_turn([_SEARCH_RESULT, {"type": "text", "text": "secret"}])
 
-    restored: Final = restore_client_tool_results(_tool_result_turn(rewritten_content), original, scan_part)
+    restored: Final = restore_client_blocks(_tool_result_turn(rewritten_content), original, scan_part)
 
     assert restored == _tool_result_turn(restored_content)
 
@@ -254,9 +254,7 @@ def test_a_part_the_guardrail_adds_follows_the_parts_it_was_shown() -> None:
     original: Final = _tool_result_turn([{"type": "text", "text": "secret"}, _SEARCH_RESULT])
     rewritten: Final = _tool_result_turn([{"type": "text", "text": "masked"}, {"type": "text", "text": "note"}])
 
-    restored: Final = restore_client_tool_results(
-        rewritten, original, LiteLLMAnthropicMessagesAdapter().tool_result_part
-    )
+    restored: Final = restore_client_blocks(rewritten, original, LiteLLMAnthropicMessagesAdapter().tool_result_part)
 
     assert restored == _tool_result_turn(
         [{"type": "text", "text": "masked"}, _SEARCH_RESULT, {"type": "text", "text": "note"}]

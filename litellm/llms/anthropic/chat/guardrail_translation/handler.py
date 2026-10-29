@@ -33,7 +33,7 @@ from litellm.llms.anthropic.messages.adapters.transformation import (
     truncate_tool_name,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
-    restore_client_tool_results,
+    restore_client_blocks,
     scannable_tool_result_request,
 )
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
@@ -971,7 +971,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             cast(Sequence[object], converted),  # cast-ok: Anthropic message payload
             original_tool_names,
         )
-        data["messages"] = restore_client_tool_results(
+        data["messages"] = restore_client_blocks(
             converted, data.get("messages"), LiteLLMAnthropicMessagesAdapter().tool_result_part
         )
 

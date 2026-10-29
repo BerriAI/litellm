@@ -119,6 +119,7 @@ def _list_items(value: object) -> tuple[object, ...]:
 
 
 _ScanPart: TypeAlias = Callable[[object], object]
+_Carried: TypeAlias = Callable[[object], bool]
 
 
 def _scannable_text(text: object) -> str:
@@ -258,28 +259,36 @@ def _rewritten_part(original: object, rewritten: object) -> object:
             return rewritten
 
 
-def _merged_part(original: object, rewritten: Iterator[object], scan_part: _ScanPart) -> tuple[object, ...]:
-    if scan_part(_scannable_part(original)) is None:
+def _carried_tool_result_part(scan_part: _ScanPart, part: object) -> bool:
+    return scan_part(_scannable_part(part)) is not None
+
+
+def _merged_part(original: object, rewritten: Iterator[object], carried: _Carried) -> tuple[object, ...]:
+    if not carried(original):
         return (original,)
     return tuple(_rewritten_part(original, part) for part in islice(rewritten, 1))
 
 
-def _merged_content(original: object, rewritten: object, scan_part: _ScanPart) -> object:
+def _merged_parts(originals: Iterable[object], rewritten: Iterator[object], carried: _Carried) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(_merged_part(part, rewritten, carried) for part in originals))
+
+
+def _merged_content(original: object, rewritten: object, carried: _Carried) -> object:
     original_parts: Final = _list_items(original)
     if not isinstance(original, list):
         return rewritten
     remaining: Final = iter(_content_blocks(rewritten))
-    merged: Final = tuple(chain.from_iterable(_merged_part(part, remaining, scan_part) for part in original_parts))
+    merged: Final = _merged_parts(original_parts, remaining, carried)
     return [*merged, *remaining]
 
 
 def _restored_tool_result(
-    rewritten: Mapping[str, object], original: Mapping[str, object], scan_part: _ScanPart
+    rewritten: Mapping[str, object], original: Mapping[str, object], carried: _Carried
 ) -> Mapping[str, object]:
     return {
         **original,
         **rewritten,
-        "content": _merged_content(original.get("content"), rewritten.get("content"), scan_part),
+        "content": _merged_content(original.get("content"), rewritten.get("content"), carried),
     }
 
 
@@ -303,21 +312,19 @@ def _entry_tool_result(entry: _ToolResultEntry) -> Mapping[str, object]:
 
 
 def _restored_block(
-    block: object, originals: Mapping[str, Iterator[Mapping[str, object]]], scan_part: _ScanPart
+    block: object, originals: Mapping[str, Iterator[Mapping[str, object]]], carried: _Carried
 ) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
             sanitize_anthropic_tool_use_id(tool_use_id) in originals
         ):
             original: Final = next(originals[sanitize_anthropic_tool_use_id(tool_use_id)], tool_result)
-            return _restored_tool_result(tool_result, original, scan_part)
+            return _restored_tool_result(tool_result, original, carried)
         case _:
             return block
 
 
-def restore_client_tool_results(
-    rewritten: Sequence[object], original: object, scan_part: _ScanPart
-) -> Sequence[object]:
+def _restored_tool_results(rewritten: Sequence[object], original: object, scan_part: _ScanPart) -> Sequence[object]:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
     entries: Final = tuple(sorted(chain.from_iterable(map(_tool_result_entry, blocks)), key=_entry_tool_use_id))
     if not entries:
@@ -328,8 +335,80 @@ def restore_client_tool_results(
             for tool_use_id, group in groupby(entries, key=_entry_tool_use_id)
         }
     )
-    restore: Final = partial(_restored_block, originals=originals_in_order, scan_part=scan_part)
+    restore: Final = partial(
+        _restored_block, originals=originals_in_order, carried=partial(_carried_tool_result_part, scan_part)
+    )
     return [_with_user_blocks(message, restore) for message in rewritten]
+
+
+_Turn: TypeAlias = tuple[Mapping[str, object], ...]
+_Run: TypeAlias = tuple[str | None, tuple[object, ...]]
+
+
+def _turn_role(message: object) -> str | None:
+    match as_str_mapping(message):
+        case {"role": str(role)} if role in _CONVERTIBLE_BLOCK_TYPES:
+            return role
+        case _:
+            return None
+
+
+def _runs(messages: Iterable[object]) -> tuple[_Run, ...]:
+    return tuple((role, tuple(group)) for role, group in groupby(messages, key=_turn_role))
+
+
+def _turn_roles(runs: Iterable[_Run]) -> tuple[str, ...]:
+    return tuple(role for role, _ in runs if role is not None)
+
+
+def _turn(messages: Iterable[object]) -> _Turn:
+    return tuple(filter(None, map(as_str_mapping, messages)))
+
+
+def _carried_turn_block(role: str, scan_part: _ScanPart, block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": str(block_type)} if block_type not in _CONVERTIBLE_BLOCK_TYPES[role]:
+            return False
+        case {"type": str(block_type)} if block_type in _SOURCED_BLOCK_TYPES:
+            return scan_part(block) is not None
+        case _:
+            return True
+
+
+def _turn_blocks(turn: _Turn) -> Iterator[object]:
+    return chain.from_iterable(_content_blocks(message.get("content")) for message in turn)
+
+
+def _merged_turn(original: _Turn, rewritten: _Turn, carried: _Carried) -> _Turn:
+    remaining: Final = iter(tuple(_turn_blocks(rewritten)))
+    contents: Final = tuple(
+        _merged_parts(_content_blocks(message.get("content")), remaining, carried) for message in original
+    )
+    completed: Final = (*contents[:-1], (*contents[-1], *remaining))
+    return tuple(
+        {**message, "content": list(content)} for message, content in zip(original, completed, strict=True) if content
+    )
+
+
+def _restored_run(run: _Run, original_turns: Iterator[_Turn], scan_part: _ScanPart) -> tuple[object, ...]:
+    match run:
+        case (str(role), messages):
+            return _merged_turn(next(original_turns), _turn(messages), partial(_carried_turn_block, role, scan_part))
+        case (_, messages):
+            return messages
+
+
+def _restored_turns(rewritten: Sequence[object], original: object, scan_part: _ScanPart) -> Sequence[object]:
+    rewritten_runs: Final = _runs(rewritten)
+    original_runs: Final = _runs(_list_items(original))
+    if _turn_roles(rewritten_runs) != _turn_roles(original_runs):
+        return rewritten
+    original_turns: Final = iter(tuple(_turn(messages) for role, messages in original_runs if role is not None))
+    return list(chain.from_iterable(_restored_run(run, original_turns, scan_part) for run in rewritten_runs))
+
+
+def restore_client_blocks(rewritten: Sequence[object], original: object, scan_part: _ScanPart) -> Sequence[object]:
+    return _restored_turns(_restored_tool_results(rewritten, original, scan_part), original, scan_part)
 
 
 def _without_non_string_text(block: object) -> object:
