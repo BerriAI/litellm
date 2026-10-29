@@ -4067,7 +4067,9 @@ def get_optional_params_transcription(
         "timestamp_granularities": None,
     }
 
-    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
+    non_default_params: Final = {
+        k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])
+    }
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -4104,6 +4106,19 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+    elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.audio_transcription import (
+            UnsupportedTranscriptionParams,
+            map_openai_transcription_params,
+        )
+
+        match map_openai_transcription_params(
+            non_default_params, drop_params=drop_params is True or litellm.drop_params is True
+        ):
+            case UnsupportedTranscriptionParams(message=message):
+                raise UnsupportedParamsError(message=message, llm_provider="bedrock")
+            case mapped_params:
+                optional_params = dict(mapped_params)
     elif provider_config is not None:  # custom audio transcription config
         supported_params = provider_config.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
@@ -4118,7 +4133,7 @@ def get_optional_params_transcription(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=OPENAI_TRANSCRIPTION_PARAMS,
+        openai_params=list(default_params) if custom_llm_provider == "bedrock" else OPENAI_TRANSCRIPTION_PARAMS,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
