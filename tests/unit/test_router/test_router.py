@@ -14168,6 +14168,71 @@ def test_credentials_for_a_mixed_group_name_keep_resolving_to_its_first_deployme
     assert credentials is not None and credentials["api_base"] == "https://chat-sku.openai.azure.com"
 
 
+def test_batch_deployment_of_a_mixed_group_resolves_to_its_batch_deployment_credentials():
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-id"),
+        ]
+    )
+
+    deployment_id: Final = router.get_batch_deployment_id("gpt-mixed")
+    credentials: Final = router.get_deployment_credentials_with_provider(model_id=deployment_id or "gpt-mixed")
+
+    assert deployment_id == "batch-id"
+    assert credentials is not None and credentials["api_base"] == "https://batch-sku.openai.azure.com"
+
+
+def test_batch_deployment_is_none_for_a_group_without_a_batch_deployment():
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+            _azure_sku_deployment("gpt-mixed", "other-chat-sku", "chat", id="other-chat-id"),
+        ]
+    )
+
+    assert router.get_batch_deployment_id("gpt-mixed") is None
+
+
+def test_batch_deployment_is_none_when_the_batch_rule_drops_no_deployment_of_the_group():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-mixed", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "dummy-key"}},
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-id"),
+        ]
+    )
+
+    assert router.get_batch_deployment_id("gpt-mixed") is None
+
+
+@pytest.mark.parametrize(
+    ("preferred_deployment_id", "expected"),
+    [
+        ("second-batch-id", "second-batch-id"),
+        (None, "first-batch-id"),
+        ("removed-id", "first-batch-id"),
+        ("other-group-batch-id", "first-batch-id"),
+        ("chat-id", "first-batch-id"),
+        ("paused-batch-id", "first-batch-id"),
+    ],
+    ids=["still-batch-ready", "no-hint", "removed", "other-group", "chat-deployment", "paused"],
+)
+def test_batch_deployment_keeps_a_hinted_deployment_only_while_it_is_batch_ready_in_the_group(
+    preferred_deployment_id: str | None, expected: str
+):
+    router: Final = Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-id"),
+            _azure_sku_deployment("gpt-mixed", "paused-sku", "batch", id="paused-batch-id", blocked=True),
+            _azure_sku_deployment("gpt-mixed", "first-batch-sku", "batch", id="first-batch-id"),
+            _azure_sku_deployment("gpt-mixed", "second-batch-sku", "batch", id="second-batch-id"),
+            _azure_sku_deployment("gpt-other", "other-batch-sku", "batch", id="other-group-batch-id"),
+        ]
+    )
+
+    assert router.get_batch_deployment_id("gpt-mixed", preferred_deployment_id=preferred_deployment_id) == expected
+
+
 _AZURE_CHAT_SKU_REJECTS_BATCH: Final = httpx.Response(
     400,
     json={"error": {"code": "invalid_deployment_type", "message": "The current deployment is not supported for batch jobs"}},

@@ -724,6 +724,14 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
 
 
+def _unpaused_deployment_id(deployment: Mapping[str, object]) -> str | None:
+    model_info: Final = _configured_model_info(deployment)
+    deployment_id: Final = model_info.get("id")
+    if model_info.get("blocked") is True or not isinstance(deployment_id, str):
+        return None
+    return deployment_id
+
+
 def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
     from litellm.responses.litellm_completion_transformation.tool_search import chat_config_builds_anthropic_request
 
@@ -12020,6 +12028,26 @@ class Router:
         if first_usable is None:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
+
+    def get_batch_deployment_id(self, model_group_name: str, preferred_deployment_id: str | None = None) -> str | None:
+        """
+        The shared deployment of ``model_group_name`` that file and batch calls
+        should reach when the group mixes batch and non-batch deployments, or
+        None when the batch rule drops nothing and the group name resolves as before.
+        """
+        group: Final = tuple(
+            deployment
+            for deployment in self.deployments_named(model_group_name) or ()
+            if self.deployment_usable_by_team(deployment, None)
+        )
+        with batch_create_routing():
+            batch_ready: Final = without_deployments_that_cannot_batch(group, caller_deployments=lambda: group)
+        if len(batch_ready) == len(group):
+            return None
+        ready_ids: Final = tuple(
+            deployment_id for deployment_id in map(_unpaused_deployment_id, batch_ready) if deployment_id is not None
+        )
+        return preferred_deployment_id if preferred_deployment_id in ready_ids else next(iter(ready_ids), None)
 
     async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
         """Refresh token limits advertised by configured OpenAI-compatible deployments."""

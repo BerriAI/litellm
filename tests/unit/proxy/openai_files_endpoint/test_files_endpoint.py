@@ -1,5 +1,6 @@
 import itertools
 import json
+from collections.abc import Mapping
 from typing import Final, List, Optional
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -18,6 +19,12 @@ from litellm.files.types import FileContentStreamingResult
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    decode_deployment_from_file_id,
+    decode_model_from_file_id,
+    encode_file_id_with_model,
+    get_original_file_id,
+)
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
     FileContentStreamingHandler,
 )
@@ -982,6 +989,108 @@ def test_batch_upload_keeps_the_callers_drop_params_over_the_deployment(batch_up
 
     assert response.status_code == 200, response.text
     assert provider_upload.call_args.kwargs["drop_params"] is True
+
+
+_MIXED_GROUP_SKUS: Final = ("chat-sku", "batch-sku", "other-sku")
+
+
+@pytest.fixture
+def mixed_azure_group(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": f"azure/{sku}",
+                    "api_base": f"https://{sku}.openai.azure.com",
+                    "api_key": f"{sku}-key",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": deployment_id, "mode": mode},
+            }
+            for model_group, sku, mode, deployment_id in (
+                ("gpt-mixed", "chat-sku", "chat", "chat-id"),
+                ("gpt-mixed", "batch-sku", "batch", "batch-id"),
+                ("gpt-other", "other-sku", "batch", "other-batch-id"),
+            )
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    try:
+        with respx.mock(assert_all_called=False) as azure:
+            yield azure
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _azure_upload_routes(azure: respx.MockRouter) -> Mapping[str, respx.Route]:
+    uploaded: Final = {
+        "id": "file-up",
+        "object": "file",
+        "bytes": len(BATCH_JSONL_LINE),
+        "created_at": 0,
+        "filename": "batch.jsonl",
+        "purpose": "batch",
+        "status": "processed",
+    }
+    return {
+        sku: azure.post(host=f"{sku}.openai.azure.com").mock(return_value=httpx.Response(200, json=uploaded))
+        for sku in _MIXED_GROUP_SKUS
+    }
+
+
+@pytest.mark.parametrize(
+    ("purpose", "reached_sku", "deployment_hint"),
+    [("batch", "batch-sku", "batch-id"), ("assistants", "chat-sku", None)],
+    ids=["batch-file", "other-purpose"],
+)
+def test_upload_naming_a_mixed_azure_group_reaches_its_batch_deployment_only_for_batch_files(
+    mixed_azure_group: respx.MockRouter, purpose: str, reached_sku: str, deployment_hint: str | None
+):
+    upload_routes: Final = _azure_upload_routes(mixed_azure_group)
+
+    response: Final = _upload_batch_file({"x-litellm-model": "gpt-mixed"}, {"purpose": purpose})
+
+    assert response.status_code == 200, response.text
+    assert {sku: route.call_count for sku, route in upload_routes.items()} == {
+        sku: int(sku == reached_sku) for sku in _MIXED_GROUP_SKUS
+    }
+    assert upload_routes[reached_sku].calls.last.request.headers["api-key"] == f"{reached_sku}-key"
+    encoded_id: Final = response.json()["id"]
+    assert (
+        decode_model_from_file_id(encoded_id),
+        get_original_file_id(encoded_id),
+        decode_deployment_from_file_id(encoded_id),
+    ) == ("gpt-mixed", "file-up", deployment_hint)
+
+
+@pytest.mark.parametrize(
+    ("deployment_hint", "reached_sku"),
+    [("batch-id", "batch-sku"), ("other-batch-id", "batch-sku"), (None, "chat-sku")],
+    ids=["hinted", "hint-naming-another-group", "group-only-id-from-before-the-upgrade"],
+)
+def test_file_content_of_a_mixed_azure_group_id_comes_from_the_deployment_its_hint_names(
+    mixed_azure_group: respx.MockRouter, deployment_hint: str | None, reached_sku: str
+):
+    for sku in _MIXED_GROUP_SKUS:
+        mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files/file-out/content$").mock(
+            return_value=httpx.Response(200, content=f"rows from {sku}".encode())
+        )
+    output_file_id: Final = encode_file_id_with_model("file-out", "gpt-mixed", deployment_id=deployment_hint)
+
+    response: Final = client.get(f"/v1/files/{output_file_id}/content", headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 200, response.text
+    assert response.content == f"rows from {reached_sku}".encode()
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")

@@ -1,6 +1,7 @@
+import base64
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,7 +14,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_team_provider_credentials,
     apply_unified_file_ids,
+    decode_deployment_from_file_id,
+    decode_model_from_file_id,
+    encode_file_id_with_model,
     get_credentials_for_model,
+    get_original_file_id,
     get_team_provider_credentials,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
@@ -851,3 +856,37 @@ def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones
 
     assert credentials is not None
     assert credentials["api_key"] == "deployment-z-key"
+
+
+@pytest.mark.parametrize(("raw_id", "id_type"), [("file-abc123", "file"), ("batch_abc123", "batch")])
+def test_a_deployment_hinted_id_decodes_to_its_group_original_id_and_deployment(
+    raw_id: str, id_type: Literal["file", "batch"]
+):
+    encoded_id: Final = encode_file_id_with_model(raw_id, "gpt-mixed", id_type=id_type, deployment_id="batch-id")
+
+    assert (
+        decode_model_from_file_id(encoded_id),
+        get_original_file_id(encoded_id),
+        decode_deployment_from_file_id(encoded_id),
+    ) == ("gpt-mixed", raw_id, "batch-id")
+
+
+def test_an_unhinted_id_keeps_the_encoding_ids_created_before_the_hint_existed():
+    encoded_before_the_hint: Final = "file-" + base64.urlsafe_b64encode(
+        b"litellm:file-abc123;model,gpt-mixed"
+    ).decode().rstrip("=")
+
+    assert encode_file_id_with_model("file-abc123", "gpt-mixed") == encoded_before_the_hint
+    assert decode_deployment_from_file_id(encoded_before_the_hint) is None
+    assert get_original_file_id(encoded_before_the_hint) == "file-abc123"
+
+
+@pytest.mark.parametrize("raw_id", ["file-abc123", "batch_abc123", "file-é", ""])
+def test_a_provider_id_carries_no_deployment_hint(raw_id: str):
+    assert decode_deployment_from_file_id(raw_id) is None
+    assert get_original_file_id(raw_id) == raw_id
+
+
+@pytest.mark.parametrize("unvalidated_id", [None, 123, ["file-abc123"]])
+def test_a_non_string_id_from_a_request_body_decodes_to_no_model_or_deployment(unvalidated_id: object):
+    assert (decode_model_from_file_id(unvalidated_id), decode_deployment_from_file_id(unvalidated_id)) == (None, None)

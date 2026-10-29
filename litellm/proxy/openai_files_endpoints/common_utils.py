@@ -229,11 +229,13 @@ def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
     return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
-def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
+def encode_file_id_with_model(
+    file_id: str, model: str, id_type: Literal["file", "batch"] = "file", deployment_id: str | None = None
+) -> str:
     """
     Encode a file/batch ID with model routing information.
 
-    Format: <prefix><base64(litellm:<original_id>;model,<model_name>)>
+    Format: <prefix><base64(litellm:<original_id>;model,<model_name>[;deployment,<deployment_id>])>
     The result preserves the original prefix (file-, batch_, etc.) for OpenAI compliance.
 
     Args:
@@ -242,6 +244,8 @@ def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file",
         id_type: Type of ID being encoded. Used to determine the correct prefix when
                  the raw ID lacks a recognizable prefix (e.g., Vertex AI numeric IDs).
                  Defaults to "file" for backward compatibility.
+        deployment_id: The group deployment that holds the resource, set only when the group's
+                       first deployment cannot serve it (a mixed Azure chat and batch group).
 
     Returns:
         Encoded ID starting with appropriate prefix and containing routing information
@@ -256,7 +260,8 @@ def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file",
         encode_file_id_with_model("3814889423749775360", "gemini-2.5-pro", id_type="batch")
         -> "batch_bGl0ZWxsbTozODE0ODg5NDIzNzQ5Nzc1MzYwO21vZGVsLGdlbWluaS0yLjUtcHJv"
     """
-    encoded_str: Final = f"litellm:{file_id};model,{model}"
+    deployment_segment: Final = f";deployment,{deployment_id}" if deployment_id else ""
+    encoded_str: Final = f"litellm:{file_id};model,{model}{deployment_segment}"
     encoded_bytes: Final = base64.urlsafe_b64encode(encoded_str.encode())
     encoded_b64: Final = encoded_bytes.decode().rstrip("=")
 
@@ -273,47 +278,46 @@ def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file",
     return f"{prefix}{encoded_b64}"
 
 
-def encode_batch_response_ids(response, model: str) -> None:
+def encode_batch_response_ids(response, model: str, deployment_id: str | None = None) -> None:
     """Encode all IDs in a batch response with model routing info (in-place)."""
     if not response or not hasattr(response, "id") or not response.id:
         return
-    response.id = encode_file_id_with_model(file_id=response.id, model=model, id_type="batch")
+    response.id = encode_file_id_with_model(
+        file_id=response.id, model=model, id_type="batch", deployment_id=deployment_id
+    )
     for attr in ("output_file_id", "error_file_id", "input_file_id"):
         if hasattr(response, attr) and getattr(response, attr):
             setattr(
                 response,
                 attr,
-                encode_file_id_with_model(file_id=getattr(response, attr), model=model),
+                encode_file_id_with_model(file_id=getattr(response, attr), model=model, deployment_id=deployment_id),
             )
 
 
-def decode_model_from_file_id(encoded_id: str) -> str | None:
+def _model_embedded_payload(encoded_id: object) -> str | None:
+    if not isinstance(encoded_id, str):
+        return None
+    prefix: Final = next((prefix for prefix in ("file-", "batch_") if encoded_id.startswith(prefix)), "")
+    b64_part: Final = encoded_id[len(prefix) :]
+    try:
+        decoded: Final = base64.urlsafe_b64decode(b64_part + "=" * (-len(b64_part) % 4)).decode()
+    except ValueError:
+        return None
+    return decoded if decoded.startswith("litellm:") and ";model," in decoded else None
+
+
+def decode_model_from_file_id(encoded_id: object) -> str | None:
     """
     Extract model name from an encoded file/batch ID.
     Handles IDs that start with "file-" or "batch_" prefix.
     """
-    try:
-        if not isinstance(encoded_id, str):
-            return None
+    match: Final = re.search(r";model,([^;]+)", _model_embedded_payload(encoded_id) or "")
+    return match.group(1).strip() if match else None
 
-        # Remove prefix if present (file-, batch_, etc.)
-        if encoded_id.startswith("file-"):
-            b64_part = encoded_id[5:]  # Remove "file-"
-        elif encoded_id.startswith("batch_"):
-            b64_part = encoded_id[6:]  # Remove "batch_"
-        else:
-            b64_part = encoded_id
 
-        padded: Final = b64_part + "=" * (-len(b64_part) % 4)
-        decoded: Final = base64.urlsafe_b64decode(padded).decode()
-        if decoded.startswith("litellm:") and ";model," in decoded:
-            match: Final = re.search(r";model,([^;]+)", decoded)
-            if match:
-                return match.group(1).strip()
-
-        return None
-    except Exception:
-        return None
+def decode_deployment_from_file_id(encoded_id: object) -> str | None:
+    match: Final = re.search(r";deployment,([^;]+)", _model_embedded_payload(encoded_id) or "")
+    return match.group(1) if match else None
 
 
 def get_original_file_id(encoded_id: str) -> str:
@@ -321,29 +325,8 @@ def get_original_file_id(encoded_id: str) -> str:
     Extract the original provider file/batch ID from an encoded ID.
     Handles IDs that start with "file-" or "batch_" prefix.
     """
-    try:
-        if not isinstance(encoded_id, str):
-            return encoded_id
-
-        # Remove prefix if present (file-, batch_, etc.)
-        if encoded_id.startswith("file-"):
-            b64_part = encoded_id[5:]  # Remove "file-"
-        elif encoded_id.startswith("batch_"):
-            b64_part = encoded_id[6:]  # Remove "batch_"
-        else:
-            b64_part = encoded_id
-
-        padded: Final = b64_part + "=" * (-len(b64_part) % 4)
-        decoded: Final = base64.urlsafe_b64decode(padded).decode()
-
-        if decoded.startswith("litellm:") and ";model," in decoded:
-            match: Final = re.search(r"litellm:([^;]+);model,", decoded)
-            if match:
-                return match.group(1)
-
-        return encoded_id
-    except Exception:
-        return encoded_id
+    match: Final = re.search(r"litellm:([^;]+);model,", _model_embedded_payload(encoded_id) or "")
+    return match.group(1) if match else encoded_id
 
 
 def is_model_embedded_id(file_id: str) -> bool:
@@ -467,14 +450,30 @@ async def get_authorized_credentials_for_model(
     model_id: str,
     user_api_key_dict: "UserAPIKeyAuth",
     operation_context: str = "file operation",
+    deployment_id: str | None = None,
 ) -> dict:  # mutable-ok: same contract as get_credentials_for_model, callers merge it into request data
     """``get_credentials_for_model`` gated by ``authorize_model_for_key``."""
     await authorize_model_for_key(model_id=model_id, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
     return get_credentials_for_model(
         llm_router=llm_router,
-        model_id=model_id,
+        model_id=deployment_id or model_id,
         operation_context=operation_context,
     )
+
+
+def batch_deployment_id(
+    llm_router: Optional["Router"], model: str, preferred_deployment_id: str | None = None
+) -> str | None:
+    return (
+        llm_router.get_batch_deployment_id(model_group_name=model, preferred_deployment_id=preferred_deployment_id)
+        if llm_router is not None
+        else None
+    )
+
+
+def hinted_batch_deployment_id(llm_router: Optional["Router"], model: str, encoded_id: str) -> str | None:
+    hint: Final = decode_deployment_from_file_id(encoded_id)
+    return batch_deployment_id(llm_router, model, preferred_deployment_id=hint) if hint else None
 
 
 def deployment_drop_params(
@@ -801,7 +800,7 @@ def prepare_data_with_credentials(
 async def handle_model_based_routing(
     file_id: str,
     request,  # FastAPI Request object
-    llm_router,  # Router instance
+    llm_router: Optional["Router"],
     data: dict,
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
@@ -845,6 +844,7 @@ async def handle_model_based_routing(
             model_id=model_from_id,
             user_api_key_dict=user_api_key_dict,
             operation_context="file operation (file created with model)",
+            deployment_id=hinted_batch_deployment_id(llm_router, model_from_id, file_id),
         )
         original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials

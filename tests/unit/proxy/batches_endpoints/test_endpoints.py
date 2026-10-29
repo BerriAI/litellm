@@ -32,6 +32,7 @@ cannot drift without a test failure.
 import base64
 import json
 import logging
+from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -50,7 +51,10 @@ import litellm.proxy.proxy_server as proxy_server
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    decode_deployment_from_file_id,
+    decode_model_from_file_id,
     encode_file_id_with_model,
+    get_original_file_id,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -198,6 +202,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     router.model_list = []
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    router.get_batch_deployment_id = MagicMock(return_value=None)
 
     read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
     pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))
@@ -1457,6 +1462,7 @@ def retrieve_harness():
     router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    router.get_batch_deployment_id = MagicMock(return_value=None)
     router.get_credential_deployment = MagicMock(return_value=None)
 
     pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
@@ -2040,6 +2046,7 @@ def list_harness():
     router.model_list = []
     router.alist_batches = AsyncMock(return_value=FakeListPage([]))
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    router.get_batch_deployment_id = MagicMock(return_value=None)
 
     read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
     pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))
@@ -2458,6 +2465,7 @@ def cancel_harness():
     router.model_list = []
     router.acancel_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    router.get_batch_deployment_id = MagicMock(return_value=None)
 
     pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
     # add_litellm_data_to_request is a passthrough that returns the data it got.
@@ -3482,3 +3490,166 @@ async def test_cancel__executed_batch_rejects_key_without_model_grant(cancel_har
     factory.assert_not_called()
     runner.cancel.assert_not_called()
     cancel_harness.router_acancel.assert_not_called()
+
+
+def _mixed_azure_group_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": f"azure/{sku}",
+                    "api_base": f"https://{sku}.openai.azure.com",
+                    "api_key": f"{sku}-key",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": deployment_id, "mode": mode},
+            }
+            for model_group, sku, mode, deployment_id in (
+                ("gpt-mixed", "chat-sku", "chat", "chat-id"),
+                ("gpt-mixed", "batch-sku", "batch", "batch-id"),
+                ("gpt-other", "other-sku", "batch", "other-batch-id"),
+            )
+        ]
+    )
+
+
+def _decoded(encoded_id: str) -> tuple[str | None, str, str | None]:
+    return (
+        decode_model_from_file_id(encoded_id),
+        get_original_file_id(encoded_id),
+        decode_deployment_from_file_id(encoded_id),
+    )
+
+
+def _reached(provider_kwargs: Mapping[str, object]) -> tuple[object, object]:
+    return provider_kwargs["api_base"], provider_kwargs["api_key"]
+
+
+_BATCH_SKU: Final = ("https://batch-sku.openai.azure.com", "batch-sku-key")
+_CHAT_SKU: Final = ("https://chat-sku.openai.azure.com", "chat-sku-key")
+_MIXED_GROUP_HINTS: Final = pytest.mark.parametrize(
+    ("deployment_hint", "reached", "kept_hint"),
+    [
+        ("batch-id", _BATCH_SKU, "batch-id"),
+        ("other-batch-id", _BATCH_SKU, "batch-id"),
+        (None, _CHAT_SKU, None),
+    ],
+    ids=["hinted", "hint-naming-another-group", "group-only-id-from-before-the-upgrade"],
+)
+
+
+@pytest.mark.asyncio
+@_MIXED_GROUP_HINTS
+async def test_create__mixed_group_input_file_reaches_the_deployment_its_hint_names(
+    harness, deployment_hint: str | None, reached: tuple[str, str], kept_hint: str | None
+):
+    input_file_id: Final = encode_file_id_with_model("file-original123", "gpt-mixed", deployment_id=deployment_hint)
+    set_body(harness, {"input_file_id": input_file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    provider_create: Final = AsyncMock(return_value=make_batch(output_file_id="file-out", error_file_id="file-err"))
+
+    with (
+        patch.object(proxy_server, "llm_router", _mixed_azure_group_router()),
+        patch.object(litellm, "acreate_batch", provider_create),
+    ):
+        resp: Final = await call_create(harness)
+
+    assert _reached(provider_create.call_args.kwargs) == reached
+    assert provider_create.call_args.kwargs["input_file_id"] == "file-original123"
+    assert tuple(map(_decoded, (resp.id, resp.output_file_id, resp.error_file_id))) == (
+        ("gpt-mixed", "batch-provider-id", kept_hint),
+        ("gpt-mixed", "file-out", kept_hint),
+        ("gpt-mixed", "file-err", kept_hint),
+    )
+    assert resp.input_file_id == input_file_id
+
+
+@pytest.mark.asyncio
+async def test_create__model_header_on_a_mixed_group_reaches_its_batch_deployment(harness):
+    set_body(harness, {"input_file_id": "file-raw", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+
+    with patch.object(proxy_server, "llm_router", _mixed_azure_group_router()):
+        resp: Final = await call_create(harness, headers={"x-litellm-model": "gpt-mixed"})
+
+    assert _reached(harness.acreate_kwargs()) == _BATCH_SKU
+    assert _decoded(resp.id) == ("gpt-mixed", "batch-provider-id", "batch-id")
+    assert _decoded(resp.input_file_id) == ("gpt-mixed", "file-provider-input", "batch-id")
+
+
+@pytest.mark.asyncio
+async def test_list__model_header_on_a_mixed_group_reaches_its_batch_deployment(list_harness):
+    provider_list: Final = AsyncMock(return_value=FakeListPage([make_batch(id="batch-1")]))
+
+    with (
+        patch.object(proxy_server, "llm_router", _mixed_azure_group_router()),
+        patch.object(litellm, "alist_batches", provider_list),
+    ):
+        resp: Final = await call_list(list_harness, headers={"x-litellm-model": "gpt-mixed"})
+
+    assert _reached(provider_list.call_args.kwargs) == _BATCH_SKU
+    assert _decoded(resp.data[0].id) == ("gpt-mixed", "batch-1", "batch-id")
+
+
+@pytest.mark.asyncio
+@_MIXED_GROUP_HINTS
+async def test_retrieve__mixed_group_batch_reaches_the_deployment_its_hint_names(
+    retrieve_harness, deployment_hint: str | None, reached: tuple[str, str], kept_hint: str | None
+):
+    batch_id: Final = encode_file_id_with_model(
+        "batch-provider-id", "gpt-mixed", id_type="batch", deployment_id=deployment_hint
+    )
+    provider_retrieve: Final = AsyncMock(return_value=make_batch(output_file_id="file-out"))
+
+    with (
+        patch.object(proxy_server, "llm_router", _mixed_azure_group_router()),
+        patch.object(litellm, "aretrieve_batch", provider_retrieve),
+    ):
+        resp: Final = await call_retrieve(retrieve_harness, batch_id)
+
+    assert _reached(provider_retrieve.call_args.kwargs) == reached
+    assert provider_retrieve.call_args.kwargs["litellm_metadata"]["model_info"]["id"] == (kept_hint or "chat-id")
+    assert _decoded(resp.id) == ("gpt-mixed", "batch-provider-id", kept_hint)
+    assert _decoded(resp.output_file_id) == ("gpt-mixed", "file-out", kept_hint)
+
+
+@pytest.mark.asyncio
+@_MIXED_GROUP_HINTS
+async def test_cancel__mixed_group_batch_reaches_the_deployment_its_hint_names(
+    cancel_harness, deployment_hint: str | None, reached: tuple[str, str], kept_hint: str | None
+):
+    batch_id: Final = encode_file_id_with_model(
+        "batch-provider-id", "gpt-mixed", id_type="batch", deployment_id=deployment_hint
+    )
+
+    with patch.object(proxy_server, "llm_router", _mixed_azure_group_router()):
+        resp: Final = await call_cancel(cancel_harness, batch_id)
+
+    assert _reached(cancel_harness.acancel_kwargs()) == reached
+    assert _decoded(resp.id) == ("gpt-mixed", "batch-provider-id", kept_hint)
+
+
+@pytest.mark.asyncio
+async def test_retrieve__a_key_granted_only_the_group_may_use_its_hinted_batch_id(retrieve_harness):
+    batch_id: Final = encode_file_id_with_model(
+        "batch-provider-id", "gpt-mixed", id_type="batch", deployment_id="batch-id"
+    )
+
+    with patch.object(proxy_server, "llm_router", _mixed_azure_group_router()):
+        resp: Final = await call_retrieve(retrieve_harness, batch_id, user=_key_restricted_to("gpt-mixed"))
+
+    assert _reached(retrieve_harness.aretrieve_kwargs()) == _BATCH_SKU
+    assert _decoded(resp.id) == ("gpt-mixed", "batch-provider-id", "batch-id")
+
+
+@pytest.mark.asyncio
+async def test_retrieve__a_hint_naming_a_granted_deployment_never_authorizes_a_group_the_key_lacks(retrieve_harness):
+    batch_id: Final = encode_file_id_with_model(
+        "batch-provider-id", "gpt-mixed", id_type="batch", deployment_id="other-batch-id"
+    )
+
+    with patch.object(proxy_server, "llm_router", _mixed_azure_group_router()):
+        with pytest.raises(ProxyException) as exc_info:
+            await call_retrieve(retrieve_harness, batch_id, user=_key_restricted_to("gpt-other"))
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.litellm_aretrieve.assert_not_called()

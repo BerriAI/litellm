@@ -52,9 +52,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_cost_poller_is_active,
+    batch_deployment_id,
     decode_model_from_file_id,
     encode_batch_response_ids,
-    encode_file_id_with_model,
+    encode_file_id_with_model,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     ensure_batch_response_managed_file_ids,
     get_authorized_credentials_for_model,
     get_batch_from_database,
@@ -62,6 +63,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
+    hinted_batch_deployment_id,
     is_base64_encoded_unified_file_id,
     is_litellm_executed_batch,
     prepare_data_with_credentials,
@@ -360,11 +362,13 @@ async def create_batch(
 
         # SCENARIO 1: File ID is encoded with model info
         if model_from_file_id is not None and input_file_id:
+            input_file_deployment_id: Final = hinted_batch_deployment_id(llm_router, model_from_file_id, input_file_id)
             credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_file_id,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="batch creation (file created with model)",
+                deployment_id=input_file_deployment_id,
             )
 
             original_file_id: Final = get_original_file_id(input_file_id)
@@ -380,34 +384,10 @@ async def create_batch(
                 **_create_batch_data,
             )
 
-            # Encode the batch ID and related file IDs with model information
-            if response and hasattr(response, "id") and response.id:
-                original_batch_id: Final = response.id
-                encoded_batch_id: Final = encode_file_id_with_model(
-                    file_id=original_batch_id,
-                    model=model_from_file_id,
-                    id_type="batch",
-                )
-                response.id = encoded_batch_id
-
-                if hasattr(response, "output_file_id") and response.output_file_id:
-                    response.output_file_id = encode_file_id_with_model(
-                        file_id=response.output_file_id, model=model_from_file_id
-                    )
-
-                if hasattr(response, "error_file_id") and response.error_file_id:
-                    response.error_file_id = encode_file_id_with_model(
-                        file_id=response.error_file_id, model=model_from_file_id
-                    )
-
-                verbose_proxy_logger.debug(
-                    "Created batch using model: %s, original_batch_id: %s, encoded: %s",
-                    model_from_file_id,
-                    original_batch_id,
-                    encoded_batch_id,
-                )
-
+            encode_batch_response_ids(response, model=model_from_file_id, deployment_id=input_file_deployment_id)
             response.input_file_id = input_file_id
+
+            verbose_proxy_logger.debug("Created batch using model: %s", model_from_file_id)
 
         elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
             if llm_router is None:
@@ -465,11 +445,13 @@ async def create_batch(
             # SCENARIO 2 & 3: Model from header/query OR custom_llm_provider fallback
             if model_param:
                 # SCENARIO 2: Use model-based routing from header/query/body
+                model_param_deployment_id: Final = batch_deployment_id(llm_router, model_param)
                 credentials = await get_authorized_credentials_for_model(
                     llm_router=llm_router,
                     model_id=model_param,
                     user_api_key_dict=user_api_key_dict,
                     operation_context="batch creation",
+                    deployment_id=model_param_deployment_id,
                 )
                 await _raise_when_input_file_must_be_managed(model_param, credentials)
 
@@ -484,7 +466,7 @@ async def create_batch(
                     **_create_batch_data,
                 )
 
-                encode_batch_response_ids(response, model=model_param)
+                encode_batch_response_ids(response, model=model_param, deployment_id=model_param_deployment_id)
 
                 verbose_proxy_logger.debug("Created batch using model: %s", model_param)
             else:
@@ -709,11 +691,13 @@ async def retrieve_batch(
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
+            retrieve_deployment_id: Final = hinted_batch_deployment_id(llm_router, model_from_id, batch_id)
             credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="batch retrieval (batch created with model)",
+                deployment_id=retrieve_deployment_id,
             )
 
             original_batch_id: Final = get_original_file_id(batch_id)
@@ -728,7 +712,9 @@ async def retrieve_batch(
             # so litellm.aretrieve_batch can load BedrockBatchesConfig. Without
             # it the call falls into the legacy provider switch and 400s.
             data["model"] = model_from_id
-            add_deployment_model_info(data=data, llm_router=llm_router, model_id=model_from_id)
+            add_deployment_model_info(
+                data=data, llm_router=llm_router, model_id=retrieve_deployment_id or model_from_id
+            )
             _litellm_metadata_of(data).setdefault("model_group", model_from_id)
 
             # Retrieve batch using model credentials
@@ -737,7 +723,7 @@ async def retrieve_batch(
                 **data,
             )
 
-            encode_batch_response_ids(response, model=model_from_id)
+            encode_batch_response_ids(response, model=model_from_id, deployment_id=retrieve_deployment_id)
 
             verbose_proxy_logger.debug(
                 "Retrieved batch using model: %s, original_id: %s", model_from_id, original_batch_id
@@ -939,11 +925,15 @@ async def list_batches(
             data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
         ):
             # SCENARIO 2: Use model-based routing from header/query/body
+            list_deployment_id: Final = (
+                batch_deployment_id(llm_router, model_param) if isinstance(model_param, str) else None
+            )
             credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_param,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="batch listing",
+                deployment_id=list_deployment_id,
             )
 
             prepare_data_with_credentials(data=data, credentials=credentials)
@@ -960,7 +950,7 @@ async def list_batches(
             response_data: Final = getattr(response, "data", None)
             if response_data:
                 for batch in response_data:
-                    encode_batch_response_ids(batch, model=model_param)
+                    encode_batch_response_ids(batch, model=model_param, deployment_id=list_deployment_id)
 
             verbose_proxy_logger.debug("Listed batches using model: %s", model_param)
 
@@ -1140,11 +1130,13 @@ async def cancel_batch(
 
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
+            cancel_deployment_id: Final = hinted_batch_deployment_id(llm_router, model_from_id, batch_id)
             credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="batch cancellation (batch created with model)",
+                deployment_id=cancel_deployment_id,
             )
 
             original_batch_id: Final = get_original_file_id(batch_id)
@@ -1162,7 +1154,7 @@ async def cancel_batch(
                 **data,
             )
 
-            encode_batch_response_ids(response, model=model_from_id)
+            encode_batch_response_ids(response, model=model_from_id, deployment_id=cancel_deployment_id)
 
             verbose_proxy_logger.debug(
                 "Cancelled batch using model: %s, original_id: %s", model_from_id, original_batch_id

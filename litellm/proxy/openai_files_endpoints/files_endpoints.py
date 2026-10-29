@@ -80,6 +80,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
+    batch_deployment_id,
     deployment_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -454,18 +455,23 @@ async def route_create_file(
 
     # NEW: Handle model-based routing (no DB required)
     if model is not None:
+        deployment_id: Final = batch_deployment_id(llm_router, model) if purpose == "batch" else None
         # Get credentials from model_list via router
         credentials: Final = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model,
             user_api_key_dict=user_api_key_dict,
             operation_context="file upload",
+            deployment_id=deployment_id,
         )
 
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            credentials={
+                **credentials,
+                **deployment_drop_params(llm_router, deployment_id or model, _create_file_request),
+            },
         )
 
         # Create the file with model credentials
@@ -477,7 +483,7 @@ async def route_create_file(
         # Encode the file ID with model information
         if response and hasattr(response, "id") and response.id:
             original_id: Final = response.id
-            encoded_id: Final = encode_file_id_with_model(file_id=original_id, model=model)
+            encoded_id: Final = encode_file_id_with_model(file_id=original_id, model=model, deployment_id=deployment_id)
             response.id = encoded_id
             verbose_proxy_logger.debug("Encoded file ID: %s -> %s (model: %s)", original_id, encoded_id, model)
 
