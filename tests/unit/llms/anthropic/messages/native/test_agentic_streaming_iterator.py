@@ -980,7 +980,10 @@ class TestAgenticStreamingIteratorHoldBack:
     async def test_should_emit_pings_while_the_follow_up_stream_is_slow(self):
         """The corrected answer can be slow to generate, so the follow-up stream gets keepalives too."""
         chunks = _build_tool_use_stream()
-        phase2_chunks = [b"follow-up-chunk-1", b"follow-up-chunk-2"]
+        phase2_chunks = [
+            _sse_event("message_start", {"type": "message_start", "message": {"id": "follow-up"}}),
+            _sse_event("message_stop", {"type": "message_stop"}),
+        ]
 
         mock_handler = MagicMock()
         mock_handler._call_agentic_completion_hooks = AsyncMock(
@@ -1000,6 +1003,28 @@ class TestAgenticStreamingIteratorHoldBack:
         first_follow_up_index = collected.index(phase2_chunks[0])
         assert collected[first_follow_up_index + 1] == STREAM_SSE_KEEPALIVE_PING_BYTES
         assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
+
+    @pytest.mark.asyncio
+    async def test_should_not_ping_inside_a_follow_up_event_that_stalls(self):
+        """A ping written into a half-sent event corrupts that event for the client."""
+        event = _sse_event("content_block_delta", {"type": "content_block_delta", "delta": {"text": "hello"}})
+        halves = [event[:20], event[20:]]
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockSlowAsyncStream(halves, delay_seconds=0.06)
+        )
+
+        iterator = _build_hold_back_iterator(
+            MockAsyncStream(_build_tool_use_stream()),
+            mock_handler,
+            ping_interval_seconds=0.02,
+        )
+
+        collected = [chunk async for chunk in iterator]
+
+        first_half_index = collected.index(halves[0])
+        assert collected[first_half_index + 1] == halves[1]
 
     @pytest.mark.asyncio
     async def test_should_propagate_follow_up_stream_error(self):

@@ -3841,7 +3841,7 @@ class ProxyException(Exception):
         code: int | str | None = None,  # maps to status code
         headers: dict[str, str] | None = None,
         openai_code: str | None = None,  # maps to 'code'  in openai
-        provider_specific_fields: dict | None = None,
+        provider_specific_fields: Mapping[str, object] | None = None,
     ):
         self.message = str(message)
         super().__init__(self.message)
@@ -3862,7 +3862,7 @@ class ProxyException(Exception):
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
-        error_dict: Final[dict[str, str | dict | None]] = {
+        error_dict: Final[dict[str, str | Mapping[str, object] | None]] = {
             "message": self.message,
             "type": self.type,
             "param": self.param,

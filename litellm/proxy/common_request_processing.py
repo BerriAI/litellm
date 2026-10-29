@@ -36,7 +36,11 @@ from typing_extensions import Never
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
+from litellm.anthropic_interface.exceptions import (
+    AnthropicErrorSseFrame,
+    anthropic_error_response,
+    anthropic_error_sse_frame,
+)
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -51,6 +55,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
+from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.bug_report import (
@@ -156,6 +161,20 @@ KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
 )
 
+
+@dataclass(frozen=True, slots=True)
+class OpenAISseErrors:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicSseErrors:
+    request_id: str | None
+    call_id: Callable[[], str | None]
+
+
+SseErrorDialect: TypeAlias = OpenAISseErrors | AnthropicSseErrors
+_OPENAI_SSE_ERRORS: Final = OpenAISseErrors()
 ProxyRouteType: TypeAlias = Literal[
     "acompletion",
     "aembedding",
@@ -250,6 +269,8 @@ ProxyRouteType: TypeAlias = Literal[
     "adelete_run",
 ]
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+from litellm.llms.base_llm.guardrail_translation.utils import blocked_response_usage
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
 StreamChunkSerializer = Callable[[object], str]
@@ -278,6 +299,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    AnthropicMessagesResponse,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -751,6 +773,9 @@ def resolve_counted_tool_fields(
     return resolved
 
 
+_PROVIDER_FIELDS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
 def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
     raw_detail: Final = attribute_of(exc, "detail", str(exc))
     message, structured_fields = serialize_http_exception_detail(raw_detail)
@@ -762,7 +787,7 @@ def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, s
         type=openai_error_type(exc, error_status),
         param=openai_error_param(exc),
         code=error_status,
-        provider_specific_fields=merged_fields,
+        provider_specific_fields=_PROVIDER_FIELDS.validate_python(merged_fields),
         headers=headers,
     )
 
@@ -784,7 +809,9 @@ def proxy_exception_from_route_error(exc: Exception) -> ProxyException:
         param=openai_error_param(exc),
         code=error_status,
         openai_code=carried_code if isinstance(carried_code, str) else None,
-        provider_specific_fields=provider_fields if isinstance(provider_fields, dict) else None,
+        provider_specific_fields=_PROVIDER_FIELDS.validate_python(
+            provider_fields if isinstance(provider_fields, dict) else None
+        ),
     )
 
 
@@ -995,6 +1022,24 @@ async def _close_upstream_and_log_its_spend(upstream: object) -> bool:
         upstream, "wait_for_spend_flush", None
     )
     return wait_for_spend_flush is not None and await wait_for_spend_flush() is True
+
+
+class _FirstChunkFailedResponse(StreamingResponse):
+    def __init__(
+        self,
+        content: AsyncGenerator[str, None],
+        *,
+        error: Exception,
+        media_type: str,
+        headers: Mapping[str, str],
+        status_code: int,
+    ) -> None:
+        super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
+        self._error = error
+
+    @property
+    def error(self) -> Exception:
+        return self._error
 
 
 class _UpstreamClosingStreamingResponse(StreamingResponse):
@@ -1294,8 +1339,9 @@ async def create_response(
             for frame in _sse_error_frames(error_obj):
                 yield frame
 
-        return StreamingResponse(
+        return _FirstChunkFailedResponse(
             error_gen_message(),
+            error=e,
             media_type=media_type,
             headers=_sse_stream_headers(await _resolve_stream_headers(headers, refresh_headers)),
             status_code=error_status,
@@ -1374,18 +1420,106 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
-async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+def blocked_anthropic_message(exc: ModifyResponseException) -> AnthropicMessagesResponse:
+    return AnthropicMessagesResponse(
+        id=f"msg_{uuid.uuid4()}",
+        type="message",
+        role="assistant",
+        content=[{"type": "text", "text": exc.message}],
+        model=exc.model,
+        stop_reason="end_turn",
+        usage=blocked_response_usage(exc.original_response),
+    )
+
+
+def _anthropic_error_frame(
+    error_dialect: AnthropicSseErrors,
+    status_code: int,
+    raw_message: str,
+    provider_specific_fields: Mapping[str, object] | None = None,
+) -> AnthropicErrorSseFrame:
+    return AnthropicErrorSseFrame(
+        status_code,
+        anthropic_error_response(
+            status_code=status_code,
+            raw_message=raw_message,
+            request_id=error_dialect.request_id,
+            provider_specific_fields=provider_specific_fields,
+            call_id=error_dialect.call_id(),
+        ),
+    )
+
+
+def _late_failure_frames(exc: Exception, error_dialect: SseErrorDialect) -> tuple[str, ...]:
+    match error_dialect:
+        case OpenAISseErrors():
+            return _sse_error_frames(sse_error_payload(exc)[1])
+        case AnthropicSseErrors() if isinstance(exc, ModifyResponseException):
+            return tuple(
+                chunk.decode() for chunk in FakeAnthropicMessagesStreamIterator(blocked_anthropic_message(exc)).chunks
+            )
+        case AnthropicSseErrors():
+            proxy_exc: Final = proxy_exception_from_route_error(exc)
+            return (
+                _anthropic_error_frame(
+                    error_dialect,
+                    status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
+                    raw_message=proxy_exc.message,
+                    provider_specific_fields=proxy_exc.provider_specific_fields,
+                ),
+            )
+
+
+def _late_body_frames(produced: Response, error_dialect: SseErrorDialect) -> tuple[bytes, ...]:
+    body: Final = bytes(produced.body) or b"{}"
+    match error_dialect:
+        case AnthropicSseErrors() if produced.status_code >= status.HTTP_400_BAD_REQUEST:
+            return (
+                _anthropic_error_frame(
+                    error_dialect, status_code=produced.status_code, raw_message=body.decode(errors="replace")
+                ).encode(),
+            )
+        case _:
+            return b"data: " + body + b"\n\n", b"data: [DONE]\n\n"
+
+
+def _chunk_bytes(chunk: str | bytes | memoryview) -> bytes:
+    return chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
+
+
+async def _late_stream_error_frames(produced: StreamingResponse, error_dialect: AnthropicSseErrors) -> tuple[str, ...]:
+    if isinstance(produced, _FirstChunkFailedResponse):
+        return _late_failure_frames(produced.error, error_dialect)
+    body: Final = b"".join([_chunk_bytes(chunk) async for chunk in produced.body_iterator])
+    return (
+        _anthropic_error_frame(
+            error_dialect, status_code=produced.status_code, raw_message=body.decode(errors="replace")
+        ),
+    )
+
+
+async def _late_stream_chunks(produced: StreamingResponse, error_dialect: SseErrorDialect) -> AsyncIterator[bytes]:
+    match error_dialect:
+        case AnthropicSseErrors() if produced.status_code >= status.HTTP_400_BAD_REQUEST:
+            for frame in await _late_stream_error_frames(produced, error_dialect):
+                yield frame.encode()
+        case _:
+            async for chunk in produced.body_iterator:
+                yield _chunk_bytes(chunk)
+
+
+async def _relay_late_response(produced: Response, error_dialect: SseErrorDialect) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
         # The status line is already on the wire, so a non-streaming body, an error
         # body included, can only reach the client as an SSE frame.
-        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
-        yield b"data: [DONE]\n\n"
+        for frame in _late_body_frames(produced, error_dialect):
+            yield frame
         return
 
     try:
-        async for chunk in produced.body_iterator:
-            yield chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
+        async for chunk in _late_stream_chunks(produced, error_dialect):
+            yield chunk
     finally:
         # Starlette never called this response, so the cleanup its __call__ would
         # have run has to happen here or the upstream LLM connection leaks.
@@ -1422,6 +1556,7 @@ async def open_sse_before_first_byte(
     ping_interval_seconds: float | str | None,
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+    error_dialect: SseErrorDialect = _OPENAI_SSE_ERRORS,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1467,11 +1602,10 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                _, error_obj = sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
-                for frame in _sse_error_frames(error_obj):
+                for frame in _late_failure_frames(await _sanitized_late_failure(exc, on_late_failure), error_dialect):
                     yield frame.encode()
                 return
-            async for chunk in _relay_late_response(produced):
+            async for chunk in _relay_late_response(produced, error_dialect):
                 yield chunk
         finally:
             if not produce_task.done():
@@ -2906,6 +3040,14 @@ class ProxyBaseLLMRequestProcessing:
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
+            error_dialect=(
+                AnthropicSseErrors(
+                    request_id=request.headers.get("x-request-id"),
+                    call_id=lambda: error_body_call_id(general_settings, self.litellm_call_id),
+                )
+                if route_type == "anthropic_messages"
+                else _OPENAI_SSE_ERRORS
+            ),
         )
 
     async def _process_llm_request(

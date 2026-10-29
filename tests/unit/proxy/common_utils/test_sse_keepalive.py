@@ -74,6 +74,42 @@ async def test_ping_emitted_while_waiting_for_first_chunk():
 
 
 @pytest.mark.asyncio
+async def test_ping_is_never_spliced_into_a_half_delivered_frame():
+    async def stalls_mid_frame() -> AsyncGenerator[str, None]:
+        yield 'data: {"type":"content_block_delta","index":0,"delta":{'
+        await asyncio.sleep(0.3)
+        yield '"type":"text_delta","text":"hi"}}\n\n'
+
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(stream=stalls_mid_frame(), ping_interval_seconds=0.05)
+    collected: Final = [chunk async for chunk in wrapped]
+
+    assert collected == [
+        'data: {"type":"content_block_delta","index":0,"delta":{',
+        '"type":"text_delta","text":"hi"}}\n\n',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ping_resumes_once_the_stalled_frame_completes():
+    async def stalls_mid_frame_then_at_boundary() -> AsyncGenerator[str, None]:
+        yield "data: {"
+        await asyncio.sleep(0.2)
+        yield "}\n"
+        yield "\n"
+        await asyncio.sleep(0.2)
+        yield TEXT_DELTA_CHUNK
+
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=stalls_mid_frame_then_at_boundary(), ping_interval_seconds=0.05
+    )
+    collected: Final = [chunk async for chunk in wrapped]
+
+    ping_index: Final = collected.index(ANTHROPIC_PING_SSE_CHUNK)
+    assert collected[:ping_index] == ["data: {", "}\n", "\n"]
+    assert collected[-1] == TEXT_DELTA_CHUNK
+
+
+@pytest.mark.asyncio
 async def test_no_pings_when_chunks_arrive_faster_than_interval():
     async def fast_stream() -> AsyncGenerator[str, None]:
         yield MESSAGE_START_CHUNK

@@ -118,6 +118,7 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    anthropic_sse_errors,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -994,6 +995,7 @@ async def anthropic_proxy_route(
         target=str(updated_url),
         custom_headers=_upstream_headers_for_anthropic_route(request, user_api_key_dict, auth_header),
         is_streaming_request=is_streaming_request,
+        sse_errors=anthropic_sse_errors,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,

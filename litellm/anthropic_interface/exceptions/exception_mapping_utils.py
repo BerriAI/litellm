@@ -5,6 +5,7 @@ Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthrop
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -191,15 +192,46 @@ class AnthropicErrorSseFrame(str):
         return frame
 
     def json_body(self, call_id: str | None) -> AnthropicErrorResponse:
-        if call_id is None:
-            return self.error_response
-        detail: Final[AnthropicErrorDetail] = {**self.error_response["error"], "litellm_call_id": call_id}
-        body: Final[AnthropicErrorResponse] = {**self.error_response, "error": detail}
-        return body
+        return _with_error_detail(self.error_response, _with_call_id(self.error_response["error"], call_id))
+
+
+def _with_provider_specific_fields(
+    detail: AnthropicErrorDetail, provider_specific_fields: Mapping[str, object] | None
+) -> AnthropicErrorDetail:
+    if not provider_specific_fields:
+        return detail
+    with_fields: Final[AnthropicErrorDetail] = {**detail, "provider_specific_fields": provider_specific_fields}
+    return with_fields
+
+
+def _with_call_id(detail: AnthropicErrorDetail, call_id: str | None) -> AnthropicErrorDetail:
+    if call_id is None:
+        return detail
+    with_call_id: Final[AnthropicErrorDetail] = {**detail, "litellm_call_id": call_id}
+    return with_call_id
+
+
+def _with_error_detail(envelope: AnthropicErrorResponse, detail: AnthropicErrorDetail) -> AnthropicErrorResponse:
+    if detail is envelope["error"]:
+        return envelope
+    body: Final[AnthropicErrorResponse] = {**envelope, "error": detail}
+    return body
+
+
+def anthropic_error_response(
+    status_code: int,
+    raw_message: str,
+    request_id: str | None = None,
+    provider_specific_fields: Mapping[str, object] | None = None,
+    call_id: str | None = None,
+) -> AnthropicErrorResponse:
+    envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code, raw_message=raw_message, request_id=request_id
+    )
+    return _with_error_detail(
+        envelope, _with_call_id(_with_provider_specific_fields(envelope["error"], provider_specific_fields), call_id)
+    )
 
 
 def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
-    return AnthropicErrorSseFrame(
-        status_code,
-        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
-    )
+    return AnthropicErrorSseFrame(status_code, anthropic_error_response(status_code, raw_message))
