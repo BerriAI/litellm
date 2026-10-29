@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
@@ -40,7 +41,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         # GLM/ZAI supports cache_control, so return messages and tools unchanged
         return messages, tools
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = [
             "max_tokens",
             "max_completion_tokens",
@@ -63,3 +64,20 @@ class ZAIChatConfig(OpenAIGPTConfig):
             pass
 
         return base_params
+
+    def map_openai_params(
+        self,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
+        supported_params: Final = self.get_supported_openai_params(model)
+        return {
+            **optional_params,
+            **{
+                ("max_tokens" if param == "max_completion_tokens" else param): value
+                for param, value in non_default_params.items()
+                if param in supported_params
+            },
+        }

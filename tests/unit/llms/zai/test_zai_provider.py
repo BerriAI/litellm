@@ -2,6 +2,7 @@
 Tests for Z.AI (Zhipu AI) provider - GLM models
 """
 
+import json
 import math
 
 import pytest
@@ -99,3 +100,47 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
 
     assert response.choices[0].message.content == "Hello! How can I help you today?"
     assert response.usage.total_tokens == 25
+
+
+def test_zai_sends_response_format_and_maps_max_completion_tokens(respx_mock, zai_response, monkeypatch):
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(
+        model="zai/glm-5.3",
+        messages=[{"role": "user", "content": "Reply in JSON"}],
+        response_format={"type": "json_object"},
+        max_completion_tokens=64,
+    )
+
+    body = json.loads(respx_mock.calls[0].request.content)
+    assert body["response_format"] == {"type": "json_object"}
+    assert body["max_tokens"] == 64
+    assert "max_completion_tokens" not in body
+
+
+@pytest.mark.parametrize("model", ["glm-5v-turbo", "GLM-5V-Turbo", "GLM-5.3", "GLM-5.3-Flash"])
+def test_zai_cost_resolves_case_insensitively(local_model_cost_map: None, model: str) -> None:
+    prompt_cost, completion_cost = cost_per_token(
+        model=model, custom_llm_provider="zai", prompt_tokens=1000, completion_tokens=1000
+    )
+
+    entry = litellm.model_cost[f"zai/{model.lower()}"]
+    assert math.isclose(prompt_cost, 1000 * entry["input_cost_per_token"])
+    assert math.isclose(completion_cost, 1000 * entry["output_cost_per_token"])
+
+
+def test_zai_glm_5v_turbo_accepts_thinking(local_model_cost_map: None, respx_mock, zai_response, monkeypatch):
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+
+    completion(
+        model="zai/glm-5v-turbo",
+        messages=[{"role": "user", "content": "Hello"}],
+        thinking={"type": "disabled"},
+    )
+
+    body = json.loads(respx_mock.calls[0].request.content)
+    assert body["thinking"] == {"type": "disabled"}
