@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -9,6 +9,14 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from unittest.mock import AsyncMock, patch
@@ -705,3 +713,150 @@ def test_cohere_v2_error_handling(respx_mock: respx.MockRouter) -> None:
     assert error.value.status_code == 400
     assert error.value.llm_provider == "cohere"
     assert "invalid request: model 'invalid-model' not found" in error.value.message
+
+
+def _cohere_chat_model(capability: str, supported: bool) -> str:
+    return next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "cohere_chat" and bool(info.get(capability)) is supported
+    )
+
+
+REASONING_MODEL: Final = _cohere_chat_model("supports_reasoning", True)
+NON_REASONING_MODEL: Final = _cohere_chat_model("supports_reasoning", False)
+TOOL_CHOICE_MODEL: Final = _cohere_chat_model("supports_tool_choice", True)
+NO_TOOL_CHOICE_MODEL: Final = _cohere_chat_model("supports_tool_choice", False)
+CITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+    "required": ["city", "country"],
+    "additionalProperties": False,
+}
+
+
+def _cohere_v2_request_body(
+    respx_mock: respx.MockRouter, model: str, params: Mapping[str, object]
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "ok"}]}))
+    )
+    litellm.completion(
+        model=f"cohere_chat/{model}",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        api_key="cohere-test-key",
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("reasoning_effort", "thinking"),
+    [
+        ("none", {"type": "disabled"}),
+        ("minimal", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET}),
+        ("low", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}),
+        ("medium", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET}),
+        ("high", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET}),
+        ("xhigh", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET}),
+        ("max", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET}),
+        ("default", None),
+    ],
+)
+def test_cohere_v2_reasoning_effort_becomes_thinking(
+    respx_mock: respx.MockRouter, reasoning_effort: str, thinking: Mapping[str, object] | None
+) -> None:
+    body: Final = _cohere_v2_request_body(respx_mock, f"v2/{REASONING_MODEL}", {"reasoning_effort": reasoning_effort})
+
+    assert body.get("thinking") == thinking
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("response_format", "cohere_response_format"),
+    [
+        (
+            {"type": "json_schema", "json_schema": {"name": "city", "strict": True, "schema": CITY_SCHEMA}},
+            {"type": "json_object", "json_schema": CITY_SCHEMA},
+        ),
+        ({"type": "json_schema", "json_schema": {"name": "city"}}, {"type": "json_object"}),
+        ({"type": "json_object"}, {"type": "json_object"}),
+        ({"type": "text"}, {"type": "text"}),
+    ],
+)
+def test_cohere_v2_response_format_reaches_cohere(
+    respx_mock: respx.MockRouter,
+    response_format: Mapping[str, object],
+    cohere_response_format: Mapping[str, object],
+) -> None:
+    body: Final = _cohere_v2_request_body(respx_mock, NON_REASONING_MODEL, {"response_format": response_format})
+
+    assert body["response_format"] == cohere_response_format
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("model", "tool_choice", "cohere_tool_choice"),
+    [
+        (TOOL_CHOICE_MODEL, "none", "NONE"),
+        (f"v2/{TOOL_CHOICE_MODEL}", "required", "REQUIRED"),
+        (TOOL_CHOICE_MODEL, "auto", None),
+        (NO_TOOL_CHOICE_MODEL, "auto", None),
+    ],
+)
+def test_cohere_v2_tool_choice_reaches_cohere(
+    respx_mock: respx.MockRouter, model: str, tool_choice: str, cohere_tool_choice: str | None
+) -> None:
+    body: Final = _cohere_v2_request_body(respx_mock, model, {"tools": [WEATHER_TOOL], "tool_choice": tool_choice})
+
+    assert body["tools"] == [WEATHER_TOOL]
+    assert body.get("tool_choice") == cohere_tool_choice
+
+
+UNSUPPORTED_COHERE_V2_PARAMS: Final = [
+    pytest.param(NO_TOOL_CHOICE_MODEL, {"tools": [WEATHER_TOOL], "tool_choice": "required"}, id="no-tool-choice-model"),
+    pytest.param(
+        TOOL_CHOICE_MODEL,
+        {"tools": [WEATHER_TOOL], "tool_choice": {"type": "function", "function": {"name": "get_current_weather"}}},
+        id="named-tool-choice",
+    ),
+    pytest.param(NON_REASONING_MODEL, {"reasoning_effort": "low"}, id="non-reasoning-model"),
+    pytest.param(REASONING_MODEL, {"reasoning_effort": "extreme"}, id="unknown-effort"),
+    pytest.param(REASONING_MODEL, {"response_format": {"type": "grammar"}}, id="unknown-response-format"),
+]
+
+
+@pytest.mark.parametrize(("model", "params"), UNSUPPORTED_COHERE_V2_PARAMS)
+def test_cohere_v2_unsupported_param_is_a_400_without_drop_params(model: str, params: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        litellm.completion(
+            model=f"cohere_chat/{model}",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            api_key="cohere-test-key",
+            **params,
+        )
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(("model", "params"), UNSUPPORTED_COHERE_V2_PARAMS)
+@pytest.mark.parametrize("drop_via", ["request", "global"])
+def test_cohere_v2_unsupported_param_is_dropped_with_drop_params(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    params: Mapping[str, object],
+    drop_via: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_via == "global")
+    request_params: Final = {**params, "drop_params": True} if drop_via == "request" else params
+
+    body: Final = _cohere_v2_request_body(respx_mock, model, request_params)
+
+    assert body.keys().isdisjoint({"tool_choice", "thinking", "response_format", "reasoning_effort"})
