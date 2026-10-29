@@ -4026,16 +4026,9 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
     ) -> str | None:
         from litellm.proxy.proxy_server import ProxyConfig
 
-        def load(config_file_path: str) -> object:
-            return yaml.safe_load(Path(config_file_path).read_text())
-
-        mock_proxy_config: Final = MagicMock()
-        mock_proxy_config.return_value.is_yaml = ProxyConfig().is_yaml
-        mock_proxy_config.return_value.get_config = AsyncMock(side_effect=load)
-        mock_proxy_config.return_value.read_config_file = AsyncMock(side_effect=load)
         mock_proxy_module: Final = MagicMock(
             app=MagicMock(),
-            ProxyConfig=proxy_config_class or mock_proxy_config,
+            ProxyConfig=proxy_config_class or ProxyConfig,
             KeyManagementSettings=MagicMock(),
             save_worker_config=MagicMock(),
         )
