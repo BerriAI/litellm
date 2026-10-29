@@ -124,6 +124,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
+    iter_items,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
@@ -4910,15 +4911,26 @@ class Router:
         splits_stream_timeout: bool = False,
     ) -> None:
         """
-        5 jobs:
+        6 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
+        - A LiteLLM param its additional_drop_params names drops only the client's value, never the deployment's own.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         - On a Responses continuation, sends the partial response as prefill where this deployment takes one.
         """
-        for key in self._forwarded_alias_marker_keys_the_deployment_sets(
-            deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+        raw_deployment_params: Final[object] = deployment["litellm_params"]
+        deployment_context: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            raw_deployment_params.model_dump(exclude_none=True)
+            if isinstance(raw_deployment_params, LiteLLM_Params)
+            else raw_deployment_params
+        )
+        drop_listed_settings: Final = self._drop_listed_settings(deployment_context)
+        for key in (
+            *self._forwarded_alias_marker_keys_the_deployment_sets(
+                deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+            ),
+            *drop_listed_settings,
         ):
             kwargs.pop(key, None)
         kwargs.pop("daily_reset_time", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
@@ -4933,12 +4945,6 @@ class Router:
 
         request_context: Final = cast(  # cast-ok: the router's legacy request dict has string keys
             Mapping[str, object], kwargs
-        )
-        raw_deployment_params: Final[object] = deployment["litellm_params"]
-        deployment_context: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
-            raw_deployment_params.model_dump(exclude_none=True)
-            if isinstance(raw_deployment_params, LiteLLM_Params)
-            else raw_deployment_params
         )
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
@@ -5111,6 +5117,13 @@ class Router:
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        spared_drop_list: Final = self._drop_list_sparing(
+            deployment_context,
+            drop_listed_settings,
+            request_context.get("additional_drop_params", deployment_context.get("additional_drop_params")),
+        )
+        if spared_drop_list is not None:
+            kwargs["additional_drop_params"] = list(spared_drop_list)  # rebind-ok: the call's kwargs are built in place
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -16247,6 +16260,28 @@ class Router:
             for key in forwarded_keys
             if isinstance(key, str) and Router._deployment_sets_litellm_param(deployment_litellm_params, key)
         )
+
+    @staticmethod
+    def _drop_listed_settings(deployment_litellm_params: Mapping[str, object]) -> frozenset[str]:
+        drop_list: Final = deployment_litellm_params.get("additional_drop_params")
+        if drop_list.__class__ is not list:
+            return frozenset()
+        return frozenset(
+            name for name in iter_items(drop_list) if isinstance(name, str) and name in LiteLLM_Params.model_fields
+        )
+
+    @staticmethod
+    def _drop_list_sparing(
+        deployment_litellm_params: Mapping[str, object], drop_listed_settings: frozenset[str], drop_list: object
+    ) -> tuple[str, ...] | None:
+        spared: Final = frozenset(
+            name
+            for name in drop_listed_settings
+            if Router._deployment_sets_litellm_param(deployment_litellm_params, name)
+        )
+        if not spared or drop_list.__class__ is not list:
+            return None
+        return tuple(name for name in iter_items(drop_list) if isinstance(name, str) and name not in spared)
 
     @staticmethod
     def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:

@@ -22,6 +22,7 @@ import httpx
 import openai
 import pytest
 import respx
+import responses as responses_lib
 from fastapi import HTTPException
 from opentelemetry import trace
 from pydantic import BaseModel, TypeAdapter
@@ -31276,3 +31277,126 @@ def test_router_keeps_supported_fallback_shapes(
     router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
 
     assert router.fallbacks == expected_fallbacks
+
+
+_VERTEX_CLAUDE_REPLY: Final = {
+    "id": "msg_vertex_region",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-5-5",
+    "content": [{"type": "text", "text": "Hi"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+_VERTEX_TOKEN_URI: Final = "https://oauth2.googleapis.com/token"
+
+
+def _vertex_claude_router(
+    *, router_defaults: Mapping[str, object] = MappingProxyType({}), **deployment_params: object
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "claude-eu",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-haiku-5-5",
+                    "vertex_project": "region-project",
+                    "vertex_credentials": json.dumps(
+                        {
+                            "type": "authorized_user",
+                            "client_id": "region-client",
+                            "client_secret": "region-client-secret",
+                            "refresh_token": "region-refresh-token",
+                            "token_uri": _VERTEX_TOKEN_URI,
+                        }
+                    ),
+                    **deployment_params,
+                },
+            }
+        ],
+        num_retries=0,
+        default_litellm_params=dict(router_defaults),
+    )
+
+
+async def _call_vertex_claude_route(router: Router, route: str, request_params: Mapping[str, object]) -> None:
+    with responses_lib.RequestsMock(assert_all_requests_are_fired=False) as google_token_endpoint:
+        google_token_endpoint.post(
+            _VERTEX_TOKEN_URI, json={"access_token": "region-access-token", "expires_in": 3600, "token_type": "Bearer"}
+        )
+        if route == "chat":
+            await router.acompletion(
+                model="claude-eu", messages=[{"role": "user", "content": "Say hi"}], max_tokens=20, **request_params
+            )
+        elif route == "responses":
+            await router.aresponses(model="claude-eu", input="Say hi", max_output_tokens=20, **request_params)
+        else:
+            await router.aanthropic_messages(
+                model="claude-eu", messages=[{"role": "user", "content": "Say hi"}], max_tokens=20, **request_params
+            )
+
+
+def _vertex_locations_called(vertex_route: respx.Route) -> tuple[str, ...]:
+    return tuple(call.request.url.path.split("/locations/")[1].split("/")[0] for call in vertex_route.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["chat", "responses", "messages"])
+@pytest.mark.parametrize("client_location", [None, "us-east5"], ids=["no-client-region", "client-region"])
+async def test_a_deployment_region_its_drop_list_names_is_the_region_every_route_calls(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None, route: str, client_location: str | None
+) -> None:
+    vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=_VERTEX_CLAUDE_REPLY)
+    router: Final = _vertex_claude_router(vertex_location="eu", additional_drop_params=["store", "vertex_location"])
+
+    await _call_vertex_claude_route(
+        router, route, {} if client_location is None else {"vertex_location": client_location}
+    )
+
+    assert _vertex_locations_called(vertex_route) == ("eu",)
+    assert vertex_route.calls.last.request.url.host == "aiplatform.eu.rep.googleapis.com"
+
+
+@pytest.mark.asyncio
+async def test_a_drop_listed_request_param_the_deployment_also_sets_is_still_not_sent(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=_VERTEX_CLAUDE_REPLY)
+    router: Final = _vertex_claude_router(
+        vertex_location="eu", temperature=0.2, additional_drop_params=["temperature", "vertex_location"]
+    )
+
+    await _call_vertex_claude_route(router, "chat", {"temperature": 0.9})
+
+    assert _vertex_locations_called(vertex_route) == ("eu",)
+    assert "temperature" not in json.loads(vertex_route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["chat", "responses", "messages"])
+async def test_a_client_region_never_reaches_a_deployment_whose_drop_list_names_it_without_setting_one(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    monkeypatch.setenv("VERTEXAI_LOCATION", "europe-west4")
+    vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=_VERTEX_CLAUDE_REPLY)
+    router: Final = _vertex_claude_router(additional_drop_params=["vertex_location"])
+
+    await _call_vertex_claude_route(router, route, {"vertex_location": "us-east5"})
+
+    assert _vertex_locations_called(vertex_route) == ("europe-west4",)
+
+
+@pytest.mark.asyncio
+async def test_a_router_default_region_stays_dropped_for_a_deployment_whose_drop_list_names_it_without_setting_one(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERTEXAI_LOCATION", "europe-west4")
+    vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=_VERTEX_CLAUDE_REPLY)
+    router: Final = _vertex_claude_router(
+        router_defaults={"vertex_location": "us-east5"}, additional_drop_params=["vertex_location"]
+    )
+
+    await _call_vertex_claude_route(router, "chat", {})
+
+    assert _vertex_locations_called(vertex_route) == ("europe-west4",)
