@@ -34,7 +34,6 @@ from litellm.llms.bedrock.common_utils import (
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     requests_opt_in_native_output,
-    strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
 )
@@ -89,10 +88,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
-
-    def default_max_tokens_model(self, model: str, litellm_params: Mapping[str, object]) -> str:
-        base_model: Final = litellm_params.get("base_model")
-        return strip_bedrock_routing_prefix(base_model) if isinstance(base_model, str) and base_model else model
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)

@@ -460,6 +460,18 @@ def _host_row_max_output_tokens(model: str, custom_llm_provider: str) -> int | N
     return None if is_generalized_model_info(info) else info.get("max_output_tokens")
 
 
+def _mapped_max_output_tokens(model: str, custom_llm_provider: str | None) -> int | None:
+    own_row_max_tokens: Final = _none_on_error(lambda: get_max_tokens(model))
+    if own_row_max_tokens is not None or custom_llm_provider is None:
+        return own_row_max_tokens
+    return _none_on_error(lambda: _host_row_max_output_tokens(model, custom_llm_provider))
+
+
+def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
+    base_model: Final = litellm_params.get("base_model")
+    return base_model if isinstance(base_model, str) and base_model else None
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -506,36 +518,33 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def get_config(cls, *, model: str | None = None, custom_llm_provider: str | None = None):
+    def get_config(
+        cls, *, model: str | None = None, custom_llm_provider: str | None = None, base_model: str | None = None
+    ):
         config: Final = super().get_config()
 
         # anthropic requires a default value for max_tokens
         if config.get("max_tokens") is None:
-            config["max_tokens"] = cls.get_max_tokens_for_model(model, custom_llm_provider)
+            config["max_tokens"] = cls.get_max_tokens_for_model(model, custom_llm_provider, base_model)
 
         return config
 
-    def default_max_tokens_model(self, model: str, litellm_params: Mapping[str, object]) -> str:
-        return model
-
     @staticmethod
-    def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
+    def get_max_tokens_for_model(
+        model: str | None = None, custom_llm_provider: str | None = None, base_model: str | None = None
+    ) -> int:
         """
         Get the max output tokens for a given model from its own cost-map row, else from the
-        serving host's row. Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var)
-        if neither row exists.
+        serving host's row, else from the deployment's base_model rows. Falls back to
+        DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if none of them exists.
         """
-        if model is None:
-            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-        max_tokens: Final = _none_on_error(lambda: get_max_tokens(model))
-        if max_tokens is not None:
-            return max_tokens
-        host_max_tokens: Final = (
-            None
-            if custom_llm_provider is None
-            else _none_on_error(lambda: _host_row_max_output_tokens(model, custom_llm_provider))
+        model_max_tokens: Final = None if model is None else _mapped_max_output_tokens(model, custom_llm_provider)
+        if model_max_tokens is not None:
+            return model_max_tokens
+        base_model_max_tokens: Final = (
+            None if base_model is None else _mapped_max_output_tokens(base_model, custom_llm_provider)
         )
-        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if host_max_tokens is None else host_max_tokens
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if base_model_max_tokens is None else base_model_max_tokens
 
     @staticmethod
     def convert_tool_use_to_openai_format(
@@ -2408,8 +2417,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ## Load Config
         config: Final[Mapping[str, object]] = MappingProxyType(
             litellm.AnthropicConfig.get_config(
-                model=self.default_max_tokens_model(model, _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)),
+                model=model,
                 custom_llm_provider=self.custom_llm_provider,
+                base_model=_deployment_base_model(_LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)),
             )
         )
         for k, v in config.items():

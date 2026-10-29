@@ -2647,7 +2647,9 @@ def test_get_config_does_not_leak_module_constants():
         assert forbidden not in cfg
 
 
-def _default_max_tokens_sent(config: AnthropicConfig, model: str, litellm_params: dict[str, object] | None = None) -> int:
+def _default_max_tokens_sent(
+    config: AnthropicConfig, model: str, litellm_params: dict[str, object] | None = None
+) -> int:
     max_tokens: Final = config.transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
@@ -2684,7 +2686,12 @@ def test_claude_host_without_max_tokens_sends_the_hosts_mapped_cap(
 def test_claude_default_max_tokens_keeps_the_models_own_row_over_the_hosts_row(local_model_cost_map: None) -> None:
     own_cap: Final = litellm.model_cost["claude-sonnet-4-6"]["max_output_tokens"]
     litellm.register_model(
-        {"vertex_ai/claude-sonnet-4-6": {**litellm.model_cost["vertex_ai/claude-sonnet-4-6"], "max_output_tokens": own_cap // 2}},
+        {
+            "vertex_ai/claude-sonnet-4-6": {
+                **litellm.model_cost["vertex_ai/claude-sonnet-4-6"],
+                "max_output_tokens": own_cap // 2,
+            }
+        },
         persist_across_reloads=False,
     )
 
@@ -2708,22 +2715,46 @@ def test_unmapped_claude_name_without_max_tokens_keeps_the_fallback_default(
 
 
 @pytest.mark.parametrize(
-    "arn",
+    "config_cls, model, base_model, cost_map_key",
     [
-        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
-        "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc123",
+        (
+            AmazonAnthropicClaudeConfig,
+            "invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+        ),
+        (
+            AmazonAnthropicClaudeConfig,
+            "invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc123",
+            "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        ),
+        (AzureAnthropicConfig, "claude-haiku-prod-eastus2", "azure_ai/claude-haiku-4-5", "azure_ai/claude-haiku-4-5"),
     ],
 )
-def test_bedrock_invoke_arn_without_max_tokens_sends_its_base_models_cap(local_model_cost_map: None, arn: str) -> None:
-    base_model: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
-    mapped_cap: Final = litellm.model_cost[base_model]["max_output_tokens"]
+def test_claude_deployment_with_an_unmapped_name_sends_its_base_models_cap(
+    local_model_cost_map: None, config_cls: type[AnthropicConfig], model: str, base_model: str, cost_map_key: str
+) -> None:
+    mapped_cap: Final = litellm.model_cost[cost_map_key]["max_output_tokens"]
     assert mapped_cap < DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the case needs a mapped cap below the fallback"
 
+    assert _default_max_tokens_sent(config_cls(), model, {"base_model": base_model}) == mapped_cap
+
+
+def test_claude_default_max_tokens_keeps_a_mapped_models_own_cap_over_its_base_model(
+    local_model_cost_map: None,
+) -> None:
+    own_cap: Final = litellm.model_cost["us.anthropic.claude-haiku-4-5-20251001-v1:0"]["max_output_tokens"]
+    base_model_cap: Final = litellm.model_cost["anthropic.claude-3-5-haiku-20241022-v1:0"]["max_output_tokens"]
+    assert base_model_cap != own_cap, "the case needs a base_model whose cap differs from the model's own"
+
     sent: Final = _default_max_tokens_sent(
-        AmazonAnthropicClaudeConfig(), f"invoke/anthropic/{arn}", {"base_model": f"bedrock/{base_model}"}
+        AmazonAnthropicClaudeConfig(),
+        "invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        {"base_model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0"},
     )
 
-    assert sent == mapped_cap
+    assert sent == own_cap
 
 
 @pytest.mark.parametrize(
