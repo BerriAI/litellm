@@ -1,3 +1,4 @@
+import logging
 import re
 from collections.abc import Mapping
 from typing import Final
@@ -1589,3 +1590,55 @@ def test_gpt_6_astra_takes_the_reasoning_series_request_shape():
     assert "max_tokens" not in params
     assert params["reasoning_effort"] == "max"
     assert params["verbosity"] == "low"
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "level", "advice"),
+    [
+        ("azure", "none", frozenset(("model_info.reasoning_effort_levels", "model_info.base_model"))),
+        ("azure", "xhigh", frozenset(("model_info.reasoning_effort_levels", "model_info.base_model"))),
+        ("openai", "xhigh", frozenset(("model_info.reasoning_effort_levels",))),
+        ("azure_ai", "xhigh", frozenset(("model_info.reasoning_effort_levels",))),
+        ("github_copilot", "xhigh", frozenset()),
+    ],
+)
+def test_a_reasoning_effort_the_level_gate_drops_logs_a_warning_naming_only_the_fixes_its_route_honors(
+    caplog: pytest.LogCaptureFixture, custom_llm_provider: str, level: str, advice: frozenset[str]
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        params: Final = litellm.get_optional_params(
+            model="gpt-5.6-terra-ptu",
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=level,
+            drop_params=True,
+        )
+
+    assert "reasoning_effort" not in params
+    drop_warnings: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "reasoning_effort" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert repr(level) in drop_warnings[0] and "gpt-5.6-terra-ptu" in drop_warnings[0]
+    assert (
+        frozenset(
+            fragment
+            for fragment in ("model_info.reasoning_effort_levels", "model_info.base_model")
+            if fragment in drop_warnings[0]
+        )
+        == advice
+    )
+
+
+def test_a_reasoning_effort_the_level_gate_forwards_logs_no_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        params: Final = litellm.get_optional_params(
+            model="gpt-5.6-terra-ptu",
+            custom_llm_provider="azure",
+            reasoning_effort="medium",
+            drop_params=True,
+        )
+
+    assert params["reasoning_effort"] == "medium"
+    assert not [record for record in caplog.records if "reasoning_effort" in record.getMessage()]

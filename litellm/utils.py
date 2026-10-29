@@ -91,7 +91,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
@@ -3852,7 +3852,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
     return None
 
 
-def is_generalized_model_info(model_info: ModelInfo) -> bool:
+def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     """Whether ``model_info`` came from a fallback-generalization capability rule.
 
     Detected as the resolved key missing ``litellm.model_cost`` while matching a
@@ -3868,15 +3868,27 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
 
 _REGISTRATION_ATTEMPTS: Final = 3
 
+_ModelInfoT: Final = TypeVar("_ModelInfoT", bound=ModelInfoBase)
 
-def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+
+def _lookup_mapped_model_info(lookup: Callable[[], _ModelInfoT]) -> _ModelInfoT | ModelInfoLookupMiss:
     try:
-        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        info: Final = lookup()
     except ModelNotMappedError:
         return ModelInfoLookupMiss(tripped=False)
     except Exception:
         return ModelInfoLookupMiss(tripped=True)
     return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
+
+
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(lambda: get_model_info(model=model, custom_llm_provider=custom_llm_provider))
+
+
+def lookup_catalog_model_info(model: str, custom_llm_provider: str | None) -> ModelInfoBase | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(
+        lambda: get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)
+    )
 
 
 def _get_builtin_model_info_for_registration(
@@ -5144,6 +5156,46 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
+_DROPPED_REASONING_PARAMS: Final = ("reasoning_effort", "thinking")
+
+
+def _turns_reasoning_off(value: object) -> bool:
+    match value:
+        case "none" | {"effort": "none"} | {"type": "disabled"}:
+            return True
+        case _:
+            return False
+
+
+def is_known_non_reasoning_model(model: str, custom_llm_provider: str | None) -> bool:
+    info: Final = lookup_catalog_model_info(model, custom_llm_provider)
+    if isinstance(info, ModelInfoLookupMiss) or info.get("supports_reasoning") is True:
+        return False
+    return info.get("supports_reasoning") is False or info["key"] in GetModelCostMap.loaded_model_cost_map()
+
+
+def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
+    info: Final = lookup_catalog_model_info(model, custom_llm_provider)
+    return not isinstance(info, ModelInfoLookupMiss) and info["key"] in GetModelCostMap.loaded_model_cost_map()
+
+
+def _dropped_reasoning_warning(model: str, custom_llm_provider: str | None) -> str:
+    return "".join(
+        (
+            "Dropping %s=%r for model=%r (drop_params=True) because %s does not support %s for it.",
+            (
+                ""
+                if has_catalog_entry(model, custom_llm_provider)
+                else " If the deployment is a reasoning model, set model_info.base_model to its underlying model."
+            ),
+        )
+    )
+
+
+def _warns_on_dropped_reasoning(value: object, model: str, custom_llm_provider: str | None) -> bool:
+    return not (_turns_reasoning_off(value) and is_known_non_reasoning_model(model, custom_llm_provider))
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -5233,19 +5285,30 @@ def get_optional_params(
             verbose_logger.debug(
                 "\nLiteLLM: Non-Default params passed to completion() %s", _debug_params_repr(non_default_params)
             )
-        unsupported_params: Final = {}
-        for k in non_default_params:
-            if k not in supported_params:
-                if k in PROVIDER_UNVALIDATED_PARAMS:
-                    continue
-                if k == "n" and n == 1:  # langchain sends n=1 as a default value
-                    continue  # skip this param
-                unsupported_params[k] = non_default_params[k]
+        unsupported_params: Final[MappingProxyType[str, object]] = MappingProxyType(
+            {
+                k: non_default_params[k]
+                for k in non_default_params
+                if k not in supported_params and k not in PROVIDER_UNVALIDATED_PARAMS and not (k == "n" and n == 1)
+            }
+        )
 
         if unsupported_params:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 for k in unsupported_params:
                     non_default_params.pop(k, None)
+                for reasoning_param in _DROPPED_REASONING_PARAMS:
+                    if reasoning_param in unsupported_params and _warns_on_dropped_reasoning(
+                        unsupported_params[reasoning_param], base_model or model, custom_llm_provider
+                    ):
+                        verbose_logger.warning(
+                            _dropped_reasoning_warning(base_model or model, custom_llm_provider),
+                            reasoning_param,
+                            unsupported_params[reasoning_param],
+                            model,
+                            custom_llm_provider,
+                            reasoning_param,
+                        )
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
@@ -6761,6 +6824,8 @@ def get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    *,
+    catalog_only: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -6794,7 +6859,7 @@ def get_model_info_helper(
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
-        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        if not catalog_only and custom_llm_provider and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -6818,7 +6883,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if not catalog_only and custom_llm_provider == "huggingface":
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,

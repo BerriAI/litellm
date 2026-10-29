@@ -626,8 +626,9 @@ class TestResolveDeploymentReasoningEffort:
         _sent("turbo\nforged line", drop_params=True)
 
         assert [record.getMessage() for record in caplog.records] == [
-            "reasoning_effort unrecognized sent as None (rounding up) to deployment deployment-1, "
-            "model group kimi-k3, model hosted_vllm/my-kimi"
+            "Dropping reasoning level unrecognized (drop_params=True) for deployment deployment-1, model group "
+            "kimi-k3, model hosted_vllm/my-kimi because its model_info.reasoning_effort_levels does not list that "
+            "level. List every level the deployment supports."
         ]
 
     def test_line_breaks_in_logged_names_cannot_forge_a_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -668,6 +669,27 @@ class TestResolveDeploymentReasoningEffort:
             "reasoning_effort_sent": "high",
             "reasoning_effort_rounding": "up",
         }
+
+    def test_only_a_dropped_level_logs_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        verbose_logger.addHandler(caplog.handler)
+        verbose_logger.propagate = False
+        verbose_logger.setLevel(logging.INFO)
+        declared: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+        _sent("none", declared, drop_params=True)
+        _sent("medium")
+        _sent("default", declared, drop_params=True)
+        _sent("default", declared)
+
+        assert [record.levelno for record in caplog.records] == [
+            logging.WARNING,
+            logging.INFO,
+            logging.INFO,
+            logging.INFO,
+        ]
+        dropped: Final = caplog.records[0].getMessage()
+        assert "Dropping reasoning level none" in dropped
+        assert "model_info.reasoning_effort_levels" in dropped
 
 
 class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
