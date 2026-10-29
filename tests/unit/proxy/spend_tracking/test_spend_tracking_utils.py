@@ -1382,6 +1382,7 @@ _TOKEN_SHAPED_SECRETS: Final = (
     "AKIAIOSFODNN7EXAMPLE",
     "xoxb-1234567890-0987654321-AbCdEfGhIjKl",
     "glpat-AbCdEfGhIj1234567890",
+    "lin_api_" + "AbCdEfGhIj" * 4,
     "hf_" + "AbCdEfGhIj" * 3 + "KlMn",
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
     "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----",

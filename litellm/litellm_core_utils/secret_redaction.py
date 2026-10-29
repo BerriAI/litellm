@@ -112,6 +112,7 @@ _TOKEN_SHAPES: Final = (
     r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}",
     r"github_pat_[A-Za-z0-9_]{82}",
     r"glpat-[A-Za-z0-9\-_]{20,}",
+    r"lin_api_[A-Za-z0-9]{40}\b",
     r"xox[abposr]-[A-Za-z0-9-]{10,}",
     r"hf_[A-Za-z0-9]{34,}",
     r"npm_[A-Za-z0-9]{36}\b",
