@@ -350,6 +350,37 @@ def test_context_management_edits_add_the_beta_each_edit_needs(
     assert set(headers["anthropic-beta"].split(",")) == betas
 
 
+_UNMAPPABLE_LIST_FORM: Final = [{"type": "clear_tool_uses_20250919"}]
+
+
+@pytest.mark.parametrize("config_class", [AnthropicMessagesConfig, VertexAIPartnerModelsAnthropicMessagesConfig])
+@pytest.mark.parametrize(
+    ("context_management", "drop_params", "forwarded"),
+    (
+        pytest.param(_UNMAPPABLE_LIST_FORM, True, None, id="unmappable_dropped_under_drop_params"),
+        pytest.param(_UNMAPPABLE_LIST_FORM, False, _UNMAPPABLE_LIST_FORM, id="unmappable_kept_for_the_provider_400"),
+        pytest.param(
+            [{"type": "compaction"}],
+            True,
+            {"edits": [{"type": "compact_20260112"}]},
+            id="mappable_still_mapped_under_drop_params",
+        ),
+    ),
+)
+def test_context_management_the_list_form_cannot_map_is_dropped_only_under_drop_params(
+    config_class: type[AnthropicMessagesConfig], context_management: JsonValue, drop_params: bool, forwarded: JsonValue
+) -> None:
+    request: Final = config_class().transform_anthropic_messages_request(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 50, "context_management": context_management},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request.get("context_management") == forwarded
+
+
 @pytest.mark.parametrize("config", _classifier_configs(), ids=type)
 def test_routes_whose_platform_runs_the_classifier_keep_safeguards_and_the_beta(
     config: AnthropicMessagesConfig, local_beta_headers_config: None

@@ -746,6 +746,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
             if transformed_context_management is not None:
                 anthropic_messages_optional_request_params["context_management"] = transformed_context_management
+            elif drops_unsupported_params(litellm_params.drop_params):
+                anthropic_messages_optional_request_params.pop("context_management")
 
         ####### get required params for all anthropic messages requests ######
         # Lazy %s: the f-string previously stringified the entire messages
