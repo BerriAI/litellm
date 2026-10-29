@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from dataclasses import replace
 from typing import Final
 
 import pytest
@@ -128,3 +129,12 @@ def test_empty_constraints_match_nothing() -> None:
     assert catalog.decision(
         RouteContext(Route.OCR, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})), rules
     ) is Decision.PYTHON
+
+
+def test_malformed_user_text_keeps_opted_in_anthropic_messages_on_python() -> None:
+    configuration.rust(True)
+    native: Final = RouteContext(Route.MESSAGES, provider="anthropic", target=Target.MESSAGES)
+    malformed: Final = replace(native, features=frozenset({Feature.MALFORMED_TEXT}))
+
+    assert catalog.decision(native) is Decision.RUST_WITH_FALLBACK
+    assert catalog.decision(malformed) is Decision.PYTHON

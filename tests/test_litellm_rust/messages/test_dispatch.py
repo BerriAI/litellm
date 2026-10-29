@@ -485,6 +485,12 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
             {"stream": True},
             {"include_cost_in_streaming_usage": True},
         ),
+        (
+            Feature.MALFORMED_TEXT,
+            "anthropic/claude-sonnet-4-5",
+            {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": None}]}]},
+            {},
+        ),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(

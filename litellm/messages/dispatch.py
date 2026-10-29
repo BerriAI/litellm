@@ -112,6 +112,7 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
         Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
         Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
+        Feature.MALFORMED_TEXT: route_detectors.malformed_text,
     }
 )
 

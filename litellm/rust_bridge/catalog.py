@@ -98,6 +98,8 @@ class Feature(str, Enum):
     """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
     TOOL_CUSTOM_FIELD = "tool_custom_field"
     """Tools carrying a non-spec custom object, which Python drops or hoists for the provider."""
+    MALFORMED_TEXT = "malformed_text"
+    """User text that is not a string, which Python rejects with a 400 unless drop_params drops it."""
     CLIENT_HEADERS = "client_headers"
     """Proxy-forwarded headers that Python merges into extra_headers."""
     DEPLOYMENT_HOOK = "deployment_hook"
@@ -179,6 +181,7 @@ MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.STREAM_COST_INJECTION,
     Feature.THINKING_SIGNATURE_RETRY,
     Feature.TOOL_CUSTOM_FIELD,
+    Feature.MALFORMED_TEXT,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
