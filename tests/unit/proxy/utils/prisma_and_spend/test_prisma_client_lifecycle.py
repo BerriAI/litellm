@@ -14,12 +14,131 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.database import Database
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine_dead", (False, True))
+async def test_shutdown_waits_for_hung_request_reconnect_to_time_out(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch, engine_dead: bool
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+    reconnecting: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+
+    async def hung_recreate(*args: object, **kwargs: object) -> None:
+        reconnecting.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    prisma_client.db.recreate_prisma_client = AsyncMock(side_effect=hung_recreate)
+    prisma_client._engine_confirmed_dead = engine_dead
+    with patch.object(asyncio.get_running_loop(), "time", return_value=1000.0) as clock:
+        reconnect: Final = asyncio.create_task(
+            prisma_client.attempt_db_reconnect(reason="request", force=True, force_recreate=True)
+        )
+        await reconnecting.wait()
+        closing: Final = asyncio.create_task(Database(prisma=prisma_client).aclose())
+        try:
+            await asyncio.sleep(0)
+            assert not closing.done()
+            prisma_client.db.disconnect.assert_not_awaited()
+
+            clock.return_value = 1000.0 + prisma_client._db_watchdog_reconnect_timeout_seconds + 1
+            assert await reconnect is False
+            await closing
+        finally:
+            reconnect.cancel()
+            closing.cancel()
+            await asyncio.gather(reconnect, closing, return_exceptions=True)
+
+    assert cancelled.is_set()
+    assert not prisma_client._db_reconnect_lock.locked()
+    prisma_client.db.disconnect.assert_awaited_once()
+    assert await prisma_client.attempt_db_reconnect(reason="request", force=True) is False
+    prisma_client.db.recreate_prisma_client.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_stops_waiting_for_a_reconnect_stuck_past_its_timeout(prisma_client: PrismaClient) -> None:
+    await prisma_client._db_reconnect_lock.acquire()
+    with patch.object(asyncio.get_running_loop(), "time", return_value=1000.0) as clock:
+        closing: Final = asyncio.create_task(Database(prisma=prisma_client).aclose())
+        try:
+            await asyncio.sleep(0)
+            assert not closing.done()
+            prisma_client.db.disconnect.assert_not_awaited()
+
+            clock.return_value = 1000.0 + prisma_client._db_watchdog_reconnect_timeout_seconds + 60
+            await closing
+        finally:
+            closing.cancel()
+            await asyncio.gather(closing, return_exceptions=True)
+
+    prisma_client.db.disconnect.assert_awaited_once()
+    prisma_client._db_reconnect_lock.release()
+    await asyncio.sleep(0)
+    assert not prisma_client._db_reconnect_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_rejects_a_reconnect_already_waiting_for_the_lock(prisma_client: PrismaClient) -> None:
+    await prisma_client._db_reconnect_lock.acquire()
+    reconnect: Final = asyncio.create_task(
+        prisma_client.attempt_db_reconnect(reason="engine_process_death", force=True)
+    )
+    await asyncio.sleep(0)
+    closing: Final = asyncio.create_task(prisma_client.stop_background_tasks())
+    await asyncio.sleep(0)
+    prisma_client._db_reconnect_lock.release()
+
+    await asyncio.wait_for(closing, timeout=2)
+    assert await reconnect is False
+    assert await prisma_client.attempt_db_reconnect(reason="engine_process_death", force=True) is False
+    prisma_client.db.connect.assert_not_awaited()
+    prisma_client.db.disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_spawned_engine_work_and_prevents_rearming(prisma_client: PrismaClient) -> None:
+    running: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    released: Final = asyncio.Event()
+    finished: Final = asyncio.Event()
+
+    async def engine_work() -> None:
+        running.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+            await released.wait()
+            finished.set()
+
+    prisma_client._spawn_engine_task(engine_work())
+    await asyncio.wait_for(running.wait(), timeout=2)
+    closing: Final = asyncio.create_task(prisma_client.stop_background_tasks())
+    try:
+        await asyncio.wait_for(cancelled.wait(), timeout=2)
+        assert not finished.is_set()
+        assert not closing.done()
+    finally:
+        released.set()
+        await asyncio.wait_for(closing, timeout=2)
+
+    assert finished.is_set()
+    prisma_client._handle_writer_engine_replaced()
+    await asyncio.sleep(0)
+    assert not prisma_client._engine_tasks
+
 
 _PROBE_SQL = "SELECT to_regclass($1) IS NOT NULL AS present"
 
