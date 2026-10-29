@@ -2125,12 +2125,13 @@ class LiteLLMProxyRequestSetup:
     def add_key_level_controls(key_metadata: dict | None, data: dict, _metadata_variable_name: str):
         if key_metadata is None:
             return data
-        if "cache" in key_metadata:
-            data["cache"] = {}
-            if isinstance(key_metadata["cache"], dict):
-                for k, v in key_metadata["cache"].items():
-                    if k in SupportedCacheControls:
-                        data["cache"][k] = v
+        if "cache" in key_metadata and isinstance(key_metadata["cache"], dict):
+            request_cache: Final = _DECODED_JSON.validate_python(data["cache"]) if "cache" in data else None
+            key_cache_controls: Final = _request_fields(_DECODED_JSON.validate_python(key_metadata["cache"]))
+            data["cache"] = {  # rebind-ok: data is an out-param
+                **_request_fields(request_cache),
+                **{k: v for k, v in key_cache_controls.items() if k in SupportedCacheControls},
+            }
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:

@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.caching.caching import Cache, CacheMode
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -60,6 +61,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     move_guardrails_to_metadata,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
 
@@ -7918,6 +7920,61 @@ async def test_key_level_callback_vars_survive_the_strip():
 
     assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "key-dd-key", "dd_site": "us5.datadoghq.com"}
     assert updated["dd_site"] == "us5.datadoghq.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_cache, request_cache, expected_cache, uses_cache_when_default_off",
+    [
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "namespace": "team-a"},
+            {"use-cache": True, "namespace": "team-a", "ttl": 600},
+            True,
+            id="key-control-added-to-request-opt-in",
+        ),
+        pytest.param(
+            {"no-store": True},
+            {"use-cache": True, "no-store": False},
+            {"use-cache": True, "no-store": True},
+            True,
+            id="key-control-wins-over-request",
+        ),
+        pytest.param(
+            {"use-cache": True, "namespace": "key-ns"},
+            None,
+            {},
+            False,
+            id="unsupported-key-controls-ignored",
+        ),
+        pytest.param(None, {"use-cache": True}, {"use-cache": True}, True, id="malformed-key-cache-keeps-request"),
+    ],
+)
+async def test_key_cache_controls_merge_into_request_cache_controls(
+    key_cache: dict[str, object] | None,
+    request_cache: dict[str, object] | None,
+    expected_cache: dict[str, object],
+    uses_cache_when_default_off: bool,
+):
+    key: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"cache": key_cache})
+    data: Final = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        **({} if request_cache is None else {"cache": request_cache}),
+    }
+
+    updated: Final = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["cache"] == expected_cache
+    opt_in_cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+    assert opt_in_cache.should_use_cache(**updated) is uses_cache_when_default_off
 
 
 class TestPromotedTraceControlFields:
