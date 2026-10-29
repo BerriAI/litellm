@@ -361,3 +361,17 @@ async def test_malformed_passthrough_logging_preserves_response_dispatch_contrac
             await pending
     assert logging_obj.finalized_cost is None
     assert not logging_obj._async_success_enqueued
+
+
+@pytest.mark.asyncio
+async def test_finalization_failure_leaves_the_request_and_callback_billing_intact(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(**kwargs: object) -> object:
+        raise RuntimeError("payload build failed")
+
+    monkeypatch.setattr(logging_obj, "prepare_success_logging", explode)
+    counter: Final = Counter()
+    assert await finalize_response_cost(logging_obj, response(), counter, NOW) is None
+    assert logging_obj.finalized_cost is None
+    assert counter.calls == 0
