@@ -8,7 +8,7 @@ import time
 import traceback
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import lru_cache
 from itertools import chain
@@ -2235,13 +2235,15 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
 class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
     may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, the
-    Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, and how
-    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn."""
+    Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, how
+    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn,
+    and how to store the turn's own request on that row when the turn fails or is refused."""
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     bill_refusal: Callable[[Exception], None] | None = None
+    bill_failed_request: Callable[[Exception, Mapping[str, object]], None] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -2254,6 +2256,8 @@ async def _reject_guarded_turn(
     runs every failure hook once per socket, like the first refusal it records."""
     if guarded.bill_refusal is not None:
         guarded.bill_refusal(rejection)
+    if guarded.bill_failed_request is not None:
+        guarded.bill_failed_request(rejection, _turn_request_body(guarded.frame))
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
 
@@ -2324,6 +2328,20 @@ def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], .
     return tuple({"role": "user", "content": text} for text in texts)
 
 
+_NO_REQUEST_BODY: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _turn_request_body(client_frame: str | None) -> Mapping[str, object]:
+    """The turn's ``response.create`` as the body of the equivalent HTTP ``/v1/responses`` request."""
+    frame: Final = _json_object_or_none(client_frame)
+    if frame is None:
+        return _NO_REQUEST_BODY
+    nested: Final = frame.get("response")
+    if _is_json_object(nested):
+        return {**{key: value for key, value in frame.items() if key not in ("type", "response")}, **nested}
+    return {key: value for key, value in frame.items() if key != "type"}
+
+
 def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
     from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
 
@@ -2339,9 +2357,11 @@ class _ResponsesWsTurn:
 
     logging_obj: LiteLLMLoggingObj
     events: tuple[Mapping[str, object], ...] = ()
+    request_body: Mapping[str, object] = _NO_REQUEST_BODY
+    bill_failed_request: Callable[[Exception, Mapping[str, object]], None] | None = None
 
     def with_event(self, event: Mapping[str, object]) -> _ResponsesWsTurn:
-        return _ResponsesWsTurn(logging_obj=self.logging_obj, events=(*self.events, event))
+        return replace(self, events=(*self.events, event))
 
     def failure(
         self, model: str, custom_llm_provider: str, connection_logging_obj: LiteLLMLoggingObj
@@ -2468,17 +2488,26 @@ class ResponsesWebSocketStreaming:
         self.turn_admission: Callable[[], Awaitable[None]] | None = turn_admission
 
     def _start_turn(
-        self, client_frame: str | None, guardrail_information: tuple[Mapping[str, object], ...] = ()
+        self,
+        client_frame: str | None,
+        guardrail_information: tuple[Mapping[str, object], ...] = (),
+        bill_failed_request: Callable[[Exception, Mapping[str, object]], None] | None = None,
     ) -> None:
         start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
+        request_body: Final = _turn_request_body(client_frame)
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
-            litellm_call_id=str(uuid.uuid4()), start_time=start_time
+            litellm_call_id=str(uuid.uuid4()), start_time=start_time, request_body=request_body
         )
         self._detach_budget_reservation()
         _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
-        self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
+        self._open_turns = (
+            *self._open_turns,
+            _ResponsesWsTurn(
+                logging_obj=turn_logging_obj, request_body=request_body, bill_failed_request=bill_failed_request
+            ),
+        )
 
     def _detach_budget_reservation(self) -> None:
         """Only the first turn settles the connection's admission reservation; later turns charge their cost directly."""
@@ -2495,11 +2524,14 @@ class ResponsesWebSocketStreaming:
         }
 
     def _record_client_frame(
-        self, client_frame: str, guardrail_information: tuple[Mapping[str, object], ...] = ()
+        self,
+        client_frame: str,
+        guardrail_information: tuple[Mapping[str, object], ...] = (),
+        bill_failed_request: Callable[[Exception, Mapping[str, object]], None] | None = None,
     ) -> None:
         frame: Final = _json_object_or_none(client_frame)
         if frame is not None and frame.get("type") == "response.create":
-            self._start_turn(client_frame, guardrail_information)
+            self._start_turn(client_frame, guardrail_information, bill_failed_request)
 
     async def _guard_frame(self, message: str) -> GuardedResponsesWsFrame | None:
         """Run the proxy's pre_call guardrails on one ``response.create`` frame.
@@ -2526,7 +2558,7 @@ class ResponsesWebSocketStreaming:
         if guarded.pii_tokens:
             self._remember_pii_tokens(guarded.pii_tokens)
         masked: Final = await self._mask_response_create(guarded.frame)
-        self._record_client_frame(masked, guarded.guardrail_information)
+        self._record_client_frame(masked, guarded.guardrail_information, guarded.bill_failed_request)
         await self.backend_ws.send(masked)
 
     def _remember_pii_tokens(self, pii_tokens: Mapping[str, str]) -> None:
@@ -2569,6 +2601,8 @@ class ResponsesWebSocketStreaming:
             return
         if self._failure is None:
             self._failure = exception
+        if turn.bill_failed_request is not None:
+            turn.bill_failed_request(exception, turn.request_body)
         _record_usage_for_failure(turn.logging_obj, events)
         traceback_exception: Final = "".join(traceback.format_exception(exception))
         spawn_logging_task(
@@ -3378,22 +3412,28 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
-        """Update proxy_server_request body so spend logs record the full request."""
-        proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get("proxy_server_request") or {}
-        if not isinstance(proxy_server_request, dict):
+        """Replace the connection's proxy_server_request body with this turn's request so its spend row records it."""
+        metadata: Final = call_kwargs.get("litellm_metadata") or {}
+        connection_request: Final = (
+            call_kwargs.get("proxy_server_request") or metadata.get("proxy_server_request") or {}
+        )
+        if not isinstance(connection_request, dict):
             return
-        body: Final = dict(proxy_server_request.get("body") or {})
-        body["input"] = call_kwargs.get("input")
-        body["store"] = call_kwargs.get("store")
-        body["model"] = model
-        for k in ("tools", "tool_choice", "instructions", "metadata"):
-            if k in call_kwargs and call_kwargs[k] is not None:
-                body[k] = call_kwargs[k]
-        proxy_server_request = {**proxy_server_request, "body": body}
-        if "litellm_metadata" not in call_kwargs:
-            call_kwargs["litellm_metadata"] = {}
-        call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
-        call_kwargs["proxy_server_request"] = proxy_server_request
+        turn_request: Final = {
+            **connection_request,
+            "body": {
+                "input": call_kwargs.get("input"),
+                "store": call_kwargs.get("store"),
+                "model": model,
+                **{
+                    key: call_kwargs[key]
+                    for key in ("tools", "tool_choice", "instructions", "metadata")
+                    if call_kwargs.get(key) is not None
+                },
+            },
+        }
+        call_kwargs["litellm_metadata"] = {**metadata, "proxy_server_request": turn_request}
+        call_kwargs["proxy_server_request"] = turn_request
 
     async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> _MutableJsonObject | None:
         """
@@ -3534,12 +3574,12 @@ class ManagedResponsesWebSocketHandler:
 
         self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)
+        call_kwargs.update(self.extra_kwargs)
         if guarded.guardrail_information:
             call_kwargs["litellm_metadata"] = self._metadata_with_turn_guardrails(
                 call_kwargs.get("litellm_metadata"), guarded.guardrail_information
             )
         self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
-        call_kwargs.update(self.extra_kwargs)
 
         try:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)

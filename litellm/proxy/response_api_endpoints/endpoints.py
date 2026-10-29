@@ -2069,7 +2069,7 @@ def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: _PreCallGuardrailWalk,
-    record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
+    failed_turns: "_FailedTurns",
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -2133,7 +2133,8 @@ def _responses_ws_frame_guard(
             frame=json.dumps(rewritten),
             guardrail_information=guardrail_information,
             pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
-            bill_refusal=partial(record_refused_turn, guardrail_information),
+            bill_refusal=partial(failed_turns.add, guardrail_information),
+            bill_failed_request=failed_turns.add_request,
         )
 
     return guard
@@ -2180,29 +2181,45 @@ _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 @dataclass(slots=True)
-class _RefusedTurns:
-    """Turns the deployment refused after their guardrails passed. The socket's close-time failure row bills their
-    guardrail records, so its failure hooks, model group and call type cover those turns too, and the first refusal
-    is that row's exception when the session limit cancels the relay before it returns one."""
+class _FailedTurns:
+    """Turns that failed or that the deployment refused after their guardrails passed. The socket's close-time
+    failure row stores the request of the turn whose failure it bills and bills the refused turns' guardrail records,
+    so its failure hooks, model group and call type cover those turns too, and the first refusal is that row's
+    exception when the session limit cancels the relay before it returns one."""
 
     first: Exception | None = None
     records: tuple[Mapping[str, object], ...] = ()
+    requests: tuple[tuple[Exception, Mapping[str, object]], ...] = ()
 
     def add(self, records: tuple[Mapping[str, object], ...], refusal: Exception) -> None:
         self.records = (*self.records, *records)
         if self.first is None:
             self.first = refusal
 
-    def billed_on(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
+    def add_request(self, failure: Exception, request: Mapping[str, object]) -> None:
+        self.requests = (*self.requests, (failure, request))
+
+    def billed_on(self, request_data: Mapping[str, object], failure: Exception) -> Mapping[str, object]:
+        with_request: Final = self._with_request_of(request_data, failure)
         if not self.records:
-            return request_data
-        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
-        bucket: Final = request_data.get(metadata_key)
+            return with_request
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(with_request)
+        bucket: Final = with_request.get(metadata_key)
         fields: Final = _WS_FRAME.validate_python(bucket) if isinstance(bucket, dict) else {}
         recorded: Final = (*_recorded_guardrail_information(fields), *self.records)
         return {
-            **request_data,
+            **with_request,
             metadata_key: {**fields, _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in recorded]},
+        }
+
+    def _with_request_of(self, request_data: Mapping[str, object], failure: Exception) -> Mapping[str, object]:
+        request: Final = next((body for recorded, body in self.requests if recorded is failure), None)
+        proxy_server_request: Final = request_data.get("proxy_server_request")
+        if request is None or not isinstance(proxy_server_request, dict):
+            return request_data
+        return {
+            **request_data,
+            "proxy_server_request": {**_WS_FRAME.validate_python(proxy_server_request), "body": dict(request)},
         }
 
 
@@ -2309,13 +2326,11 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
-    refused_turns: Final = _RefusedTurns()
+    failed_turns: Final = _FailedTurns()
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
-        responses_ws_frame_guard=_responses_ws_frame_guard(
-            data, user_api_key_dict, proxy_logging_obj, refused_turns.add
-        ),
+        responses_ws_frame_guard=_responses_ws_frame_guard(data, user_api_key_dict, proxy_logging_obj, failed_turns),
         **_routing_hints_from_first_ws_frame(first_message),
     )
 
@@ -2323,7 +2338,7 @@ async def _responses_websocket_session(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=exception,
-            request_data=dict(refused_turns.billed_on(routed_data)),
+            request_data=dict(failed_turns.billed_on(routed_data, exception)),
         )
 
     def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
@@ -2341,8 +2356,8 @@ async def _responses_websocket_session(
             )
             outcome: Final = await llm_call
         except asyncio.CancelledError:
-            if refused_turns.first is not None:
-                _ = bill_socket_failure(refused_turns.first)
+            if failed_turns.first is not None:
+                _ = bill_socket_failure(failed_turns.first)
             raise
         except Exception as e:
             crash_row: Final = bill_socket_failure(e)

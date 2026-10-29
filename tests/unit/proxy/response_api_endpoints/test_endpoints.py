@@ -2560,6 +2560,82 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.asyncio
+    async def test_close_time_failure_row_stores_the_request_of_the_turn_whose_failure_it_bills(self):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": "alpha"})
+        )
+        ws.close = AsyncMock()
+        connection_request = {"url": "ws://testserver/v1/responses", "body": {"model": "gpt-4o-mini"}}
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=(
+                {"model": "gpt-4o-mini", "litellm_metadata": {}, "proxy_server_request": connection_request},
+                MagicMock(),
+            )
+        )
+        failure = RateLimitError(message="beta was rate limited", llm_provider="openai", model="gpt-4o-mini")
+        later_failure = RateLimitError(message="gamma was rate limited", llm_provider="openai", model="gpt-4o-mini")
+
+        def route_request(data, **kwargs):
+            async def relay():
+                for turn, turn_failure in (("alpha", None), ("beta", failure), ("gamma", later_failure)):
+                    guarded = await data["responses_ws_frame_guard"](
+                        json.dumps({"type": "response.create", "input": turn})
+                    )
+                    if turn_failure is not None:
+                        guarded.bill_failed_request(turn_failure, {"input": turn})
+                return failure
+
+            return relay()
+
+        row_written = asyncio.Event()
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=lambda **kwargs: row_written.set())
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+            await asyncio.wait_for(row_written.wait(), timeout=1)
+
+        booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert booked["original_exception"] is failure
+        assert booked["request_data"]["proxy_server_request"] == {
+            "url": "ws://testserver/v1/responses",
+            "body": {"input": "beta"},
+        }
+        assert connection_request["body"] == {"model": "gpt-4o-mini"}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "relay_outcome",
         ["still_relaying", "already_returned", "returns_despite_the_cancel", "crashes_despite_the_cancel"],

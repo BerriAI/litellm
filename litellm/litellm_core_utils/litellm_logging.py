@@ -845,12 +845,15 @@ class Logging(LiteLLMLoggingBaseClass):
         self._stream_failure_claimed: bool = False
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
-    def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
+    def copy_for_new_call(
+        self, litellm_call_id: str, start_time: datetime.datetime, request_body: Mapping[str, object]
+    ) -> "Logging":
         """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
-        start time and chunk buffers, so the turn logs and bills as a request of its own."""
+        start time, request body and chunk buffers, so the turn logs and bills as a request of its own."""
         connection_params: Final = _LITELLM_PARAMS.validate_python(
             self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
         )
+        connection_request: Final = connection_params.get("proxy_server_request")
         litellm_params: Final[dict[str, object]] = {
             **connection_params,
             **{
@@ -858,6 +861,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 for key, value in connection_params.items()
                 if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
             },
+            **(
+                {
+                    "proxy_server_request": {
+                        **_LITELLM_PARAMS.validate_python(connection_request),
+                        "body": dict(request_body),
+                    }
+                }
+                if isinstance(connection_request, dict)
+                else {}
+            ),
             "litellm_call_id": litellm_call_id,
         }
         new_call: Final = copy.copy(self)

@@ -2216,7 +2216,7 @@ async def test_aresponses_websocket_turn_reaches_a_custom_logger_through_the_asy
         base_llm_http_handler, "async_responses_websocket", AsyncMock(side_effect=open_session)
     ):
         await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
-    turn = sessions[0].copy_for_new_call("ws-turn-2", dt_object.now())
+    turn = sessions[0].copy_for_new_call("ws-turn-2", dt_object.now(), {"input": "hi"})
 
     await turn.dispatch_success_handlers(
         litellm.ResponsesAPIResponse(
@@ -13618,17 +13618,25 @@ def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connect
     connection.litellm_params = {
         "litellm_call_id": "connection-call",
         "metadata": {"user_api_key": "hashed-key", "user_api_key_budget_reservation": reservation},
+        "proxy_server_request": {"url": "ws://proxy/v1/responses", "body": {"input": "first frame"}},
     }
     connection.model_call_details["litellm_params"] = connection.litellm_params
     turn_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
 
-    turn: Final = connection.copy_for_new_call(litellm_call_id="turn-1", start_time=turn_start)
+    turn: Final = connection.copy_for_new_call(
+        litellm_call_id="turn-1", start_time=turn_start, request_body={"input": "second turn"}
+    )
 
     assert (turn.litellm_call_id, turn.start_time) == ("turn-1", turn_start)
     assert (turn.model_call_details["litellm_call_id"], turn.model_call_details["start_time"]) == ("turn-1", turn_start)
     assert turn.model_call_details["litellm_params"]["litellm_call_id"] == "turn-1"
     assert turn.litellm_params["metadata"]["user_api_key"] == "hashed-key"
     assert turn.litellm_params["metadata"]["user_api_key_budget_reservation"] is reservation
+    assert turn.litellm_params["proxy_server_request"] == {
+        "url": "ws://proxy/v1/responses",
+        "body": {"input": "second turn"},
+    }
+    assert connection.litellm_params["proxy_server_request"]["body"] == {"input": "first frame"}
     turn.litellm_params["metadata"]["turn_only"] = True
     assert "turn_only" not in connection.litellm_params["metadata"]
     assert (connection.litellm_call_id, connection.model_call_details["litellm_call_id"]) == (
