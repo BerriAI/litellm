@@ -9,6 +9,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
 )
@@ -222,6 +223,48 @@ class TestContextCachingEndpoints:
             tools=self.sample_tools,
             tool_choice=None,
             model="gemini-1.5-pro",
+        )
+
+    @pytest.mark.parametrize("vertex_location", ["us-central1", None])
+    def test_check_and_create_cache_creates_the_cache_where_the_api_base_model_lives(
+        self, vertex_location: str | None
+    ):
+        context_caching = ContextCachingEndpoints(known_caches=KnownCachedContents())
+        listed = MagicMock()
+        listed.json.return_value = {"cachedContents": []}
+        created = MagicMock()
+        created.json.return_value = {"name": "cachedContents/base-cache"}
+        self.mock_client.get.return_value = listed
+        self.mock_client.post.return_value = created
+        base_model_location = "https://gateway.example.com/v1/projects/base-project/locations/europe-west4"
+
+        _, _, cache_name = context_caching.check_and_create_cache(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Long policy text", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": "Summarize it"},
+            ],
+            optional_params={},
+            api_key="unused",
+            api_base=f"{base_model_location}/publishers/google/models/gemini-2.5-pro",
+            model="gemini-2.5-pro",
+            client=self.mock_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            custom_llm_provider="vertex_ai",
+            vertex_project="config-project",
+            vertex_location=vertex_location,
+            vertex_auth_header="vertex-token",
+        )
+
+        assert cache_name == "cachedContents/base-cache"
+        assert self.mock_client.get.call_args.kwargs["url"] == f"{base_model_location}/cachedContents"
+        assert self.mock_client.post.call_args.kwargs["url"] == f"{base_model_location}/cachedContents"
+        assert (
+            self.mock_client.post.call_args.kwargs["json"]["model"]
+            == "projects/base-project/locations/europe-west4/publishers/google/models/gemini-2.5-pro"
         )
 
     @pytest.mark.parametrize(
@@ -2251,32 +2294,16 @@ class TestVertexAIGlobalLocation:
             ),
             (
                 "vertex_ai",
-                "https://gateway.example.com/v1/projects/tuned-project/locations/europe-west4/endpoints/123",
-                "https://gateway.example.com/v1/projects/tuned-project/locations/europe-west4/cachedContents",
-            ),
-            (
-                "vertex_ai",
                 "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
-                "/publishers/google/models/gemini-2.5-pro",
-                "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
-                "/cachedContents",
-            ),
-            (
-                "vertex_ai",
-                "https://gateway.example.com/vertex-proxy",
-                "https://gateway.example.com/vertex-proxy/v1/projects/my-project/locations/us-central1/cachedContents",
-            ),
-            (
-                "vertex_ai",
-                "https://gateway.example.com/publishers/relay",
+                "/publishers/google/models/gemini-2.5-pro/",
                 "https://gateway.example.com/publishers/relay/v1/projects/my-project/locations/us-central1"
                 "/cachedContents",
             ),
             (
                 "vertex_ai_beta",
-                "https://gateway.example.com/vertex-proxy/",
-                "https://gateway.example.com/vertex-proxy/v1beta1/projects/my-project/locations/us-central1"
-                "/cachedContents",
+                "https://gateway.example.com/v1beta1/projects/my-project/locations/us-central1"
+                "/publishers/google/models/gemini-2.5-pro",
+                "https://gateway.example.com/v1beta1/projects/my-project/locations/us-central1/cachedContents",
             ),
         ],
     )
@@ -2297,6 +2324,31 @@ class TestVertexAIGlobalLocation:
 
         assert auth_header == "vertex-token"
         assert url == expected_url
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://gateway.example.com/v1/projects/tuned-project/locations/europe-west4/endpoints/123",
+            "https://gateway.example.com/v1/projects/my-project/locations/us-central1",
+            "https://gateway.example.com/vertex-proxy",
+        ],
+    )
+    def test_vertex_context_caching_without_a_publisher_model_in_api_base_keeps_the_api_base_resource(
+        self, api_base: str
+    ):
+        caching = ContextCachingEndpoints()
+
+        _, url = caching._get_token_and_url_context_caching(
+            gemini_api_key=None,
+            custom_llm_provider="vertex_ai",
+            api_base=api_base,
+            vertex_project="my-project",
+            vertex_location="us-central1",
+            vertex_auth_header="vertex-token",
+            model="gemini-2.5-pro",
+        )
+
+        assert url == f"{api_base}:cachedContents"
 
     def test_gemini_context_caching_without_api_base_ignores_model(self):
         """Without custom api_base, model param is not needed (default URL is used)."""

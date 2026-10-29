@@ -12,8 +12,9 @@ from pydantic import JsonValue, TypeAdapter
 _BACKEND: Final = "gemini-3.8-flash"
 _PROJECT: Final = "scripted-project"
 _LOCATION: Final = "us-central1"
-_VERTEX_LOCATION_PATH: Final = f"/v1/projects/{_PROJECT}/locations/{_LOCATION}"
-_VERTEX_COLLECTION: Final = f"{_VERTEX_LOCATION_PATH}/cachedContents"
+_MODEL_LOCATION: Final = "europe-west4"
+_VERTEX_MODEL_RESOURCE: Final = f"projects/{_PROJECT}/locations/{_MODEL_LOCATION}/publishers/google/models/{_BACKEND}"
+_VERTEX_COLLECTION: Final = f"/v1/projects/{_PROJECT}/locations/{_MODEL_LOCATION}/cachedContents"
 _GEMINI_COLLECTION: Final = "/v1beta/cachedContents"
 _GEMINI_MODEL_PATH: Final = f"/v1beta/models/{_BACKEND}"
 _GEMINI_KEY: Final = "scripted-gemini-key"
@@ -105,18 +106,10 @@ def test_gemini_custom_api_base_lists_and_creates_the_cached_contents_collection
         assert _cached_tokens_of(response) == _CACHED_TOKENS
 
 
-@pytest.mark.parametrize(
-    ("api_base_path", "collection"),
-    [
-        (f"{_VERTEX_LOCATION_PATH}/publishers/google/models/{_BACKEND}", _VERTEX_COLLECTION),
-        (f"{_VERTEX_LOCATION_PATH}/endpoints/4417", _VERTEX_COLLECTION),
-        ("/vertex-proxy", f"/vertex-proxy{_VERTEX_COLLECTION}"),
-    ],
-    ids=["model-path", "endpoint-path", "mount-prefix"],
-)
-def test_vertex_custom_api_base_lists_and_creates_the_cached_contents_collection(
-    gateway: Gateway, api_base_path: str, collection: str
-) -> None:
+@pytest.mark.parametrize("gateway_prefix", ["", "/vertex-proxy"], ids=["model-path", "prefixed-model-path"])
+def test_vertex_custom_api_base_creates_the_cache_where_its_model_lives(gateway: Gateway, gateway_prefix: str) -> None:
+    api_base_path: Final = f"{gateway_prefix}/v1/{_VERTEX_MODEL_RESOURCE}"
+    collection: Final = f"{gateway_prefix}{_VERTEX_COLLECTION}"
     with (
         wire_server(_google_responder(collection, api_base_path)) as wire,
         gateway.scenario() as scenario,
@@ -132,5 +125,6 @@ def test_vertex_custom_api_base_lists_and_creates_the_cached_contents_collection
         response: Final = _chat(gateway, model)
         requests: Final = wire.drain()
         _assert_cache_round_trip(requests, collection, api_base_path)
+        assert _JSON_OBJECT.validate_json(requests[1].body)["model"] == _VERTEX_MODEL_RESOURCE
         assert all(request.headers.get("authorization") == "Bearer scripted-token" for request in requests)
         assert _cached_tokens_of(response) == _CACHED_TOKENS

@@ -10,6 +10,7 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
@@ -48,14 +49,22 @@ def graft_default_vertex_path(api_base: str, default_url: str) -> str:
 _graft_default_vertex_path = graft_default_vertex_path
 
 
-_VERTEX_LOCATION_PARENT: Final = re.compile(r".*/projects/[^/]+/locations/[^/]+")
+_PUBLISHER_MODEL_LOCATION: Final = re.compile(r".*/projects/[^/]+/locations/[^/]+(?=/publishers/[^/]+/models/[^/]+/?$)")
 
 
-def _vertex_collection_url(api_base: str, endpoint: str, default_url: str) -> str:
-    location_parent: Final = _VERTEX_LOCATION_PARENT.match(api_base)
-    if location_parent is None:
-        return join_api_base(api_base, urlparse(default_url).path)
-    return join_api_base(location_parent.group(), endpoint)
+@dataclass(frozen=True, slots=True)
+class PublisherModelLocation:
+    parent_url: str
+    project: str
+    location: str
+
+
+def publisher_model_location(api_base: str) -> PublisherModelLocation | None:
+    match: Final = _PUBLISHER_MODEL_LOCATION.match(api_base)
+    if match is None:
+        return None
+    _, _, project, _, location = match.group().rsplit("/", 4)
+    return PublisherModelLocation(parent_url=match.group(), project=project, location=location)
 
 
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
@@ -659,9 +668,8 @@ class VertexBase:
            for a collection endpoint
         2. Vertex AI with standard proxies - grafts the default vertex URL path onto the
            api_base when its path is empty or only an API version (/v1, /v1beta1);
-           otherwise constructs {api_base}:{endpoint}, or, for a collection endpoint, the collection
-           under the api_base's projects/{project}/locations/{location} parent, or the default
-           collection path under an api_base with no location in it
+           otherwise constructs {api_base}:{endpoint}, or, for a collection endpoint under an api_base
+           naming a publisher model, the collection under that model's projects/{project}/locations/{location}
         3. Vertex AI with PSC endpoints - constructs full path structure
            {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
            (only when use_psc_endpoint_format=True)
@@ -708,10 +716,11 @@ class VertexBase:
                 elif urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1") and "/projects/" in urlparse(url).path:
                     url = graft_default_vertex_path(api_base=api_base, default_url=url)
                 else:
+                    model_location: Final = publisher_model_location(api_base) if collection_endpoint else None
                     url = (
-                        _vertex_collection_url(api_base=api_base, endpoint=endpoint, default_url=url)
-                        if collection_endpoint
-                        else f"{api_base.rstrip('/')}:{endpoint}"
+                        f"{api_base.rstrip('/')}:{endpoint}"
+                        if model_location is None
+                        else join_api_base(model_location.parent_url, endpoint)
                     )
             if stream is True:
                 parsed_stream_url: Final = urlparse(url)

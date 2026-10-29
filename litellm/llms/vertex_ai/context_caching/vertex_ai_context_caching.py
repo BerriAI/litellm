@@ -19,7 +19,7 @@ from litellm.llms.openai.openai import AllMessageValues
 from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
-from ..vertex_llm_base import VertexBase
+from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
 from .transformation import (
     cached_messages_end_on_supported_turn,
@@ -76,6 +76,20 @@ def _wait_seconds(timeout: float | httpx.Timeout | None) -> float | None:
             return timeout.read
         case _:
             return timeout
+
+
+def _cache_project_and_location(
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    api_base: str | None,
+    vertex_project: str | None,
+    vertex_location: str | None,
+) -> tuple[str | None, str | None]:
+    model_location: Final = (
+        None if custom_llm_provider == "gemini" or api_base is None else publisher_model_location(api_base)
+    )
+    if model_location is None:
+        return vertex_project, vertex_location
+    return model_location.project, model_location.location
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -394,6 +408,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
+        cache_project, cache_location = _cache_project_and_location(
+            custom_llm_provider, api_base, vertex_project, vertex_location
+        )
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
 
@@ -402,8 +419,8 @@ class ContextCachingEndpoints(VertexBase):
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
+            vertex_project=cache_project,
+            vertex_location=cache_location,
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
@@ -440,8 +457,8 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
+            vertex_project=cache_project,
+            vertex_location=cache_location,
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
@@ -454,8 +471,8 @@ class ContextCachingEndpoints(VertexBase):
             messages=cached_messages,
             cache_key=generated_cache_key,
             custom_llm_provider=custom_llm_provider,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
+            vertex_project=cache_project,
+            vertex_location=cache_location,
         )
 
         cached_content_request_body["tools"] = tools
@@ -490,7 +507,7 @@ class ContextCachingEndpoints(VertexBase):
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         self._known_caches.remember(
             KnownCachedContents.scope(
-                url, custom_llm_provider, headers, vertex_project=vertex_project, vertex_location=vertex_location
+                url, custom_llm_provider, headers, vertex_project=cache_project, vertex_location=cache_location
             ),
             generated_cache_key,
             raw_response_cached.get("name"),
@@ -560,6 +577,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
+        cache_project, cache_location = _cache_project_and_location(
+            custom_llm_provider, api_base, vertex_project, vertex_location
+        )
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
 
@@ -568,8 +588,8 @@ class ContextCachingEndpoints(VertexBase):
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
+            vertex_project=cache_project,
+            vertex_location=cache_location,
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
@@ -594,7 +614,7 @@ class ContextCachingEndpoints(VertexBase):
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
         scope: Final = KnownCachedContents.scope(
-            url, custom_llm_provider, headers, vertex_project=vertex_project, vertex_location=vertex_location
+            url, custom_llm_provider, headers, vertex_project=cache_project, vertex_location=cache_location
         )
 
         async def lookup_or_create() -> str | None:
@@ -606,8 +626,8 @@ class ContextCachingEndpoints(VertexBase):
                 api_base=api_base,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
+                vertex_project=cache_project,
+                vertex_location=cache_location,
                 vertex_auth_header=vertex_auth_header,
                 model=model,
             )
@@ -621,8 +641,8 @@ class ContextCachingEndpoints(VertexBase):
                 messages=cached_messages,
                 cache_key=generated_cache_key,
                 custom_llm_provider=custom_llm_provider,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
+                vertex_project=cache_project,
+                vertex_location=cache_location,
             )
 
             cached_content_request_body["tools"] = tools
