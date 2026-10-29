@@ -14,6 +14,7 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+import copy
 import json
 import time
 import uuid
@@ -758,22 +759,51 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         return True
 
     @staticmethod
+    def _joined_streamed_arguments(
+        responses_so_far: Sequence["ModelResponseStream"],
+    ) -> Mapping[tuple[int, int], str]:
+        """The argument text streamed so far per (choice index, tool call index)."""
+        fragments: Final = tuple(OpenAIChatCompletionsHandler._streamed_argument_fragments(responses_so_far))
+        return MappingProxyType(
+            {
+                call: "".join(text for other, text in fragments if other == call)
+                for call in frozenset(call for call, _ in fragments)
+            }
+        )
+
+    @staticmethod
     def _streamed_tool_arguments_are_complete(responses_so_far: Sequence["ModelResponseStream"]) -> bool:
         """Whether every streamed tool call now carries arguments that parse as JSON.
 
         A call that has announced itself but emitted no argument text yet is still in flight, so a
         parallel call finishing first does not make the whole set complete.
         """
-        fragments: Final = tuple(OpenAIChatCompletionsHandler._streamed_argument_fragments(responses_so_far))
-        if not fragments:
+        joined: Final = OpenAIChatCompletionsHandler._joined_streamed_arguments(responses_so_far)
+        if not joined:
             return False
-        joined: Final = MappingProxyType(
-            {
-                call: "".join(text for other, text in fragments if other == call)
-                for call in frozenset(call for call, _ in fragments)
-            }
-        )
         return all(OpenAIChatCompletionsHandler._parses_as_json(arguments) for arguments in joined.values())
+
+    @staticmethod
+    def _without_unfinished_tool_calls(
+        assembled: "ModelResponse", responses_so_far: Sequence["ModelResponseStream"]
+    ) -> "ModelResponse":
+        """Copy of the rebuilt response without the calls still in flight when the stream ended.
+
+        Rebuilding gives a call that never streamed any argument text an empty JSON object, which
+        reads to a guardrail as a real call taking no arguments rather than an unfinished one.
+        """
+        joined: Final = OpenAIChatCompletionsHandler._joined_streamed_arguments(responses_so_far)
+        pruned: Final = copy.deepcopy(assembled)
+        for choice in pruned.choices:
+            streamed = choice.message.tool_calls or ()
+            kept = [
+                call
+                for position, call in enumerate(streamed)
+                if OpenAIChatCompletionsHandler._parses_as_json(joined.get((choice.index, position), ""))
+            ]
+            if len(kept) != len(streamed):
+                choice.message.tool_calls = kept or None
+        return pruned
 
     @staticmethod
     def _rebuild_ended_stream_per_choice(
@@ -903,7 +933,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 else self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
             )
             if assembled is not None:
-                resolved_request_data["response"] = assembled
+                resolved_request_data["response"] = (
+                    assembled
+                    if tool_arguments_complete
+                    else self._without_unfinished_tool_calls(assembled, responses_so_far)
+                )
             if assembled is not None and len(assembled.choices) > 1:
                 choice_rounds: Final = tuple(
                     (

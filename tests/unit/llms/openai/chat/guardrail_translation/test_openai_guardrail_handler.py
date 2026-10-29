@@ -1680,6 +1680,53 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
 
     @pytest.mark.asyncio
+    async def test_an_unfinished_parallel_call_is_kept_out_of_what_the_guardrail_reads(self) -> None:
+        """A call that only announced its name must not reach the guardrail, by either route."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen_calls: list[object] = []
+            seen_response: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen_calls.append(inputs.get("tool_calls"))
+                type(self).seen_response.append(request_data.get("response"))
+                return inputs
+
+        def call(index: int, arguments: str) -> dict[str, object]:
+            return {
+                "index": index, "id": f"call_{index}", "type": "function",
+                "function": {"name": "weather", "arguments": arguments},
+            }
+
+        RecordingGuardrail.seen_calls = []
+        RecordingGuardrail.seen_response = []
+        handler: Final = OpenAIChatCompletionsHandler()
+        request_data: Final[dict[str, object]] = {}
+        ended_with_one_unfinished: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=0, delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, "")]),
+            finish_reason="tool_calls",
+        )])]
+        await handler.process_output_streaming_response(
+            responses_so_far=ended_with_one_unfinished,
+            guardrail_to_apply=RecordingGuardrail(guardrail_name="recording"),
+            litellm_logging_obj=None, request_data=request_data,
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert RecordingGuardrail.seen_calls == [None]
+        inspected: Final = RecordingGuardrail.seen_response[-1]
+        arguments: Final = tuple(
+            tool_call.function.arguments
+            for choice in getattr(inspected, "choices", None) or ()
+            for tool_call in choice.message.tool_calls or ()
+        )
+        assert arguments == ('{"city": "Paris"}',)
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
         handler: Final = OpenAIChatCompletionsHandler()
         chunks: Final = self._two_choice_tool_call_stream_chunks()
