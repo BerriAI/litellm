@@ -2467,14 +2467,19 @@ def test_images_over_cloudflares_size_limits_are_refused_before_http(
     assert not route.called
 
 
+_SMALL_PNG: Final = _png_data_url(1)
+_DROPPED_OVERSIZED_IMAGES: Final[tuple[tuple[Sequence[object], Sequence[object]], ...]] = (
+    *((images, images[:kept]) for (images, _), kept in zip(_OVERSIZED_IMAGES, (0, 0, 2), strict=True)),
+    ((_png_data_url(4 * _MIB + 1), _SMALL_PNG), (_SMALL_PNG,)),
+)
+
+
 @pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize(
-    ("images", "kept_count"),
-    tuple(zip((images for images, _ in _OVERSIZED_IMAGES), (0, 0, 2), strict=True)),
-    ids=_OVERSIZED_IMAGE_IDS,
+    ("images", "kept"), _DROPPED_OVERSIZED_IMAGES, ids=(*_OVERSIZED_IMAGE_IDS, "oversized_then_small")
 )
 def test_images_over_cloudflares_size_limits_are_dropped_under_drop_params(
-    images: Sequence[object], kept_count: int, respx_mock: respx.MockRouter
+    images: Sequence[object], kept: Sequence[object], respx_mock: respx.MockRouter
 ) -> None:
     route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
 
@@ -2486,7 +2491,28 @@ def test_images_over_cloudflares_size_limits_are_dropped_under_drop_params(
         drop_params=True,
     )
 
-    assert json.loads(route.calls.last.request.content).get("images", []) == list(images[:kept_count])
+    assert json.loads(route.calls.last.request.content).get("images", []) == list(kept)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+async def test_logging_callbacks_get_only_the_images_left_after_an_oversized_one_drops(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    recording_logger: Final = _InputRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    await litellm.asystemone(
+        model="cloudflare/clef",
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_png_data_url(4 * _MIB + 1), _SMALL_PNG],
+        drop_params=True,
+    )
+    await _drain_logging_worker()
+
+    assert recording_logger.inputs == [json.loads(route.calls.last.request.content)]
 
 
 @pytest.mark.usefixtures("cloudflare_account")
@@ -3616,6 +3642,31 @@ async def test_a_deployment_that_advertises_box_questions_gets_box_answers_from_
 
 
 @pytest.mark.asyncio
+async def test_openrouter_jev_1_14_gets_box_answers_while_jev_1_13_is_still_refused(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    box_answer: Final = {key: value for key, value in _CRACK_BOX_ANSWER.items() if key != "name"}
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(
+        json={"model": "typesafe/jev-1.14", "answers": {"crack": box_answer}}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="openrouter/typesafe/jev-1.14", input="review", questions=[_CRACK_BOX_QUESTION], api_key="caller-key"
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == {
+        "crack": {"type": "box", "instructions": "the crack on the screen"}
+    }
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="openrouter/typesafe/jev-1.13", input="review", questions=[_CRACK_BOX_QUESTION], api_key="caller-key"
+        )
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_a_deployment_that_turns_box_questions_off_is_refused_even_when_the_cost_map_allows_them(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4307,6 +4358,34 @@ def test_openrouter_jev_rejects_webp_before_http(
         )
 
     assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_images_to_an_openrouter_upstream_without_image_rules_are_refused_or_dropped_as_before(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    request: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            "model": "openrouter/upstage/solar-decide-flash",
+            "state": "Product photo",
+            "questions": _SYSTEMONE_PREDICATE,
+            "images": [_SMALL_PNG],
+            "api_key": "caller-key",
+        }
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['images'\]"):
+        await litellm.asystemone(**request)
+    await litellm.asystemone(**request, drop_params=True)
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "upstage/solar-decide-flash",
+        "state": "Product photo",
+        "questions": _SYSTEMONE_PREDICATE,
+    }
 
 
 def test_openrouter_jev_drops_webp_and_keeps_png_under_drop_params(respx_mock: respx.MockRouter) -> None:

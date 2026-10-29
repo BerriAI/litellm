@@ -302,7 +302,7 @@ def _unsupported_params(
         ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier
     )
     refused_image_param: Final = (
-        None if provider_config.supports_images_in(ir_request.input, headers) else image_param(ir_request.input)
+        None if provider_config.supports_images_in(model, ir_request.input, headers) else image_param(ir_request.input)
     )
     refuses_assets: Final = bool(ir_request.assets) and not provider_config.supports_assets(headers)
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not supports_box_questions
@@ -333,6 +333,7 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
+    model: str,
     headers: Mapping[str, str],
     supports_box_questions: bool,
 ) -> DecisionsIRRequest:
@@ -340,7 +341,7 @@ def _without_unsupported_params(
         ir_request,
         input=(
             ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
+            if provider_config.supports_images_in(model, ir_request.input, headers)
             else with_images_where(ir_request.input, _no_image)
         ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
@@ -401,7 +402,7 @@ def _provider_ir_request(
         return ir_request
     if not _drops_params(kwargs):
         return _UnsupportedParams(names=unsupported)
-    supported: Final = _without_unsupported_params(ir_request, provider_config, headers, supports_box_questions)
+    supported: Final = _without_unsupported_params(ir_request, provider_config, model, headers, supports_box_questions)
     if _leaves_no_input(supported.input):
         return _NothingLeftAfterDrop(names=unsupported, missing="input to decide on")
     if not supported.questions:
@@ -716,6 +717,16 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
+def _image_count(call: DecisionsCall) -> int:
+    return len(input_images(call.ir_request.input))
+
+
+def _logged_body(supported: DecisionsCall, inlined: DecisionsCall, body: Mapping[str, object]) -> Mapping[str, object]:
+    if inlined is supported or _image_count(inlined) < _image_count(supported):
+        return body
+    return _request_body(supported)
+
+
 def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
     returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
     if returned is not None and cost_map_key_prices_anything(returned):
@@ -789,7 +800,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=_logged_body(supported, inlined, body),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -813,7 +824,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=_logged_body(supported, inlined, body),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,

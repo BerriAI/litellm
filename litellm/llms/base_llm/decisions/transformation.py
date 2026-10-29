@@ -666,7 +666,7 @@ class BaseDecisionsConfig(ABC):
         return headers, None
 
     def supports_images_in(
-        self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
+        self, model: str, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
     ) -> bool:
         return self.supports_images
 
