@@ -1419,9 +1419,10 @@ def _format_single_function_definition(function: Mapping[str, object]) -> tuple[
 
 def _format_object_parameters(parameters, indent):
     properties: Final = parameters.get("properties")
-    if not properties:
+    if not isinstance(properties, Mapping) or not properties:
         return ""
-    required_params: Final = parameters.get("required", [])
+    required: Final = parameters.get("required")
+    required_params: Final = tuple(required) if isinstance(required, list) else ()
     lines: Final = []
     for key, props in properties.items():
         description = props.get("description") if isinstance(props, Mapping) else None
@@ -1438,17 +1439,18 @@ def _format_type(props, indent):
     if not isinstance(props, Mapping):
         return "any"
     type: Final = props.get("type")
+    enum: Final = props.get("enum")
     if type == "string":
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        if isinstance(enum, list):
+            return " | ".join([f'"{item}"' for item in enum])
         return "string"
     elif type == "array":
         return f"{_format_type(props.get('items'), indent)}[]"
     elif type == "object":
         return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
     elif type in ["integer", "number"]:
-        if "enum" in props:
-            return " | ".join([f'"{item}"' for item in props["enum"]])
+        if isinstance(enum, list):
+            return " | ".join([f'"{item}"' for item in enum])
         return "number"
     elif type == "boolean":
         return "boolean"

@@ -526,20 +526,35 @@ def test_token_counter_skips_non_mapping_tools():
     ids=["array_without_items", "boolean_subschema"],
 )
 def test_token_counter_counts_json_schema_shorthands_like_their_explicit_form(shorthand: object, explicit: object) -> None:
-    def tool(property_schema: object) -> dict[str, object]:
-        return {
-            "type": "function",
-            "function": {
-                "name": "read_files",
-                "parameters": {"type": "object", "properties": {"paths": property_schema}},
-            },
-        }
+    assert _count_with_property_schema(shorthand) == _count_with_property_schema(explicit)
 
-    messages: Final = [{"role": "user", "content": "Read the config files"}]
 
-    assert token_counter_new(model="gpt-4o", messages=messages, tools=[tool(shorthand)]) == token_counter_new(
-        model="gpt-4o", messages=messages, tools=[tool(explicit)]
-    )
+@pytest.mark.parametrize(
+    ("malformed", "without_keyword"),
+    [
+        (
+            {"type": "object", "properties": {"id": {"type": "string"}}, "required": True},
+            {"type": "object", "properties": {"id": {"type": "string"}}},
+        ),
+        ({"type": "object", "properties": [{"id": {"type": "string"}}]}, {"type": "object"}),
+        ({"type": "string", "enum": None}, {"type": "string"}),
+        ({"type": "integer", "enum": 3}, {"type": "integer"}),
+    ],
+    ids=["required_true", "properties_list", "string_enum_null", "integer_enum_number"],
+)
+def test_token_counter_counts_a_malformed_schema_keyword_as_absent(malformed: object, without_keyword: object) -> None:
+    assert _count_with_property_schema(malformed) == _count_with_property_schema(without_keyword)
+
+
+def _count_with_property_schema(property_schema: object) -> int:
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "read_files",
+            "parameters": {"type": "object", "properties": {"paths": property_schema}},
+        },
+    }
+    return token_counter_new(model="gpt-4o", messages=[{"role": "user", "content": "Read the config files"}], tools=[tool])
 
 
 _WEATHER_FUNCTION: Final = {
