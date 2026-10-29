@@ -4387,6 +4387,7 @@ name = "litellm-router"
 version = "0.1.0"
 dependencies = [
  "litellm-config",
+ "litellm-core-utils",
  "litellm-inference",
  "litellm-inference-messages",
  "litellm-router-types",
