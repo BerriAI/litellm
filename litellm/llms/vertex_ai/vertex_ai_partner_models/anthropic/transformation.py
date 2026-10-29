@@ -145,6 +145,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="vertex_ai",
+            thinking=optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
         )
 
         beta_set: Final = set(auto_betas)

@@ -13,7 +13,7 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.anthropic.count_tokens import handler as count_handler
-from litellm.llms.anthropic.messages.native.transformation import DEFAULT_ANTHROPIC_API_VERSION
+from litellm.llms.anthropic.messages.native.transformation import DEFAULT_ANTHROPIC_API_VERSION, AnthropicMessagesConfig
 from litellm.llms.anthropic.prompt_cache_prediction import (
     CountedPromptCachePlan,
     NativePredictionTarget,
@@ -26,6 +26,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     parse_cache_plan,
     parse_observed_cache,
     parse_prompt,
+    prepare_native_baseline_body,
     resolve_baseline_prediction_target,
     resolve_prediction_target,
     supported_prediction_headers,
@@ -36,7 +37,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy.hooks.prompt_cache_prediction import PromptCacheObserver
 from litellm.proxy.management_endpoints.prompt_cache_prediction import predict_arm
 from litellm.proxy.utils import InternalUsageCache
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.router import Deployment, GenericLiteLLMParams, LiteLLM_Params, ModelInfo
 from litellm.types.utils import CacheCreationTokenDetails, ModelResponse, PromptTokensDetailsWrapper, Usage
 
 _MODEL: Final = "claude-sonnet-5"
@@ -50,9 +51,12 @@ def _body() -> dict[str, JsonValue]:
         "model": _MODEL,
         "system": "Keep this context",
         "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": "A cacheable prefix", "cache_control": {"type": "ephemeral"}}
-        ]}],
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "A cacheable prefix", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
     }
 
 
@@ -88,7 +92,8 @@ async def test_observer_records_only_version_supported_by_token_counter(version:
             "httpx_response": httpx.Response(200, request=wire),
             "first_api_call_start_time": datetime.fromtimestamp(1000.0),
             "standard_logging_object": {
-                "status": "success", "model_id": _DEPLOYMENT,
+                "status": "success",
+                "model_id": _DEPLOYMENT,
                 "metadata": {"user_api_key_hash": _CALLER},
             },
         },
@@ -104,13 +109,16 @@ async def test_observer_records_only_version_supported_by_token_counter(version:
         assert await lookup(cache, other_scope, prefix, now=1010.0) is None
 
 
-@pytest.mark.parametrize("headers, supported", [
-    ({}, True),
-    ({"Anthropic-Version": DEFAULT_ANTHROPIC_API_VERSION}, True),
-    ({"anthropic-version": "2099-01-01"}, False),
-    ({"Anthropic-Beta": ""}, False),
-    ({"anthropic-beta": "future-feature"}, False),
-])
+@pytest.mark.parametrize(
+    "headers, supported",
+    [
+        ({}, True),
+        ({"Anthropic-Version": DEFAULT_ANTHROPIC_API_VERSION}, True),
+        ({"anthropic-version": "2099-01-01"}, False),
+        ({"Anthropic-Beta": ""}, False),
+        ({"anthropic-beta": "future-feature"}, False),
+    ],
+)
 def test_prediction_header_eligibility(headers: Mapping[str, str], supported: bool) -> None:
     assert supported_prediction_headers(headers) is supported
 
@@ -150,49 +158,89 @@ async def test_provider_count_uses_same_version_and_preserves_native_input(
 @pytest.mark.parametrize("source", ["static", "database"])
 @pytest.mark.asyncio
 async def test_environment_credential_matches_native_count_and_observed_scope(
-    source: str, monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LIT7658_PROVIDER_KEY", _KEY)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     params: Final = {
-        "model": f"anthropic/{_MODEL}", "api_key": "os.environ/LIT7658_PROVIDER_KEY",
+        "model": f"anthropic/{_MODEL}",
+        "api_key": "os.environ/LIT7658_PROVIDER_KEY",
         "api_base": "https://api.anthropic.com",
     }
-    router: Final = litellm.Router(model_list=[{
-        "model_name": "test-native", "litellm_params": dict(params), "model_info": {"id": _DEPLOYMENT},
-    }] if source == "static" else [], num_retries=0)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-native",
+                "litellm_params": dict(params),
+                "model_info": {"id": _DEPLOYMENT},
+            }
+        ]
+        if source == "static"
+        else [],
+        num_retries=0,
+    )
     if source == "database":
         monkeypatch.setattr(proxy_server, "llm_router", router)
-        assert proxy_server.ProxyConfig()._add_deployment([SimpleNamespace(
-            model_id=_DEPLOYMENT, model_name="test-native", model_info={}, litellm_params=dict(params),
-        )]) == 1
+        assert (
+            proxy_server.ProxyConfig()._add_deployment(
+                [
+                    SimpleNamespace(
+                        model_id=_DEPLOYMENT,
+                        model_name="test-native",
+                        model_info={},
+                        litellm_params=dict(params),
+                    )
+                ]
+            )
+            == 1
+        )
     deployment: Final = router.get_deployment(_DEPLOYMENT)
     assert deployment is not None
     target: Final = resolve_prediction_target(deployment.litellm_params)
     assert isinstance(target, NativePredictionTarget)
     body: Final = _body()
     with respx.mock() as upstream:
-        native: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(200, json={
-            "id": "msg_test", "type": "message", "role": "assistant", "model": _MODEL,
-            "content": [{"type": "text", "text": "Hello"}], "stop_reason": "end_turn", "stop_sequence": None,
-            "usage": {"input_tokens": 11, "output_tokens": 1, "cache_read_input_tokens": 300},
-        })
+        native: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": _MODEL,
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 11, "output_tokens": 1, "cache_read_input_tokens": 300},
+            },
+        )
         counter: Final = upstream.post("https://api.anthropic.com/v1/messages/count_tokens").respond(
-            200, json={"input_tokens": 311},
+            200,
+            json={"input_tokens": 311},
         )
         await router.aanthropic_messages(
-            model="test-native", max_tokens=1, **{key: value for key, value in body.items() if key != "model"},
+            model="test-native",
+            max_tokens=1,
+            **{key: value for key, value in body.items() if key != "model"},
         )
         assert await count_prompt_tokens(target.model, target.api_key, body) == 311
     assert native.call_count == counter.call_count == 1
     assert native.calls.last.request.headers["x-api-key"] == counter.calls.last.request.headers["x-api-key"] == _KEY
-    observed: Final = parse_observed_cache(native.calls.last.request, ModelResponse(
-        model=_MODEL, usage=Usage(
-            prompt_tokens=311, completion_tokens=1, total_tokens=312,
-            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300),
+    observed: Final = parse_observed_cache(
+        native.calls.last.request,
+        ModelResponse(
+            model=_MODEL,
+            usage=Usage(
+                prompt_tokens=311,
+                completion_tokens=1,
+                total_tokens=312,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300),
+            ),
         ),
-    ), _CALLER, _DEPLOYMENT)
+        _CALLER,
+        _DEPLOYMENT,
+    )
     assert observed is not None
     assert observed.scope == cache_scope(_CALLER, _DEPLOYMENT, target.api_key, target.model)
 
@@ -200,15 +248,26 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
 @pytest.mark.parametrize("inline_key", [None, _KEY])
 @pytest.mark.asyncio
 async def test_named_credential_is_explicitly_unsupported_before_count(
-    inline_key: str | None, monkeypatch: pytest.MonkeyPatch,
+    inline_key: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(litellm, "credential_list", [CredentialItem(
-        credential_name="test-named", credential_info={}, credential_values={"api_key": "test-named-provider-key"},
-    )])
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="test-named",
+                credential_info={},
+                credential_values={"api_key": "test-named-provider-key"},
+            )
+        ],
+    )
     deployment: Final = Deployment(
         model_name="test-native",
         litellm_params=LiteLLM_Params(
-            model=f"anthropic/{_MODEL}", api_key=inline_key, litellm_credential_name="test-named",
+            model=f"anthropic/{_MODEL}",
+            api_key=inline_key,
+            litellm_credential_name="test-named",
         ),
         model_info=ModelInfo(id=_DEPLOYMENT),
     )
@@ -232,8 +291,7 @@ def _cache_plan(body: Mapping[str, JsonValue]) -> PromptCachePlan:
 
 
 def _text(text: str, ttl: str | None = None) -> dict[str, JsonValue]:
-    return {"type": "text", "text": text,
-            **({"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl else {})}
+    return {"type": "text", "text": text, **({"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl else {})}
 
 
 def _prompt(*blocks: dict[str, JsonValue], role: str = "user", **options: JsonValue) -> dict[str, JsonValue]:
@@ -251,16 +309,19 @@ def test_public_predictor_preserves_string_message_policy(text: str, supported: 
 
 def test_cache_plan_preserves_hierarchical_prefixes_and_public_policy() -> None:
     body: Final = _prompt(
-        _text("First turn", "5m"), system=[_text("Stable instructions", "1h")],
-        tools=[{"name": "lookup", "input_schema": {"type": "object"},
-                "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        _text("First turn", "5m"),
+        system=[_text("Stable instructions", "1h")],
+        tools=[
+            {"name": "lookup", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+        ],
     )
     plan: Final = _cache_plan(body)
     changed: Final = _cache_plan({**body, "system": [_text("Changed instructions", "1h")]})
     assert tuple(marker.ttl_seconds for marker in plan.breakpoints) == (3600, 3600, 300)
     assert plan.breakpoints[0].fingerprint == changed.breakpoints[0].fingerprint
-    assert all(left.fingerprint != right.fingerprint for left, right
-               in zip(plan.breakpoints[1:], changed.breakpoints[1:]))
+    assert all(
+        left.fingerprint != right.fingerprint for left, right in zip(plan.breakpoints[1:], changed.breakpoints[1:])
+    )
     assert plan.breakpoints[0].prefix_body == {
         "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
         "messages": [],
@@ -268,51 +329,80 @@ def test_cache_plan_preserves_hierarchical_prefixes_and_public_policy() -> None:
     assert parse_prompt(body) is None
 
 
-@pytest.mark.parametrize("kind, added, matches", [
-    ("text", 19, True), ("text", 20, False), ("tool_use", 30, True),
-    ("tool_result", 30, True),
-])
+@pytest.mark.parametrize(
+    "kind, added, matches",
+    [
+        ("text", 19, True),
+        ("text", 20, False),
+        ("tool_use", 30, True),
+        ("tool_result", 30, True),
+    ],
+)
 def test_cache_plan_lookback_counts_native_positions(
-    kind: str, added: int, matches: bool,
+    kind: str,
+    added: int,
+    matches: bool,
 ) -> None:
     previous: Final = _cache_plan(_body())
     appended: Final[list[dict[str, JsonValue]]] = [
         {"type": "tool_use", "id": f"tool_{index}", "name": "lookup", "input": {}}
-        if kind == "tool_use" else
-        {"type": "tool_result", "tool_use_id": f"tool_{index}", "content": "done"}
-        if kind == "tool_result" else
-        {"type": "text", "text": f"Added {index}"}
+        if kind == "tool_use"
+        else {"type": "tool_result", "tool_use_id": f"tool_{index}", "content": "done"}
+        if kind == "tool_result"
+        else {"type": "text", "text": f"Added {index}"}
         for index in range(added)
     ]
-    current: Final = _cache_plan({**_body(), **_prompt(
-        _text("A cacheable prefix"), *appended[:-1],
-        {**appended[-1], "cache_control": {"type": "ephemeral"}},
-    )})
-    assert (previous.breakpoints[0].fingerprint
-            in current.breakpoints[0].lookback_fingerprints) is matches
+    current: Final = _cache_plan(
+        {
+            **_body(),
+            **_prompt(
+                _text("A cacheable prefix"),
+                *appended[:-1],
+                {**appended[-1], "cache_control": {"type": "ephemeral"}},
+            ),
+        }
+    )
+    assert (previous.breakpoints[0].fingerprint in current.breakpoints[0].lookback_fingerprints) is matches
 
 
-@pytest.mark.parametrize("change, same_prefix, same_content", [
-    ("tool_order", False, False), ("effort", False, False),
-    ("standard_speed", True, True), ("ttl", False, True),
-])
+@pytest.mark.parametrize(
+    "change, same_prefix, same_content",
+    [
+        ("tool_order", False, False),
+        ("effort", False, False),
+        ("standard_speed", True, True),
+        ("ttl", False, True),
+    ],
+)
 def test_cache_plan_identity_respects_settings_and_preserves_content(
-    change: str, same_prefix: bool, same_content: bool,
+    change: str,
+    same_prefix: bool,
+    same_content: bool,
 ) -> None:
     tool_input: Final[dict[str, JsonValue]] = {"a": 1, "b": 2, "cache_control": {"ttl": "user-data"}}
     block: Final[dict[str, JsonValue]] = {
-        "type": "tool_use", "id": "tool_1", "name": "lookup", "input": tool_input,
+        "type": "tool_use",
+        "id": "tool_1",
+        "name": "lookup",
+        "input": tool_input,
         "cache_control": {"type": "ephemeral", "ttl": "5m"},
     }
     changed_block: Final = (
-        {**block, "input": dict(reversed(tool_input.items()))} if change == "tool_order" else
-        {**block, "cache_control": {"type": "ephemeral", "ttl": "1h"}} if change == "ttl" else block
+        {**block, "input": dict(reversed(tool_input.items()))}
+        if change == "tool_order"
+        else {**block, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+        if change == "ttl"
+        else block
     )
     before: Final = _cache_plan(_prompt(block, role="assistant", output_config={"effort": "low"})).breakpoints[0]
-    after: Final = _cache_plan(_prompt(
-        changed_block, role="assistant", output_config={"effort": "high" if change == "effort" else "low"},
-        **({"speed": "standard"} if change == "standard_speed" else {}),
-    )).breakpoints[0]
+    after: Final = _cache_plan(
+        _prompt(
+            changed_block,
+            role="assistant",
+            output_config={"effort": "high" if change == "effort" else "low"},
+            **({"speed": "standard"} if change == "standard_speed" else {}),
+        )
+    ).breakpoints[0]
     assert (before.fingerprint == after.fingerprint) is same_prefix
     assert (before.fingerprint in after.lookback_fingerprints) is same_prefix
     assert (before.content_fingerprint == after.content_fingerprint) is same_content
@@ -323,30 +413,41 @@ def test_cache_plan_identity_respects_settings_and_preserves_content(
 
 def test_cache_plan_automatic_cache_and_thinking_use_last_cacheable_block() -> None:
     body: Final = _prompt(
-        _text("A stable answer"), {"type": "thinking", "thinking": "Thinking", "signature": "signature"},
-        role="assistant", thinking={"type": "adaptive"}, cache_control={"type": "ephemeral", "ttl": "1h"},
+        _text("A stable answer"),
+        {"type": "thinking", "thinking": "Thinking", "signature": "signature"},
+        role="assistant",
+        thinking={"type": "adaptive"},
+        cache_control={"type": "ephemeral", "ttl": "1h"},
     )
     plan: Final = _cache_plan(body)
     assert len(plan.breakpoints) == 1
     assert plan.breakpoints[0].ttl_seconds == 3600
     assert plan.breakpoints[0].prefix_body == {
         "thinking": {"type": "adaptive"},
-        "messages": [{"role": "assistant", "content": [
-            {"type": "text", "text": "A stable answer"},
-        ]}],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "A stable answer"},
+                ],
+            }
+        ],
     }
     assert parse_prompt(body) is None
 
 
-@pytest.mark.parametrize("body, reason", [
-    (_prompt({"type": "image"}), "unsupported_prompt_shape"),
-    ({**_body(), "unknown_native_setting": True}, "unsupported_prompt_shape"),
-    ({**_body(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-     "conflicting_cache_ttl"),
-    (_prompt(_text("five", "5m"), _text("hour", "1h")), "invalid_cache_ttl_order"),
-])
+@pytest.mark.parametrize(
+    "body, reason",
+    [
+        (_prompt({"type": "image"}), "unsupported_prompt_shape"),
+        ({**_body(), "unknown_native_setting": True}, "unsupported_prompt_shape"),
+        ({**_body(), "cache_control": {"type": "ephemeral", "ttl": "1h"}}, "conflicting_cache_ttl"),
+        (_prompt(_text("five", "5m"), _text("hour", "1h")), "invalid_cache_ttl_order"),
+    ],
+)
 def test_cache_plan_unsupported_is_explicit(
-    body: Mapping[str, JsonValue], reason: str,
+    body: Mapping[str, JsonValue],
+    reason: str,
 ) -> None:
     result: Final = parse_cache_plan(body)
     assert isinstance(result, UnsupportedCachePlan)
@@ -354,30 +455,46 @@ def test_cache_plan_unsupported_is_explicit(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model, counts, reason", [
-    (None, (100, 150, 200), None),
-    (None, (100, 201, 200), "inconsistent_prefix_token_count"),
-    (None, (151, 150, 200), "inconsistent_prefix_token_count"),
-    (None, (None, 150, 200), "token_count_unavailable"),
-    ("claude-opus-5", (100, 150, 200), None),
-    ("claude-sonnet-5", (100, 150, 200), None),
-    ("declared-cache-model", (100, 150, 200), None),
-    ("unknown-cache-model", (100, 150, 200), "unsupported_thinking_cache_semantics"),
-    ("claude-haiku-4-5", (100, 150, 200), "unsupported_thinking_cache_semantics"),
-    ("claude-sonnet-4-5", (100, 150, 200), "unsupported_thinking_cache_semantics"),
-])
+@pytest.mark.parametrize(
+    "model, counts, reason",
+    [
+        (None, (100, 150, 200), None),
+        (None, (100, 201, 200), "inconsistent_prefix_token_count"),
+        (None, (151, 150, 200), "inconsistent_prefix_token_count"),
+        (None, (None, 150, 200), "token_count_unavailable"),
+        ("claude-opus-5", (100, 150, 200), None),
+        ("claude-sonnet-5", (100, 150, 200), None),
+        ("declared-cache-model", (100, 150, 200), None),
+        ("unknown-cache-model", (100, 150, 200), "unsupported_thinking_cache_semantics"),
+        ("claude-haiku-4-5", (100, 150, 200), "unsupported_thinking_cache_semantics"),
+        ("claude-sonnet-4-5", (100, 150, 200), "unsupported_thinking_cache_semantics"),
+    ],
+)
 async def test_cache_plan_count_conserves_total_and_rejects_unknown(
-    model: str | None, counts: tuple[int | None, int | None, int], reason: str | None,
+    model: str | None,
+    counts: tuple[int | None, int | None, int],
+    reason: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, "declared-cache-model", {
-        "litellm_provider": "anthropic", "mode": "chat", "supports_thinking_cache_preservation": True,
-    })
-    plan: Final = _cache_plan(_prompt(
-        {"type": "thinking", "thinking": "Retained thought", "signature": "signature"}
-        if model else _text("first", "5m"),
-        _text("second", "5m"), _text("uncached"), role="assistant" if model else "user",
-    ))
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "declared-cache-model",
+        {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_thinking_cache_preservation": True,
+        },
+    )
+    plan: Final = _cache_plan(
+        _prompt(
+            {"type": "thinking", "thinking": "Retained thought", "signature": "signature"}
+            if model
+            else _text("first", "5m"),
+            _text("second", "5m"),
+            _text("uncached"),
+            role="assistant" if model else "user",
+        )
+    )
 
     async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
         assert reason != "unsupported_thinking_cache_semantics", "Unverified thinking retention must skip counting"
@@ -399,12 +516,15 @@ async def test_cache_plan_count_conserves_total_and_rejects_unknown(
 @pytest.mark.parametrize("section", ["system", "tools"])
 @pytest.mark.parametrize("rejects_prefix", (False, True))
 async def test_native_count_preserves_settings_and_requires_every_prefix(
-    section: str, rejects_prefix: bool, monkeypatch: pytest.MonkeyPatch,
+    section: str,
+    rejects_prefix: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     params: Final = LiteLLM_Params(
-        model=f"anthropic/{_MODEL}", api_key=_KEY,
+        model=f"anthropic/{_MODEL}",
+        api_key=_KEY,
         api_base="https://gateway.example/v1/messages",
     )
     target: Final = resolve_baseline_prediction_target(params)
@@ -413,19 +533,38 @@ async def test_native_count_preserves_settings_and_requires_every_prefix(
     assert not isinstance(resolve_prediction_target(params), NativePredictionTarget)
     body: Final = _body()
     marker: Final[dict[str, JsonValue]] = {"type": "ephemeral", "ttl": "1h"}
-    body[section] = ([_text("A cached system", "1h")] if section == "system" else [{
-        "name": "lookup", "input_schema": {"type": "object"}, "cache_control": marker,
-    }])
-    plan: Final = _cache_plan({**body, **_prompt(
-        _text("A later prefix", "5m"), _text("An uncached suffix"),
-        thinking={"type": "adaptive"}, tool_choice={"type": "auto"}, output_config={"effort": "high"},
-    )})
+    body[section] = (
+        [_text("A cached system", "1h")]
+        if section == "system"
+        else [
+            {
+                "name": "lookup",
+                "input_schema": {"type": "object"},
+                "cache_control": marker,
+            }
+        ]
+    )
+    plan: Final = _cache_plan(
+        {
+            **body,
+            **_prompt(
+                _text("A later prefix", "5m"),
+                _text("An uncached suffix"),
+                thinking={"type": "adaptive"},
+                tool_choice={"type": "auto"},
+                output_config={"effort": "high"},
+            ),
+        }
+    )
     assert len(plan.breakpoints) == 2
     assert plan.breakpoints[0].prefix_body["messages"] == []
 
     async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
         return await count_prompt_tokens(
-            model, api_key, {**body, "max_tokens": 100}, api_base=target.api_base,
+            model,
+            api_key,
+            {**body, "max_tokens": 100},
+            api_base=target.api_base,
         )
 
     with respx.mock(assert_all_called=False) as upstream:
@@ -434,12 +573,16 @@ async def test_native_count_preserves_settings_and_requires_every_prefix(
             upstream.post(endpoint, json={**body, "model": _MODEL}).respond(
                 400 if rejects_prefix and index == 1 else 200,
                 json={"detail": {"error": "messages parameter is required"}}
-                if rejects_prefix and index == 1 else {"input_tokens": tokens},
+                if rejects_prefix and index == 1
+                else {"input_tokens": tokens},
             )
-            for index, (body, tokens) in enumerate((
-                (plan.full_body, 6000), (plan.breakpoints[0].prefix_body, 5000),
-                (plan.breakpoints[1].prefix_body, 5800),
-            ))
+            for index, (body, tokens) in enumerate(
+                (
+                    (plan.full_body, 6000),
+                    (plan.breakpoints[0].prefix_body, 5000),
+                    (plan.breakpoints[1].prefix_body, 5800),
+                )
+            )
         )
         unexpected: Final = upstream.post(endpoint).respond(200, json={"input_tokens": 1})
         result: Final = await count_cache_plan(target.model, target.api_key, plan, count)
@@ -452,3 +595,32 @@ async def test_native_count_preserves_settings_and_requires_every_prefix(
         assert tuple(marker.prefix_tokens for marker in result.breakpoints) == (5000, 5800)
     assert tuple(route.call_count for route in routes) == (1, 1, 1)
     assert unexpected.call_count == 0
+
+
+def test_native_baseline_body_matches_the_sent_body_when_drop_params_meets_an_auto_added_beta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    messages: Final = [{"role": "user", "content": "Say hi in French"}]
+    predicted: Final = prepare_native_baseline_body(
+        {"model": "claude-opus-4-8", "messages": messages, "max_tokens": 64, "thinking": thinking}, "claude-opus-4-8"
+    )
+    config: Final = AnthropicMessagesConfig()
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="claude-opus-4-8",
+        messages=[dict(message) for message in messages],
+        optional_params={"max_tokens": 64, "thinking": dict(thinking)},
+        litellm_params={},
+        api_key="sk-ant-test",
+    )
+    sent: Final = config.transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[dict(message) for message in messages],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thinking": dict(thinking)},
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+    assert predicted is not None
+    assert predicted["thinking"] == sent["thinking"] == thinking

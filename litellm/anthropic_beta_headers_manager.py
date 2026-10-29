@@ -241,6 +241,13 @@ def get_provider_name(provider: str) -> str:
     return aliases.get(provider, provider)
 
 
+def has_beta_headers_config(provider: str) -> bool:
+    config: Final = _bundled_beta_headers_config()
+    aliases: Final = config.get("provider_aliases", {})
+    canonical_provider: Final = (aliases.get(provider) if isinstance(aliases, Mapping) else None) or provider
+    return canonical_provider in config
+
+
 def filter_and_transform_beta_headers(
     beta_headers: list[str],
     provider: str,
@@ -397,7 +404,7 @@ def update_request_with_filtered_beta(
     headers: dict,
     request_data: dict,
     provider: str,
-) -> tuple[dict, dict]:
+) -> tuple[dict[str, str], dict[str, object]]:
     """
     Update both headers and request body beta fields based on provider support.
     Modifies both dicts in place and returns them.
