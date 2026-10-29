@@ -152,7 +152,7 @@ async def resync_model_deployments_by_ids(model_ids: tuple[str, ...]) -> None:
     writer_table: Final = ModelRepository(WriterPinnedClient(prisma_client.db)).table
     async with proxy_server.MODEL_RECONCILE_LOCK:
         rows: Final = await _find_rows_by_ids(model_ids, writer_table)
-        _ = await _install_model_rows(rows, _names_an_unloaded_credential)
+        _ = await _install_model_rows(_without_auto_routers(rows), _names_an_unloaded_credential)
 
 
 async def _find_rows_by_name_or_id(model_name: str, table: "_ModelTable") -> "_ModelRows":
@@ -205,6 +205,10 @@ def _always(rows: "_ModelRows") -> bool:
 
 def _holds_an_auto_router(rows: "_ModelRows") -> bool:
     return any(_names_an_auto_router(row.litellm_params) for row in rows)
+
+
+def _without_auto_routers(rows: "_ModelRows") -> "_ModelRows":
+    return list(row for row in rows if not _names_an_auto_router(row.litellm_params))
 
 
 def _names_an_unloaded_credential(rows: "_ModelRows") -> bool:

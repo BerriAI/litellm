@@ -1096,3 +1096,38 @@ async def test_resync_model_deployments_by_ids_leaves_an_auto_router_to_the_debo
     full_reload.assert_not_awaited()
     single_row_install.assert_not_called()
     assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
+
+
+@pytest.mark.asyncio
+async def test_resync_model_deployments_by_ids_installs_the_ordinary_rows_queued_with_an_auto_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-by-ids-mixed-batch")
+    auto_router_row: Final = MagicMock()
+    auto_router_row.litellm_params = {"model": encrypt_value_helper("auto_router/complexity-router")}
+    backup_row: Final = MagicMock()
+    backup_row.litellm_params = {"model": encrypt_value_helper("openai/gpt-backup")}
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[auto_router_row, backup_row])
+    router: Final = MagicMock()
+    router.get_model_list.return_value = ["backup-deployment"]
+    full_reload: Final = AsyncMock()
+    installed: list[object] = []
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", full_reload)
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", lambda db_models: installed.append(list(db_models)))
+
+    await resync_model_deployments_by_ids(("auto-router-id", "backup-id"))
+
+    assert installed == [[backup_row]]
+    full_reload.assert_not_awaited()
+    assert proxy_server.llm_model_list == ["backup-deployment"]

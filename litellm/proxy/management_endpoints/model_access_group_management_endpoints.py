@@ -494,14 +494,33 @@ async def update_specific_deployments_with_access_group(
     return tuple(pair for pair in tagged if pair is not None)
 
 
-def _deployments_outside_selection(
+def _selected_deployments_or_400(
     deployments: Sequence[_DeploymentRow], data: UpdateModelGroupRequest
 ) -> tuple[_DeploymentRow, ...]:
     if data.model_ids:
+        known_model_ids: Final = frozenset(deployment.model_id for deployment in deployments)
+        unknown_model_id: Final = next(
+            (model_id for model_id in data.model_ids if model_id not in known_model_ids), None
+        )
+        if unknown_model_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Deployment with model_id '{unknown_model_id}' not found in Database."},
+            )
         selected_model_ids: Final = frozenset(data.model_ids)
-        return tuple(deployment for deployment in deployments if deployment.model_id not in selected_model_ids)
-    selected_model_names: Final = frozenset(data.model_names or ())
-    return tuple(deployment for deployment in deployments if deployment.model_name not in selected_model_names)
+        return tuple(deployment for deployment in deployments if deployment.model_id in selected_model_ids)
+    model_names: Final = data.model_names or ()
+    known_model_names: Final = frozenset(deployment.model_name for deployment in deployments)
+    unknown_model_name: Final = next((name for name in model_names if name not in known_model_names), None)
+    if unknown_model_name is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Can't find model '{unknown_model_name}' in Database. Access group management is only supported for database models."
+            },
+        )
+    selected_model_names: Final = frozenset(model_names)
+    return tuple(deployment for deployment in deployments if deployment.model_name in selected_model_names)
 
 
 async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> object:
@@ -547,10 +566,10 @@ async def get_all_access_groups_from_db(
     Returns:
         Dict[str, AccessGroupInfo]: Dictionary mapping access_group name to info
     """
-    # Get all deployments
-    deployments: Final = await ModelRepository(prisma_client).table.find_many()
+    return dict(_access_groups_of_deployments(await ModelRepository(prisma_client).table.find_many()))
 
-    # Build access group map
+
+def _access_groups_of_deployments(deployments: Sequence[_DeploymentRow]) -> Mapping[str, AccessGroupInfo]:
     model_names_by_group: Final[dict[str, list[str]]] = {}
 
     for deployment in deployments:
@@ -892,20 +911,17 @@ async def update_access_group(
 
     use_model_ids: Final = has_model_ids
 
-    # Validation: Check if access group exists
     try:
-        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
-        if access_group not in access_groups_map:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"Access group '{access_group}' not found"},
-            )
-    except HTTPException:
-        raise
+        all_deployments: Final = await _model_table(prisma_client).find_many()
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to check access group existence: {e}"},
+        )
+    if access_group not in _access_groups_of_deployments(all_deployments):
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Access group '{access_group}' not found"},
         )
 
     # Validation: Check if all new models exist (only if using model_names path)
@@ -922,26 +938,13 @@ async def update_access_group(
                 detail={"error": f"Model(s) not found: {', '.join(missing_models)}"},
             )
 
-    try:
-        # Step 1: Add access group using the appropriate method
-        if use_model_ids:
-            assert data.model_ids is not None
-            updated_pairs = await update_specific_deployments_with_access_group(
-                model_ids=data.model_ids,
-                access_group=access_group,
-                prisma_client=prisma_client,
-            )
-        else:
-            assert data.model_names is not None
-            updated_pairs = await update_deployments_with_access_group(
-                model_names=data.model_names,
-                access_group=access_group,
-                prisma_client=prisma_client,
-            )
+    selected_deployments: Final = _selected_deployments_or_400(deployments=all_deployments, data=data)
+    selected_model_ids: Final = frozenset(deployment.model_id for deployment in selected_deployments)
+    unselected_deployments: Final = tuple(
+        deployment for deployment in all_deployments if deployment.model_id not in selected_model_ids
+    )
 
-        # Step 2: Remove access group from the other DB deployments (skip config models)
-        all_deployments: Final = await _model_table(prisma_client).find_many()
-        unselected_deployments: Final = _deployments_outside_selection(deployments=all_deployments, data=data)
+    try:
         stripped: Final = [
             await _strip_access_group_from_deployment(
                 model_id=deployment.model_id,
@@ -952,7 +955,17 @@ async def update_access_group(
             for deployment in unselected_deployments
         ]
         stripped_pairs: Final = tuple(pair for pair in stripped if pair is not None)
-        models_updated: Final = len(all_deployments) - len(unselected_deployments)
+        tagged: Final = [
+            await _tag_deployment_with_access_group(
+                model_id=deployment.model_id,
+                model_info=deployment.model_info,
+                access_group=access_group,
+                prisma_client=prisma_client,
+            )
+            for deployment in selected_deployments
+        ]
+        updated_pairs: Final = tuple(pair for pair in tagged if pair is not None)
+        models_updated: Final = len(selected_deployments)
 
         # Clear cache and reload models to pick up the access group changes
         live_before_reload: Final = live_model_ids_snapshot()
