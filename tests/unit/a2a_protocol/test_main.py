@@ -798,6 +798,105 @@ def test_streaming_logging_obj_keeps_agent_credentials_out_of_logging_params():
     assert logging_obj.model_call_details["litellm_params"] == expected
 
 
+class _A2ASpendRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.payload = None
+        self.agent_id = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        payload = kwargs["standard_logging_object"]
+        if payload["call_type"] not in ("asend_message", "asend_message_streaming"):
+            return
+        self.payload = payload
+        self.agent_id = kwargs.get("agent_id")
+        self.logged.set()
+
+
+@pytest.fixture
+def a2a_spend_recorder(monkeypatch):
+    recorder = _A2ASpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    return recorder
+
+
+_BRIDGE_AGENT_PRICES: Final = (
+    pytest.param({"cost_per_query": 0.25}, lambda prompt_tokens, completion_tokens: 0.25, id="cost_per_query"),
+    pytest.param(
+        {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+        lambda prompt_tokens, completion_tokens: prompt_tokens * 0.001 + completion_tokens * 0.002,
+        id="per_token",
+    ),
+)
+
+
+def _bridge_agent_params(prices):
+    return {
+        "custom_llm_provider": "langgraph",
+        "model": "agent",
+        "mock_response": "Paris is the capital of France.",
+        **prices,
+    }
+
+
+def _bridge_message_params() -> MessageSendParams:
+    return MessageSendParams(
+        message={
+            "messageId": "m1",
+            "role": "user",
+            "parts": [{"kind": "text", "text": "What is the capital of France?"}],
+        }
+    )
+
+
+def _assert_billed_at_agent_prices(recorder, expected_cost):
+    payload = recorder.payload
+    assert payload["prompt_tokens"] > 0
+    assert payload["completion_tokens"] > 0
+    assert payload["response_cost"] == pytest.approx(
+        expected_cost(payload["prompt_tokens"], payload["completion_tokens"])
+    )
+    assert recorder.agent_id == "agent-1"
+
+
+@pytest.mark.parametrize(("prices", "expected_cost"), _BRIDGE_AGENT_PRICES)
+@pytest.mark.asyncio
+async def test_completion_bridge_send_bills_the_agents_prices(prices, expected_cost, a2a_spend_recorder):
+    await asend_message(
+        request=SendMessageRequest(id="bridge-send", params=_bridge_message_params()),
+        api_base="http://127.0.0.1:9",
+        litellm_params=_bridge_agent_params(prices),
+        agent_id="agent-1",
+    )
+    await asyncio.wait_for(a2a_spend_recorder.logged.wait(), timeout=10)
+
+    _assert_billed_at_agent_prices(a2a_spend_recorder, expected_cost)
+
+
+@pytest.mark.parametrize(("prices", "expected_cost"), _BRIDGE_AGENT_PRICES)
+@pytest.mark.asyncio
+async def test_completion_bridge_stream_bills_the_agents_prices(prices, expected_cost, a2a_spend_recorder):
+    from litellm.a2a_protocol.main import asend_message_streaming
+
+    _ = [
+        chunk
+        async for chunk in asend_message_streaming(
+            request=SendStreamingMessageRequest(id="bridge-stream", params=_bridge_message_params()),
+            api_base="http://127.0.0.1:9",
+            litellm_params=_bridge_agent_params(prices),
+            agent_id="agent-1",
+            agent_name="trip-planner",
+        )
+    ]
+    await asyncio.wait_for(a2a_spend_recorder.logged.wait(), timeout=10)
+
+    _assert_billed_at_agent_prices(a2a_spend_recorder, expected_cost)
+    assert a2a_spend_recorder.payload["model"] == "a2a_agent/trip-planner"
+
+
 class MockA2AResponse:
     def __init__(self, text: str):
         self._payload = {

@@ -3,7 +3,7 @@ A2A Streaming Iterator with token tracking and logging support.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
@@ -23,6 +23,12 @@ if TYPE_CHECKING:
 _OPAQUE_PAYLOAD: Final = TypeAdapter(object)
 
 
+def _chunk_payload(chunk: "SendStreamingMessageResponse | Mapping[str, object]") -> Mapping[str, object]:
+    if isinstance(chunk, Mapping):
+        return chunk
+    return chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+
+
 class A2AStreamingIterator:
     """
     Async iterator for A2A streaming responses with token tracking.
@@ -32,26 +38,28 @@ class A2AStreamingIterator:
 
     def __init__(
         self,
-        stream: AsyncIterator["SendStreamingMessageResponse"],
+        stream: AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"],
         request: "SendStreamingMessageRequest",
         logging_obj: LiteLLMLoggingObj,
         agent_name: str = "unknown",
+        output_text: Callable[[Mapping[str, object]], str] = A2ARequestUtils.extract_text_from_response,
     ):
         self.stream = stream
         self.request = request
         self.logging_obj = logging_obj
         self.agent_name = agent_name
+        self.output_text = output_text
         self.start_time = logging_obj.start_time
 
         # Collect chunks for token counting
-        self.chunks: list[SendStreamingMessageResponse] = []
+        self.chunks: list[SendStreamingMessageResponse | Mapping[str, object]] = []
         self.collected_text_parts: list[str] = []
-        self.final_chunk: SendStreamingMessageResponse | None = None
+        self.final_chunk: SendStreamingMessageResponse | Mapping[str, object] | None = None
 
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> "SendStreamingMessageResponse":
+    async def __anext__(self) -> "SendStreamingMessageResponse | Mapping[str, object]":
         try:
             chunk: Final = await self.stream.__anext__()
             if self.logging_obj.completion_start_time is None:
@@ -76,21 +84,19 @@ class A2AStreamingIterator:
             await self._handle_stream_complete()
             raise
 
-    def _collect_text_from_chunk(self, chunk: "SendStreamingMessageResponse") -> None:
+    def _collect_text_from_chunk(self, chunk: "SendStreamingMessageResponse | Mapping[str, object]") -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
-            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
-            text: Final = A2ARequestUtils.extract_text_from_response(chunk_dict)
+            text: Final = self.output_text(_chunk_payload(chunk))
             if text:
                 self.collected_text_parts.append(text)
         except Exception:
             verbose_logger.debug("Failed to extract text from A2A streaming chunk")
 
-    def _is_completed_chunk(self, chunk: "SendStreamingMessageResponse") -> bool:
+    def _is_completed_chunk(self, chunk: "SendStreamingMessageResponse | Mapping[str, object]") -> bool:
         """Check if chunk indicates stream completion."""
         try:
-            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
-            result: Final = chunk_dict.get("result", {})
+            result: Final = _chunk_payload(chunk).get("result", {})
             if isinstance(result, dict):
                 status: Final = result.get("status", {})
                 if isinstance(status, dict):
@@ -167,9 +173,7 @@ class A2AStreamingIterator:
         # Add final chunk result if available
         if self.final_chunk:
             try:
-                chunk_dict: Final = as_str_mapping(
-                    _OPAQUE_PAYLOAD.validate_python(self.final_chunk.model_dump(mode="json", exclude_none=True))
-                )
+                chunk_dict: Final = as_str_mapping(_OPAQUE_PAYLOAD.validate_python(_chunk_payload(self.final_chunk)))
                 if chunk_dict is not None:
                     result["result"] = chunk_dict.get("result", {})
             except Exception:
