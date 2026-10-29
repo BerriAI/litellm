@@ -31,6 +31,7 @@ from ..constants import (
 )
 from ..errors import AnthropicContextManagementError
 from ..placeholders import build_cleared_tool_result_content
+from .compact import count_system_tokens, history_after_client_compaction
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import ChatCompletionToolParam
@@ -203,9 +204,10 @@ def _trigger_met(
     model: str,
     messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None,
+    system: str | Sequence[Mapping[str, object]] | None,
     counted_tool_uses: int,
 ) -> tuple[bool, int | None]:
-    """Return (trigger_met, input_tokens if counted for reuse)."""
+    """Return (trigger_met, message and tool tokens for reuse); like the API, input_tokens adds the system prompt."""
     trigger_type: Final = trigger.get("type", "input_tokens")
     threshold = trigger.get("value")
 
@@ -216,14 +218,17 @@ def _trigger_met(
 
     if not isinstance(threshold, int):
         threshold = DEFAULT_INPUT_TOKENS_TRIGGER
-    current_tokens: Final = litellm.token_counter(
+    message_tokens: Final = litellm.token_counter(
         model=model,
         messages=messages,
         tools=cast("list[ChatCompletionToolParam] | None", tools),
     )
+    if message_tokens > threshold:
+        return True, message_tokens
+    current_tokens: Final = message_tokens + count_system_tokens(model, system)
     verbose_logger.debug("context_management polyfill: current_tokens: %s", current_tokens)
     verbose_logger.debug("context_management polyfill: threshold: %s", threshold)
-    return current_tokens > threshold, current_tokens
+    return current_tokens > threshold, message_tokens
 
 
 def _resolve_keep_count(keep: dict[str, object]) -> int:
@@ -237,7 +242,7 @@ def _resolve_keep_count(keep: dict[str, object]) -> int:
 
 
 def _last_completed_tool_use_id(
-    messages: list[dict[str, object]],
+    messages: Sequence[Mapping[str, object]],
 ) -> str | None:
     """Latest completed tool_result id; never cleared."""
     last_id: str | None = None
@@ -253,7 +258,7 @@ def _last_completed_tool_use_id(
 
 
 def _clear_tool_results(
-    messages: list[dict[str, object]], ids_to_clear: set[str]
+    messages: list[dict[str, object]], ids_to_clear: Set[str]
 ) -> tuple[list[dict[str, object]], int]:
     """Clear matching tool_result content; return (messages, cleared_count)."""
     cleared = 0
@@ -311,7 +316,11 @@ def apply_clear_tool_uses_20250919(
     system: str | list[dict[str, object]] | None,
     edit_spec: ClearToolUsesEditSpec,
 ) -> tuple[list[dict[str, object]], AppliedEdit | None]:
-    """Apply clear_tool_uses to an edit ``check_clear_tool_uses_spec`` returned; return (messages, AppliedEdit or None)."""
+    """Apply clear_tool_uses to an edit ``check_clear_tool_uses_spec`` returned; return (messages, AppliedEdit or None).
+
+    Like the API, it reads only the history after a client compaction block and counts the block's summary as system.
+    """
+    kept, counted_system = history_after_client_compaction(messages, system)
     fields: Final = _ClearToolUsesFields.model_validate(edit_spec)
     clear_at_least: Final = 0 if fields.clear_at_least is None else fields.clear_at_least.value
     exclude_tools: Final = frozenset(fields.exclude_tools or ())
@@ -326,7 +335,7 @@ def apply_clear_tool_uses_20250919(
         "value": DEFAULT_KEEP_TOOL_USES,
     }
 
-    blocks: Final = _all_blocks(messages)
+    blocks: Final = _all_blocks(kept)
     results: Final = _blocks_by_id(blocks, "tool_result", "tool_use_id")
     uses: Final = _blocks_by_id(blocks, "tool_use", "id")
     tiny: Final = _tiny_result_ids(results)
@@ -335,15 +344,15 @@ def apply_clear_tool_uses_20250919(
         for tool_use_id, name in _tool_uses_in_order(blocks)
         if name not in exclude_tools and (tool_use_id not in tiny or _clears_input(name, input_tools))
     )
-    met, counted_tokens = _trigger_met(trigger, model, messages, tools, len(clearable))
-    if not met:
-        return messages, None
-
     keep_count: Final = _resolve_keep_count(keep)
     if len(clearable) <= keep_count:
         return messages, None
 
-    last_completed_id: Final = _last_completed_tool_use_id(messages)
+    met, counted_tokens = _trigger_met(trigger, model, kept, tools, counted_system, len(clearable))
+    if not met:
+        return messages, None
+
+    last_completed_id: Final = _last_completed_tool_use_id(kept)
     candidates: Final = tuple(
         (tool_use_id, name)
         for tool_use_id, name in clearable[: len(clearable) - keep_count]
@@ -358,7 +367,7 @@ def apply_clear_tool_uses_20250919(
         _select_in_batches(candidate_ids, tokens, clear_at_least) if clear_at_least > 0 else candidate_ids
     )
 
-    edited, cleared_count = _clear_tool_results(messages, set(ids_to_clear))
+    edited, cleared_count = _clear_tool_results(messages, ids_to_clear)
     verbose_logger.debug("context_management polyfill: edited: %s", edited)
     if cleared_count == 0:
         return messages, None
@@ -370,11 +379,12 @@ def apply_clear_tool_uses_20250919(
         counted_tokens
         if counted_tokens is not None
         else litellm.token_counter(
-            model=model, messages=messages, tools=cast("list[ChatCompletionToolParam] | None", tools)
+            model=model, messages=kept, tools=cast("list[ChatCompletionToolParam] | None", tools)
         )
     )
+    kept_after, _ = history_after_client_compaction(final_messages, system)
     tokens_after: Final = litellm.token_counter(
-        model=model, messages=final_messages, tools=cast("list[ChatCompletionToolParam] | None", tools)
+        model=model, messages=kept_after, tools=cast("list[ChatCompletionToolParam] | None", tools)
     )
     cleared_input_tokens: Final = max(tokens_before - tokens_after, 0)
 

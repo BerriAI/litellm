@@ -46,12 +46,12 @@ API_FUNCTION_PARAMS = [
     (
         "image_generation",
         False,
-        {"model": "dall-e-3", "prompt": "A beautiful sunset over mountains"},
+        {"model": "gpt-image-2.5-sunburst", "prompt": "A beautiful sunset over mountains"},
     ),
     (
         "image_generation",
         True,
-        {"model": "dall-e-3", "prompt": "A beautiful sunset over mountains"},
+        {"model": "gpt-image-2.5-sunburst", "prompt": "A beautiful sunset over mountains"},
     ),
     (
         "speech",
@@ -84,11 +84,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     """
 
     # Determine which client class to mock based on whether the test is async
-    client_path = (
-        "litellm.llms.openai.openai.AsyncOpenAI"
-        if is_async
-        else "litellm.llms.openai.openai.OpenAI"
-    )
+    client_path = "litellm.llms.openai.openai.AsyncOpenAI" if is_async else "litellm.llms.openai.openai.OpenAI"
 
     # Create the appropriate patches
     with (
@@ -98,9 +94,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     ):
         # Setup the mock to return None first time (cache miss) then a client for subsequent calls
         mock_client = MagicMock()
-        mock_get_cache.side_effect = [None] + [
-            mock_client
-        ] * 9  # First call returns None, rest return the mock client
+        mock_get_cache.side_effect = [None] + [mock_client] * 9  # First call returns None, rest return the mock client
 
         # Make 10 API calls
         for _ in range(10):
@@ -118,9 +112,9 @@ async def test_openai_client_reuse(function_name, is_async, args):
                 pass
 
         # Verify client was created only once
-        assert (
-            mock_client_class.call_count == 1
-        ), f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        assert mock_client_class.call_count == 1, (
+            f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        )
 
         # Verify the client was cached
         assert mock_set_cache.call_count == 1, "Client should be cached once"
@@ -144,12 +138,8 @@ def test_precomputed_init_params_match_inspect_signature():
         _OPENAI_INIT_PARAMS,
     )
 
-    expected_openai = tuple(
-        p for p in inspect.signature(OpenAI.__init__).parameters if p != "self"
-    )
-    expected_azure = tuple(
-        p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self"
-    )
+    expected_openai = tuple(p for p in inspect.signature(OpenAI.__init__).parameters if p != "self")
+    expected_azure = tuple(p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self")
 
     assert _OPENAI_INIT_PARAMS == expected_openai
     assert _AZURE_OPENAI_INIT_PARAMS == expected_azure
@@ -333,6 +323,29 @@ def test_mapped_response_still_bills_the_prompt_the_provider_processed(provider)
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+@pytest.mark.asyncio
+async def test_mapped_response_bills_a_custom_named_deployment_with_its_base_model_only_when_it_is_openai(
+    provider: str, base_model: str, counted_as: str
+) -> None:
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    overrides: Final = {"model": f"{provider}/my-gpt-6", "messages": messages, "base_model": base_model}
+
+    sync_response: Final = litellm.completion(
+        **_completion_kwargs(provider, _sync_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+    async_response: Final = await litellm.acompletion(
+        **_completion_kwargs(provider, _async_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+
+    expected: Final = token_counter(model=counted_as, messages=messages)
+    assert token_counter(model=base_model, messages=messages) != token_counter(model="my-gpt-6", messages=messages)
+    assert (sync_response.usage.prompt_tokens, async_response.usage.prompt_tokens) == (expected, expected)
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.asyncio
 async def test_async_output_limit_400_maps_to_length_truncated_response(provider):
     response = await litellm.acompletion(
@@ -500,7 +513,10 @@ async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(api: 
         moved: Final = mock.get(host="sdk-default.example", path="/v1/moved-models").mock(
             return_value=httpx.Response(
                 200,
-                json={"object": "list", "data": [{"id": "sdk-compat", "object": "model", "created": 0, "owned_by": "t"}]},
+                json={
+                    "object": "list",
+                    "data": [{"id": "sdk-compat", "object": "model", "created": 0, "owned_by": "t"}],
+                },
             )
         )
         sdk_client: Final = _sdk_api_client(api, is_async, timeout)
@@ -542,7 +558,10 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         assert azure_client is not None
         assert azure_client._client is session
         response: Final = await aimage_variation(
-            image=BytesIO(b"image-bytes"), api_key="transport-only", api_base="https://sdk-default.example/v1"
+            image=BytesIO(b"image-bytes"),
+            custom_llm_provider="openai",
+            api_key="transport-only",
+            api_base="https://sdk-default.example/v1",
         )
         assert response.data[0].url == "https://example.com/image.png"
         assert not session.is_closed
