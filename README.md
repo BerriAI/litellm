@@ -80,7 +80,7 @@ Managing LLM calls across providers gets complicated fast — different SDKs, au
 ## Features
 
 <details open>
-<summary><b>LLMs</b> - Call 100+ LLMs (Python SDK + AI Gateway)</summary>
+<summary><h3>LLMs - Call 100+ LLMs (Python SDK + AI Gateway)</h3></summary>
 
 [**All Supported Endpoints**](https://docs.litellm.ai/docs/supported_endpoints) - `/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, `/rerank`, `/a2a`, `/messages` and more.
 
@@ -141,12 +141,10 @@ response = client.chat.completions.create(
 )
 ```
 
-[**Docs: LLM Providers**](https://docs.litellm.ai/docs/providers)
-
 </details>
 
 <details>
-<summary><b>Auto Routing</b> - Choose a model for each prompt (Python SDK + AI Gateway)</summary>
+<summary><h3>Auto Routing - Choose a model for each prompt (Python SDK + AI Gateway)</h3></summary>
 
 ### Python SDK
 
@@ -163,7 +161,7 @@ Configure an Auto Router in your gateway, then use its model name in your reques
 </details>
 
 <details>
-<summary><b>Agents</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
+<summary><h3>A2A - Invoke A2A Agents (Python SDK + AI Gateway)</h3></summary>
 
 [**Supported Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
 
@@ -233,7 +231,7 @@ async with httpx.AsyncClient(headers=headers, timeout=60.0) as http_client:
 </details>
 
 <details>
-<summary><b>MCP Tools</b> - Connect MCP servers to any LLM (Python SDK + AI Gateway)</summary>
+<summary><h3>MCP Tools - Connect MCP servers to any LLM (Python SDK + AI Gateway)</h3></summary>
 
 ### Python SDK - MCP Bridge
 
@@ -304,7 +302,7 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 </details>
 
 <details>
-<summary><b>Agents</b> - Run Claude Code, Codex, OpenCode, pi or Deep Agents on any model (Python SDK)</summary>
+<summary><h3>Agents - Run Claude Code, Codex, OpenCode, pi or Deep Agents on any model (Python SDK)</h3></summary>
 
 ### Python SDK - Agents
 
