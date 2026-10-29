@@ -3434,11 +3434,13 @@ class _ManagedStoreTable:
         return self.rows.pop(where["unified_resource_id"])
 
 
-def test_proxy_answers_by_managed_vector_store_id_and_forgets_the_store_once_the_provider_deletes_it(monkeypatch):
+_PROVIDER_STORE_ROUTE = "https://api.openai.com/v1/vector_stores/vs_provider"
+_PROVIDER_DELETED_STORE = {"id": "vs_provider", "object": "vector_store.deleted", "deleted": True}
+
+
+def _proxy_serving_one_managed_vector_store(monkeypatch):
     from types import SimpleNamespace
 
-    import httpx
-    import respx
     from fastapi.testclient import TestClient
     from litellm_enterprise.proxy.hooks.managed_vector_stores import PROXY_LiteLLMManagedVectorStores
 
@@ -3474,21 +3476,24 @@ def test_proxy_answers_by_managed_vector_store_id_and_forgets_the_store_once_the
     table.rows[unified_id] = _ManagedStoreRow(provider_store)
     monkeypatch.setitem(proxy_server.proxy_logging_obj.proxy_hook_mapping, "managed_vector_stores", hook)
     monkeypatch.setattr(litellm, "callbacks", [hook])
-    headers = {"Authorization": "Bearer sk-master-test"}
-    client = TestClient(app)
+    return TestClient(app, headers={"Authorization": "Bearer sk-master-test"}), table, unified_id, provider_store
+
+
+def test_proxy_answers_by_managed_vector_store_id_and_forgets_the_store_once_the_provider_deletes_it(monkeypatch):
+    import httpx
+    import respx
+
+    client, _, unified_id, provider_store = _proxy_serving_one_managed_vector_store(monkeypatch)
 
     with respx.mock(assert_all_called=False) as upstream:
-        provider_route = "https://api.openai.com/v1/vector_stores/vs_provider"
-        upstream.get(provider_route).mock(return_value=httpx.Response(200, json=provider_store))
-        upstream.post(provider_route).mock(return_value=httpx.Response(200, json={**provider_store, "name": "renamed"}))
-        upstream.delete(provider_route).mock(
-            return_value=httpx.Response(200, json={"id": "vs_provider", "object": "vector_store.deleted", "deleted": True})
-        )
+        upstream.get(_PROVIDER_STORE_ROUTE).mock(return_value=httpx.Response(200, json=provider_store))
+        upstream.post(_PROVIDER_STORE_ROUTE).mock(return_value=httpx.Response(200, json={**provider_store, "name": "renamed"}))
+        upstream.delete(_PROVIDER_STORE_ROUTE).mock(return_value=httpx.Response(200, json=_PROVIDER_DELETED_STORE))
 
-        retrieved = client.get(f"/v1/vector_stores/{unified_id}", headers=headers)
-        updated = client.post(f"/v1/vector_stores/{unified_id}", json={"name": "renamed"}, headers=headers)
-        deleted = client.delete(f"/v1/vector_stores/{unified_id}", headers=headers)
-        retrieved_after_delete = client.get(f"/v1/vector_stores/{unified_id}", headers=headers)
+        retrieved = client.get(f"/v1/vector_stores/{unified_id}")
+        updated = client.post(f"/v1/vector_stores/{unified_id}", json={"name": "renamed"})
+        deleted = client.delete(f"/v1/vector_stores/{unified_id}")
+        retrieved_after_delete = client.get(f"/v1/vector_stores/{unified_id}")
         upstream_requests = [(call.request.method, call.request.url.path) for call in upstream.calls]
 
     assert retrieved.status_code == 200, retrieved.text
@@ -3503,3 +3508,21 @@ def test_proxy_answers_by_managed_vector_store_id_and_forgets_the_store_once_the
         ("POST", "/v1/vector_stores/vs_provider"),
         ("DELETE", "/v1/vector_stores/vs_provider"),
     ]
+
+
+def test_proxy_confirms_a_managed_vector_store_delete_when_a_concurrent_delete_already_forgot_the_store(monkeypatch):
+    import httpx
+    import respx
+
+    client, table, unified_id, _ = _proxy_serving_one_managed_vector_store(monkeypatch)
+
+    def provider_deletes_after_a_concurrent_delete_forgot_the_store(request):
+        table.rows.pop(unified_id)
+        return httpx.Response(200, json=_PROVIDER_DELETED_STORE)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.delete(_PROVIDER_STORE_ROUTE).mock(side_effect=provider_deletes_after_a_concurrent_delete_forgot_the_store)
+        deleted = client.delete(f"/v1/vector_stores/{unified_id}")
+
+    assert deleted.status_code == 200, deleted.text
+    assert (deleted.json()["id"], deleted.json()["deleted"]) == (unified_id, True)

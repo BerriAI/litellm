@@ -1735,7 +1735,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         file_ids = []
         for message in messages:
-            if isinstance(message, dict) and message.get("role") == "user":
+            if isinstance(cast(object, message), dict) and message.get("role") == "user":
                 content = message.get("content")
                 if content:
                     if isinstance(content, str):
