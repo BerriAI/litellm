@@ -3743,6 +3743,76 @@ async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_u
     assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 27
 
 
+
+def _responses_websocket_turn_events(total_tokens: int) -> list[dict[str, object]]:
+    response: Final = {"id": "resp_ws_turn", "object": "response", "created_at": 1700000000, "model": "gpt-5.4"}
+    return [
+        {"type": "response.created", "response": {**response, "status": "in_progress", "output": []}},
+        {
+            "type": "response.completed",
+            "response": {
+                **response,
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": total_tokens - 10, "output_tokens": 10, "total_tokens": total_tokens},
+            },
+        },
+    ]
+
+
+async def _tokens_counted(handler, local_cache: DualCache, key: str, value: str) -> int:
+    counter: Final = handler.create_rate_limit_keys(key=key, value=value, rate_limit_type="tokens")
+    return int(await local_cache.async_get_cache(key=counter) or 0)
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turns_charge_their_usage_to_the_key_and_the_sockets_tpm_limited_tags_v3():
+    _api_key = hash_token("sk-responses-ws-turns")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    _request_stash.set(
+        RequestRateLimiterStash(owner_litellm_call_id="socket-open", tpm_limited_tags=frozenset({"ws-tag"}))
+    )
+
+    for turn_call_id in ("turn-1", "turn-2"):
+        await handler.async_log_success_event(
+            kwargs={
+                "litellm_call_id": turn_call_id,
+                "call_type": CallTypes.aresponses_websocket.value,
+                "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            },
+            response_obj=_responses_websocket_turn_events(total_tokens=600),
+            start_time=None,
+            end_time=None,
+        )
+
+    assert await _tokens_counted(handler, local_cache, "api_key", _api_key) == 1200
+    assert await _tokens_counted(handler, local_cache, "tag", "ws-tag") == 1200
+
+
+@pytest.mark.asyncio
+async def test_a_nested_call_charges_its_own_usage_but_not_the_tags_of_the_request_it_runs_under_v3():
+    _api_key = hash_token("sk-nested-call")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    _request_stash.set(
+        RequestRateLimiterStash(owner_litellm_call_id="outer-call", tpm_limited_tags=frozenset({"outer-tag"}))
+    )
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "nested-call",
+            "call_type": CallTypes.acompletion.value,
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await _tokens_counted(handler, local_cache, "api_key", _api_key) == 15
+    assert await _tokens_counted(handler, local_cache, "tag", "outer-tag") == 0
+
 @pytest.mark.asyncio
 async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usage_v3():
     """

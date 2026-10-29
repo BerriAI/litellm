@@ -43,7 +43,7 @@ from litellm.caching.redis_batch import (
 )
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
-from litellm.cost_calculator import get_usage_object
+from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor, get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -113,6 +113,7 @@ else:
 
 
 _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
+_RESPONSES_WS_TURN_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _MCP_KEY_RPM_LIMITS: Final[TypeAdapter[dict[str, int] | None]] = TypeAdapter(dict[str, int] | None)
 
 
@@ -851,6 +852,30 @@ def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
         return None
     call_id: Final = kwargs.get("litellm_call_id")
     return call_id if isinstance(call_id, str) else None
+
+
+def _is_responses_websocket_turn(kwargs: Mapping[str, object]) -> bool:
+    return kwargs.get("call_type") == CallTypes.aresponses_websocket.value
+
+
+def _unmodeled_response_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
+    combined_usage: Final = kwargs.get("combined_usage_object")
+    if isinstance(combined_usage, Usage):
+        return combined_usage
+    if not _is_responses_websocket_turn(kwargs) or not isinstance(response_obj, list):
+        return None
+    return ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+        _RESPONSES_WS_TURN_EVENTS.validate_python(response_obj)
+    )
+
+
+def _tpm_limited_tags(call_stash: RequestRateLimiterStash | None, kwargs: Mapping[str, object]) -> frozenset[str]:
+    if call_stash is not None:
+        return call_stash.tpm_limited_tags
+    connection_stash: Final = get_request_stash()
+    if connection_stash is None or not _is_responses_websocket_turn(kwargs):
+        return frozenset()
+    return connection_stash.tpm_limited_tags
 
 
 def _parse_output_cap_value(raw_value: object) -> int | None:
@@ -5269,9 +5294,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Get total tokens from response. Responses LiteLLM does not model
         # (e.g. pass-through, whose usage is reported by the upstream rather
         # than parsed out of the body) carry their usage in
-        # ``combined_usage_object`` instead, and would otherwise never charge
-        # the TPM window.
-        _combined_usage: Final = kwargs.get("combined_usage_object")
+        # ``combined_usage_object`` instead (a Responses WebSocket turn in its
+        # raw events) and would otherwise never charge the TPM window.
         _usage: Final[Usage | dict[str, object] | None] = (
             getattr(response_obj, "usage", None)
             if isinstance(
@@ -5285,9 +5309,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             else get_usage_object(response_obj)
             if isinstance(response_obj, ExtractionResponse)
-            else _combined_usage
-            if isinstance(_combined_usage, Usage)
-            else None
+            else _unmodeled_response_usage(kwargs, response_obj)
         )
         total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
         if total_tokens == 0:
@@ -5320,7 +5342,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         targets: Final = self._collect_tpm_scope_targets(
             standard_logging_metadata=standard_logging_metadata,
             kwargs=kwargs,
-            tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
+            tpm_limited_tags=_tpm_limited_tags(stash, kwargs),
             model_group=reconcile_model.group if reconcile_model is not None else None,
         )
         targets.extend(
