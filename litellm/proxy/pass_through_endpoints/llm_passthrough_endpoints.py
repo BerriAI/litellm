@@ -2641,7 +2641,12 @@ def _without_dropped_anthropic_betas(
     return MappingProxyType({name: value for name, value in upstream_values if value is not None})
 
 
-_VERTEX_BODY_LABELED_METHODS: Final = (":generateContent", ":streamGenerateContent", ":predict")
+_VERTEX_BODY_LABELED_ENDPOINTS: Final = (
+    ":generateContent",
+    ":streamGenerateContent",
+    ":predict",
+    "/batchPredictionJobs",
+)
 _VERTEX_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -3129,14 +3134,13 @@ async def _base_vertex_proxy_route(
     identity: Final[Mapping[str, object]] = (
         get_passthrough_router_request_metadata(user_api_key_dict) if label_fields else MappingProxyType({})
     )
-    if label_fields and encoded_endpoint.endswith(_VERTEX_BODY_LABELED_METHODS):
+    if label_fields and encoded_endpoint.endswith(_VERTEX_BODY_LABELED_ENDPOINTS):
         body: Final = _VERTEX_REQUEST_BODY.validate_python(await read_request_body(request))
-        if body:
-            setattr(
-                request.state,
-                LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
-                _vertex_body_with_resolved_labels(label_fields, identity, body),
-            )
+        setattr(
+            request.state,
+            LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+            _vertex_body_with_resolved_labels(label_fields, identity, body),
+        )
 
     ## CREATE PASS-THROUGH
     endpoint_func: Final = create_pass_through_route(

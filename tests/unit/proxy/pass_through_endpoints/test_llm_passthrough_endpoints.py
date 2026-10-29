@@ -222,9 +222,7 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
     endpoint: Final = "v1beta/models/gemini-2.5-flash:countTokens"
-    upstream: Final = respx_mock.post(
-        url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}"
-    ).mock(
+    upstream: Final = respx_mock.post(url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}").mock(
         return_value=httpx.Response(
             200,
             json={"totalTokens": 9},
@@ -264,6 +262,7 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     assert outbound.url.path == f"/{endpoint}"
     assert outbound.url.params["key"] == "gemini-test-key"
     assert json.loads(outbound.content) == json.loads(body)
+
 
 @pytest.mark.asyncio
 async def test_router_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
@@ -483,7 +482,6 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
     assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
 
 
-
 @pytest.mark.parametrize(
     "configured",
     [[f" {_VERTEX_REJECTED_BETA} "], [f"{_VERTEX_REJECTED_BETA},afk-mode-2026-01-31"]],
@@ -511,6 +509,7 @@ def test_vertex_pass_through_matches_a_configured_beta_written_the_way_the_heade
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert upstream.calls.last.request.headers["anthropic-beta"] == "claude-code-20250219,effort-2025-11-24"
+
 
 def test_vertex_pass_through_refuses_a_malformed_drop_setting_without_calling_vertex(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
@@ -560,6 +559,13 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
 
 _VERTEX_GEMINI_PATH: Final = "v1/projects/caller-project/locations/global/publishers/google/models/gemini-3.8-flash"
 _VERTEX_GEMINI_BODY: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+_VERTEX_BATCH_JOBS_PATH: Final = "v1/projects/caller-project/locations/global/batchPredictionJobs"
+_VERTEX_BATCH_JOB_BODY: Final = {
+    "displayName": "nightly-eval",
+    "model": "publishers/google/models/gemini-3.8-flash",
+    "inputConfig": {"instancesFormat": "jsonl", "gcsSource": {"uris": ["gs://caller-bucket/input.jsonl"]}},
+    "outputConfig": {"predictionsFormat": "jsonl", "gcsDestination": {"outputUriPrefix": "gs://caller-bucket/out/"}},
+}
 _VERTEX_LABELED_KEY: Final = "sk-billing-svc"
 _VERTEX_CALLER_LABELS: Final = {"user_api_key_team_alias": "forged", "env": "prod"}
 _VERTEX_RESOLVED_LABELS: Final = {
@@ -588,7 +594,15 @@ def labeled_key(monkeypatch: pytest.MonkeyPatch) -> str:
     return _VERTEX_LABELED_KEY
 
 
-@pytest.mark.parametrize("method", [":generateContent", ":streamGenerateContent", ":predict"])
+@pytest.mark.parametrize(
+    ("route", "body"),
+    [
+        pytest.param(f"{_VERTEX_GEMINI_PATH}:generateContent", _VERTEX_GEMINI_BODY, id="generateContent"),
+        pytest.param(f"{_VERTEX_GEMINI_PATH}:streamGenerateContent", _VERTEX_GEMINI_BODY, id="streamGenerateContent"),
+        pytest.param(f"{_VERTEX_GEMINI_PATH}:predict", _VERTEX_GEMINI_BODY, id="predict"),
+        pytest.param(_VERTEX_BATCH_JOBS_PATH, _VERTEX_BATCH_JOB_BODY, id="batchPredictionJobs"),
+    ],
+)
 @pytest.mark.parametrize(
     ("label_fields", "sent_labels", "upstream_labels"),
     [
@@ -607,25 +621,46 @@ def test_vertex_pass_through_labels_the_request_body_from_the_key_identity(
     respx_mock: "respx.MockRouter",
     monkeypatch: pytest.MonkeyPatch,
     labeled_key: str,
-    method: str,
+    route: str,
+    body: dict[str, object],
     label_fields: list[str] | None,
     sent_labels: dict[str, str],
     upstream_labels: dict[str, str] | None,
 ) -> None:
     monkeypatch.setattr(litellm, "vertex_request_label_fields", label_fields)
-    upstream: Final = respx_mock.post(
-        url__startswith=f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_PATH}{method}"
-    ).mock(return_value=httpx.Response(200, json={}))
+    upstream: Final = respx_mock.post(url__startswith=f"https://aiplatform.googleapis.com/{route}").mock(
+        return_value=httpx.Response(200, json={})
+    )
 
     response: Final = vertex_proxy.post(
-        f"/vertex_ai/{_VERTEX_GEMINI_PATH}{method}",
-        json={**_VERTEX_GEMINI_BODY, "labels": sent_labels},
+        f"/vertex_ai/{route}",
+        json={**body, "labels": sent_labels},
         headers={"x-litellm-api-key": labeled_key, "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
     )
 
     assert response.status_code == 200
     expected_labels: Final = {} if upstream_labels is None else {"labels": upstream_labels}
-    assert json.loads(upstream.calls.last.request.content) == {**_VERTEX_GEMINI_BODY, **expected_labels}
+    assert json.loads(upstream.calls.last.request.content) == {**body, **expected_labels}
+
+
+def test_vertex_pass_through_sends_no_body_on_a_batch_job_list_with_labels_on(
+    vertex_proxy: TestClient,
+    respx_mock: "respx.MockRouter",
+    monkeypatch: pytest.MonkeyPatch,
+    labeled_key: str,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", ["user_api_key_alias", "user_api_key_team_alias"])
+    upstream: Final = respx_mock.get(
+        url__startswith=f"https://aiplatform.googleapis.com/{_VERTEX_BATCH_JOBS_PATH}"
+    ).mock(return_value=httpx.Response(200, json={"batchPredictionJobs": []}))
+
+    response: Final = vertex_proxy.get(
+        f"/vertex_ai/{_VERTEX_BATCH_JOBS_PATH}",
+        headers={"x-litellm-api-key": labeled_key, "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+    )
+
+    assert response.status_code == 200
+    assert upstream.calls.last.request.content == b""
 
 
 @pytest.mark.parametrize(
@@ -683,6 +718,8 @@ def test_vertex_pass_through_labels_the_claude_request_header_from_the_key_ident
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     outbound: Final = upstream.calls.last.request
-    sent_headers: Final = tuple(json.loads(base64.b64decode(value)) for value in outbound.headers.get_list("x-vertex-ai-labels"))
+    sent_headers: Final = tuple(
+        json.loads(base64.b64decode(value)) for value in outbound.headers.get_list("x-vertex-ai-labels")
+    )
     assert sent_headers == (() if upstream_labels is None else (upstream_labels,))
     assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
