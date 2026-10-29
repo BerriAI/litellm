@@ -1603,3 +1603,20 @@ async def test_vertex_wildcard_health_check_only_calls_vertex_hosts(
     assert "error" not in result, result
     assert vertex_route.called
     assert not other_hosts.called
+
+
+async def test_ai21_wildcard_health_check_calls_ai21(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    ai21_route: Final = respx_mock.route(host="api.ai21.com").respond(json=dict(CHAT_COMPLETION_BODY))
+    other_hosts: Final = respx_mock.route().respond(json=dict(CHAT_COMPLETION_BODY))
+
+    result: Final = await ahealth_check(model_params={"model": "ai21/*", "api_key": "health-ai21-key"}, mode="chat")
+
+    assert "error" not in result, result
+    assert ai21_route.called
+    assert not other_hosts.called
+

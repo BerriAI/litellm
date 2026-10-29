@@ -4,6 +4,7 @@ from typing import Final, cast
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 
 
 def _form_field_value(value: object) -> str:
@@ -171,11 +172,8 @@ def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator
 
 
 def _routes_to(model: str, custom_llm_provider: str) -> bool:
-    try:
-        _, routed_provider, _, _ = litellm.get_llm_provider(model=model)
-    except litellm.BadRequestError:
-        return False
-    return routed_provider == custom_llm_provider
+    routed_provider: Final = inferred_provider(model)
+    return routed_provider is not None and routed_provider == inferred_provider(f"{custom_llm_provider}/{model}")
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:
