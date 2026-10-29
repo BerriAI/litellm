@@ -4871,8 +4871,12 @@ class LiteLLMBatch(Batch):
         if not isinstance(usage, Usage):
             return usage
         return {
-            **usage.model_dump(mode=info.mode, exclude_none=info.exclude_none),
-            **_batch_usage_from_chat_usage(usage).model_dump(mode=info.mode),
+            **usage.model_dump(
+                mode=info.mode, include=info.include, exclude=info.exclude, exclude_none=info.exclude_none
+            ),
+            **_batch_usage_from_chat_usage(usage).model_dump(
+                mode=info.mode, include=info.include, exclude=info.exclude
+            ),
         }
 
     def __contains__(self, key) -> bool:

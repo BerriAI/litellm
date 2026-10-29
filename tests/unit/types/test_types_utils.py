@@ -1143,3 +1143,14 @@ def test_batch_json_keeps_usage_that_skipped_validation() -> None:
     batch: Final = LiteLLMBatch.model_validate(_BATCH_FIELDS).model_copy(update={"usage": {"prompt_tokens": 3}})
 
     assert json.loads(batch.model_dump_json(warnings=False))["usage"] == {"prompt_tokens": 3}
+
+
+def test_batch_dump_applies_nested_include_and_exclude_to_both_usage_shapes() -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": _PROVIDER_BATCH_USAGE})
+
+    excluded: Final = batch.model_dump(exclude={"usage": {"prompt_tokens_details", "input_tokens_details"}})["usage"]
+    included: Final = batch.model_dump(include={"usage": {"prompt_tokens", "input_tokens"}})["usage"]
+
+    assert {"prompt_tokens_details", "input_tokens_details"}.isdisjoint(excluded)
+    assert (excluded["prompt_tokens"], excluded["input_tokens"]) == (21, 21)
+    assert included == {"prompt_tokens": 21, "input_tokens": 21}
