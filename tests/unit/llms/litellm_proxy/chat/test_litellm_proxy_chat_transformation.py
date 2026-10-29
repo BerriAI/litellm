@@ -639,3 +639,25 @@ def test_litellm_gateway_from_sdk_with_thinking_param(respx_mock):
         )
     e = exc_info.value
     assert "Connection error." in str(e)
+
+
+def test_translate_developer_role_leaves_a_later_developer_message_in_place_for_the_downstream_proxy() -> None:
+    translated: Final = LiteLLMProxyChatConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="fireworks-qwen",
+        custom_llm_provider="litellm_proxy",
+        api_base="http://inner-proxy:4000",
+        model_info=None,
+    )
+
+    assert list(translated) == [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]

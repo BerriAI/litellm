@@ -36,7 +36,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import (
+    BaseLLMModelInfo,
+    hoist_developer_messages_into_leading_system_message,
+    map_developer_role_to_system_role,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -58,7 +62,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
 
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -75,6 +79,45 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
+    if custom_llm_provider != "openai":
+        return False
+    resolved_api_base: Final = (
+        api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    )
+    if not resolved_api_base:
+        return True
+    hostname: Final = urlparse(resolved_api_base).hostname
+    if hostname is None:
+        return True
+    return hostname == "openai.com" or hostname.endswith(".openai.com")
+
+
+def _roles(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
+    return tuple(message["role"] for message in messages)
+
+
+def translate_developer_role_for_openai_compatible_endpoint(
+    messages: Sequence[AllMessageValues],
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    model_info: object,
+) -> Sequence[AllMessageValues]:
+    in_place: Final = map_developer_role_to_system_role(messages=messages)
+    if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
+        return in_place
+    placed: Final = hoist_developer_messages_into_leading_system_message(messages=messages)
+    if _roles(placed) == _roles(in_place):
+        return in_place
+    if declared_mid_conversation_system_support(model, custom_llm_provider, model_info) is not False:
+        return in_place
+    return placed
+
+
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -437,20 +480,30 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 )
         return messages, tools
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
+        """
+        A developer message only changes role, except on a model whose deployment or cost
+        map declares `supports_mid_conversation_system` false, where the instructions are
+        placed in one leading system message for its chat template.
+        """
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
+        )
+
     def _targets_openai_hosted_endpoint(
         self,
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> bool:
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return True
-        hostname: Final = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return True
-        return hostname == "openai.com" or hostname.endswith(".openai.com")
+        return targets_openai_hosted_endpoint(custom_llm_provider, api_base)
 
     def _should_preserve_cache_control_for_endpoint(
         self,
