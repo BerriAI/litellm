@@ -681,6 +681,7 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
+streamlake_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
@@ -970,6 +971,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
+        elif value.get("litellm_provider") == "streamlake":
+            streamlake_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1145,6 +1148,7 @@ model_list = list(
     | publicai_models
     | darkbloom_models
     | openinfer_models
+    | streamlake_models
     | zerogpu_models
     | v0_models
     | morph_models
@@ -1265,6 +1269,7 @@ def _build_models_by_provider() -> dict:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
+        "streamlake": streamlake_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
@@ -1336,7 +1341,6 @@ all_embedding_models = (
 )
 
 ####### IMAGE GENERATION MODELS ###################
-openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
