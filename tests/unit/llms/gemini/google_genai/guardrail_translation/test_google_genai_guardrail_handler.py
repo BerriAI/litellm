@@ -4,6 +4,7 @@ Tests for the Google GenAI generateContent guardrail translation handler.
 
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -188,6 +189,21 @@ async def test_streaming_raw_sse_chunks_accumulate_text_across_split_frames():
     )
 
     assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == ["harmful answer"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_raw_sse_text_holding_unicode_line_separators_reaches_the_guardrail_whole() -> None:
+    guardrail: Final = _mock_guardrail(["clean"])
+    text: Final = "harmful\u2028answer\u2029here"
+    payload: Final = {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+    chunk: Final = f"data: {json.dumps(payload, ensure_ascii=False)}\r\n\r\n"
+
+    await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
+        responses_so_far=[chunk],
+        guardrail_to_apply=guardrail,
+    )
+
+    assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == [text]
 
 
 @pytest.mark.asyncio
