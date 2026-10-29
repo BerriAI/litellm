@@ -12412,7 +12412,6 @@ class Router(DeprecatedRouterMembers):
         return None
 
     def _core_routable_model_group(self, model_name: str) -> str:
-
         """
         The model group a request to model_name routes to: its target when
         model_name is a `model_group_alias`, else model_name itself.
