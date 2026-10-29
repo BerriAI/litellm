@@ -2533,21 +2533,28 @@ class Logging(LiteLLMLoggingBaseClass):
                 (usage, float(response_cost) if isinstance(response_cost, (int, float)) else 0.0),
             )
 
-    def record_continued_partial(self, usage: Usage, response_cost: float, response_id: str) -> None:
-        """Bill what a cut stream already consumed on this continuation's success log, under the id the caller saw."""
+    def record_continued_partial(self, usage: Usage, response_cost: float, response_id: str | None) -> None:
+        """Bill what a cut stream already consumed on this continuation's success log, under the id the caller saw
+        when one is given."""
         self.model_call_details["continued_partial_usage"] = usage
         self.model_call_details["continued_partial_cost"] = response_cost
-        self.model_call_details["continued_response_id"] = response_id
+        if response_id is not None:
+            self.model_call_details["continued_response_id"] = response_id
 
     def _add_continued_partial_spend(self, response: object) -> None:
         partial_usage: Final = self.model_call_details.get("continued_partial_usage")
         partial_cost: Final = self.model_call_details.get("continued_partial_cost")
-        own_usage: Final = getattr(response, "usage", None)
+        own_usage: Final = (
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)
+            if isinstance(response, ResponsesAPIResponse)
+            else getattr(response, "usage", None)
+        )
         own_cost: Final = self.model_call_details.get("response_cost")
         if not (isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_usage, Usage)):
             return
         from litellm.cost_calculator import BaseTokenUsageProcessor
 
+        self.model_call_details.pop("failed_attempts_usage", None)
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, partial_usage]
         )

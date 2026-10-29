@@ -3555,6 +3555,30 @@ class Router:
         )
 
     @staticmethod
+    def _billed_responses_cut_partial(cut_logging: object) -> "ContinuedPartial | None":
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        if not isinstance(cut_logging, LiteLLMLogging):
+            return None
+        details: Final = cut_logging.model_call_details
+        candidate_legs: Final = (
+            (details.get("combined_usage_object"), details.get("response_cost")),
+            (details.get("continued_partial_usage"), details.get("continued_partial_cost")),
+        )
+        billed_legs: Final = tuple(
+            (usage, float(cost) if isinstance(cost, (int, float)) else 0.0)
+            for usage, cost in candidate_legs
+            if isinstance(usage, Usage)
+        )
+        if not billed_legs:
+            return None
+        return ContinuedPartial(
+            usage=BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[usage for usage, _ in billed_legs]),
+            response_cost=sum((cost for _, cost in billed_legs), 0.0),
+            response_id=None,
+        )
+
+    @staticmethod
     def _carry_partial_spend_to_fallback(fallback_response: object, cut_partial: "ContinuedPartial | None") -> None:
         """Bill what the cut legs consumed on the continuation's success log."""
         fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
@@ -4362,6 +4386,9 @@ class Router:
         )
         seam: Final = ResponsesContinuationSeam(continuation.emitted_text if continuation is not None else "")
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
+        cut_partial: Final = Router._billed_responses_cut_partial(
+            getattr(source_iterator, "logging_obj", getattr(source_iterator, "litellm_logging_obj", None))
+        )
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
         try:
@@ -4410,6 +4437,7 @@ class Router:
             )
             prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
+                Router._carry_partial_spend_to_fallback(fallback_response, cut_partial)
                 async for fallback_item in seam.splice(fallback_response):
                     Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:

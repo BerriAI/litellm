@@ -212,7 +212,7 @@ def _drop_leading_text(chunks: tuple[ModelResponseStream, ...], count: int) -> t
 class ContinuedPartial:
     usage: Usage
     response_cost: float
-    response_id: str
+    response_id: str | None
 
 
 class ContinuationOutput:
