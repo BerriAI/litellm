@@ -2100,6 +2100,11 @@ def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple
     return estimated_input_tokens, max_output_tokens if isinstance(max_output_tokens, int) else None
 
 
+def _connection_model_group(litellm_metadata: Mapping[str, object]) -> str | None:
+    model_group: Final = litellm_metadata.get("model_group") or litellm_metadata.get("deployment_model_name")
+    return model_group if isinstance(model_group, str) else None
+
+
 async def _enforce_frame_project_quota(
     quota_callbacks: Sequence[ProjectQuotaCallback],
     user_api_key_dict: UserAPIKeyAuth | None,
@@ -2454,6 +2459,7 @@ class ResponsesWebSocketStreaming:
         self.request_data: dict[str, object] = request_data or {}
         litellm_metadata: Final = self.request_data.get("litellm_metadata")
         self.litellm_metadata: dict[str, object] = litellm_metadata if _is_json_object(litellm_metadata) else {}
+        self.model_group: str | None = _connection_model_group(self.litellm_metadata)
         self.custom_llm_provider: str | None = custom_llm_provider
         self._open_turns: tuple[_ResponsesWsTurn, ...] = ()
         self._failure: Exception | None = None
@@ -2918,7 +2924,7 @@ class ResponsesWebSocketStreaming:
         """
         try:
             await _enforce_frame_project_quota(
-                self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
+                self.quota_callbacks, self.user_api_key_dict, self.model_group or self.authorized_model, message
             )
         except RateLimitError as e:
             await self._send_turn_refusal(e)
@@ -3050,10 +3056,7 @@ class ManagedResponsesWebSocketHandler:
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.litellm_metadata: Mapping[str, object] = litellm_metadata or {}
-        raw_model_group: Final = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
-            "deployment_model_name"
-        )
-        self.model_group: str | None = raw_model_group if isinstance(raw_model_group, str) else None
+        self.model_group: str | None = _connection_model_group(self.litellm_metadata)
         self.api_key = api_key
         self.api_base = api_base
         self.timeout = timeout

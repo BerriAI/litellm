@@ -1581,6 +1581,56 @@ class TestWebSocketProjectQuotaEnforcement:
         assert allowed is True
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("litellm_metadata", "limited_model"),
+        [
+            ({"model_group": "codex-model"}, "codex-model"),
+            ({"deployment_model_name": "codex-model"}, "codex-model"),
+            ({}, "gpt-6.1-sol"),
+        ],
+    )
+    async def test_native_handler_refuses_a_frame_over_the_project_itpm_limit_of_its_model_group(
+        self, litellm_metadata: Mapping[str, str], limited_model: str
+    ):
+        from unittest.mock import AsyncMock
+
+        from litellm.caching.dual_cache import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.utils import InternalUsageCache
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache()), model_group_resolver=lambda _: None
+        )
+        mock_backend_ws: Final = MagicMock()
+        mock_backend_ws.send = AsyncMock()
+        mock_websocket: Final = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+        handler: Final = ResponsesWebSocketStreaming(
+            websocket=mock_websocket,
+            backend_ws=mock_backend_ws,
+            logging_obj=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-ws-project-key",
+                project_id="ws-project",
+                project_metadata={"model_itpm_limit": {limited_model: 100}},
+            ),
+            request_data={"litellm_metadata": dict(litellm_metadata)},
+            authorized_model="gpt-6.1-sol",
+            quota_callbacks=[limiter],
+        )
+
+        allowed: Final = await handler._enforce_or_reject_frame(
+            json.dumps({"type": "response.create", "input": "long " * 400})
+        )
+
+        assert allowed is False
+        error_event: Final = json.loads(mock_websocket.send_text.call_args[0][0])
+        assert (error_event["status"], error_event["error"]["type"]) == (429, "rate_limit_exceeded")
+        assert f"ws-project:{limited_model}" in error_event["error"]["message"]
+
 
 def _turn_frames() -> tuple[str, str, str]:
     return tuple(json.dumps({"type": "response.create", "input": word}) for word in ("one", "two", "three"))

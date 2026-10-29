@@ -600,29 +600,41 @@ def test_usage_based_routing_serves_every_turn_while_the_deployment_has_headroom
         assert deployment.forwarded_turns() == 3
 
 
+def _assert_frames_over_the_project_input_quota_are_refused(
+    gateway: Gateway, scenario: Scenario, deployment: Deployment
+) -> None:
+    team: Final = scenario.team()
+    key: Final = scenario.key(
+        models=[deployment.name],
+        team_id=team,
+        project_id=scenario.project(team, model_itpm_limit={deployment.name: 100}),
+    )
+
+    async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+        async with _socket(gateway, key, deployment.name) as connection:
+            return (
+                await _say(connection, deployment.name, "short"),
+                await _say(connection, deployment.name, "long " * 400),
+                await _say(connection, deployment.name, "long " * 400),
+            )
+
+    first, second, third = asyncio.run(session())
+
+    completed(first)
+    _assert_refused(third)
+    answered: Final = sum(received[-1].get("type") == "response.completed" for received in (first, second, third))
+    assert deployment.forwarded_turns() == answered
+
+
 def test_a_frame_over_the_project_input_quota_gets_a_429_error_frame_and_never_reaches_the_provider(
     limited: Gateway,
 ) -> None:
     with limited.scenario() as scenario:
-        deployment: Final = _managed(scenario)
-        team: Final = scenario.team()
-        key: Final = scenario.key(
-            models=[deployment.name],
-            team_id=team,
-            project_id=scenario.project(team, model_itpm_limit={deployment.name: 100}),
-        )
+        _assert_frames_over_the_project_input_quota_are_refused(limited, scenario, _managed(scenario))
 
-        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
-            async with _socket(limited, key, deployment.name) as connection:
-                return (
-                    await _say(connection, deployment.name, "short"),
-                    await _say(connection, deployment.name, "long " * 400),
-                    await _say(connection, deployment.name, "long " * 400),
-                )
 
-        first, second, third = asyncio.run(session())
-
-        completed(first)
-        _assert_refused(third)
-        answered: Final = sum(received[-1].get("type") == "response.completed" for received in (first, second, third))
-        assert deployment.forwarded_turns() == answered
+def test_a_native_frame_over_the_project_input_quota_of_its_model_group_gets_a_429_error_frame(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        _assert_frames_over_the_project_input_quota_are_refused(limited, scenario, _native(scenario, peer))
