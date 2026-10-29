@@ -133,7 +133,7 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-)\d+")
+_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-|\*)\d+")
 
 
 def _requested_image_param(optional_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -143,7 +143,7 @@ def _requested_image_param(optional_params: Mapping[str, object] | None, key: st
 
 def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
     value: Final = _requested_image_param(optional_params, "size")
-    return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
+    return value.replace("*", "x") if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
 
 
 def get_web_search_requests(server_tool_use: object) -> int | None:

@@ -248,13 +248,24 @@ async def test_router_image_edit_returns_the_provider_image(
 
 
 @pytest.mark.asyncio
-async def test_an_edit_bills_the_deployment_price_on_a_logging_object_made_before_routing(
-    respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("deployment_price", "size", "expected_cost"),
+    (
+        ({"input_cost_per_image": 0.0123}, None, 0.0123),
+        ({"input_cost_per_pixel": 1e-08}, "2048x2048", 2048 * 2048 * 1e-08),
+    ),
+)
+async def test_an_edit_bills_the_deployment_price_at_its_size_on_a_logging_object_made_before_routing(
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_price: dict[str, float],
+    size: str | None,
+    expected_cost: float,
 ) -> None:
     monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_BASE_IMAGE", raising=False)
     respx_mock.post(_DASHSCOPE_IMAGE_URL).mock(return_value=httpx.Response(200, json=_DASHSCOPE_EDIT_RESPONSE))
-    deployment_price: Final = 0.0123
     logging_made_before_routing: Final = Logging(
         model="qwen-image-edit",
         messages=[],
@@ -272,7 +283,7 @@ async def test_an_edit_bills_the_deployment_price_on_a_logging_object_made_befor
                 "litellm_params": {
                     "model": "dashscope/qwen-image-2.0",
                     "api_key": "fake-key",
-                    "input_cost_per_image": deployment_price,
+                    **deployment_price,
                 },
             }
         ]
@@ -282,9 +293,10 @@ async def test_an_edit_bills_the_deployment_price_on_a_logging_object_made_befor
         model="qwen-image-edit",
         image=_FIRST_IMAGE,
         prompt="Turn the circle into a square",
+        size=size,
         litellm_logging_obj=logging_made_before_routing,
         litellm_call_id="edit-call",
     )
 
     assert isinstance(result, ImageResponse)
-    assert result._hidden_params["response_cost"] == pytest.approx(deployment_price)
+    assert result._hidden_params["response_cost"] == pytest.approx(expected_cost)
