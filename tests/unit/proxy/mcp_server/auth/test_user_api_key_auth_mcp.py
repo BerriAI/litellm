@@ -3587,6 +3587,162 @@ class TestMCPDelegateAuthToUpstream:
 
         assert result == ["pkce-server"]
 
+    @staticmethod
+    def _static_authorization_delegate(static_headers: dict[str, str], name: str = "test-server"):
+        from litellm.types.mcp import MCPAuth
+
+        return TestMCPDelegateAuthToUpstream._make_server(
+            auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
+        ).model_copy(update={"static_headers": static_headers, "name": name, "server_id": f"{name}-id"})
+
+    @pytest.mark.parametrize("authorization", [b"Bearer junk-token", b"Bearer ", b"Bearer", b"bearer"])
+    @pytest.mark.parametrize("static_name", ["Authorization", "authorization"])
+    async def test_delegate_with_static_authorization_requires_a_litellm_credential(
+        self, authorization: bytes, static_name: str
+    ) -> None:
+        """A static Authorization replaces the caller's token upstream, so any bearer that is not a LiteLLM
+        credential is refused instead of being admitted to ride the operator's token."""
+        refusal: Final = HTTPException(status_code=401, detail="LiteLLM Virtual Key expected")
+        admission: Final = AsyncMock(side_effect=refusal)
+        server: Final = self._static_authorization_delegate({static_name: "Bearer operator-token"})
+        with (
+            patch("litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth", admission),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = server
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    {
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/mcp/test-server",
+                        "headers": [(b"authorization", authorization)],
+                    }
+                )
+
+        assert exc_info.value.status_code == 401
+        admission.assert_awaited_once()
+
+    @pytest.mark.parametrize("authorization", [b"Bearer ", b"Bearer", b"BEARER"])
+    async def test_delegate_blank_bearer_takes_normal_admission(self, authorization: bytes) -> None:
+        """A bearer with no token carries nothing to forward, so it gets LiteLLM's 401 like any malformed key."""
+        refusal: Final = HTTPException(status_code=401, detail="Malformed API Key")
+        admission: Final = AsyncMock(side_effect=refusal)
+        with TestMCPDelegateAuthToUpstream._delegate_admission(admission):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    {
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/mcp/delegated_oauth_server",
+                        "headers": [(b"authorization", authorization)],
+                    }
+                )
+
+        assert exc_info.value is refusal
+
+    async def test_delegate_with_static_authorization_admits_a_litellm_key(self) -> None:
+        """A LiteLLM key still reaches a delegate server with a static Authorization, and is never forwarded."""
+        admitted: Final = UserAPIKeyAuth(api_key="hashed-key", user_id="key-user")
+        admission: Final = AsyncMock(return_value=admitted)
+        server: Final = self._static_authorization_delegate({"Authorization": "Bearer operator-token"})
+        with (
+            patch("litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth", admission),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = server
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/mcp/test-server",
+                    "headers": [(b"x-litellm-api-key", b"sk-caller-key")],
+                }
+            )
+
+        assert auth_result.user_id == "key-user"
+        assert auth_result.mcp_forwards_caller_authorization is False
+
+    async def test_delegate_with_companion_static_headers_still_forwards_the_caller_token(self) -> None:
+        """Static headers other than Authorization leave the caller's token as the upstream credential, so
+        the v1.102 anonymous forward is unchanged for them."""
+        from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+
+        admission: Final = AsyncMock()
+        server: Final = self._static_authorization_delegate({"X-Tenant": "tenant-1"})
+        with (
+            patch("litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth", admission),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+                new_callable=AsyncMock,
+                side_effect=KeyNotFoundError("hashed-token"),
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = server
+            mock_mgr.get_allowed_mcp_servers = AsyncMock(return_value=[])
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(
+                TestMCPDelegateAuthToUpstream._bearer_scope("upstream-token")
+            )
+
+        assert auth_result.mcp_forwards_caller_authorization is True
+        admission.assert_not_awaited()
+
+    async def test_multi_server_delegate_scope_with_one_static_authorization_fails_closed(self) -> None:
+        """Multi-server requests are never probed, so one static-Authorization delegate in the list must
+        send the whole request through normal admission."""
+        refusal: Final = HTTPException(status_code=401, detail="LiteLLM Virtual Key expected")
+        servers: Final = {
+            "plain_delegate": self._static_authorization_delegate({}, name="plain_delegate"),
+            "static_delegate": self._static_authorization_delegate(
+                {"Authorization": "Bearer operator-token"}, name="static_delegate"
+            ),
+        }
+        with (
+            patch(
+                "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                AsyncMock(side_effect=refusal),
+            ),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.side_effect = lambda name, client_ip=None: servers.get(name)
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    {
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/mcp",
+                        "headers": [
+                            (b"x-mcp-servers", b"plain_delegate,static_delegate"),
+                            (b"authorization", b"Bearer junk-token"),
+                        ],
+                    }
+                )
+
+        assert exc_info.value.status_code == 401
+
+    async def test_anonymous_listing_excludes_delegates_with_static_authorization(self) -> None:
+        """An anonymous caller is never shown a delegate server whose upstream sees the operator's token."""
+        from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+        manager: Final = MCPServerManager()
+        companion: Final = self._static_authorization_delegate({"X-Tenant": "t"}, name="companion")
+        static: Final = self._static_authorization_delegate({"AUTHORIZATION": "Bearer op"}, name="static")
+        manager.registry = {companion.server_id: companion, static.server_id: static}
+        with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock, return_value=[]):
+            assert await manager.get_allowed_mcp_servers(None) == [companion.server_id]
+
+    def test_static_authorization_delegate_logs_why_callers_need_a_litellm_credential(self) -> None:
+        from litellm.proxy.mcp_server import mcp_server_manager
+
+        server: Final = self._static_authorization_delegate({"Authorization": "Bearer operator-token"})
+        with patch.object(mcp_server_manager.verbose_logger, "warning") as warning:
+            mcp_server_manager._warn_legacy_delegate_auth_if_applicable(server, source="config")
+
+        warning.assert_called_once()
+        assert "static Authorization" in warning.call_args.args[0]
+        assert "operator-token" not in repr(warning.call_args)
+
     async def test_true_passthrough_skips_litellm_auth_anonymously(self):
         """auth_type=true_passthrough performs no admission auth: the caller's Authorization is an
         upstream token forwarded unchanged and user_api_key_auth is never called."""

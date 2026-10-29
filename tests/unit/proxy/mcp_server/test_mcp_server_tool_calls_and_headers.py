@@ -7437,22 +7437,14 @@ async def test_legacy_delegate_multi_server_scope_is_not_failed_by_one_upstream_
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
-@pytest.mark.parametrize(
-    "static_headers, expected_authorization",
-    [
-        ({"X-Tenant": "tenant-1"}, "Bearer expired-upstream-token"),
-        ({"X-Tenant": "tenant-1", "Authorization": "Bearer server-wide-token"}, "Bearer server-wide-token"),
-    ],
-    ids=["companion-header", "static-authorization-wins"],
-)
-async def test_legacy_delegate_probe_sends_the_headers_a_tool_call_sends(
-    static_headers: dict[str, str], expected_authorization: str
-) -> None:
-    """An upstream that needs a static header next to the token sees it in the probe too, so a token the
-    upstream accepts on real calls is not rejected before the session opens."""
+async def test_legacy_delegate_probe_carries_only_the_caller_token() -> None:
+    """As in v1.102, the probe decides whether the caller's own token is admitted, so it carries that token
+    and nothing configured: no static companion header and no static secret reach the upstream."""
     import respx
 
-    server: Final = _delegate_auth_mcp_server().model_copy(update={"static_headers": static_headers})
+    server: Final = _delegate_auth_mcp_server().model_copy(
+        update={"static_headers": {"X-Tenant": "tenant-1", "X-Static-Secret": "operator-secret"}}
+    )
     with (
         _patch_delegate_resolver(server, "delegate_test"),
         patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
@@ -7461,20 +7453,21 @@ async def test_legacy_delegate_probe_sends_the_headers_a_tool_call_sends(
         ),
         respx.mock as upstream,
     ):
-        probe: Final = upstream.post(server.url).mock(
-            side_effect=lambda request: httpx.Response(200 if request.headers.get("X-Tenant") == "tenant-1" else 401)
-        )
+        probe: Final = upstream.post(server.url).respond(200)
         assert await _expired_delegate_token_preflight(["delegate_test"]) is None
 
     assert probe.call_count == 1
-    assert probe.calls[0].request.headers["Authorization"] == expected_authorization
+    sent: Final = probe.calls[0].request.headers
+    assert sent["Authorization"] == "Bearer expired-upstream-token"
+    assert "X-Tenant" not in sent
+    assert "X-Static-Secret" not in sent
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
-async def test_legacy_delegate_probe_steps_aside_when_static_headers_need_unset_user_values() -> None:
-    """A static header built from a per-user value the caller has not set cannot be reproduced, so the
-    probe lets the request through and the tool call reports the missing value."""
+async def test_legacy_delegate_probe_does_not_fail_open_on_unset_static_header_values() -> None:
+    """Static headers play no part in a delegate probe, so a per-user value the caller has not set cannot
+    skip the probe and let a token the upstream rejects through."""
     import respx
 
     server: Final = _delegate_auth_mcp_server().model_copy(
@@ -7494,8 +7487,36 @@ async def test_legacy_delegate_probe_steps_aside_when_static_headers_need_unset_
         probe: Final = upstream.post(server.url).respond(
             401, headers={"www-authenticate": 'Bearer error="invalid_token"'}
         )
+        with pytest.raises(HTTPException) as exc_info:
+            await _expired_delegate_token_preflight(["delegate_test"])
+
+    assert exc_info.value.status_code == 401
+    assert probe.call_count == 1
+    assert "X-Tenant-Token" not in probe.calls[0].request.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+async def test_delegate_with_static_authorization_is_never_probed_with_the_static_token() -> None:
+    """A delegate server with a static Authorization is not a legacy delegate, so no probe sends the
+    operator's token on behalf of a caller."""
+    import respx
+
+    server: Final = _delegate_auth_mcp_server().model_copy(
+        update={"static_headers": {"Authorization": "Bearer operator-token"}}
+    )
+    with (
+        _patch_delegate_resolver(server, "delegate_test"),
+        patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
+            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server]),
+        ),
+        respx.mock as upstream,
+    ):
+        probe: Final = upstream.post(server.url).respond(200)
         assert await _expired_delegate_token_preflight(["delegate_test"]) is None
 
+    assert all(call.request.headers.get("Authorization") != "Bearer operator-token" for call in probe.calls)
     assert probe.call_count == 0
 
 
