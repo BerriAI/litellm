@@ -869,8 +869,7 @@ class AnthropicPassthroughLoggingHandler:
 
         if llm_router is not None:
             # Try to find the model in the router by the model name
-            # Use the existing get_model_ids method from router
-            model_ids: Final = llm_router.get_model_ids(model_name=model_name)
+            model_ids: Final = llm_router.registry().names(model_name, kind="ids")
             if model_ids and len(model_ids) > 0:
                 # Use the first model ID found
                 actual_model_id = model_ids[0]

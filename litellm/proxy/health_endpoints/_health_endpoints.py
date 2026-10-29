@@ -75,6 +75,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.router import Router
+from litellm.router_api import deployment_usable_by_team
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
@@ -1059,11 +1060,12 @@ def _health_accessible_model_names(
         return None
     if llm_router is None:
         return frozenset(granted_models)
+    registry: Final = llm_router.registry()
     return frozenset(
         get_key_models(
             user_api_key_dict=user_api_key_dict,
-            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
-            model_access_groups=llm_router.get_model_access_groups(),
+            proxy_model_list=registry.names(team_id=user_api_key_dict.team_id),
+            model_access_groups=registry.access_groups(),
         )
     )
 
@@ -1076,16 +1078,15 @@ def _caller_may_probe_deployment(
     caller_is_admin: bool,
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not deployment_usable_by_team(deployment, team_id):
         return False
     if allowed_models is None:
         return True
     if llm_router is None:
         return deployment.get("model_name") in allowed_models
     model: Final = dict(deployment)
-    return any(
-        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
-    )
+    registry: Final = llm_router.registry()
+    return any(registry.includes(model, model_name=name, team_id=team_id) for name in allowed_models)
 
 
 def _resolve_targeted_model_ids(
@@ -1190,7 +1191,7 @@ async def _perform_health_check_and_save(
 def _health_endpoint_resolve_target_model_name(
     model: str | None,
     model_id: str | None,
-    llm_router,
+    llm_router: Router | None,
 ) -> str | None:
     """Map ``model_id`` to its deployment's ``model_name`` for live health checks.
 
@@ -1205,7 +1206,7 @@ def _health_endpoint_resolve_target_model_name(
             detail={"error": f"Model with ID {model_id} not found"},
         )
     try:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
     except Exception as e:
         verbose_proxy_logger.error("Error getting deployment for model_id %s: %s", model_id, e)
         raise HTTPException(
@@ -1775,7 +1776,9 @@ async def no_redis_on_multiple_workers() -> bool:
 def _redis_configured() -> bool:
     from litellm.proxy.proxy_server import llm_router, redis_usage_cache
 
-    return redis_usage_cache is not None or (llm_router is not None and llm_router.cache.redis_cache is not None)
+    return redis_usage_cache is not None or (
+        llm_router is not None and llm_router.health().store.redis_cache is not None
+    )
 
 
 def no_redis_warning_disabled_by_env() -> bool:
@@ -2265,7 +2268,7 @@ async def test_model_connection(
             request_model_id: Final = request_model_info.get("id")
             try:
                 if request_model_id:
-                    deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
+                    deployment_by_id = llm_router.registry().deployment(request_model_id)
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
@@ -2274,12 +2277,12 @@ async def test_model_connection(
                     # Fall back to model_name lookup for callers (e.g. the
                     # "Add Model" wizard, or curl) that don't supply an id.
                     # First try to find by proxy model_name (e.g., "gpt-4o")
-                    deployments = llm_router.get_model_list(model_name=model_name)
+                    deployments = llm_router.registry().deployments(model_name)
 
                     # If not found, try to find by litellm model name
                     # (e.g., "azure/gpt-4o")
                     if not deployments or len(deployments) == 0:
-                        all_deployments: Final = llm_router.get_model_list(model_name=None)
+                        all_deployments: Final = llm_router.registry().deployments(None)
                         if all_deployments:
                             for deployment in all_deployments:
                                 if deployment.get("litellm_params", {}).get("model") == model_name:
