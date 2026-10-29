@@ -1625,14 +1625,6 @@ def completion_cost(
                     for part in ws_tier_parts
                 )
 
-        if (
-            (call_type == "aimage_generation" or call_type == "image_generation")
-            and model is not None
-            and isinstance(model, str)
-            and len(model) == 0
-            and custom_llm_provider == "azure"
-        ):
-            model = "dall-e-2"  # for dall-e-2, azure expects an empty model name
         # Handle Inputs to completion_cost
         prompt_tokens = 0
         prompt_characters: int | None = None
@@ -1708,7 +1700,8 @@ def completion_cost(
         )
 
         priced_response: Final[object] = completion_response
-        for idx, (model, candidate_pricing_provider) in enumerate(potential_model_names):
+        for idx, (candidate_model, candidate_pricing_provider) in enumerate(potential_model_names):
+            model = candidate_model
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)

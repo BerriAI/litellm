@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
-from typing import Final, Literal, TypedDict, cast
+from typing import Final, Literal, Protocol, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from typing_extensions import ReadOnly
@@ -2085,6 +2085,41 @@ def calculate_image_response_web_search_cost(
     )
 
 
+class _ModelPricedImageCostCalculator(Protocol):
+    def __call__(self, model: str, image_response: ImageResponse, model_info: ModelInfo | None = None) -> float: ...
+
+
+def _model_priced_image_cost_calculator(
+    custom_llm_provider: str | None, model: str
+) -> _ModelPricedImageCostCalculator | None:
+    match custom_llm_provider:
+        case litellm.LlmProviders.RECRAFT.value:
+            from litellm.llms.recraft.cost_calculator import cost_calculator as recraft_image_cost_calculator
+
+            return recraft_image_cost_calculator
+        case litellm.LlmProviders.AIML.value:
+            from litellm.llms.aiml.image_generation.cost_calculator import cost_calculator as aiml_image_cost_calculator
+
+            return aiml_image_cost_calculator
+        case litellm.LlmProviders.COMETAPI.value:
+            from litellm.llms.cometapi.image_generation.cost_calculator import (
+                cost_calculator as cometapi_image_cost_calculator,
+            )
+
+            return cometapi_image_cost_calculator
+        case litellm.LlmProviders.RUNWAYML.value:
+            from litellm.llms.runwayml.cost_calculator import cost_calculator as runwayml_image_cost_calculator
+
+            return runwayml_image_cost_calculator
+        case litellm.LlmProviders.TENCENT.value:
+            from litellm.llms.tencent.cost_calculator import image_cost_calculator as tencent_image_cost_calculator
+            from litellm.llms.tencent.image_generation.transformation import is_tokenhub_image_model
+
+            return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
+        case _:
+            return None
+
+
 class CostCalculatorUtils:
     @staticmethod
     def call_type_has_image_response(call_type: str) -> bool:
@@ -2131,9 +2166,6 @@ class CostCalculatorUtils:
         from litellm.llms.gemini.image_generation.cost_calculator import (
             cost_calculator as gemini_image_cost_calculator,
         )
-        from litellm.llms.recraft.cost_calculator import (
-            cost_calculator as recraft_image_cost_calculator,
-        )
         from litellm.llms.vertex_ai.image_generation.cost_calculator import (
             cost_calculator as vertex_ai_image_cost_calculator,
         )
@@ -2146,7 +2178,10 @@ class CostCalculatorUtils:
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
+        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model)
 
+        if model_priced_calculator is not None:
+            return model_priced_calculator(model=model, image_response=completion_response, model_info=pricing)
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):
                 return vertex_ai_image_cost_calculator(
@@ -2164,36 +2199,6 @@ class CostCalculatorUtils:
                     optional_params=optional_params,
                 )
             raise TypeError("completion_response must be of type ImageResponse for bedrock image cost calculation")
-        elif custom_llm_provider == litellm.LlmProviders.RECRAFT.value:
-            from litellm.llms.recraft.cost_calculator import (
-                cost_calculator as recraft_image_cost_calculator,
-            )
-
-            return recraft_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
-                model_info=pricing,
-            )
-        elif custom_llm_provider == litellm.LlmProviders.AIML.value:
-            from litellm.llms.aiml.image_generation.cost_calculator import (
-                cost_calculator as aiml_image_cost_calculator,
-            )
-
-            return aiml_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
-                model_info=pricing,
-            )
-        elif custom_llm_provider == litellm.LlmProviders.COMETAPI.value:
-            from litellm.llms.cometapi.image_generation.cost_calculator import (
-                cost_calculator as cometapi_image_cost_calculator,
-            )
-
-            return cometapi_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
-                model_info=pricing,
-            )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
             if call_type in (
                 CallTypes.image_edit.value,
@@ -2235,16 +2240,6 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
                 optional_params=optional_params,
-                model_info=pricing,
-            )
-        elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
-            from litellm.llms.runwayml.cost_calculator import (
-                cost_calculator as runwayml_image_cost_calculator,
-            )
-
-            return runwayml_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
                 model_info=pricing,
             )
         elif (
