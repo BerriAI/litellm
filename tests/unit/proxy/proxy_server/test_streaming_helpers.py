@@ -504,6 +504,7 @@ def test_format_fallback_metadata_sse_event():
     event = _format_fallback_metadata_sse_event(
         fallback_model="fallback-model",
         fallback_errors=fallback_errors,
+        error_state=None,
     )
 
     assert isinstance(event, str)
@@ -845,6 +846,116 @@ async def test_async_data_generator_emits_fallback_error_metadata_event(monkeypa
     assert metadata_payload["object"] == "chat.completion.chunk"
     assert metadata_payload["model"] == "fallback-model"
     assert isinstance(metadata_payload["created"], int)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_sends_fallback_metadata_in_place_of_a_stripped_usage_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
+    fallback_errors: Final = [
+        {"message": "litellm.RateLimitError: upstream limited request", "type": "RateLimitError", "code": "429"}
+    ]
+    usage_artifact: Final = ModelResponseStream(
+        id="chatcmpl-test", choices=[], created=0, model="openai/internal-fallback", object="chat.completion.chunk"
+    )
+    upstream: Final = _FakeStream(
+        [usage_artifact, _simple_chunk(model="openai/internal-fallback", content="hello")],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+                "x-litellm-model-group": "fallback-model",
+                "x-litellm-fallback-errors": json.dumps(fallback_errors),
+            }
+        },
+    )
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in async_data_generator(
+                response=upstream,
+                user_api_key_dict=_user_auth(),
+                request_data={
+                    "model": "primary-model",
+                    "include_fallback_errors": True,
+                    "_litellm_strip_stream_usage": True,
+                },
+            )
+        ]
+    )
+    payloads: Final = tuple(json.loads(frame.removeprefix("data: ")) for frame in frames[:-1])
+
+    assert frames[-1] == "data: [DONE]\n\n"
+    assert len(payloads) == 2
+    assert payloads[0]["object"] == "chat.completion.chunk"
+    assert payloads[0]["choices"] == []
+    assert payloads[0]["litellm_fallback"] == {"fallback_model": "fallback-model", "errors": fallback_errors}
+    assert payloads[1]["choices"][0]["delta"]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_like_its_neighbours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
+    fallback_errors: Final = [
+        {
+            "message": "litellm.AuthenticationError: Incorrect API key provided",
+            "type": "AuthenticationError",
+            "param": None,
+            "code": "401",
+        }
+    ]
+    response: Final = ResponsesAPIResponse(id="resp_fallback", created_at=1, model="fallback-model", output=[])
+    upstream: Final = _FakeStream(
+        [
+            ResponseCreatedEvent.model_validate(
+                {"type": "response.created", "sequence_number": 0, "response": response}
+            ),
+            ResponseCompletedEvent.model_validate(
+                {"type": "response.completed", "sequence_number": 1, "response": response}
+            ),
+        ],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+                "x-litellm-model-group": "fallback-model",
+                "x-litellm-fallback-errors": json.dumps(fallback_errors),
+            }
+        },
+    )
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in async_data_generator(
+                response=upstream,
+                user_api_key_dict=_user_auth(),
+                request_data={"model": "primary-model", "include_fallback_errors": True},
+                responses_stream_errors=True,
+            )
+        ]
+    )
+    event_frames: Final = frames[:-1]
+    payloads: Final = tuple(
+        json.loads(next(line.removeprefix("data: ") for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in event_frames
+    )
+
+    assert frames[-1] == "data: [DONE]\n\n"
+    assert tuple(payload.get("type") for payload in payloads) == (
+        "response.created",
+        "litellm.fallback_metadata",
+        "response.completed",
+    )
+    assert payloads[1] == {
+        "type": "litellm.fallback_metadata",
+        "litellm_fallback": {"fallback_model": "fallback-model", "errors": fallback_errors},
+    }
+    assert len({frame.startswith("event: ") for frame in event_frames}) == 1
 
 
 @pytest.mark.asyncio

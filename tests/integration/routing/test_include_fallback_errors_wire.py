@@ -16,7 +16,14 @@ from urllib.parse import unquote
 import httpx
 import pytest
 import yaml
-from integration._support.anthropic_sse import error_body, message_json, message_stream, parse_sse, stream_reply
+from integration._support.anthropic_sse import (
+    SseEvent,
+    error_body,
+    message_json,
+    message_stream,
+    parse_sse,
+    stream_reply,
+)
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply, responses_reply
@@ -34,6 +41,7 @@ _API_KEY: Final = "synthetic-fallback-errors-key"
 _ROUTER_ONLY_KEYS: Final = ("include_fallback_errors", "silent_model")
 _ANSWER: Final = "answered by"
 _UNAUTHORIZED_MESSAGE: Final = "scripted 401: the primary key was revoked"
+_RESPONSES_FALLBACK_METADATA_EVENT: Final = "litellm.fallback_metadata"
 _NONCE: Final = re.compile(r"nonce=([0-9a-f]{32})")
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _ERRORS: Final = TypeAdapter(list[dict[str, JsonValue]])
@@ -447,11 +455,25 @@ def exposed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exposed]:
             yield _Exposed(proxy, wire)
 
 
+def _mention_the_outage(errors: list[dict[str, JsonValue]]) -> bool:
+    return len(errors) == 1 and _UNAUTHORIZED_MESSAGE in str(errors[0]["message"])
+
+
 def _errors_mention_the_outage(errors_header: str | None) -> bool:
     if errors_header is None:
         return False
-    errors: Final = _ERRORS.validate_json(errors_header)
-    return len(errors) == 1 and _UNAUTHORIZED_MESSAGE in str(errors[0]["message"])
+    return _mention_the_outage(_ERRORS.validate_json(errors_header))
+
+
+def _fallback_reports(events: tuple[SseEvent, ...]) -> tuple[SseEvent, ...]:
+    return tuple(event for event in events if "litellm_fallback" in event.data)
+
+
+def _reports_the_outage_served_by_the_backup(report: SseEvent) -> bool:
+    fallback: Final = _JSON.validate_python(report.data["litellm_fallback"])
+    return fallback["fallback_model"] == _EXPOSED_OPENAI_BACKUP and _mention_the_outage(
+        _ERRORS.validate_python(fallback["errors"])
+    )
 
 
 @pytest.mark.parametrize("stream", _STREAMING)
@@ -475,6 +497,10 @@ def test_exposed_chat_fallback_reports_the_errors_without_putting_the_flag_on_th
     if not stream:
         assert observed.attempted == "1", observed
         assert _errors_mention_the_outage(observed.errors_header), observed
+        return
+    reports: Final = _fallback_reports(parse_sse(observed.text))
+    assert tuple(report.data.get("object") for report in reports) == ("chat.completion.chunk",), observed
+    assert _reports_the_outage_served_by_the_backup(reports[0]), observed
 
 
 def test_exposed_chat_without_a_fallback_keeps_the_flag_off_the_wire_and_the_errors_header_off(
@@ -563,6 +589,13 @@ def test_exposed_responses_fallback_keeps_the_flag_off_the_wire(exposed: _Expose
     assert observed.served_id == _identity("responses", _EXPOSED_OPENAI_BACKUP, sent.nonce), observed
     assert observed.hit == (_EXPOSED_OPENAI_PRIMARY, _EXPOSED_OPENAI_BACKUP), observed
     assert observed.leaks == (), observed
+    if not stream:
+        return
+    events: Final = parse_sse(observed.text)
+    reports: Final = _fallback_reports(events)
+    assert tuple(report.data.get("type") for report in reports) == (_RESPONSES_FALLBACK_METADATA_EVENT,), observed
+    assert _reports_the_outage_served_by_the_backup(reports[0]), observed
+    assert all("type" in event.data for event in events if event.data), observed
 
 
 @pytest.mark.parametrize("stream", _STREAMING)

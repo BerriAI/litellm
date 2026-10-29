@@ -9907,23 +9907,27 @@ def _get_streaming_fallback_metadata(
     return True, None, fallback_errors
 
 
+_RESPONSES_FALLBACK_METADATA_EVENT_TYPE: Final = "litellm.fallback_metadata"
+
+
 def _format_fallback_metadata_sse_event(
     *,
     fallback_model: str | None,
     fallback_errors: list[dict[str, object]],
-) -> str:
-    import time
-
+    error_state: ResponsesStreamErrorState | None,
+) -> str | bytes:
+    litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
+    if error_state is not None:
+        event: Final = {"type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE, "litellm_fallback": litellm_fallback}
+        error_state.observe_chunk(event)
+        return error_state.mark_emitted(f"data: {json.dumps(event)}\n\n")
     payload: Final = {
         "id": "litellm-fallback-metadata",
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": fallback_model or "",
         "choices": [],
-        "litellm_fallback": {
-            "fallback_model": fallback_model,
-            "errors": fallback_errors,
-        },
+        "litellm_fallback": litellm_fallback,
     }
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -10575,6 +10579,7 @@ async def async_data_generator(
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
                         fallback_errors=fallback_errors,
+                        error_state=error_state,
                     )
                     fallback_metadata_event_sent = True
                 continue
@@ -10628,6 +10633,7 @@ async def async_data_generator(
                 yield _format_fallback_metadata_sse_event(
                     fallback_model=fallback_model_from_metadata,
                     fallback_errors=fallback_errors,
+                    error_state=error_state,
                 )
                 fallback_metadata_event_sent = True
 
