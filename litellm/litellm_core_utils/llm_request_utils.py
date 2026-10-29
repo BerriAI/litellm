@@ -1,5 +1,9 @@
+import datetime
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Final, cast
+
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -163,8 +167,29 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     return [model for _, _, model in sorted(ranked_rows, key=lambda row: row[:2])[:n]]
 
 
+class _CostMapDeprecation(TypedDict):
+    deprecation_date: NotRequired[ReadOnly[object]]
+
+
+_COST_MAP_DEPRECATION: Final = TypeAdapter(_CostMapDeprecation)
+
+
+def _is_past_deprecation_date(model: str) -> bool:
+    deprecation_date: Final = _COST_MAP_DEPRECATION.validate_python(
+        litellm.model_cost.get(model) or {}  # pyright: ignore[reportUnknownMemberType]  # the cost map is untyped JSON
+    ).get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.datetime.now(datetime.timezone.utc).date()
+    except ValueError:
+        return False
+
+
 def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float]]:
     for model in models:
+        if _is_past_deprecation_date(model):
+            continue
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:

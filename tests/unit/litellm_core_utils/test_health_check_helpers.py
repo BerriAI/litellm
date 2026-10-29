@@ -1533,6 +1533,8 @@ def wildcard_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
         ("bedrock", "converse/anthropic.*", ("bedrock/converse/anthropic.claude-fixture",)),
         ("bedrock", "converse/*", ("bedrock/converse/meta.llama-fixture", "bedrock/converse/anthropic.claude-fixture")),
         ("bedrock", "agent/anthropic.*", ()),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*", ()),
+        ("bedrock", "converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*", ()),
         ("cloudflare", "@cf/*", ("cloudflare/@cf/meta/fixture-chat",)),
         ("vertex_ai", "claude-*", ("vertex_ai/claude-fixture@default",)),
         ("vertex_ai", "meta/*", ()),
@@ -1593,11 +1595,15 @@ async def test_partial_wildcard_health_check_probes_and_falls_back_only_within_t
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("wildcard_catalog")
-async def test_partial_wildcard_health_check_without_a_served_cost_map_model_names_health_check_model(
+async def test_partial_wildcard_health_check_without_a_served_cost_map_model_probes_the_provider_cheapest_chat_model(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
+        side_effect=_fail_first_databricks_claude_probe
+    )
+
     response: Final = await ahealth_check(
         {
             "model": "databricks/databricks-llama-*",
@@ -1607,9 +1613,27 @@ async def test_partial_wildcard_health_check_without_a_served_cost_map_model_nam
         }
     )
 
-    assert "databricks-llama-*" in response["error"]
-    assert "model_info.health_check_model" in response["error"]
-    assert not respx_mock.calls
+    assert json.loads(upstream.calls[0].request.content)["model"] == "databricks-cheap-chat"
+    assert response == {}
+
+
+@pytest.mark.asyncio
+async def test_partial_wildcard_health_check_on_a_provider_without_cost_map_chat_models_names_health_check_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setitem(litellm.models_by_provider, "databricks", [])
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-llama-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert "model_info.health_check_model" in response["error"], response["error"]
+    assert respx_mock.calls.call_count == 0
 
 
 @pytest.mark.asyncio

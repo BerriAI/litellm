@@ -149,6 +149,24 @@ def deepseek_rows_whose_cheapest_ids_route_elsewhere(monkeypatch: pytest.MonkeyP
         "deepseek/fake-cheapest-embedding": {"input_cost_per_token": 1e-13, "mode": "embedding"},
         "openai/fake-free-chat": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0, "mode": "chat"},
         "deepseek/fake-cheap-chat": {"input_cost_per_token": 1e-12, "output_cost_per_token": 1e-12, "mode": "chat"},
+        "deepseek/fake-retired-chat": {
+            "input_cost_per_token": 1e-14,
+            "output_cost_per_token": 1e-14,
+            "mode": "chat",
+            "deprecation_date": "2000-01-01",
+        },
+        "deepseek/fake-retiring-chat": {
+            "input_cost_per_token": 2e-12,
+            "output_cost_per_token": 2e-12,
+            "mode": "chat",
+            "deprecation_date": "2999-01-01",
+        },
+        "deepseek/fake-misdated-chat": {
+            "input_cost_per_token": 2.5e-12,
+            "output_cost_per_token": 2.5e-12,
+            "mode": "chat",
+            "deprecation_date": "next spring",
+        },
         "fake-free-chat-without-provider": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0, "mode": "chat"},
     }
     for name, row in rows.items():
@@ -156,11 +174,13 @@ def deepseek_rows_whose_cheapest_ids_route_elsewhere(monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, tuple(rows))
 
 
-def test_pick_cheapest_chat_models_prefers_provider_routed_ids_and_skips_ids_routed_elsewhere(
+def test_pick_cheapest_chat_models_prefers_provider_routed_ids_and_skips_ids_routed_elsewhere_or_retired(
     deepseek_rows_whose_cheapest_ids_route_elsewhere: None,
 ) -> None:
     assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=10) == [
         "deepseek/fake-cheap-chat",
+        "deepseek/fake-retiring-chat",
+        "deepseek/fake-misdated-chat",
         "deepseek/fake-pricey-chat",
         "fake-free-chat-without-provider",
     ]

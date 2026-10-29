@@ -30,6 +30,7 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
 WILDCARD_HEALTH_CHECK_MODEL_COUNT: Final = 3
+AWS_ARN_PREFIX: Final = "arn:"
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
 )
@@ -102,6 +103,8 @@ def _provider_base_model(custom_llm_provider: str, model: str) -> str | None:
 
 
 def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segment: str) -> bool:
+    if segment.startswith(AWS_ARN_PREFIX):
+        return False
     base_model: Final = _provider_base_model(custom_llm_provider, f"{segment}/{model_after_segment}")
     return base_model is not None and not base_model.startswith(f"{segment}/")
 
@@ -142,12 +145,20 @@ class HealthCheckHelpers:
         litellm_logging_obj: "Logging",
     ) -> dict:
         from litellm import acompletion
+        from litellm.litellm_core_utils.health_check_utils import STR_TUPLE
+        from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
 
-        probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
+        probe_models: Final = wildcard_health_check_models(
+            wildcard=model, custom_llm_provider=custom_llm_provider
+        ) or STR_TUPLE.validate_python(
+            pick_cheapest_chat_models_from_llm_provider(
+                custom_llm_provider=custom_llm_provider, n=WILDCARD_HEALTH_CHECK_MODEL_COUNT
+            )
+        )
         if len(probe_models) == 0:
             raise Exception(
-                f"Unable to health check wildcard model {model} for provider {custom_llm_provider}: no chat model "
-                "in the cost map matches it. Set model_info.health_check_model to a model this wildcard serves"
+                f"Unable to health check wildcard model {model} for provider {custom_llm_provider}: the cost map has "
+                "no chat model for this provider. Set model_info.health_check_model to a model this wildcard serves"
             )
         model_params["model"] = probe_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
