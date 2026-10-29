@@ -11,11 +11,11 @@ where
     C: redis::ConnectionLike + Send + 'static,
 {
     fn sync_ping(&self) -> Result<bool, Error> {
-        self.execute(|connection| connection.ping().map_err(|_| Error::Unavailable))
+        self.execute(|connection| connection.ping().map_err(Error::unavailable))
     }
 
     async fn ping(&self) -> Result<bool, Error> {
-        self.run(|connection| connection.ping().map_err(|_| Error::Unavailable))
+        self.run(|connection| connection.ping().map_err(Error::unavailable))
             .await
     }
 }
@@ -33,9 +33,10 @@ where
             RedisTopology::Cluster { .. } => "Redis Cluster",
         };
         let ping = self
-            .run(|connection| Ok(connection.ping().map_err(|error| error.to_string())))
+            .run(|connection| Ok(connection.ping().map_err(Error::unavailable)))
             .await
-            .unwrap_or_else(|error| Err(error.to_string()));
+            .and_then(|ping| ping)
+            .map_err(|error| litellm_error::Report::new(&error).to_string());
         Ok(match ping {
             Ok(true) => CacheConnectionResult {
                 status: CacheConnectionStatus::Success,

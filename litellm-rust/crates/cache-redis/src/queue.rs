@@ -29,7 +29,7 @@ where
         ttl: Option<Duration>,
     ) -> Result<Self::SetResult, Error> {
         if values.is_empty() {
-            return Err(Error::InvalidEntry);
+            return Err(Error::InvalidEntry(None));
         }
         let key = self.namespaced_key(key);
         let ttl = self.ttl_or_default(ttl);
@@ -58,7 +58,7 @@ where
 
     async fn async_rpush(&self, key: &str, values: Vec<Self::QueueValue>) -> Result<usize, Error> {
         if values.is_empty() {
-            return Err(Error::InvalidEntry);
+            return Err(Error::InvalidEntry(None));
         }
         let key = self.namespaced_key(key);
         self.run(move |connection| {
@@ -66,7 +66,7 @@ where
                 .arg(key)
                 .arg(values)
                 .query(connection)
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })
         .await
     }
@@ -78,7 +78,7 @@ where
         max_len: usize,
     ) -> Result<usize, Error> {
         if values.is_empty() {
-            return Err(Error::InvalidEntry);
+            return Err(Error::InvalidEntry(None));
         }
         let key = self.namespaced_key(key);
         let start = i64::try_from(max_len).map_or(i64::MIN, |max_len| -max_len);
@@ -108,7 +108,7 @@ where
         let mut pipeline = redis::pipe();
         for operation in operations {
             if operation.values.is_empty() {
-                return Err(Error::InvalidEntry);
+                return Err(Error::InvalidEntry(None));
             }
             pipeline
                 .cmd("RPUSH")
@@ -130,7 +130,7 @@ where
             .run(move |connection| {
                 command
                     .query::<redis::Value>(connection)
-                    .map_err(|_| Error::Unavailable)
+                    .map_err(Error::unavailable)
             })
             .await?;
         lpop_result(value, count.is_some())
@@ -182,7 +182,7 @@ fn redis_bytes(value: redis::Value) -> Result<Vec<u8>, Error> {
     match value {
         redis::Value::BulkString(bytes) => Ok(bytes),
         redis::Value::SimpleString(text) => Ok(text.into_bytes()),
-        _ => Err(Error::InvalidEntry),
+        _ => Err(Error::InvalidEntry(None)),
     }
 }
 
@@ -221,6 +221,6 @@ fn lpop_result(value: redis::Value, multiple: bool) -> Result<RedisLpopResult, E
             .collect::<Result<Vec<_>, _>>()
             .map(RedisLpopResult::Values),
         value if !multiple => redis_bytes(value).map(RedisLpopResult::Value),
-        _ => Err(Error::InvalidEntry),
+        _ => Err(Error::InvalidEntry(None)),
     }
 }
