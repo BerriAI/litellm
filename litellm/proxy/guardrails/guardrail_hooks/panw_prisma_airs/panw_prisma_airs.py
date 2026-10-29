@@ -30,6 +30,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
     role_out_of_guardrail_scope,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -37,12 +38,16 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.llms.openai.responses.guardrail_translation.handler import scannable_instructions
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    scannable_instructions,
+    tool_output_texts,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
+from litellm.responses.litellm_completion_transformation.transformation import TOOL_CALL_OUTPUT_ITEM_TYPES
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
@@ -112,12 +117,16 @@ class _ResponsesInputItem(LiteLLMBaseModel):
     type: str | None = None
     role: str | None = None
     content: str | tuple[_ResponsesContentPart, ...] | None = None
+    output: object = None
+    call_id: object = None
 
-    def text_count(self, *, skip_system: bool) -> int:
-        if role_out_of_guardrail_scope(
-            (self.role or "").lower(), skip_system_message=skip_system, skip_tool_message=False
-        ):
+    def text_count(self, *, skip_system: bool, skip_tool: bool) -> int:
+        is_tool_output: Final = self.type in TOOL_CALL_OUTPUT_ITEM_TYPES
+        role: Final = "tool" if is_tool_output else (self.role or "").lower()
+        if role_out_of_guardrail_scope(role, skip_system_message=skip_system, skip_tool_message=skip_tool):
             return 0
+        if is_tool_output:
+            return len(tool_output_texts(self))
         if isinstance(self.content, str):
             return 1
         if self.content is None:
@@ -1692,13 +1701,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         request_data: Mapping[str, object],
         *,
         skip_system: bool,
+        skip_tool: bool,
     ) -> frozenset[int] | None:
         """Return the ``texts`` indices flattened from Responses ``reasoning`` input items.
 
         The Responses translation handler gives those model-authored items the default
         ``user`` role, so the latest-turn selection must not mistake one for a human turn.
         Empty for requests without a Responses ``input`` item list; None when the raw items
-        (after the leading ``instructions`` text, both minus whatever ``skip_system`` drops)
+        (after the leading ``instructions`` text, both minus whatever ``skip_system`` and ``skip_tool`` drop)
         do not account for every entry of ``texts``.
         """
         try:
@@ -1708,7 +1718,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if not isinstance(raw_input, tuple):
             return frozenset()
         offset: Final = 0 if scannable_instructions(request_data, skip_system=skip_system) is None else 1
-        counts: Final = tuple(item.text_count(skip_system=skip_system) for item in raw_input)
+        counts: Final = tuple(item.text_count(skip_system=skip_system, skip_tool=skip_tool) for item in raw_input)
         if offset + sum(counts) != len(texts):
             return None
         starts: Final = itertools.accumulate(counts, initial=offset)
@@ -1738,7 +1748,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if sources is None:
             return None
         reasoning: Final = self._reasoning_item_text_indices(
-            texts, request_data, skip_system=effective_skip_system_message_for_guardrail(self)
+            texts,
+            request_data,
+            skip_system=effective_skip_system_message_for_guardrail(self),
+            skip_tool=effective_skip_tool_message_for_guardrail(self),
         )
         if reasoning is None:
             return None
