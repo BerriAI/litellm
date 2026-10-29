@@ -1,10 +1,14 @@
+import json
 import logging
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+import respx
 
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
@@ -20,6 +24,15 @@ from litellm.llms.github_copilot.common_utils import (
     get_copilot_api_base,
     get_copilot_default_headers,
 )
+
+TRUNCATED_UTF_16: Final = b"\xff\xfe\x00\xd8"
+
+
+@pytest.fixture
+def logged_in_token_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "access-token").write_text("gho_logged_in")
+    return tmp_path
 
 
 class TestGitHubCopilotAuthenticator:
@@ -250,13 +263,9 @@ class TestGitHubCopilotAuthenticator:
         assert str(uuid.UUID(request_headers["x-request-id"])) == request_headers["x-request-id"]
         mock_client.get.assert_not_called()
 
-    def test_get_access_token_from_file(self, authenticator):
+    def test_get_access_token_from_file(self, logged_in_token_dir: Path) -> None:
         """Test retrieving an access token from a file."""
-        mock_token = "mock-access-token"
-
-        with patch("builtins.open", mock_open(read_data=mock_token)):
-            token = authenticator.get_access_token()
-            assert token == mock_token
+        assert Authenticator().get_access_token() == "gho_logged_in"
 
     def test_get_access_token_login(self, authenticator):
         mock_token = "mock-access-token"
@@ -314,6 +323,27 @@ class TestGitHubCopilotAuthenticator:
         assert authenticator.access_token_file not in str(exc.value)
         mock_login.assert_not_called()
 
+    @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-8-sig"])
+    def test_saved_access_token_in_another_encoding_is_sent_to_copilot(
+        self, logged_in_token_dir: Path, encoding: str
+    ) -> None:
+        """An access-token file a Windows editor saved as UTF-16 or with a BOM is still the token Copilot gets."""
+        (logged_in_token_dir / "access-token").write_bytes("gho_logged_in\n".encode(encoding))
+
+        with respx.mock:
+            assert Authenticator().get_api_key() == "gho_logged_in"
+
+    def test_undecodable_access_token_is_refused_like_a_missing_one(self, logged_in_token_dir: Path) -> None:
+        """A proxy worker gets the login hint for an access-token file it cannot decode, and the file is kept."""
+        access_token_file: Final = logged_in_token_dir / "access-token"
+        access_token_file.write_bytes(TRUNCATED_UTF_16)
+
+        with ThreadPoolExecutor(max_workers=1) as pool, pytest.raises(GetAccessTokenError) as exc:
+            pool.submit(Authenticator().get_access_token).result()
+
+        assert "worker thread" in str(exc.value)
+        assert access_token_file.read_bytes() == TRUNCATED_UTF_16
+
     def test_get_access_token_failure(self, authenticator):
         """Test that an exception is raised after multiple login failures."""
         with (
@@ -336,6 +366,28 @@ class TestGitHubCopilotAuthenticator:
         ):
             with pytest.raises(GetAPIKeyError, match="Failed to get OAuth access token"):
                 authenticator.get_api_key()
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            b"[]",
+            json.dumps({"token": "tid=abc", "expires_at": "soon"}).encode(),
+            TRUNCATED_UTF_16,
+            json.dumps({"token": "tid=abc", "expires_at": 4102444800, "endpoints": []}).encode(),
+        ],
+        ids=["json-list", "text-expires-at", "truncated-utf-16", "list-endpoints-beside-live-key"],
+    )
+    def test_get_api_key_malformed_api_key_file_is_ignored_like_a_missing_one(
+        self, logged_in_token_dir: Path, malformed: bytes
+    ) -> None:
+        """A leftover api-key.json in any shape never replaces the access token and is left for inspection."""
+        api_key_file: Final = logged_in_token_dir / "api-key.json"
+        api_key_file.write_bytes(malformed)
+
+        with respx.mock:
+            assert Authenticator().get_api_key() == "gho_logged_in"
+
+        assert api_key_file.read_bytes() == malformed
 
     def test_get_device_code(self, authenticator, mock_http_client):
         """Test getting a device code."""

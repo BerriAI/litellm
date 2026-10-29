@@ -437,7 +437,6 @@ def get_llm_provider(
             model in litellm.open_ai_chat_completion_models
             or "ft:gpt-3.5-turbo" in model
             or "ft:gpt-4" in model  # catches ft:gpt-4-0613, ft:gpt-4o
-            or model in litellm.openai_image_generation_models
             or model.startswith("gpt-image")
             or model in litellm.openai_video_generation_models
         ):
@@ -795,6 +794,13 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.XAIChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "bigmodel":
+        from litellm.llms.bigmodel.common_utils import get_bigmodel_api_key, get_bigmodel_url
+
+        (
+            api_base,  # rebind-ok: existing provider-resolution pipeline resolves the API base in place
+            dynamic_api_key,  # rebind-ok: existing provider-resolution pipeline resolves the API key in place
+        ) = get_bigmodel_url(api_base, "chat"), get_bigmodel_api_key(api_key)
     elif custom_llm_provider == "zai":
         (
             api_base,

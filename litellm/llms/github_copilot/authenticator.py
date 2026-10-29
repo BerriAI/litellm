@@ -20,6 +20,12 @@ from .common_utils import (
 from .github_host import DEFAULT_GITHUB_ACCESS_TOKEN_URL, DEFAULT_GITHUB_CLIENT_ID, DEFAULT_GITHUB_DEVICE_CODE_URL
 
 
+def _read_token_file(path: str) -> str:
+    with open(path, "rb") as f:
+        raw: Final = f.read()
+    return raw.decode(json.detect_encoding(raw))
+
+
 @with_config(ConfigDict(extra="allow", strict=True))
 class _DeviceCode(TypedDict):
     device_code: ReadOnly[str]
@@ -54,9 +60,11 @@ class Authenticator:
 
     def stored_access_token(self) -> str | None:
         try:
-            with open(self.access_token_file, "r") as f:
-                return f.read().strip() or None
+            return _read_token_file(self.access_token_file).strip() or None
         except OSError:
+            return None
+        except ValueError as e:
+            verbose_logger.warning("Ignoring %s, not a text access token: %s", self.access_token_file, e)
             return None
 
     def get_access_token(self) -> str:
@@ -112,7 +120,7 @@ class Authenticator:
             raise GetAPIKeyError(
                 message=f"Failed to get OAuth access token: {e!s}",
                 status_code=401,
-            )
+            ) from e
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""

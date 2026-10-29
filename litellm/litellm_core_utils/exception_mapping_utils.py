@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.bug_report import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
+from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -2036,14 +2037,6 @@ def _map_azure_exception(
             litellm_debug_info=extra_information,
             response=getattr(original_exception, "response", None),
         )
-    elif "This model's maximum context length is" in error_str:
-        raise ContextWindowExceededError(
-            message=f"AzureException ContextWindowExceededError - {message}",
-            llm_provider="azure",
-            model=model,
-            litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
-        )
     elif "DeploymentNotFound" in error_str:
         raise NotFoundError(
             message=f"AzureException NotFoundError - {message}",
@@ -2079,6 +2072,18 @@ def _map_azure_exception(
         )
         raise BadRequestError(
             message=helpful_message,
+            llm_provider="azure",
+            model=model,
+            litellm_debug_info=extra_information,
+            response=getattr(original_exception, "response", None),
+            body=getattr(original_exception, "body", None),
+        )
+    elif getattr(original_exception, "status_code", None) in (None, 400) and (
+        azure_error_code == "context_length_exceeded"
+        or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
+    ):
+        raise ContextWindowExceededError(
+            message=f"AzureException ContextWindowExceededError - {message}",
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
@@ -2767,6 +2772,8 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
+            if custom_llm_provider == "bigmodel":
+                raise_bigmodel_business_error(model, f"{exception_provider} - {error_str}", original_exception)  # pyright: ignore[reportUnknownArgumentType]  # exception_type takes untyped parameters
             if custom_llm_provider == "openrouter":
                 _map_openrouter_exception(
                     model=model,

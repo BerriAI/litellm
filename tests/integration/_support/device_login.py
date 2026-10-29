@@ -394,4 +394,7 @@ def write_copilot_access(directory: Path, access_token: str) -> None:
 def clear_tokens(*directories: Path) -> None:
     for directory in directories:
         for path in directory.iterdir():
-            path.unlink()
+            if path.is_dir():
+                path.rmdir()
+            else:
+                path.unlink()

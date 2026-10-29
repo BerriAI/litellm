@@ -37,6 +37,7 @@ import {
 } from "./tier_rows";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { routingModelGroups } from "./auto_setup";
 import ClassificationMethodConfig, { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
 import ComplexityRouterAdvancedSections from "./ComplexityRouterAdvancedSections";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
@@ -657,13 +658,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   );
   const classifierEffortOptionsByModel = classifierEffortOptionsForModels(modelInfo);
 
-  // Embedding models can't serve a chat-completion role, so they're excluded here.
-  const modelOptions = modelInfo
-    .filter((model) => model.mode !== "embedding")
-    .map((model) => ({
-      value: model.model_group,
-      label: model.model_group,
-    }));
+  const modelOptions = routingModelGroups(modelInfo).map((model) => ({
+    value: model.model_group,
+    label: model.model_group,
+  }));
 
   const handleTierModelParamChange = (tier: string, model: string, change: TierModelParamChange) =>
     onChange({
