@@ -18,6 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gated_strips, strip_beta_gated_thinking
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
@@ -1830,11 +1831,14 @@ class AmazonConverseConfig(BaseConfig):
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
         header_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
-        client_beta_list: Final = header_beta_list or sorted(
-            active_beta_values(
-                {},
-                additional_request_params.get("anthropic_beta"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
-            )
+        client_beta_list: Final = header_beta_list or filter_and_transform_beta_headers(
+            sorted(
+                active_beta_values(
+                    {},
+                    additional_request_params.get("anthropic_beta"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # additional_request_params is a bare dict
+                )
+            ),
+            provider="bedrock_converse",
         )
         eager_beta: Final = (
             (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)

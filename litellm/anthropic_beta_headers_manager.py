@@ -242,7 +242,10 @@ def get_provider_name(provider: str) -> str:
 
 
 def has_beta_headers_config(provider: str) -> bool:
-    return get_provider_name(provider) in _load_beta_headers_config()
+    config: Final = _bundled_beta_headers_config()
+    aliases: Final = config.get("provider_aliases", {})
+    canonical_provider: Final = (aliases.get(provider) if isinstance(aliases, Mapping) else None) or provider
+    return canonical_provider in config
 
 
 def filter_and_transform_beta_headers(

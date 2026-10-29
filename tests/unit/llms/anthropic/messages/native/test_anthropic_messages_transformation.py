@@ -7,9 +7,11 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 from pydantic import JsonValue
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -521,3 +523,29 @@ def test_a_provider_without_a_beta_headers_row_forwards_beta_gated_fields_under_
     )
     assert request["thinking"] == thinking
     assert request["messages"][-1]["output_config"] == {"effort": "low"}
+
+
+def test_a_first_party_messages_request_never_fetches_the_remote_beta_headers_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+
+    with respx.mock(assert_all_called=False) as router:
+        remote_config: Final = router.get(litellm.anthropic_beta_headers_url).mock(
+            return_value=httpx.Response(200, json={})
+        )
+        request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-opus-4-8",
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "be terse", "clear_at": "end_turn"},
+                {"role": "user", "content": "go"},
+            ],
+            anthropic_messages_optional_request_params={"max_tokens": 64},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+    assert request["messages"][1] == {"role": "system", "content": "be terse"}
+    assert not remote_config.called

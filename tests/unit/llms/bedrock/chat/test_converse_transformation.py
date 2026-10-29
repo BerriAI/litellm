@@ -10884,6 +10884,19 @@ def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carri
     }
 
 
+def test_converse_drops_body_betas_the_bedrock_converse_row_rejects_when_adding_thinking_betas(
+    local_beta_headers_config: None,
+) -> None:
+    fields: Final = _converse_bound_thinking_request(
+        None, body_betas=("per-turn-control-2026-07-01", "context-1m-2025-08-07")
+    )
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]
+
+
 def test_converse_sends_only_the_header_betas_when_header_and_body_both_carry_betas(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
