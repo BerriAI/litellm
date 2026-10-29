@@ -63,3 +63,13 @@ def test_chatgpt_without_a_login_resolves_to_no_account(tmp_path: Path, monkeypa
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(empty_dir))
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
     assert resolve_subscription_account_id("chatgpt", {"model": "chatgpt/gpt-5.6-terra"}) is None
+
+
+def test_resolving_an_account_leaves_the_login_file_untouched(signed_in_chatgpt_token_dir: Path) -> None:
+    login: Final = signed_in_chatgpt_token_dir / "no-saved-account" / "auth.json"
+    login.parent.mkdir(parents=True)
+    saved: Final = json.dumps({"access_token": _access_token_for("acct-derived"), "refresh_token": "rt-current"})
+    login.write_text(saved)
+
+    assert resolve_subscription_account_id("chatgpt", {"chatgpt_auth_file": str(login)}) == "acct-derived"
+    assert login.read_text() == saved

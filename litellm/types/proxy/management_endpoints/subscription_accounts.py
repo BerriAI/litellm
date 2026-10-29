@@ -13,7 +13,7 @@ class SubscriptionAccountFeeRequest(BaseModel):
 
     custom_llm_provider: str = Field(min_length=1)
     account_id: str = Field(min_length=1)
-    monthly_fee: float = Field(gt=0)
+    monthly_fee: float = Field(gt=0, allow_inf_nan=False)
     currency: str = Field(pattern=CURRENCY_CODE_PATTERN)
     billing_period_start: date
     label: str | None = None
@@ -23,7 +23,7 @@ class UpdateSubscriptionAccountFeeRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     subscription_account_id: str
-    monthly_fee: float | None = Field(default=None, gt=0)
+    monthly_fee: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     currency: str | None = Field(default=None, pattern=CURRENCY_CODE_PATTERN)
     billing_period_start: date | None = None
     label: str | None = None

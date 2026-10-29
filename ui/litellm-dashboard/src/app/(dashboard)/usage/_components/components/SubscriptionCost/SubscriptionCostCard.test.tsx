@@ -103,7 +103,19 @@ describe("SubscriptionCostCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(onEditFee).toHaveBeenCalledWith(covered);
+  });
+
+  it("removes a fee only after the admin confirms it", async () => {
+    const covered = account({ fee: fee(), billing_periods: [], fixed_cost: 0 });
+    const { onRemoveFee } = renderCard([covered]);
+
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onRemoveFee).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(onRemoveFee).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove fee" }));
     expect(onRemoveFee).toHaveBeenCalledWith(covered);
   });
 

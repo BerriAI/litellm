@@ -7,9 +7,11 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
-from typing import Annotated, Final, TypeAlias
+from itertools import chain
+from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import TypeAdapter
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, SUBSCRIPTION_BACKED_PROVIDERS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
@@ -38,6 +40,9 @@ from litellm.types.proxy.management_endpoints.subscription_accounts import (
 )
 from litellm.types.router import DeploymentTypedDict
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 router: Final = APIRouter(prefix="/subscription_accounts", tags=["subscription accounts"])
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 
@@ -50,6 +55,7 @@ class SubscriptionDeployment:
 
 
 AccountIdResolver: TypeAlias = Callable[[str, Mapping[str, object]], str | None]
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _declared_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -61,6 +67,15 @@ def _declared_provider(litellm_params: Mapping[str, object]) -> str | None:
     )
 
 
+def _model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
+def _public_model_name(entry: DeploymentTypedDict) -> str:
+    team_public_model_name: Final = _model_info(entry).get("team_public_model_name")
+    return team_public_model_name if isinstance(team_public_model_name, str) else entry["model_name"]
+
+
 def _subscription_deployment(
     entry: DeploymentTypedDict, account_id_resolver: AccountIdResolver
 ) -> SubscriptionDeployment | None:
@@ -69,7 +84,7 @@ def _subscription_deployment(
     if provider is None or provider not in SUBSCRIPTION_BACKED_PROVIDERS:
         return None
     return SubscriptionDeployment(
-        model_name=entry["model_name"],
+        model_name=_public_model_name(entry),
         custom_llm_provider=provider,
         account_id=account_id_resolver(provider, litellm_params),
     )
@@ -82,12 +97,20 @@ def subscription_deployments_from_model_list(
     return tuple(candidate for candidate in candidates if candidate is not None)
 
 
+def subscription_deployments_of_router(
+    llm_router: "Router | None", account_id_resolver: AccountIdResolver
+) -> tuple[SubscriptionDeployment, ...]:
+    if llm_router is None:
+        return ()
+    indexed_names: Final = tuple(llm_router.model_name_to_deployment_indices)
+    deployments: Final = chain.from_iterable(llm_router.deployments_named(name) or () for name in indexed_names)
+    return subscription_deployments_from_model_list(deployments, account_id_resolver)
+
+
 def get_subscription_deployments() -> tuple[SubscriptionDeployment, ...]:
     from litellm.proxy.proxy_server import llm_router
 
-    if llm_router is None:
-        return ()
-    return subscription_deployments_from_model_list(llm_router.get_model_list() or [], resolve_subscription_account_id)
+    return subscription_deployments_of_router(llm_router, resolve_subscription_account_id)
 
 
 def get_subscription_account_repository() -> SubscriptionAccountStore:
@@ -207,6 +230,8 @@ async def get_subscription_usage(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "end_date must not be before start_date"}
         )
+    if not deployments:
+        return build_subscription_usage((), (), start, end)
     return build_subscription_usage(deployments, await repository.list_all(), start, end)
 
 

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from litellm.models.subscription_account import LiteLLM_SubscriptionAccountTable
 from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles, UserAPIKeyAuth
@@ -20,6 +21,12 @@ from litellm.proxy.management_endpoints.subscription_accounts import (
     get_subscription_deployments,
     router,
     subscription_deployments_from_model_list,
+    subscription_deployments_of_router,
+)
+from litellm.router import Router
+from litellm.types.proxy.management_endpoints.subscription_accounts import (
+    SubscriptionAccountFeeRequest,
+    UpdateSubscriptionAccountFeeRequest,
 )
 from litellm.repositories.subscription_account_repository import (
     DuplicateSubscriptionAccount,
@@ -271,6 +278,33 @@ def test_rejects_malformed_fee_fields(client, payload):
     assert store.rows == {}
 
 
+def test_rejects_an_infinite_monthly_fee():
+    with pytest.raises(ValidationError):
+        SubscriptionAccountFeeRequest.model_validate({**_TEST_FEE, "monthly_fee": float("inf")})
+    with pytest.raises(ValidationError):
+        UpdateSubscriptionAccountFeeRequest.model_validate(
+            {"subscription_account_id": "fee-1", "monthly_fee": float("inf")}
+        )
+
+
+class _MissingTableStore:
+    async def list_all(self) -> list[LiteLLM_SubscriptionAccountTable]:
+        raise RuntimeError('relation "LiteLLM_SubscriptionAccountTable" does not exist')
+
+
+def test_proxy_without_subscription_deployments_answers_without_reading_fees():
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_subscription_account_repository] = _MissingTableStore
+    app.dependency_overrides[get_subscription_deployments] = lambda: ()
+    app.dependency_overrides[user_api_key_auth] = _resolve_auth
+
+    with TestClient(app) as test_client:
+        body = _usage(test_client, "2026-10-01", "2026-10-07")
+
+    assert body["accounts"] == []
+
+
 def test_usage_rejects_a_malformed_or_inverted_range(client):
     test_client, _ = client
 
@@ -368,6 +402,24 @@ def test_deployments_take_the_account_of_their_own_login():
         ("chatgpt", "chatgpt/gpt-5.6-sol"),
         ("chatgpt", "chatgpt/gpt-5.6-luna"),
     ]
+
+
+def test_deployments_list_each_router_deployment_once_by_the_name_callers_use():
+    llm_router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-5.6-sol", "litellm_params": {"model": "chatgpt/gpt-5.6-sol"}},
+            {
+                "model_name": "model_name_team-1_7f3a",
+                "litellm_params": {"model": "chatgpt/gpt-5.6-terra"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "team-terra"},
+            },
+        ],
+        model_group_alias={"sol-alias": "gpt-5.6-sol"},
+    )
+
+    deployments = subscription_deployments_of_router(llm_router, lambda provider, litellm_params: _ACCOUNT)
+
+    assert sorted(deployment.model_name for deployment in deployments) == ["gpt-5.6-sol", "team-terra"]
 
 
 @pytest.mark.parametrize(

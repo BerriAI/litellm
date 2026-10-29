@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 -- CreateTable
 CREATE TABLE IF NOT EXISTS "LiteLLM_SubscriptionAccountTable" (
     "subscription_account_id" TEXT NOT NULL,

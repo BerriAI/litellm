@@ -4,6 +4,17 @@ import React from "react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { DataTable } from "@/components/shared/DataTable";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,7 +46,7 @@ const AccountCell = ({ account }: { account: SubscriptionAccountUsage }) => {
   }
   return (
     <div className="flex flex-col">
-      <span className="font-mono text-xs">{account.account_id}</span>
+      <span className="font-mono text-xs break-all whitespace-normal">{account.account_id}</span>
       {account.fee?.label && <span className="text-xs text-muted-foreground">{account.fee.label}</span>}
     </div>
   );
@@ -60,9 +71,24 @@ const ActionsCell = ({
       <Button variant="outline" size="xs" onClick={() => onEditFee(account)}>
         Edit
       </Button>
-      <Button variant="outline" size="xs" onClick={() => onRemoveFee(account)}>
-        Remove
-      </Button>
+      <AlertDialog>
+        <AlertDialogTrigger render={<Button variant="outline" size="xs" />}>Remove</AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this monthly fee?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {account.account_id} goes back to &quot;Fixed cost not tracked&quot;. Its requests stay included in the
+              subscription
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => onRemoveFee(account)}>
+              Remove fee
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
@@ -72,8 +98,8 @@ const baseColumns: ColumnDef<SubscriptionAccountUsage>[] = [
     header: "Provider",
     accessorKey: "custom_llm_provider",
     cell: ({ row }) => (
-      <div className="flex items-center space-x-2">
-        <ProviderLogo provider={row.original.custom_llm_provider} className="size-4" />
+      <div className="flex items-center gap-2 whitespace-nowrap">
+        <ProviderLogo provider={row.original.custom_llm_provider} className="size-4 shrink-0" />
         <span>{row.original.custom_llm_provider}</span>
       </div>
     ),
