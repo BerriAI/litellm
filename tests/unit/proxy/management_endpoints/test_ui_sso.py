@@ -4057,12 +4057,12 @@ class TestCLIKeyRegenerationFlow:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("posted_team_id", "chosen_team_id"),
-        [("team-claude", "team-claude"), ("", None)],
+        ("posted_team_id", "chosen_team_id", "stored_teams"),
+        [("team-claude", "team-claude", ["team-claude", "team-ops"]), ("", None, ["team-ops", "team-claude"])],
         ids=["chosen", "not_posted"],
     )
     async def test_cli_sso_complete_records_the_team_chosen_in_the_browser(
-        self, posted_team_id: str, chosen_team_id: str | None
+        self, posted_team_id: str, chosen_team_id: str | None, stored_teams: list[str]
     ):
         from litellm.proxy.management_endpoints.ui_sso import (
             CLI_SSO_BROWSER_TEAM_CHOICE,
@@ -4094,6 +4094,7 @@ class TestCLIKeyRegenerationFlow:
         stored: Final = mock_cache.set_cache.call_args.kwargs["value"]
         assert stored["user_code_verified"] is True
         assert stored[CLI_SSO_CHOSEN_TEAM_ID] == chosen_team_id
+        assert stored["session_data"]["teams"] == stored_teams
 
     @pytest.mark.asyncio
     async def test_cli_sso_complete_refuses_a_team_the_user_is_not_on(self):

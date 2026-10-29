@@ -846,7 +846,19 @@ async def cli_sso_complete(request: Request, login_id: str):
     _set_cli_sso_flow(
         login_id=login_id,
         cache=cli_sso_session_cache,
-        flow={**flow, "user_code_verified": True, CLI_SSO_CHOSEN_TEAM_ID: chosen_team_id},
+        flow={
+            **flow,
+            "user_code_verified": True,
+            CLI_SSO_CHOSEN_TEAM_ID: chosen_team_id,
+            "session_data": (
+                flow["session_data"]
+                if chosen_team_id is None
+                else {
+                    **flow["session_data"],
+                    "teams": [chosen_team_id, *(team for team in team_choice_flow.teams if team != chosen_team_id)],
+                }
+            ),
+        },
     )
 
     html_content: Final = render_cli_sso_success_page()

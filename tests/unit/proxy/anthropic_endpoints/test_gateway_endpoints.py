@@ -446,7 +446,10 @@ def test_token_refuses_a_browser_choice_that_is_no_longer_one_of_the_session_tea
     with _gateway_env() as (client, cache):
         resp: Final = _request_token_after_browser_choice(client, cache, "team-gone")
     assert resp.status_code == 400
-    assert resp.json()["error"] == "invalid_grant"
+    assert resp.json() == {
+        "error": "invalid_grant",
+        "error_description": "The team picked at sign-in is no longer one of your teams; sign in again",
+    }
 
 
 def test_token_teamless_user_mints_without_a_team():
