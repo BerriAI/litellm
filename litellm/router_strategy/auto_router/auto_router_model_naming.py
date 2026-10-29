@@ -19,6 +19,7 @@ from litellm.router_strategy.complexity_router.config import (
     COMPLEXITY_ROUTER_CONFIG_KEYS,
     DEFAULT_JEV_INSTRUCTIONS,
     LLM_CLASSIFIER_TYPES,
+    ComplexityTier,
     configured_local_heuristic,
     normalize_classifier_config_aliases,
 )
@@ -195,12 +196,12 @@ def uses_heuristic_v2_classifier(complexity_router_config: object) -> bool:
 
 
 def defines_custom_tiers(complexity_router_config: object) -> bool:
-    """Whether this complexity config replaces the built-in tier ladder with operator-defined tier_definitions.
-
-    Mirrors the SQL spelling on the capability record: only an actual array claims the capability,
-    so an explicit JSON null or a malformed value does not.
-    """
-    return isinstance(_mapping(complexity_router_config).get("tier_definitions"), (list, tuple))
+    """Whether this router uses explicitly defined or custom Python classifier tiers."""
+    config: Final = _mapping(complexity_router_config)
+    return isinstance(config.get("tier_definitions"), (list, tuple)) or (
+        config.get("classifier_type") == "custom"
+        and any(name not in ComplexityTier.__members__ for name in _mapping(config.get("tiers")))
+    )
 
 
 OPERATOR_CLASSIFIER_PROMPT_FIELDS: Final = ("classification_prompt", "classification_examples")
@@ -289,6 +290,8 @@ _OPENSOURCE_CLASSIFIER_CONFIG_SQL: Final = (
     "COALESCE({config} -> 'opensource_classifier_config', {config} -> 'jev_classifier_config')"
 )
 
+_BUILT_IN_TIER_KEYS_SQL: Final = ", ".join(f"'{tier.value}'" for tier in ComplexityTier)
+
 CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
     key="tier_or_classifier_prompt",
     subject="with operator-defined tier_definitions or an operator-written classifier prompt",
@@ -299,6 +302,9 @@ CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
     uses=uses_custom_tier_or_classifier_prompt,
     sql_config_predicate=(
         "jsonb_typeof({config} -> 'tier_definitions') = 'array' OR "
+        "({config} ->> 'classifier_type' = 'custom' AND "
+        "jsonb_typeof({config} -> 'tiers') = 'object' AND "
+        f"({{config}} -> 'tiers') - ARRAY[{_BUILT_IN_TIER_KEYS_SQL}]::text[] <> jsonb_build_object()) OR "
         f"({{config}} ->> 'classifier_type' IN ({_LLM_CLASSIFIER_TYPES_SQL}) AND ("
         "{config} -> 'classifier_llm_config' ->> 'system_prompt' IS NOT NULL OR "
         f"{_OPERATOR_PROMPT_FIELDS_SQL})) OR "
