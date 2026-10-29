@@ -3590,23 +3590,15 @@ class TestLangfuseDestinationFields:
         assert destination is not None
         assert dict(destination.resource_attributes) == {}
 
-    @pytest.mark.parametrize(
-        ("configured", "operator_keys", "expected"),
-        [
-            (None, False, "span_only"),
-            ("no_content", False, "no_content"),
-            (None, True, None),
-            ("span_only", True, "span_only"),
-        ],
-        ids=["unset", "key-no-content", "operator-keys", "operator-keys-key-span-only"],
-    )
-    def test_a_langfuse_destination_captures_the_prompt_where_the_legacy_logger_sent_it(
+    @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
+    @pytest.mark.parametrize("configured", [None, "no_content", "span_only"])
+    def test_a_langfuse_destination_keeps_its_own_capture_setting_whatever_the_operator_keys(
         self,
         monkeypatch: pytest.MonkeyPatch,
         configured: str | None,
         operator_keys: bool,
-        expected: str | None,
     ) -> None:
+        """An unset setting stays unset, so the destination follows the global capture mode either way."""
         credential_less_proxy(monkeypatch)
         if operator_keys:
             monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
@@ -3619,14 +3611,17 @@ class TestLangfuseDestinationFields:
         )
 
         assert destination is not None
-        assert destination.capture_message_content == expected
+        assert destination.capture_message_content == configured
 
-    def test_only_the_langfuse_destination_gets_the_prompt_it_captures_by_default(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(("configured", "captured"), [(None, False), ("span_only", True)])
+    def test_a_langfuse_destination_gets_the_prompt_only_when_its_setting_asks_without_operator_keys(
+        self, monkeypatch: pytest.MonkeyPatch, configured: str | None, captured: bool
     ) -> None:
         credential_less_proxy(monkeypatch)
         destination: Final = destination_for(
-            "langfuse_otel", StandardCallbackDynamicParams(langfuse_public_key="pk", langfuse_secret_key="sk")
+            "langfuse_otel",
+            StandardCallbackDynamicParams(langfuse_public_key="pk", langfuse_secret_key="sk"),
+            capture_message_content=configured,
         )
         arize: Final = destination_for("arize", StandardCallbackDynamicParams(arize_space_id="s", arize_api_key="k"))
         assert destination is not None
@@ -3637,7 +3632,7 @@ class TestLangfuseDestinationFields:
         )
 
         assert {headers: "langfuse.observation.input" in attributes for headers, attributes in received.items()} == {
-            destination.header_string(): True,
+            destination.header_string(): captured,
             arize.header_string(): False,
             None: False,
         }
@@ -5377,10 +5372,7 @@ class TestCaptureMessageContent:
     def test_the_setting_rides_the_teams_destination_and_omission_stays_omitted(
         self, monkeypatch: pytest.MonkeyPatch, setting: str | None
     ) -> None:
-        """On a proxy with Langfuse keys of its own; without them see ``TestLangfuseDestinationFields``."""
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
         is_otel_v2_enabled.cache_clear()
         callback_vars: Final = {
             "langfuse_public_key": "pk-team",

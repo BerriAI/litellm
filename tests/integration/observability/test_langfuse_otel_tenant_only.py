@@ -87,15 +87,19 @@ def _one_model_span(spans: tuple[Span, ...]) -> bool:
     return len(_model_spans(spans)) == 1 and not LEGACY_SPANS & {str(span["name"]) for span in spans}
 
 
+@pytest.mark.parametrize("capture", [None, "span_only"])
 @pytest.mark.parametrize("level", ["key", "team"])
 def test_a_tenant_langfuse_project_gets_user_session_and_tags_without_operator_keys(
-    level: Literal["key", "team"], proxy: Gateway, provider: Wire, audit_sinks: SpanSinks
+    level: Literal["key", "team"], capture: str | None, proxy: Gateway, provider: Wire, audit_sinks: SpanSinks
 ) -> None:
     logging: Final[list[JsonValue]] = [
         {
             "callback_name": "langfuse_otel",
             "callback_type": "success",
-            "callback_vars": langfuse_callback_variables(audit_sinks),
+            "callback_vars": {
+                **langfuse_callback_variables(audit_sinks),
+                **({"capture_message_content": capture} if capture else {}),
+            },
         }
     ]
     with proxy.scenario() as scenario:
@@ -135,7 +139,7 @@ def test_a_tenant_langfuse_project_gets_user_session_and_tags_without_operator_k
         for span in tenant
     ] == [{"user.id": "user-42", "session.id": session, "langfuse.trace.tags": TAGS}], [s["name"] for s in tenant]
     assert "langfuse.observation.metadata" in tenant[0]["attributes"], sorted(tenant[0]["attributes"])
-    assert f"lf-tenant-only-{trace_id}" in str(tenant[0]["attributes"].get("langfuse.observation.input")), sorted(
+    assert (f"lf-tenant-only-{trace_id}" in json.dumps(tenant[0]["attributes"])) == (capture == "span_only"), sorted(
         tenant[0]["attributes"]
     )
     assert len(operator) == 1, [span["name"] for span in operator]
