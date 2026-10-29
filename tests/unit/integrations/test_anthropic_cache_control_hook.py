@@ -4346,17 +4346,6 @@ class TestHostedOpenAIDialectFlag:
         assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("azure/my-deployment", None) is False
         assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("my-deployment", "azure") is False
 
-    @pytest.mark.parametrize(
-        ("provider", "reads"),
-        [("azure_ai", True), ("hosted_vllm", False), ("azure", False), ("bedrock_mantle", False)],
-    )
-    def test_a_router_registered_opt_in_without_a_provider_is_read_only_for_azure_ai(
-        self, monkeypatch, provider, reads
-    ):
-        """A Router registers a deployment's model_info under ``<provider>/<name>`` with no ``litellm_provider``."""
-        monkeypatch.setitem(litellm.model_cost, f"{provider}/qa-alias", {"supports_prompt_cache_breakpoint": True})
-        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("qa-alias", provider) is reads
-
     def test_bare_name_colliding_with_an_openai_row_reads_its_own_provider_entry(self, monkeypatch):
         """The Responses layer hands the hook a bare deployment name plus its provider. The openai row keyed by
         that bare name neither answers for the deployment nor stops the lookup of the provider's own entry."""

@@ -23,6 +23,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
@@ -72,7 +73,6 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
 _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
-_PROVIDERS_NAMED_BY_A_REGISTERED_KEY_PREFIX: Final = frozenset({"azure_ai"})
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
@@ -151,18 +151,19 @@ def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
     return next((flag is True for flag in flags if flag is not None), None)
 
 
-def _hosted_entry_flag(
-    entry: Mapping[str, object], resolve_provider: Callable[[], str | None], key_provider: str | None = None
-) -> bool | None:
+def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[], str | None]) -> bool | None:
     flag: Final = entry.get("supports_prompt_cache_breakpoint")
-    entry_provider: Final = entry.get("litellm_provider") or key_provider
+    entry_provider: Final = entry.get("litellm_provider")
     if flag is None or entry_provider is None or entry_provider == "openai":
         return None
     return (flag is True) if entry_provider == resolve_provider() else None
 
 
 def _hosted_openai_dialect_flag(
-    model: str, custom_llm_provider: str | None, resolve_provider: Callable[[str], str | None]
+    model: str,
+    custom_llm_provider: str | None,
+    resolve_provider: Callable[[str], str | None],
+    model_cost: Mapping[str, Mapping[str, object]] | None = None,
 ) -> bool | None:
     """
     Explicit opt-in for an OpenAI-shaped deployment served by another provider.
@@ -177,21 +178,23 @@ def _hosted_openai_dialect_flag(
     third-party host is still not assumed to speak the dialect. A bare deployment name
     another provider serves (``gpt-6-astra`` on azure_ai) may collide with the openai
     row of the same name, so an exact entry only speaks for a deployment when it is
-    keyed for that deployment's provider. An azure_ai deployment's ``model_info`` is
-    registered under its provider-prefixed key without a ``litellm_provider``, so for
-    azure_ai that prefix names the provider the entry speaks for. Other providers keep
-    ignoring such an entry until their own path is proven to read it.
+    keyed for that deployment's provider.
     """
     import litellm
 
-    exact_entry: Final = litellm.model_cost.get(model)
-    exact_provider: Final = exact_entry.get("litellm_provider") if isinstance(exact_entry, dict) else None
+    cost_map: Final = (
+        cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: the live map holds catalog entries
+        if model_cost is None
+        else model_cost
+    )
+    exact_entry: Final = cost_map.get(model)
+    exact_provider: Final = exact_entry.get("litellm_provider") if isinstance(exact_entry, Mapping) else None
     if custom_llm_provider is None and (exact_provider == "openai" or ("/" not in model and exact_provider is None)):
         return None
     provider: Final = custom_llm_provider or resolve_provider(model)
     if provider is None or provider == "openai":
         return None
-    if isinstance(exact_entry, dict) and exact_provider == provider:
+    if isinstance(exact_entry, Mapping) and exact_provider == provider:
         return _hosted_entry_flag(exact_entry, lambda: provider)
     from litellm.utils import get_potential_model_names
 
@@ -204,15 +207,8 @@ def _hosted_openai_dialect_flag(
         names["stripped_model_name"],
         names["provider_prefixed_model_name"],
     )
-    provider_prefix: Final = f"{provider}/" if provider in _PROVIDERS_NAMED_BY_A_REGISTERED_KEY_PREFIX else None
-    entries: Final = ((candidate, litellm.model_cost.get(candidate)) for candidate in candidates)
-    flags: Final = (
-        _hosted_entry_flag(
-            entry, lambda: provider, provider if provider_prefix and candidate.startswith(provider_prefix) else None
-        )
-        for candidate, entry in entries
-        if isinstance(entry, dict)
-    )
+    entries: Final = (cost_map.get(candidate) for candidate in candidates)
+    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, Mapping))
     return next((flag for flag in flags if flag is not None), None)
 
 
@@ -533,6 +529,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
             return False
         return prompt_cache_options is not None or targets_openai_api(api_base)
+
+    @staticmethod
+    def catalog_targets_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str) -> bool:
+        return (
+            _hosted_openai_dialect_flag(
+                model,
+                custom_llm_provider,
+                AnthropicCacheControlHook._resolve_provider,
+                GetModelCostMap.loaded_model_cost_map(),
+            )
+            is True
+        )
 
     @staticmethod
     def _resolve_provider(model: str) -> str | None:

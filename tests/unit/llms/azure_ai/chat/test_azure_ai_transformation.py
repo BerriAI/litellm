@@ -1,5 +1,6 @@
 import json
 import traceback
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,7 @@ import respx
 from httpx import Response
 
 import litellm
+from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure_ai.azure_model_router.transformation import (
@@ -1051,7 +1053,7 @@ def test_azure_ai_puts_a_message_level_mark_on_the_last_text_part_when_a_file_pa
 @pytest.mark.parametrize(
     ("registered", "keeps_parts"),
     [
-        ({"azure_ai/qa-foundry-alias": {"supports_prompt_cache_breakpoint": True}}, True),
+        ({"azure_ai/qa-foundry-alias": {"litellm_provider": "azure_ai", "supports_prompt_cache_breakpoint": True}}, True),
         ({"qa-foundry-alias": {"litellm_provider": "openai", "supports_prompt_cache_breakpoint": True}}, False),
     ],
     ids=["azure_ai-entry-opts-in", "openai-entry-does-not-speak-for-azure_ai"],
@@ -1059,7 +1061,7 @@ def test_azure_ai_puts_a_message_level_mark_on_the_last_text_part_when_a_file_pa
 def test_azure_ai_keeps_parts_only_when_the_azure_ai_entry_reads_breakpoints(
     _local_model_cost_map, registered: dict[str, dict[str, object]], keeps_parts: bool
 ):
-    litellm.register_model(model_cost=registered, add_to_provider_model_sets=False)
+    litellm.register_model(model_cost=registered, persist_across_reloads=False, add_to_provider_model_sets=False)
     breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
 
     request: Final = AzureAIStudioConfig().transform_request(
@@ -1071,6 +1073,91 @@ def test_azure_ai_keeps_parts_only_when_the_azure_ai_entry_reads_breakpoints(
     )
 
     assert request["messages"][0]["content"] == ([breakpoint_part] if keeps_parts else "stable")
+
+
+@pytest.mark.parametrize(
+    "registration_order", [("opted-in", "opted-out", "unflagged"), ("unflagged", "opted-out", "opted-in")]
+)
+def test_azure_ai_deployment_reads_only_its_own_breakpoint_flag_not_a_siblings_sharing_its_model_string(
+    _local_model_cost_map, respx_mock: respx.MockRouter, registration_order: tuple[str, ...]
+) -> None:
+    breakpoint_flags: Final = MappingProxyType(
+        {
+            "opted-in": {"supports_prompt_cache_breakpoint": True},
+            "opted-out": {"supports_prompt_cache_breakpoint": False},
+        }
+    )
+    def deployment(host: str, model_info: dict[str, object]) -> dict[str, object]:
+        return {
+            "model_name": host,
+            "litellm_params": {
+                "model": "azure_ai/qa-shared-deployment",
+                "api_base": f"https://{host}.services.ai.azure.com/models",
+                "api_key": "azure-ai-test-key",
+            },
+            "model_info": model_info,
+        }
+
+    routes: Final = {
+        host: respx_mock.post(host=f"{host}.services.ai.azure.com", path="/models/chat/completions").mock(
+            return_value=Response(
+                200,
+                json={
+                    "id": "chatcmpl-azure-ai",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "qa-shared-deployment",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+                },
+            )
+        )
+        for host in registration_order
+    }
+    router: Final = Router(
+        model_list=[
+            deployment(host, {"id": f"{host}-id", **breakpoint_flags.get(host, {})}) for host in registration_order
+        ]
+    )
+    marked_system: Final = {
+        "role": "system",
+        "content": [{"type": "text", "text": "stable", "cache_control": {"type": "ephemeral"}}],
+    }
+
+    for host in registration_order:
+        router.completion(model=host, messages=[marked_system, {"role": "user", "content": "hi"}])
+
+    def sent_system_content(host: str) -> object:
+        return json.loads(routes[host].calls.last.request.content)["messages"][0]["content"]
+
+    assert sent_system_content("opted-in") == [
+        {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert sent_system_content("opted-out") == "stable"
+    assert sent_system_content("unflagged") == "stable"
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"base_model": "azure_ai/gpt-6-astra"},
+        {"base_model": "azure_ai/gpt-6-astra", "model_info": {"id": "my-astra-deployment-id"}},
+    ],
+)
+def test_azure_ai_keeps_parts_for_a_custom_deployment_name_whose_base_model_reads_breakpoints(
+    _local_model_cost_map, litellm_params: dict[str, object]
+):
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="my-astra-deployment",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [breakpoint_part]
 
 
 def test_azure_ai_reference_only_tool_result_is_sent_as_empty_text():

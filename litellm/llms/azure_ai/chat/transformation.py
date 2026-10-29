@@ -69,6 +69,21 @@ def _with_only_text_parts(message: AllMessageValues) -> AllMessageValues:
     return cast(AllMessageValues, text_only)  # cast-ok: the same message, text parts only
 
 
+_DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, object]) -> bool:
+    base_model: Final = litellm_params.get("base_model")
+    named_model: Final = base_model if isinstance(base_model, str) and base_model else model
+    model_info: Final = litellm_params.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(named_model, "azure_ai")
+    deployment_flag: Final = _DEPLOYMENT_PARAMS.validate_python(model_info).get("supports_prompt_cache_breakpoint")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return AnthropicCacheControlHook.catalog_targets_openai_prompt_cache_breakpoint(named_model, "azure_ai")
+
+
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
     def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
         usage: Final = chunk.get("usage")
@@ -258,6 +273,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         messages: list[AllMessageValues],
         model: str,
+        reads_breakpoints: bool | None = None,
     ) -> list:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
@@ -268,9 +284,10 @@ class AzureAIStudioConfig(OpenAIConfig):
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
             2. Transforms list content to a string, except on deployments that read OpenAI explicit
-               prompt cache breakpoints (the same check the cache-mark dialect uses): only a content
-               part can carry the breakpoint (a message-level one is silently ignored), so those keep
-               their text parts, with each Anthropic `cache_control` mark renamed to a breakpoint the
+               prompt cache breakpoints (the deployment's own model_info opt-in, else the cost-map entry
+               of its base_model or name, as loaded and without a sibling deployment's opt-in): only a
+               content part can carry the breakpoint (a message-level one is silently ignored), so those
+               keep their text parts, with each Anthropic `cache_control` mark renamed to a breakpoint the
                way the openai provider renames it. Every other part is dropped, exactly as the string
                conversion drops it, before the marks are renamed, so a message-level mark lands on the
                last text part.
@@ -279,14 +296,18 @@ class AzureAIStudioConfig(OpenAIConfig):
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
         """
+        deployment_reads_breakpoints: Final = (
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, "azure_ai")
+            if reads_breakpoints is None
+            else reads_breakpoints
+        )
         copied_messages: Final = copy.deepcopy(drop_tool_reference_parts_from_tool_messages(messages))
-        reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, "azure_ai")
         stripped_messages: Final = (
             [
                 AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(_with_only_text_parts(message))
                 for message in copied_messages
             ]
-            if reads_breakpoints
+            if deployment_reads_breakpoints
             else copied_messages
         )
         for message in stripped_messages:
@@ -297,7 +318,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             if audio_or_image_in_message_content(message):
                 continue
 
-            if reads_breakpoints and (text_parts := _text_parts(message)):
+            if deployment_reads_breakpoints and (text_parts := _text_parts(message)):
                 message_dict["content"] = list(text_parts)
                 continue
 
@@ -355,7 +376,15 @@ class AzureAIStudioConfig(OpenAIConfig):
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        return {
+            "model": model,
+            "messages": self._transform_messages(
+                messages,
+                model,
+                _deployment_reads_breakpoints(model, _DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+            ),
+            **optional_params,
+        }
 
     def transform_response(
         self,
