@@ -2286,3 +2286,80 @@ async def test_disable_flag_still_skips_batch_processing_with_enqueued_limits():
 
     assert result is data
     afile_content_mock.assert_not_awaited()
+
+
+def _team_a_vllm_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-a_7c1e",
+                "litellm_params": {
+                    "model": "hosted_vllm/team-batch-model",
+                    "api_key": "team-a-key",
+                    "api_base": "http://team-a-vllm:8000/v1",
+                },
+                "model_info": {
+                    "id": "team-a-deployment",
+                    "team_id": "team-a",
+                    "team_public_model_name": "team-batch",
+                },
+            }
+        ]
+    )
+
+
+def _model_encoded_file_id(model: str) -> str:
+    import base64
+
+    encoded = base64.urlsafe_b64encode(f"litellm:file-orig;model,{model}".encode()).decode().rstrip("=")
+    return f"file-{encoded}"
+
+
+@pytest.mark.parametrize(
+    "file_id, data",
+    [("file-plain", {"model": "team-batch"}), (_model_encoded_file_id("team-batch"), {})],
+    ids=["request-model", "model-encoded-file-id"],
+)
+@pytest.mark.parametrize(
+    "team_id, expected_provider, expected_api_base",
+    [("team-a", "hosted_vllm", "http://team-a-vllm:8000/v1"), ("team-b", "openai", None)],
+)
+def test_resolve_fetch_params_reads_a_team_model_with_the_caller_team_credentials(
+    file_id, data, team_id, expected_provider, expected_api_base
+):
+    rate_limiter = _make_rate_limiter()
+    with patch("litellm.proxy.proxy_server.llm_router", _team_a_vllm_router()):
+        _, fetch_kwargs = rate_limiter._resolve_batch_input_file_fetch_params(
+            file_id=file_id,
+            custom_llm_provider="openai",
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", team_id=team_id),
+        )
+
+    assert (fetch_kwargs["custom_llm_provider"], fetch_kwargs.get("api_base")) == (
+        expected_provider,
+        expected_api_base,
+    )
+
+
+@pytest.mark.parametrize("team_id, should_skip", [("team-a", True), ("team-b", False)])
+def test_skip_listed_provider_of_a_team_model_is_skipped_only_for_its_team(team_id, should_skip):
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter.create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 100}}
+    ]
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", _team_a_vllm_router()),
+    ):
+        skipped, _ = rate_limiter._should_skip_batch_input_file_processing(
+            data={"model": "team-batch", "input_file_id": "file-plain"},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", team_id=team_id),
+        )
+
+    assert skipped is should_skip

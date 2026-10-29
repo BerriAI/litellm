@@ -728,7 +728,9 @@ async def retrieve_batch(
             # so litellm.aretrieve_batch can load BedrockBatchesConfig. Without
             # it the call falls into the legacy provider switch and 400s.
             data["model"] = model_from_id
-            add_deployment_model_info(data=data, llm_router=llm_router, model_id=model_from_id)
+            add_deployment_model_info(
+                data=data, llm_router=llm_router, model_id=model_from_id, team_id=user_api_key_dict.team_id
+            )
             _litellm_metadata_of(data).setdefault("model_group", model_from_id)
 
             # Retrieve batch using model credentials

@@ -396,6 +396,7 @@ def get_credentials_for_model(
     llm_router,  # Router instance
     model_id: str,
     operation_context: str = "file operation",
+    team_id: str | None = None,
 ):
     """
     Retrieve API credentials for a model from the LLM Router.
@@ -408,6 +409,7 @@ def get_credentials_for_model(
         llm_router: LiteLLM Router instance
         model_id: Model name or deployment ID
         operation_context: Description for error messages (e.g., "file upload", "batch creation")
+        team_id: The caller's team, so a team-scoped deployment resolves by its public model name
 
     Returns:
         Dictionary with credentials (api_key, api_base, custom_llm_provider, etc.)
@@ -425,7 +427,7 @@ def get_credentials_for_model(
             detail={"error": "Router not initialized. Cannot use model-based routing."},
         )
 
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
 
     if credentials is None:
         raise ProxyModelNotFoundError(
@@ -474,14 +476,15 @@ async def get_authorized_credentials_for_model(
         llm_router=llm_router,
         model_id=model_id,
         operation_context=operation_context,
+        team_id=user_api_key_dict.team_id,
     )
 
 
 def deployment_drop_params(
-    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
+    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object], team_id: str | None
 ) -> Mapping[str, bool | str]:
     deployment: Final = (
-        llm_router.get_credential_deployment(model_id=model_id)
+        llm_router.get_credential_deployment(model_id=model_id, team_id=team_id)
         if llm_router is not None and "drop_params" not in request
         else None
     )
@@ -733,6 +736,7 @@ def add_internal_model_credentials(
     data: dict,
     llm_router: "Router",
     model_id: str | None,
+    team_id: str | None = None,
 ) -> None:
     """
     Attach the deployment's immutable server-side credential snapshot to a router-routed
@@ -746,7 +750,7 @@ def add_internal_model_credentials(
     if model_id is None:
         return
     try:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
     except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
         return
     if credentials is None:
@@ -758,13 +762,16 @@ def add_deployment_model_info(
     data: dict,
     llm_router: Optional["Router"],
     model_id: str,
+    team_id: str | None = None,
 ) -> None:
     """
     Stamp the resolved deployment's `model_info` onto a direct (non-router) batch call
     (in-place), the way the router does for routed calls, so the completed batch is
     priced by its deployment id instead of the published model rate.
     """
-    deployment: Final = llm_router.get_credential_deployment(model_id=model_id) if llm_router is not None else None
+    deployment: Final = (
+        llm_router.get_credential_deployment(model_id=model_id, team_id=team_id) if llm_router is not None else None
+    )
     if deployment is None:
         return
     data["litellm_metadata"] = {

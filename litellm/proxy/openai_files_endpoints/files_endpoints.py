@@ -465,7 +465,10 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            credentials={
+                **credentials,
+                **deployment_drop_params(llm_router, model, _create_file_request, user_api_key_dict.team_id),
+            },
         )
 
         # Create the file with model credentials
@@ -1091,7 +1094,9 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
-                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
+                add_internal_model_credentials(
+                    data=data, llm_router=llm_router, model_id=model, team_id=user_api_key_dict.team_id
+                )
                 response = await llm_router.afile_content(
                     **{
                         "model": model,

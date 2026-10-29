@@ -19,12 +19,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_managed_file_id,
+    _update_request_data_with_model_routing_hint,
     _with_managed_file_list_ids,
     _with_provider_file_id_cursors,
 )
@@ -75,11 +77,11 @@ class ManagedFileIdResolverStub:
         )
 
 
-def _unified_file_id(provider_file_id: str = RAW_FILE_ID) -> str:
+def _unified_file_id(provider_file_id: str = RAW_FILE_ID, target_model_name: str = "gpt-4o-mini") -> str:
     unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
         "application/json",
         "victim-unified-id",
-        "gpt-4o-mini",
+        target_model_name,
         provider_file_id,
         "gpt-4o-mini-id",
     )
@@ -290,3 +292,70 @@ async def test_raw_file_id_allowed_when_managed_files_not_required():
 
     assert original is None
     assert data["file_id"] == RAW_FILE_ID
+
+
+def _team_a_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-a_7c1e",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "team-a-key"},
+                "model_info": {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": "team-gpt"},
+            }
+        ]
+    )
+
+
+def _request(headers: Sequence[tuple[bytes, bytes]], query_string: bytes) -> Request:
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": list(headers), "query_string": query_string})
+
+
+@pytest.mark.parametrize(
+    "headers, query_string",
+    [([(b"x-litellm-model", b"team-gpt")], b""), ([], b"model=team-gpt")],
+    ids=["x-litellm-model-header", "model-query-param"],
+)
+@pytest.mark.asyncio
+async def test_a_team_model_routing_hint_routes_to_the_caller_team_deployment(
+    headers: Sequence[tuple[bytes, bytes]], query_string: bytes
+):
+    data: Final = await _update_request_data_with_model_routing_hint(
+        data={"vector_store_id": "vs_abc"},
+        request=_request(headers, query_string),
+        llm_router=_team_a_router(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team-a", team_id="team-a"),
+    )
+
+    assert data["api_key"] == "team-a-key"
+
+
+@pytest.mark.parametrize("team_id", ["team-b", None])
+@pytest.mark.asyncio
+async def test_a_team_model_routing_hint_from_another_team_is_rejected(team_id: str | None):
+    with pytest.raises(ProxyModelNotFoundError):
+        await _update_request_data_with_model_routing_hint(
+            data={"vector_store_id": "vs_abc"},
+            request=_request([(b"x-litellm-model", b"team-gpt")], b""),
+            llm_router=_team_a_router(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-other", team_id=team_id),
+        )
+
+
+@pytest.mark.parametrize("team_id, api_key", [("team-a", "team-a-key"), ("team-b", None)])
+@pytest.mark.asyncio
+async def test_a_managed_file_on_a_team_model_routes_with_the_caller_team_credentials(
+    team_id: str, api_key: str | None
+):
+    managed_file_id: Final = _unified_file_id(target_model_name="team-gpt")
+
+    with patch.object(litellm, "require_managed_files", False):
+        data, _ = await _update_request_data_with_managed_file_id(
+            data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+            file_id=managed_file_id,
+            request=MagicMock(headers={}, query_params={}),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", team_id=team_id),
+            managed_files_obj=ManagedResourceAccessCheckerStub(file_access="allow"),
+            llm_router=_team_a_router(),
+        )
+
+    assert (data["file_id"], data.get("api_key")) == (RAW_FILE_ID, api_key)

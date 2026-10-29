@@ -176,7 +176,7 @@ async def test_vector_store_file_list_resolves_managed_ids_and_cursors():
 
     llm_router = MagicMock()
 
-    def get_credentials(model_id):
+    def get_credentials(model_id, team_id=None):
         return {
             "api_key": f"sk-{model_id}",
             "api_base": "https://api.openai.com/v1",
@@ -215,7 +215,9 @@ async def test_vector_store_file_list_resolves_managed_ids_and_cursors():
     assert captured_data["vector_store_id"] == "vs_provider_native"
     assert captured_data["api_key"] == "sk-managed-deployment"
     assert captured_data["model"] == "openai/managed-deployment"
-    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="managed-deployment")
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
+        model_id="managed-deployment", team_id=None
+    )
     proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files")
     resolver.assert_awaited_once_with(
         provider_file_ids=(provider_file_id,),

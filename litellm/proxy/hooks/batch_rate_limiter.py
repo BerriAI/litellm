@@ -223,7 +223,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return None
 
-    def _resolve_batch_provider(self, batch_model: str | None) -> str | None:
+    def _resolve_batch_provider(self, batch_model: str | None, team_id: str | None) -> str | None:
         """Resolve the provider from the deployment that serves ``batch_model``.
 
         The provider is read from trusted router credentials rather than the
@@ -246,6 +246,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 llm_router=llm_router,
                 model_id=batch_model,
                 operation_context="batch input file read (rate limiting)",
+                team_id=team_id,
             )
         except HTTPException:
             return None
@@ -408,7 +409,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         skip_providers: Final = general_settings.get("skip_batch_input_file_rate_limiting_for_providers") or []
         if skip_providers:
-            batch_provider: Final = self._resolve_batch_provider(self._get_batch_routing_model(data))
+            batch_provider: Final = self._resolve_batch_provider(
+                self._get_batch_routing_model(data), user_api_key_dict.team_id
+            )
             if batch_provider and batch_provider in skip_providers:
                 verbose_proxy_logger.debug("Skipping batch input file processing for provider=%s", batch_provider)
                 return True, None
@@ -553,6 +556,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         fetch_kwargs: Final[dict[str, object]] = {
             "custom_llm_provider": custom_llm_provider,
         }
+        caller_team_id: Final = user_api_key_dict.team_id if user_api_key_dict is not None else None
 
         model_from_file_id: Final = decode_model_from_file_id(file_id)
         if model_from_file_id:
@@ -562,6 +566,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         llm_router=llm_router,
                         model_id=model_from_file_id,
                         operation_context="batch input file read (rate limiting)",
+                        team_id=caller_team_id,
                     )
                     fetch_kwargs.update(extract_file_access_credentials(credentials))
                     fetch_kwargs["model"] = model_from_file_id
@@ -580,6 +585,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         llm_router=llm_router,
                         model_id=request_model,
                         operation_context="batch input file read (rate limiting)",
+                        team_id=caller_team_id,
                     )
                     fetch_kwargs.update(extract_file_access_credentials(credentials))
                     fetch_kwargs["model"] = request_model

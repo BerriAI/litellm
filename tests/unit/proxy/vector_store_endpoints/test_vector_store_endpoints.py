@@ -303,7 +303,7 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
     assert result["model"] == "openai/gpt-4o-mini"
     assert "custom_llm_provider" not in result
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
-        model_id="team-openai"
+        model_id="team-openai", team_id=None
     )
 
 
@@ -337,7 +337,7 @@ async def test_vector_store_file_list_registry_routed_model_skips_key_model_gran
     assert result["api_key"] == "sk-team-openai"
     assert result["model"] == "openai/gpt-4o-mini"
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
-        model_id="team-openai"
+        model_id="team-openai", team_id=None
     )
 
 

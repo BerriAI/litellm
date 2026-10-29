@@ -209,7 +209,9 @@ async def _update_request_data_with_managed_file_id(
 
                 # Get credentials for the model
                 if llm_router:
-                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=routing_model)
+                    credentials = llm_router.get_deployment_credentials_with_provider(
+                        model_id=routing_model, team_id=user_api_key_dict.team_id
+                    )
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
@@ -344,7 +346,7 @@ async def _update_request_data_with_model_routing_hint(
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
             )
-        credentials = get_credentials_for_model(llm_router=llm_router, model_id=model_hint)
+        credentials = get_credentials_for_model(llm_router=llm_router, model_id=model_hint, team_id=caller_team_id)
         should_route = True
 
     if should_route and credentials is not None:
