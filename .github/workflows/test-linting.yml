@@ -265,6 +265,7 @@ jobs:
     name: ui
     permissions:
       contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 8
     defaults:

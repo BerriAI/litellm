@@ -38,6 +38,8 @@ case "$1 $endpoint ${3-} ${4-}" in
     printf '%s\n' "$LIVE_BASE_REF" ;;
   "api branches/"*" --jq .commit.sha")
     commit "refs/heads/${endpoint#branches/}" ;;
+  "api pulls/1/reviews --paginate --slurp")
+    printf '[[]]\n' ;;
   *)
     echo "fake gh cannot answer: $*" >&2
     exit 64 ;;
@@ -48,7 +50,10 @@ esac
 class WorkflowStep(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    id: str = ""
     name: str = ""
+    uses: str = ""
+    with_: Mapping[str, str] = Field(default_factory=dict, alias="with")
     env: Mapping[str, str] = Field(default_factory=dict)
     run: str = ""
 
@@ -59,9 +64,22 @@ class WorkflowJob(BaseModel):
     steps: tuple[WorkflowStep, ...] = ()
 
 
+class PullRequestTrigger(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    branches: tuple[str, ...] = ("**",)
+
+
+class WorkflowTriggers(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    pull_request: PullRequestTrigger = Field(default_factory=PullRequestTrigger)
+
+
 class Workflow(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    on: WorkflowTriggers
     jobs: Mapping[str, WorkflowJob]
 
 
@@ -70,6 +88,7 @@ class MergeBaseStep:
     workflow: str
     label: str
     step: WorkflowStep
+    base_branches: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,11 +99,15 @@ class StaleBaseUpstream:
     merge_base_by_ref: Mapping[str, str]
 
 
+def _workflow(path: Path) -> Workflow:
+    return Workflow.model_validate(yaml.load(path.read_text(), Loader=yaml.BaseLoader))
+
+
 def _merge_base_steps_in(path: Path) -> Iterator[MergeBaseStep]:
-    workflow: Final = Workflow.model_validate(yaml.load(path.read_text(), Loader=yaml.BaseLoader))
+    workflow: Final = _workflow(path)
     for job_id, job in workflow.jobs.items():
         yield from (
-            MergeBaseStep(path.name, f"{path.name}:{job_id}:{step.name}", step)
+            MergeBaseStep(path.name, f"{path.name}:{job_id}:{step.name}", step, workflow.on.pull_request.branches)
             for step in job.steps
             if "merge_base_commit" in step.run
         )
@@ -199,24 +222,29 @@ def _resolved(text: str, pull_request: Mapping[str, str]) -> str:
     return GITHUB_EXPRESSION.sub(lambda expression: _github_context(expression.group(1), pull_request), text)
 
 
-def _merge_base_assigned_by(
-    step: MergeBaseStep, pull_request: Mapping[str, str], live_base_ref: str, upstream: Path, tmp_path: Path
-) -> str:
-    assignment: Final = MERGE_BASE_ASSIGNMENT.search(step.step.run)
-    assert assignment is not None, f"{step.label} never assigns the merge base to a variable"
+def _run_step_script(
+    script: str,
+    step: WorkflowStep,
+    pull_request: Mapping[str, str],
+    live_base_ref: str,
+    upstream: Path,
+    cwd: Path,
+    tmp_path: Path,
+) -> None:
     fake_gh: Final = tmp_path / "bin" / "gh"
     fake_gh.parent.mkdir()
     fake_gh.write_text(FAKE_GH)
     fake_gh.chmod(0o755)
-    script: Final = f'{step.step.run[: assignment.end()]}\nprintf %s "${assignment.group(1)}" > merge_base\n'
     result: Final = subprocess.run(
         ["bash", "-e", "-c", _resolved(script, pull_request)],
-        cwd=tmp_path,
+        cwd=cwd,
         env={
-            **{name: _resolved(value, pull_request) for name, value in step.step.env.items()},
+            **{name: _resolved(value, pull_request) for name, value in step.env.items()},
             "PATH": f"{fake_gh.parent}{os.pathsep}{os.environ['PATH']}",
             "HOME": str(tmp_path),
             "GITHUB_REPOSITORY": REPOSITORY,
+            "GITHUB_OUTPUT": str(tmp_path / "github_output"),
+            "RUNNER_TEMP": str(tmp_path),
             "UPSTREAM": str(upstream),
             "LIVE_BASE_REF": live_base_ref,
         },
@@ -225,6 +253,15 @@ def _merge_base_assigned_by(
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _merge_base_assigned_by(
+    step: MergeBaseStep, pull_request: Mapping[str, str], live_base_ref: str, upstream: Path, tmp_path: Path
+) -> str:
+    assignment: Final = MERGE_BASE_ASSIGNMENT.search(step.step.run)
+    assert assignment is not None, f"{step.label} never assigns the merge base to a variable"
+    script: Final = f'{step.step.run[: assignment.end()]}\nprintf %s "${assignment.group(1)}" > merge_base\n'
+    _run_step_script(script, step.step, pull_request, live_base_ref, upstream, tmp_path, tmp_path)
     return (tmp_path / "merge_base").read_text()
 
 
@@ -264,20 +301,52 @@ def test_every_workflow_that_reads_a_merge_base_has_its_steps_discovered() -> No
     )
 
 
-@pytest.mark.parametrize(
-    ("event_base_ref", "live_base_ref"),
-    ((BASE_REFS[0], BASE_REFS[0]), (BASE_REFS[1], BASE_REFS[1]), ("litellm_deleted_after_merge", BASE_REFS[0])),
-    ids=("main", "stacked", "rerun_after_the_stacked_base_was_deleted"),
+def _runs_for(step: MergeBaseStep, base_ref: str) -> bool:
+    return any(fnmatch.fnmatchcase(base_ref, pattern) for pattern in step.base_branches)
+
+
+BASE_REF_CASES: Final = (
+    ("main", BASE_REFS[0], BASE_REFS[0]),
+    ("stacked", BASE_REFS[1], BASE_REFS[1]),
+    ("rerun_after_the_stacked_base_was_deleted", "litellm_deleted_after_merge", BASE_REFS[0]),
+    ("rerun_after_a_retarget_off_main", BASE_REFS[0], BASE_REFS[1]),
 )
-@pytest.mark.parametrize("step", MERGE_BASE_STEPS, ids=lambda step: step.label)
-def test_merge_base_step_measures_from_the_pull_requests_current_base_branch_tip(
+MERGE_BASE_CASES: Final = tuple(
+    pytest.param(step, event_base_ref, live_base_ref, id=f"{step.label}-{case}")
+    for step, (case, event_base_ref, live_base_ref) in itertools.product(MERGE_BASE_STEPS, BASE_REF_CASES)
+    if _runs_for(step, event_base_ref)
+)
+
+
+@pytest.mark.parametrize(("step", "event_base_ref", "live_base_ref"), MERGE_BASE_CASES)
+def test_merge_base_step_measures_from_the_current_tip_of_a_base_branch_its_workflow_runs_for(
     upstream: StaleBaseUpstream, tmp_path: Path, step: MergeBaseStep, event_base_ref: str, live_base_ref: str
 ) -> None:
     pull_request: Final = MappingProxyType(
         {"number": "1", "base.ref": event_base_ref, "base.sha": upstream.stale_base, "head.sha": upstream.head}
     )
     merge_base: Final = _merge_base_assigned_by(step, pull_request, live_base_ref, upstream.path, tmp_path)
-    assert merge_base == upstream.merge_base_by_ref[live_base_ref]
+    measured_ref: Final = live_base_ref if _runs_for(step, live_base_ref) else event_base_ref
+    assert merge_base == upstream.merge_base_by_ref[measured_ref]
+
+
+@pytest.mark.parametrize("workflow_name", ("spend-logs-guard.yml", "cost-map-guard.yml"))
+def test_guard_runs_its_script_from_the_base_branch_tip_rather_than_the_events_stale_base(
+    upstream: StaleBaseUpstream, tmp_path: Path, workflow_name: str
+) -> None:
+    pull_request: Final = MappingProxyType(
+        {"number": "1", "base.ref": BASE_REFS[0], "base.sha": upstream.stale_base, "head.sha": upstream.head}
+    )
+    (job,) = _workflow(WORKFLOWS_DIR / workflow_name).jobs.values()
+    checkout: Final = next(step for step in job.steps if step.uses.startswith("actions/checkout@"))
+    revisions: Final = next(step for step in job.steps if step.id == "revisions")
+    runner: Final = tmp_path / "runner"
+    _git(tmp_path, "init", "-q", str(runner))
+    _git(runner, "remote", "add", "origin", f"file://{upstream.path}")
+    _git(runner, "fetch", "-q", "--no-tags", "origin", _resolved(checkout.with_["ref"], pull_request))
+    _git(runner, "checkout", "-q", "--detach", "FETCH_HEAD")
+    _run_step_script(revisions.run, revisions, pull_request, BASE_REFS[0], upstream.path, runner, tmp_path)
+    assert _sha(runner, "HEAD") == _sha(upstream.path, BASE_REFS[0])
 
 
 UI_API_TYPES_DETECT: Final[str] = next(
