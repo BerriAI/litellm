@@ -356,12 +356,14 @@ class _LoggedEvents(CustomLogger):
         self.events: list[tuple[str, str, str, str | None]] = []
         self.response_costs: list[float] = []
         self.session_ids: list[str | None] = []
+        self.messages: list[object] = []
 
     def _record(self, outcome: str, kwargs: dict[str, object]) -> None:
         payload: Final = kwargs["standard_logging_object"]
         self.events.append((outcome, kwargs["call_type"], kwargs["litellm_call_id"], payload["model_group"]))
         self.response_costs.append(payload["response_cost"])
         self.session_ids.append(kwargs["litellm_params"].get("litellm_session_id"))
+        self.messages.append(payload["messages"])
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._record("success", kwargs)
@@ -679,6 +681,39 @@ async def test_generate_content_adapter_runs_sync_callbacks_once_on_async_reques
 
     assert logged.events == [("agenerate_content", _ADAPTER_CALL_ID)]
     assert _litellm_error_messages(_litellm_errors) == []
+
+
+@pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
+@pytest.mark.asyncio
+async def test_generate_content_adapter_logs_the_whole_conversation(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str, stream: bool
+):
+    logged = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream))
+        response = await getattr(_adapter_router(), entrypoint)(
+            model="grok-group",
+            contents=[
+                {"role": "user", "parts": [{"text": "Say hi."}]},
+                {"role": "model", "parts": [{"text": "hi"}]},
+                {"role": "user", "parts": [{"text": "Now say bye."}]},
+            ],
+            systemInstruction={"parts": [{"text": "Answer in three words."}]},
+        )
+        if stream:
+            await _drain(response)
+    await await_until(lambda: bool(logged.messages), message="the request's success callback ran")
+
+    assert logged.messages == [
+        [
+            {"role": "system", "content": "Answer in three words."},
+            {"role": "user", "content": "Say hi."},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "Now say bye."},
+        ]
+    ]
 
 
 @pytest.mark.asyncio

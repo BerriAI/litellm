@@ -61,6 +61,8 @@ class GenerateContentToCompletionHandler:
         )
         stream_options: Final = _adapter_stream_options(request_kwargs.get("stream_options")) if stream else None
         logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+        if isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.update_messages(completion_request["messages"])
         if stream and isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.stream_options = stream_options
         completion_kwargs: Final = dict(
