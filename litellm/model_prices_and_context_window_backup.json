@@ -87,11 +87,6 @@
             "realtime_ga_only": 1
         },
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/a-new-chapter-for-realtime-ai-reasoning-translation-and-real-time-transcription/4517124",
-        "supported_endpoints": [
-            "/v1/realtime/translations",
-            "/v1/realtime/translations/client_secrets",
-            "/v1/realtime/translations/calls"
-        ],
         "supported_modalities": [
             "audio"
         ],
@@ -113,11 +108,6 @@
             "realtime_ga_only": 1
         },
         "source": "https://ai.azure.com/catalog/models/gpt-realtime-translate",
-        "supported_endpoints": [
-            "/v1/realtime/translations",
-            "/v1/realtime/translations/client_secrets",
-            "/v1/realtime/translations/calls"
-        ],
         "supported_modalities": [
             "audio"
         ],
@@ -63197,11 +63187,6 @@
         "max_output_tokens": 2000,
         "mode": "realtime",
         "source": "https://developers.openai.com/api/docs/pricing",
-        "supported_endpoints": [
-            "/v1/realtime/translations",
-            "/v1/realtime/translations/client_secrets",
-            "/v1/realtime/translations/calls"
-        ],
         "supported_modalities": [
             "audio"
         ],
@@ -71158,11 +71143,6 @@
         "provider_specific_entry": {
             "realtime_ga_only": 1
         },
-        "supported_endpoints": [
-            "/v1/realtime/translations",
-            "/v1/realtime/translations/client_secrets",
-            "/v1/realtime/translations/calls"
-        ],
         "supports_native_streaming": true
     },
     "aihubmix/agnes-2.5-flash": {

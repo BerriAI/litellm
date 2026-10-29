@@ -610,6 +610,26 @@ def test_transcription_stream_that_is_not_a_boolean_answers_400_without_calling_
     assert sent_bodies == []
 
 
+def test_transcription_with_an_empty_stream_form_value_runs_unstreamed_without_a_stream_field(
+    local_model_cost_map: None,
+) -> None:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
+
+    def send_response(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.read())
+        return _duration_priced_transcript(streamed=False)
+
+    with _openai_transcription_client(httpx.MockTransport(send_response)) as client:
+        response: Final = litellm.transcription(
+            model="openai/gpt-transcribe", file=_one_second_wav(), stream="", client=client
+        )
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "hello world"
+    assert len(sent_bodies) == 1
+    assert b'name="stream"' not in sent_bodies[0]
+
+
 def test_transcription_stream_that_is_not_a_boolean_is_dropped_under_drop_params(local_model_cost_map: None) -> None:
     sent_bodies: Final[list[bytes]] = []  # mutable-ok: collects what the mock upstream received
 

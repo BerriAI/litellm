@@ -150,7 +150,9 @@ def _set_transcription_model_on_session(
 
 
 def nested_transcription_upstream_model(model: str, team_id: str | None, llm_router: "Router | None") -> str:
-    deployment_model: Final = llm_router.get_routable_upstream_model(model, team_id) if llm_router is not None else None
+    deployment_model: Final = (
+        llm_router.registry().resolve(model, kind="upstream", team_id=team_id) if llm_router is not None else None
+    )
     if deployment_model is None:
         return model
     try:

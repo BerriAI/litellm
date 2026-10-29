@@ -32,6 +32,10 @@ def transcription_stream_flag(value: object) -> bool | None:
         return None
 
 
+def transcription_stream_unset(value: object) -> bool:
+    return value is None or value == ""
+
+
 def transcription_stream_requested(value: object) -> bool:
     return transcription_stream_flag(value) is True
 
