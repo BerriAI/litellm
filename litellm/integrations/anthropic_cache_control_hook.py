@@ -150,9 +150,11 @@ def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
     return next((flag is True for flag in flags if flag is not None), None)
 
 
-def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[], str | None]) -> bool | None:
+def _hosted_entry_flag(
+    entry: Mapping[str, object], resolve_provider: Callable[[], str | None], key_provider: str | None = None
+) -> bool | None:
     flag: Final = entry.get("supports_prompt_cache_breakpoint")
-    entry_provider: Final = entry.get("litellm_provider")
+    entry_provider: Final = entry.get("litellm_provider") or key_provider
     if flag is None or entry_provider is None or entry_provider == "openai":
         return None
     return (flag is True) if entry_provider == resolve_provider() else None
@@ -174,7 +176,9 @@ def _hosted_openai_dialect_flag(
     third-party host is still not assumed to speak the dialect. A bare deployment name
     another provider serves (``gpt-6-astra`` on azure_ai) may collide with the openai
     row of the same name, so an exact entry only speaks for a deployment when it is
-    keyed for that deployment's provider.
+    keyed for that deployment's provider. A deployment's ``model_info`` is registered
+    under its provider-prefixed key without a ``litellm_provider``, so that prefix
+    names the provider the entry speaks for.
     """
     import litellm
 
@@ -198,8 +202,13 @@ def _hosted_openai_dialect_flag(
         names["stripped_model_name"],
         names["provider_prefixed_model_name"],
     )
-    entries: Final = (litellm.model_cost.get(candidate) for candidate in candidates)
-    flags: Final = (_hosted_entry_flag(entry, lambda: provider) for entry in entries if isinstance(entry, dict))
+    provider_prefix: Final = f"{provider}/"
+    entries: Final = ((candidate, litellm.model_cost.get(candidate)) for candidate in candidates)
+    flags: Final = (
+        _hosted_entry_flag(entry, lambda: provider, provider if candidate.startswith(provider_prefix) else None)
+        for candidate, entry in entries
+        if isinstance(entry, dict)
+    )
     return next((flag for flag in flags if flag is not None), None)
 
 

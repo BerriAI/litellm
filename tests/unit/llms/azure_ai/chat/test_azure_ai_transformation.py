@@ -881,7 +881,7 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
 
 def test_azure_ai_keeps_prompt_cache_breakpoint_for_a_model_that_supports_it(_local_model_cost_map):
     """
-    Foundry GPT-5.6+ deployments take OpenAI explicit prompt caching, and the breakpoint only
+    Foundry GPT-6 deployments take OpenAI explicit prompt caching, and the breakpoint only
     counts on a content part, so a system message carrying one must reach the request body as
     the content-part list it arrived in while the Anthropic-only fields are still stripped.
     """
@@ -974,6 +974,80 @@ def test_azure_ai_drops_thinking_parts_from_history_while_keeping_the_breakpoint
     assert request["messages"][3]["content"] == [{"type": "text", "text": "thanks"}]
     assert not _find_key_anywhere(request["messages"], "thinking")
     assert not _find_key_anywhere(request["messages"], "data")
+
+
+
+def test_azure_ai_renames_a_cache_control_mark_to_a_breakpoint_for_a_model_that_reads_them(_local_model_cost_map):
+    request = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "stable instructions", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][1]["content"] == [
+        {"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert not _find_key_anywhere(request["messages"], "cache_control")
+
+
+def test_azure_ai_drops_a_file_part_next_to_the_breakpoint_like_the_string_conversion(_local_model_cost_map):
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "file", "file": {"file_id": "file-held-by-another-provider"}},
+            ],
+        }
+    ]
+
+    kept: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+    flattened: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-4o", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert kept["messages"][0]["content"] == [
+        {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert flattened["messages"][0]["content"] == "summarize"
+
+
+@pytest.mark.parametrize(
+    ("registered", "keeps_parts"),
+    [
+        ({"azure_ai/qa-foundry-alias": {"supports_prompt_cache_breakpoint": True}}, True),
+        ({"qa-foundry-alias": {"litellm_provider": "openai", "supports_prompt_cache_breakpoint": True}}, False),
+    ],
+    ids=["azure_ai-entry-opts-in", "openai-entry-does-not-speak-for-azure_ai"],
+)
+def test_azure_ai_keeps_parts_only_when_the_azure_ai_entry_reads_breakpoints(
+    _local_model_cost_map, registered: dict[str, dict[str, object]], keeps_parts: bool
+):
+    litellm.register_model(model_cost=registered, add_to_provider_model_sets=False)
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request = AzureAIStudioConfig().transform_request(
+        model="qa-foundry-alias",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure_ai", "drop_params": True},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == ([breakpoint_part] if keeps_parts else "stable")
 
 
 def test_azure_ai_reference_only_tool_result_is_sent_as_empty_text():

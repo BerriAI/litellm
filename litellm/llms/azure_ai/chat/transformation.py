@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     audio_or_image_in_message_content,
     convert_content_list_to_str,
@@ -30,7 +31,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
-from litellm.utils import add_path_to_api_base, supports_prompt_cache_breakpoint, supports_tool_choice
+from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -47,13 +48,10 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "cache_control",
 )
 
-OPENAI_CHAT_CONTENT_PART_TYPES: Final = frozenset({"text", "image_url", "input_audio", "file", "refusal"})
-
-
 _CONTENT_PARTS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
-def _openai_content_parts(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+def _text_parts(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     content: Final = message.get("content")
     if not isinstance(content, list):
         return ()
@@ -61,7 +59,7 @@ def _openai_content_parts(message: Mapping[str, object]) -> tuple[Mapping[str, o
         parts: Final = _CONTENT_PARTS_ADAPTER.validate_python(content)
     except ValidationError:
         return ()
-    return tuple(part for part in parts if part.get("type") in OPENAI_CHAT_CONTENT_PART_TYPES)
+    return tuple(part for part in parts if part.get("type") == "text")
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
@@ -262,19 +260,27 @@ class AzureAIStudioConfig(OpenAIConfig):
                Azure AI Foundry backends set additionalProperties=false and reject
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
-            2. Transforms list content to a string, except for models that take OpenAI explicit
-               prompt cache breakpoints (`supports_prompt_cache_breakpoint`): Foundry accepts the
-               OpenAI content-part shape for those, and only a content part can carry the
-               breakpoint (a message-level one is silently ignored). Those models keep only the
-               part types OpenAI chat completions define, so a thinking part echoed back as
-               history is dropped the way the string conversion always dropped it.
+            2. Transforms list content to a string, except on deployments that read OpenAI explicit
+               prompt cache breakpoints (the same check the cache-mark dialect uses): only a content
+               part can carry the breakpoint (a message-level one is silently ignored), so those keep
+               their text parts, with each Anthropic `cache_control` mark renamed to a breakpoint the
+               way the openai provider renames it. Every other part is dropped, exactly as the string
+               conversion drops it.
             3. If message contains an image or audio, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
         """
-        stripped_messages: Final = copy.deepcopy(drop_tool_reference_parts_from_tool_messages(messages))
-        keeps_content_parts: Final = supports_prompt_cache_breakpoint(model=model, custom_llm_provider="azure_ai")
+        copied_messages: Final = copy.deepcopy(drop_tool_reference_parts_from_tool_messages(messages))
+        reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, "azure_ai")
+        stripped_messages: Final = (
+            [
+                AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message)
+                for message in copied_messages
+            ]
+            if reads_breakpoints
+            else copied_messages
+        )
         for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
@@ -283,9 +289,9 @@ class AzureAIStudioConfig(OpenAIConfig):
             if audio_or_image_in_message_content(message):
                 continue
 
-            openai_parts = _openai_content_parts(message) if keeps_content_parts else ()
-            if openai_parts:
-                message_dict["content"] = list(openai_parts)
+            text_parts = _text_parts(message) if reads_breakpoints else ()
+            if text_parts:
+                message_dict["content"] = list(text_parts)
                 continue
 
             texts = convert_content_list_to_str(message=message)
