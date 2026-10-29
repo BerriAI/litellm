@@ -311,8 +311,8 @@ def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed
                 },
             },
             response_obj=None,
-            start_time=datetime.now(),
-            end_time=datetime.now(),
+            start_time=datetime(2025, 1, 1),
+            end_time=datetime(2025, 1, 1),
         )
 
         event = span.add_event.call_args.args[0]

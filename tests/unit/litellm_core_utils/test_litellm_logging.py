@@ -11675,7 +11675,7 @@ def _prompt_failure_logging_obj(litellm_params: Mapping[str, object] | None = No
         messages=[{"role": "user", "content": SCRUB_PROMPT}],
         stream=False,
         call_type="completion",
-        start_time=time.time(),
+        start_time=datetime.datetime(2025, 1, 1),
         litellm_call_id="failure-scrub",
         function_id="failure-scrub",
     )
