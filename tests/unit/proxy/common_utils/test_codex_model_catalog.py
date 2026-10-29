@@ -429,8 +429,11 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             upstream_model="openai/gpt-5.5",
             display_name="Team 5.5",
             service_tiers=(["ultrafast"], None),
+            search_tool_support=(None, None),
         ),
-        CodexCatalogRow(id="plain", upstream_model="openai/some-unmapped-model", service_tiers=(None,)),
+        CodexCatalogRow(
+            id="plain", upstream_model="openai/some-unmapped-model", service_tiers=(None,), search_tool_support=(None,)
+        ),
     )
 
 
@@ -452,7 +455,12 @@ def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
     (row,) = codex_catalog_rows(listing, (("gpt-6", "gpt-6"),), router)
 
     assert row == CodexCatalogRow(
-        id="gpt-6", mode="chat", max_input_tokens=9, upstream_model="openai/gpt-6-astra", service_tiers=(["ultrafast"],)
+        id="gpt-6",
+        mode="chat",
+        max_input_tokens=9,
+        upstream_model="openai/gpt-6-astra",
+        service_tiers=(["ultrafast"],),
+        search_tool_support=(None,),
     )
     (entry,) = json.loads(codex_model_list_body(listing, (("gpt-6", "gpt-6"),), router))["models"]
     assert (entry["slug"], entry["display_name"], [tier["id"] for tier in entry["service_tiers"]]) == (
@@ -533,3 +541,51 @@ def test_catalog_rows_without_a_router_carry_only_the_listing():
     listing = ({"id": "plain", "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"},)
 
     assert codex_catalog_rows(listing, (("plain", "plain"),), None) == (CodexCatalogRow(id="plain", mode="chat"),)
+
+
+def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when_every_deployment_answers_it():
+    claude = "anthropic/claude-sonnet-5-5"
+    converse = "bedrock/us.anthropic.claude-sonnet-5-5"
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": {"model": claude}},
+            {
+                "model_name": "claude-off",
+                "litellm_params": {"model": claude},
+                "model_info": {"supports_search_tool": False},
+            },
+            {"model_name": "converse", "litellm_params": {"model": converse}},
+            {
+                "model_name": "converse-on",
+                "litellm_params": {"model": converse},
+                "model_info": {"supports_search_tool": True},
+            },
+            {"model_name": "gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5"}},
+            {
+                "model_name": "gpt-5.5-off",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {"supports_search_tool": False},
+            },
+            {"model_name": "mixed", "litellm_params": {"model": claude}},
+            {"model_name": "mixed", "litellm_params": {"model": converse}},
+        ]
+    )
+    names = ("claude", "claude-off", "converse", "converse-on", "gpt-5.5", "gpt-5.5-off", "mixed")
+    listing = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "x", "mode": "chat", "max_input_tokens": 1000000}
+        for name in names
+    )
+
+    models = json.loads(codex_model_list_body(listing, tuple((name, name) for name in names), router))["models"]
+
+    stock_support = bundled_codex_models()["gpt-5.5"].model_dump()["supports_search_tool"]
+    assert {entry["slug"]: entry["supports_search_tool"] for entry in models} == {
+        "claude": True,
+        "claude-off": False,
+        "converse": False,
+        "converse-on": True,
+        "gpt-5.5": stock_support,
+        "gpt-5.5-off": False,
+        "mixed": False,
+    }
+    assert models[0]["context_window"] == 1000000

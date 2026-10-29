@@ -1010,9 +1010,7 @@ class _RecordingCustomLLM(CustomLLM):
 
     def completion(self, *args: object, **kwargs: object) -> ModelResponse:
         self.sent_messages.extend(cast(list[object], kwargs["messages"]))
-        return litellm.completion(
-            model="gpt-5.6", messages=[{"role": "user", "content": "Hi."}], mock_response="dog."
-        )
+        return litellm.completion(model="gpt-5.6", messages=[{"role": "user", "content": "Hi."}], mock_response="dog.")
 
 
 def test_responses_over_a_custom_provider_send_a_compaction_item_as_summary_text(
@@ -1198,3 +1196,281 @@ def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_th
             ],
         }
     ]
+
+
+_CODEX_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the deferred app tools.",
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
+_SHELL_TOOL: Final = {
+    "type": "function",
+    "name": "shell",
+    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+}
+_CALENDAR_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}},
+    "required": ["title"],
+    "additionalProperties": False,
+}
+_CODEX_SEARCH_CALL: Final = {
+    "type": "tool_search_call",
+    "call_id": "search-1",
+    "execution": "client",
+    "arguments": {"query": "calendar create", "limit": 1},
+}
+_CODEX_SEARCH_OUTPUT: Final = {
+    "type": "tool_search_output",
+    "call_id": "search-1",
+    "status": "completed",
+    "execution": "client",
+    "tools": [
+        {
+            "type": "function",
+            "name": "mcp__codex_apps__calendar_create_event",
+            "description": "Create a calendar event.",
+            "defer_loading": True,
+            "parameters": _CALENDAR_PARAMETERS,
+        }
+    ],
+}
+
+
+def _deferred_namespace(name: str, *members: str) -> Mapping[str, object]:
+    return {
+        "type": "namespace",
+        "name": name,
+        "description": f"{name} tools",
+        "tools": [
+            {"type": "function", "name": member, "defer_loading": True, "parameters": _CALENDAR_PARAMETERS}
+            for member in members
+        ],
+    }
+
+
+def _claude_tool_use(tool_id: str, name: str, tool_input: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_tool_use",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [{"type": "tool_use", "id": tool_id, "name": name, "input": tool_input}],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _sent(route: respx.Route) -> Mapping[str, object]:
+    return json.loads(route.calls.last.request.content)
+
+
+def test_responses_over_anthropic_offer_codex_tool_search_as_a_function_and_hold_back_deferred_tools(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "ok"})
+    )
+
+    litellm.responses(
+        model=_MODEL,
+        input="Create a calendar event",
+        tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL, _deferred_namespace("mcp__vercel__", "list_projects")],
+        api_key="mock_api_key",
+    )
+
+    sent_tools: Final = _sent(route)["tools"]
+    assert [tool["name"] for tool in sent_tools] == ["tool_search", "shell"]
+    assert sent_tools[0]["description"] == _CODEX_TOOL_SEARCH["description"]
+    assert sent_tools[0]["input_schema"] == _CODEX_TOOL_SEARCH["parameters"]
+    assert "defer_loading" not in json.dumps(sent_tools)
+
+
+@pytest.mark.parametrize("tool_input", [{"query": "calendar create", "limit": 1}, {"query": "calendar create"}])
+def test_claude_calling_tool_search_comes_back_as_a_client_tool_search_call(
+    respx_mock: respx.MockRouter, tool_input: Mapping[str, object]
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_claude_tool_use("toolu_search", "tool_search", tool_input)
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL, input="Create a calendar event", tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL], api_key="mock_api_key"
+    )
+
+    (item,) = response.output
+    assert (item.type, item.execution, item.call_id, item.arguments) == (
+        "tool_search_call",
+        "client",
+        "toolu_search",
+        tool_input,
+    )
+
+
+def test_claude_calling_a_function_named_tool_search_stays_a_function_call_without_codex_tool_search(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_claude_tool_use("toolu_search", "tool_search", {"query": "calendar"})
+    )
+    own_tool_search: Final = {**_SHELL_TOOL, "name": "tool_search"}
+
+    response: Final = litellm.responses(model=_MODEL, input="Search", tools=[own_tool_search], api_key="mock_api_key")
+
+    (item,) = response.output
+    assert (item.type, item.name, json.loads(item.arguments)) == ("function_call", "tool_search", {"query": "calendar"})
+
+
+def test_streamed_claude_tool_search_is_one_client_tool_search_call_item(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_search_stream",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "toolu_search", "name": "tool_search", "input": {}},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"query": "calendar create",'},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": ' "limit": 1}'},
+                },
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input="Create a calendar event",
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+
+    done: Final = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    assert [(item.type, item.execution, item.call_id, item.arguments) for item in done] == [
+        ("tool_search_call", "client", "toolu_search", {"query": "calendar create", "limit": 1})
+    ]
+    assert not any(event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA for event in events)
+    assert [item.type for item in events[-1].response.output] == ["tool_search_call"]
+
+
+def test_codex_tool_search_output_loads_the_found_tool_and_answers_the_search_on_anthropic(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_claude_tool_use("toolu_event", "mcp__codex_apps__calendar_create_event", {"title": "Standup"})
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL,
+        input=[
+            {"role": "user", "content": "Create a calendar event called Standup"},
+            _CODEX_SEARCH_CALL,
+            _CODEX_SEARCH_OUTPUT,
+        ],
+        tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+        api_key="mock_api_key",
+    )
+
+    sent: Final = _sent(route)
+    assert [(tool["name"], tool["input_schema"]) for tool in sent["tools"][1:]] == [
+        ("shell", _SHELL_TOOL["parameters"]),
+        ("mcp__codex_apps__calendar_create_event", _CALENDAR_PARAMETERS),
+    ]
+    assert "defer_loading" not in json.dumps(sent["tools"])
+    (assistant, answer) = sent["messages"][1:]
+    assert [block for block in assistant["content"] if block["type"] == "tool_use"] == [
+        {"type": "tool_use", "id": "search-1", "name": "tool_search", "input": {"query": "calendar create", "limit": 1}}
+    ]
+    (result,) = answer["content"]
+    assert result["type"] == "tool_result" and result["tool_use_id"] == "search-1"
+    assert "mcp__codex_apps__calendar_create_event" in json.dumps(result["content"])
+    (item,) = response.output
+    assert (item.type, item.name, json.loads(item.arguments)) == (
+        "function_call",
+        "mcp__codex_apps__calendar_create_event",
+        {"title": "Standup"},
+    )
+
+
+def test_a_namespace_codex_loads_through_tool_search_is_callable_and_its_calls_keep_the_namespace(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_claude_tool_use("toolu_projects", "mcp__vercel____list_projects", {"title": "x"})
+    )
+    loaded: Final = _deferred_namespace("mcp__vercel__", "list_projects", "get_project")
+
+    response: Final = litellm.responses(
+        model=_MODEL,
+        input=[
+            {"role": "user", "content": "List my Vercel projects"},
+            {**_CODEX_SEARCH_CALL, "arguments": {"query": "vercel projects"}},
+            {**_CODEX_SEARCH_OUTPUT, "tools": [loaded]},
+        ],
+        tools=[_CODEX_TOOL_SEARCH, loaded],
+        api_key="mock_api_key",
+    )
+
+    assert [tool["name"] for tool in _sent(route)["tools"]] == [
+        "tool_search",
+        "mcp__vercel____list_projects",
+        "mcp__vercel____get_project",
+    ]
+    (item,) = response.output
+    assert (item.type, item.namespace, item.name) == ("function_call", "mcp__vercel__", "list_projects")
+
+
+def test_codex_tool_search_output_loading_the_same_tool_twice_sends_it_once(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "ok"})
+    )
+
+    litellm.responses(
+        model=_MODEL,
+        input=[
+            {"role": "user", "content": "Create two events"},
+            _CODEX_SEARCH_CALL,
+            _CODEX_SEARCH_OUTPUT,
+            {**_CODEX_SEARCH_CALL, "call_id": "search-2"},
+            {**_CODEX_SEARCH_OUTPUT, "call_id": "search-2"},
+        ],
+        tools=[_CODEX_TOOL_SEARCH],
+        api_key="mock_api_key",
+    )
+
+    assert [tool["name"] for tool in _sent(route)["tools"]] == ["tool_search", "mcp__codex_apps__calendar_create_event"]

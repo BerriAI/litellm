@@ -9,6 +9,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.responses.additional_tools import hoist_additional_tools
+from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -48,9 +49,12 @@ class LiteLLMCompletionTransformationHandler:
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
         hoisted: Final = hoist_additional_tools(input, responses_api_request.get("tools"))
-        bridged_input: Final = hoisted.input
+        searched: Final = bridge_client_tool_search(hoisted.input, hoisted.tools)
+        bridged_input: Final = searched.input
         bridged_request: Final[ResponsesAPIOptionalRequestParams] = (
-            {**responses_api_request, "tools": list(hoisted.tools)} if hoisted.hoisted else responses_api_request
+            {**responses_api_request, "tools": list(searched.tools)}
+            if hoisted.hoisted or searched.bridged
+            else responses_api_request
         )
         litellm_completion_request: Final[dict] = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(

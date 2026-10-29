@@ -102,6 +102,7 @@ class CodexFallbackModel(LiteLLMBaseModel):
     experimental_supported_tools: tuple[()] = ()
     context_window: int | None
     base_instructions: str
+    supports_search_tool: bool = False
 
 
 class CodexStockUpgrade(LiteLLMBaseModel):
@@ -128,6 +129,7 @@ class CodexStockModel(LiteLLMBaseModel):
     upgrade: CodexStockUpgrade | None = None
     service_tiers: tuple[CodexServiceTier, ...] = ()
     default_service_tier: str | None = None
+    supports_search_tool: bool = False
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -150,6 +152,7 @@ class CodexCatalogRow:
     upstream_model: str | None = None
     display_name: str | None = None
     service_tiers: tuple[object, ...] = ()
+    search_tool_support: tuple[bool | None, ...] = ()
 
 
 @cache
@@ -242,6 +245,12 @@ def configured_service_tiers(
     return offered
 
 
+def offered_search_tool(per_deployment: Sequence[bool | None]) -> bool | None:
+    if False in per_deployment:
+        return False
+    return True if per_deployment and None not in per_deployment else None
+
+
 def _codex_can_drive(row: CodexCatalogRow) -> bool:
     return "*" not in row.id and (row.mode is None or row.mode in CODEX_CHAT_MODES)
 
@@ -266,6 +275,7 @@ def _entry(
         {tier.id: tier for tier in (stock_model.service_tiers if stock_model is not None else ())}
     )
     configured: Final = configured_service_tiers(row.service_tiers, row.id, stock_tiers)
+    search_tool: Final = offered_search_tool(row.search_tool_support)
     if stock_model is None:
         return CodexFallbackModel(
             slug=row.id,
@@ -274,6 +284,7 @@ def _entry(
             service_tiers=configured if configured is not None else (),
             context_window=row.max_input_tokens,
             base_instructions=instructions,
+            supports_search_tool=search_tool is True,
         )
     upgrade: Final = (
         stock_model.upgrade if stock_model.upgrade is not None and stock_model.upgrade.model in served else None
@@ -286,6 +297,7 @@ def _entry(
         "visibility": "list",
         "supported_in_api": True,
         "upgrade": upgrade,
+        **({} if search_tool is None else {"supports_search_tool": search_tool}),
     }
     if configured is None:
         return stock_model.model_copy(update=listing)
@@ -385,6 +397,7 @@ def _catalog_row(
         upstream_model=llm_router.get_routable_upstream_model(lookup_id, team_id) if llm_router is not None else None,
         display_name=llm_router.get_configured_display_name(label_id) if llm_router is not None else None,
         service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
+        search_tool_support=llm_router.get_search_tool_support(lookup_id, team_id) if llm_router is not None else (),
     )
 
 
