@@ -9,12 +9,14 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
+SELECTION_RESERVATION_MAX_KEYS: Final = 10_000
 
 
 class _ModelInfo(TypedDict, total=False):
@@ -23,6 +25,7 @@ class _ModelInfo(TypedDict, total=False):
 
 class _Metadata(TypedDict, total=False):
     model_group: ReadOnly[str | None]
+    model_info: ReadOnly[_ModelInfo | None]
 
 
 class _LitellmParams(TypedDict, total=False):
@@ -57,6 +60,14 @@ def _model_group(metadata: _Metadata | None) -> str | None:
     return metadata.get("model_group") if metadata else None
 
 
+def _deployment_id(model_info: _ModelInfo | None) -> str | int | None:
+    return model_info.get("id") if model_info else None
+
+
+def _routed_deployment_id(metadata: _Metadata | None) -> str | int | None:
+    return _deployment_id(metadata.get("model_info")) if metadata else None
+
+
 def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
     if is_batch_retrieve_call_type(kwargs.get("call_type")):
         return None
@@ -65,11 +76,19 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
     except ValidationError:
         return None
     litellm_params: Final = call.get("litellm_params") or _LitellmParams()
-    model_info: Final = litellm_params.get("model_info")
-    model_group: Final = _model_group(litellm_params.get("litellm_metadata")) or _model_group(
-        litellm_params.get("metadata")
+    routing_metadata: Final = (litellm_params.get("litellm_metadata"), litellm_params.get("metadata"))
+    model_group: Final = next((group for group in map(_model_group, routing_metadata) if group is not None), None)
+    deployment_id: Final = next(
+        (
+            deployment_id
+            for deployment_id in (
+                _deployment_id(litellm_params.get("model_info")),
+                *map(_routed_deployment_id, routing_metadata),
+            )
+            if deployment_id is not None
+        ),
+        None,
     )
-    deployment_id: Final = model_info.get("id") if model_info else None
     if model_group is None or deployment_id is None:
         return None
     return model_group, str(deployment_id)
@@ -137,24 +156,30 @@ class LeastBusyLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache, clock: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        router_cache: DualCache,
+        clock: Callable[[], float] = time.monotonic,
+        reservation_store: _ReservationStore | None = None,
+    ):
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
         self._clock = clock
-
-    def _reservation_store(self) -> _ReservationStore:
-        return self.router_cache.in_memory_cache
+        self._reservations: Final[_ReservationStore] = (
+            reservation_store
+            if reservation_store is not None
+            else InMemoryCache(max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS, clock=clock)
+        )
 
     def _live_reservations(self, key: str, now: float) -> tuple[float, ...]:
-        raw: Final = self._reservation_store().get_cache(_reservation_key(key))
+        raw: Final = self._reservations.get_cache(_reservation_key(key))
         return _unexpired(_RESERVATION_TIMES.validate_python(raw) or (), now)
 
     def _store_reservations(self, key: str, times: tuple[float, ...]) -> None:
         # InMemoryCache keeps a live key's first TTL, so drop the key to restart it
-        store: Final = self._reservation_store()
-        store.delete_cache(_reservation_key(key))
+        self._reservations.delete_cache(_reservation_key(key))
         if times:
-            store.set_cache(_reservation_key(key), times, ttl=SELECTION_RESERVATION_TTL_SECONDS)
+            self._reservations.set_cache(_reservation_key(key), times, ttl=SELECTION_RESERVATION_TTL_SECONDS)
 
     def _select(
         self,
@@ -235,9 +260,8 @@ class LeastBusyLoggingHandler(CustomLogger):
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
-                return self._select(healthy_deployments, keys, shared, reserve)
-        local: Final = _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
-        return self._select(healthy_deployments, keys, local, reserve)
+                return self._select(healthy_deployments, keys, self._at_least_this_workers(keys, shared), reserve)
+        return self._select(healthy_deployments, keys, self._this_workers_counts(keys), reserve)
 
     @with_service_target("router_usage")
     async def async_get_available_deployments(
@@ -251,9 +275,14 @@ class LeastBusyLoggingHandler(CustomLogger):
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
-                return self._select(healthy_deployments, keys, shared, reserve)
-        local: Final = _local_counts(await self.router_cache.async_batch_get_cache(list(keys), local_only=True), keys)
-        return self._select(healthy_deployments, keys, local, reserve)
+                return self._select(healthy_deployments, keys, self._at_least_this_workers(keys, shared), reserve)
+        return self._select(healthy_deployments, keys, self._this_workers_counts(keys), reserve)
+
+    def _this_workers_counts(self, keys: tuple[str, ...]) -> tuple[int, ...]:
+        return _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
+
+    def _at_least_this_workers(self, keys: tuple[str, ...], shared: tuple[int, ...]) -> tuple[int, ...]:
+        return tuple(max(counts) for counts in zip(shared, self._this_workers_counts(keys), strict=True))
 
     def _increment(self, kwargs: Mapping[str, object], delta: int) -> None:
         ref: Final = _deployment_ref(kwargs)

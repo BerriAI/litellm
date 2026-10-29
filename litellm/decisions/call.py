@@ -557,7 +557,6 @@ def prepare_call(
             litellm_params={
                 "litellm_call_id": kwargs.get("litellm_call_id"),
                 "api_base": provider_config.get_complete_url(resolved_api_base, canonical_model),
-                **({} if (model_info := kwargs.get("model_info")) is None else {"model_info": model_info}),
             },
             custom_llm_provider=provider,
         )

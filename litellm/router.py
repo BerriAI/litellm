@@ -200,7 +200,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     reject_recursive_compactor,
     surface_for_call,
 )
-from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm.router_strategy.least_busy import SELECTION_RESERVATION_MAX_KEYS, LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
@@ -1463,6 +1463,7 @@ class Router:
         self.cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
+        self._least_busy_reservations: InMemoryCache = InMemoryCache(max_size_in_memory=SELECTION_RESERVATION_MAX_KEYS)
         self._claude_code_session_router_cache: DualCache = DualCache(
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(),
@@ -1967,7 +1968,9 @@ class Router:
         selector: RouterStrategySelector | None = None
         match self._normalize_strategy(strategy):
             case RoutingStrategy.LEAST_BUSY.value:
-                selector = LeastBusyLoggingHandler(router_cache=self.cache)
+                selector = LeastBusyLoggingHandler(
+                    router_cache=self.cache, reservation_store=self._least_busy_reservations
+                )
             case RoutingStrategy.USAGE_BASED_ROUTING.value:
                 selector = LowestTPMLoggingHandler(
                     router_cache=self.cache,

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from typing import Final
 
 import httpx
@@ -11,7 +12,7 @@ import litellm
 from litellm import Router
 
 from litellm.caching.caching import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.least_busy import (
@@ -62,6 +63,20 @@ class SharedRedisCounters:
         return self.batch_get_counts(key_list)
 
 
+class SlowRedisRead(SharedRedisCounters):
+    """Answers a count read with the counts from when the read started, after letting other work run."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.while_reading: Callable[[], None] = lambda: None
+
+    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+        counts_when_asked: Final = self.batch_get_counts(key_list)
+        await asyncio.sleep(0)
+        self.while_reading()
+        return counts_when_asked
+
+
 def _worker(shared: SharedRedisCounters | None) -> LeastBusyLoggingHandler:
     cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=shared)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     return LeastBusyLoggingHandler(router_cache=cache)
@@ -83,6 +98,16 @@ async def test_worker_routes_around_a_request_another_worker_started() -> None:
     await streaming_worker.async_log_success_event(_call_kwargs("dep-a"), None, None, None)
 
     assert await picking_worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_starts_while_redis_is_read_still_counts_on_its_deployment() -> None:
+    redis: Final = SlowRedisRead()
+    worker: Final = _worker(redis)
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    redis.while_reading = lambda: worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
 
 
 def test_sync_pick_reads_the_shared_counts() -> None:
@@ -503,16 +528,32 @@ def test_a_started_request_moves_its_reservation_into_the_in_flight_count() -> N
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
 
 
-def test_a_request_started_through_another_selector_on_the_same_cache_releases_the_reservation() -> None:
+def test_a_request_started_through_another_selector_of_the_router_releases_the_reservation() -> None:
     cache: Final = DualCache()
-    picker: Final = LeastBusyLoggingHandler(router_cache=cache)
-    registered: Final = LeastBusyLoggingHandler(router_cache=cache)
+    reservations: Final = InMemoryCache()
+    picker: Final = LeastBusyLoggingHandler(router_cache=cache, reservation_store=reservations)
+    registered: Final = LeastBusyLoggingHandler(router_cache=cache, reservation_store=reservations)
 
     assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
     registered.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
 
     assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
     assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+
+def _router_pick(router: Router) -> str:
+    deployment: Final = router.get_available_deployment(ROUTER_GROUP, request_kwargs={"metadata": {}})
+    return deployment["model_info"]["id"]
+
+
+def test_a_pick_stays_reserved_while_other_router_keys_fill_its_cache() -> None:
+    router: Final = _least_busy_router()
+
+    first: Final = _router_pick(router)
+    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
+        router.cache.set_cache(f"deployment-usage-{index}", 1, local_only=True, ttl=60)
+
+    assert _router_pick(router) != first
 
 
 @pytest.mark.asyncio
