@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import openai
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -41,7 +41,6 @@ from litellm.types.utils import CountContextManagement, LlmProviders, TokenCount
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
-_SYSTEM: Final = TypeAdapter(str | list[dict[str, object]])
 
 
 def _workload_identity_config(
@@ -98,13 +97,6 @@ def _count_error(model_to_use: str, request_model: str, message: str, status_cod
     )
 
 
-def _clearing_system(system: object) -> str | Sequence[Mapping[str, object]] | None:
-    try:
-        return _SYSTEM.validate_python(system)
-    except ValidationError:
-        return None
-
-
 async def _sent_messages(
     model: str,
     messages: Sequence[Mapping[str, object]],
@@ -122,7 +114,7 @@ async def _sent_messages(
                     model=model,
                     messages=messages,
                     tools=tools,
-                    system=_clearing_system(system),
+                    system=system,
                     context_management=context_management,
                 )
             except AnthropicContextManagementError as error:

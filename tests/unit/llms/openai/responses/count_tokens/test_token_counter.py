@@ -551,8 +551,12 @@ async def test_anthropic_format_counts_the_history_the_clear_edit_leaves_for_inf
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "system",
-    ["Follow the policy. " * 1500, [{"type": "text", "text": "Follow the policy. " * 1500}]],
-    ids=["string", "blocks"],
+    [
+        "Follow the policy. " * 1500,
+        [{"type": "text", "text": "Follow the policy. " * 1500}],
+        ["Stray.", {"type": "text", "text": "Follow the policy. " * 1500}],
+    ],
+    ids=["string", "blocks", "blocks_beside_a_stray_string"],
 )
 async def test_anthropic_format_input_tokens_trigger_counts_the_system_prompt_like_inference(
     monkeypatch: pytest.MonkeyPatch, system: object

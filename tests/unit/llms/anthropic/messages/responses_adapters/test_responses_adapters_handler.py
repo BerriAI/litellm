@@ -816,6 +816,7 @@ async def _cleared_bridge(
     stream: bool,
     edits: list[dict[str, object]],
     drop_params: bool = False,
+    system: object = None,
 ) -> tuple[object, Mapping[str, object]]:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
@@ -834,6 +835,7 @@ async def _cleared_bridge(
         custom_llm_provider="openai",
         context_management={"edits": edits},
         drop_params=drop_params,
+        system=system,
     )
     body: Final = json.loads(upstream.calls.last.request.content)
     if not stream:
@@ -1011,6 +1013,50 @@ async def test_under_drop_params_a_malformed_edit_still_clears_without_its_bad_f
     ]
     assert isinstance(served, dict)
     assert served["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
+
+
+def _cleared_outputs(body: Mapping[str, object]) -> list[bool]:
+    from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
+
+    outputs: Final = {
+        item["call_id"]: item["output"] for item in body["input"] if item.get("type") == "function_call_output"
+    }
+    return [CLEARED_TOOL_RESULT_PLACEHOLDER in json.dumps(outputs[f"toolu_{i}"]) for i in range(3)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system",
+    [7, {"type": "text", "text": "Be brief."}, ["Be brief."], ["Be brief.", {"type": "text", "text": "Be kind."}]],
+    ids=["number", "object", "strings", "mixed_list"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+async def test_clear_tool_uses_still_clears_when_the_system_prompt_is_not_text_or_a_block_list(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, system: object, stream: bool
+) -> None:
+    _, body = await _cleared_bridge(respx_mock, monkeypatch, stream=stream, edits=[dict(CLEAR_EDIT)], system=system)
+
+    assert _cleared_outputs(body) == [True, True, False]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("system", "expect_cleared"),
+    [
+        (["Stray.", {"type": "text", "text": "Follow the policy. " * 1500}], [True, True, False]),
+        (["Follow the policy. " * 1500], [False, False, False]),
+    ],
+    ids=["text_block_counts", "stray_string_does_not"],
+)
+async def test_input_tokens_trigger_counts_the_text_blocks_of_a_system_list_with_stray_items(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, system: object, expect_cleared: list[bool]
+) -> None:
+    trigger_between_messages_and_system: Final = litellm.token_counter(model="gpt-4o", messages=_three_reads()) + 1000
+    edit: Final = {**CLEAR_EDIT, "trigger": {"type": "input_tokens", "value": trigger_between_messages_and_system}}
+
+    _, body = await _cleared_bridge(respx_mock, monkeypatch, stream=False, edits=[edit], system=system)
+
+    assert _cleared_outputs(body) == expect_cleared
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.asyncify import (
     run_async_function,  # pyright: ignore[reportUnknownVariableType]  # untyped helper
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_for_wire,
@@ -54,6 +54,7 @@ from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
 BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
+_SYSTEM_ITEMS: Final = TypeAdapter(list[object])
 _SPEC: Final = TypeAdapter(dict[str, object])
 _SplitEdits: TypeAlias = tuple[dict[str, object] | None, Sequence[Mapping[str, object]]]
 AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, object]] | None
@@ -83,12 +84,22 @@ def _split_context_management(
     )
 
 
+def _system_blocks(system: object) -> str | Sequence[Mapping[str, object]] | None:
+    if system is None or isinstance(system, str):
+        return system
+    try:
+        items: Final = _SYSTEM_ITEMS.validate_python(system)
+    except ValidationError:
+        return None
+    return tuple(block for block in map(as_str_mapping, items) if block is not None)
+
+
 async def _polyfilled(
     *,
     model: str,
     messages: AnthropicRequestMessages,
     tools: Sequence[AllAnthropicToolsValues | Mapping[str, object]] | None,
-    system: str | Sequence[Mapping[str, object]] | None,
+    system: object,
     edits: Sequence[Mapping[str, object]],
     kwargs: Mapping[str, object],
 ) -> PolyfillResult | None:
@@ -97,12 +108,13 @@ async def _polyfilled(
         return None
     reject_malformed_tool_result_text(messages, model, kwargs)
     drop_invalid_edits: Final = drops_unsupported_params(kwargs.get("drop_params"))
+    blocks: Final = _system_blocks(system)
     try:
         return await apply_context_management(
             model=model,
             messages=_BLOCK_LIST.validate_python(messages),
             tools=_BLOCK_LIST.validate_python(tools) if tools else None,
-            system=system if system is None or isinstance(system, str) else _BLOCK_LIST.validate_python(system),
+            system=blocks if blocks is None or isinstance(blocks, str) else _BLOCK_LIST.validate_python(blocks),
             context_management_spec={"edits": [dict(edit) for edit in edits]},
             drop_invalid_edits=drop_invalid_edits,
         )
@@ -120,7 +132,7 @@ async def count_view_messages(
     model: str,
     messages: Sequence[Mapping[str, object]],
     tools: Sequence[Mapping[str, object]] | None,
-    system: str | Sequence[Mapping[str, object]] | None,
+    system: object,
     context_management: CountContextManagement | None,
 ) -> Sequence[Mapping[str, object]]:
     """The messages /v1/messages sends the Responses API once the polyfill has run the edits it can't run natively."""
