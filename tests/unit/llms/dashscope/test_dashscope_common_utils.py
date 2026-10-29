@@ -86,6 +86,21 @@ def test_openai_base_derives_from_the_domain(monkeypatch: pytest.MonkeyPatch):
     )
 
 
+@pytest.mark.parametrize(
+    "endpoint_url",
+    [
+        "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        f"{WORKSPACE}/api/v1/services/aigc/video-generation/video-synthesis",
+    ],
+)
+def test_openai_base_keeps_a_native_endpoint_url(monkeypatch: pytest.MonkeyPatch, endpoint_url: str):
+    monkeypatch.setenv("DASHSCOPE_API_BASE", endpoint_url)
+
+    assert resolve_dashscope_openai_api_base(None) == endpoint_url
+    assert resolve_dashscope_openai_api_base(endpoint_url) == endpoint_url
+    assert resolve_dashscope_openai_api_base(f"{WORKSPACE}/api/v1") == f"{WORKSPACE}/compatible-mode/v1"
+
+
 def test_openai_base_keeps_unrecognized_hosts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
 

@@ -96,12 +96,18 @@ def resolve_dashscope_endpoints(api_base: str | None) -> DashScopeEndpoints | No
     )
 
 
+def is_dashscope_native_endpoint_url(api_base: str) -> bool:
+    return urlparse(api_base).path.rstrip("/").startswith(f"{DASHSCOPE_NATIVE_V1_PATH}/")
+
+
 def resolve_dashscope_openai_api_base(
     api_base: str | None,
     env_var: str = "DASHSCOPE_API_BASE",
     default: str = f"{DASHSCOPE_DEFAULT_ORIGIN}{DASHSCOPE_CHAT_COMPATIBLE_PATH}",
 ) -> str:
     candidate: Final = api_base or get_secret_str(env_var)
+    if candidate and is_dashscope_native_endpoint_url(candidate):
+        return candidate
     endpoints: Final = resolve_dashscope_endpoints(candidate)
     if endpoints is not None:
         return endpoints.openai

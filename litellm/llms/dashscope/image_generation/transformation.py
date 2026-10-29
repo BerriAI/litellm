@@ -25,7 +25,6 @@ Response format:
 
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
-from urllib.parse import urlparse
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -43,7 +42,7 @@ from litellm.types.utils import ImageObject, ImageResponse
 from ..common_utils import (
     DASHSCOPE_CHAT_COMPATIBLE_PATH,
     DASHSCOPE_IMAGE_PATH,
-    DASHSCOPE_NATIVE_V1_PATH,
+    is_dashscope_native_endpoint_url,
     resolve_dashscope_endpoints,
 )
 
@@ -70,10 +69,6 @@ OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
     "1024x1792": "1024*1792",
     "2048x2048": "2048*2048",
 }
-
-
-def _is_native_endpoint_url(api_base: str) -> bool:
-    return urlparse(api_base).path.rstrip("/").startswith(f"{DASHSCOPE_NATIVE_V1_PATH}/")
 
 
 class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
@@ -134,7 +129,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         configured_api_base: Final = api_base or self._configured_chat_api_base()
         if not configured_api_base or configured_api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
             return image_env_api_base or self._default_image_api_base()
-        if _is_native_endpoint_url(configured_api_base):
+        if is_dashscope_native_endpoint_url(configured_api_base):
             return configured_api_base
         endpoints: Final = resolve_dashscope_endpoints(configured_api_base)
         if endpoints is None:
