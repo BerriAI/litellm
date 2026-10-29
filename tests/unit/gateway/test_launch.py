@@ -1,3 +1,4 @@
+import gc
 import importlib
 import os
 import socket
@@ -140,7 +141,12 @@ class TestUvicornArgv:
         ):
             monkeypatch.delenv(key, raising=False)
 
-        served: Final = import_from_string(cast(str, _uvicorn_params(uvicorn_argv((), {}))["app"]))
+        params: Final = _uvicorn_params(uvicorn_argv((), {}))
+        assert params["factory"] is True
+        try:
+            served: Final = import_from_string(cast(str, params["app"]))()
+        finally:
+            gc.unfreeze()
         assert served is importlib.import_module("gateway.main").app
 
 

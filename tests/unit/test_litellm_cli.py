@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import sys
-import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
@@ -11,6 +10,11 @@ import pytest
 
 import litellm
 from litellm_cli.main import cli
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 _HELP_ARGV: Final = (
     ("--help",),

@@ -1,7 +1,10 @@
+import gc
+import importlib
 import inspect
 import json
 import logging
 import os
+from collections.abc import Iterator
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -4109,6 +4112,48 @@ general_settings:
     hosted_keys:
       - MY_PROVIDER_KEY
 """
+
+
+_PROBE_LOGGER: Final = "litellm-test-worker-log-config"
+
+
+@pytest.fixture
+def probe_logger() -> Iterator[logging.Logger]:
+    logger: Final = logging.getLogger(_PROBE_LOGGER)
+    yield logger
+    logger.setLevel(logging.NOTSET)
+    gc.unfreeze()
+
+
+def _log_config_source(kind: str, tmp_path: Path) -> str | dict[str, object]:
+    config: Final[dict[str, object]] = {"version": 1, "incremental": True, "loggers": {_PROBE_LOGGER: {"level": "ERROR"}}}
+    if kind == "dict":
+        return config
+    written: Final = tmp_path / f"log_config.{kind}"
+    written.write_text(json.dumps(config) if kind == "json" else yaml.dump(config))
+    return str(written)
+
+
+@pytest.mark.parametrize("kind", ["dict", "json", "yaml"])
+def test_a_spawned_worker_applies_the_log_config_only_after_loading_the_app(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, probe_logger: logging.Logger
+) -> None:
+    monkeypatch.setenv(proxy_cli.WORKER_LOG_CONFIG_ENV, "")
+    log_config: Final = _log_config_source(kind, tmp_path)
+    worker_args: Final = {
+        "app": "litellm.proxy.proxy_server:app",
+        "log_config": log_config,
+        **ProxyInitializationHelpers.child_process_uvicorn_overrides(log_config),
+    }
+    assert probe_logger.level == logging.ERROR
+
+    probe_logger.setLevel(logging.NOTSET)
+    uvicorn.Config(**worker_args)
+    assert probe_logger.level == logging.NOTSET
+
+    served: Final = import_from_string(worker_args["app"])()
+    assert served is importlib.import_module("litellm.proxy.proxy_server").app
+    assert probe_logger.level == logging.ERROR
 
 
 class TestJsonLogsConfigReachesSpawnedWorkers:

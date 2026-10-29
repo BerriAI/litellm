@@ -3,6 +3,10 @@
 `litellm` imports the proxy only when it runs. Every worker that `--num_workers` spawns
 imports this module again before it can answer uvicorn's first health ping, which fails
 within 5 s, so importing the SDK here makes slow hosts kill each new worker in a loop.
+Each worker then loads the proxy app through `proxy_worker_app`, while its ping thread runs.
+A full garbage collection during that load holds the GIL long enough to miss a ping, so
+collection waits until the app is loaded and never revisits it. The log config is applied
+only after the load, so it silences the same loggers in a worker as in a single process.
 
 The CLI is a thin HTTP client, but it lives inside the `litellm` package, so a plain
 import would run the whole SDK `__init__` before Click parses argv. `lite` and
@@ -16,13 +20,19 @@ raises leaves the SDK uninitialized, so the next use runs it again and raises th
 
 import builtins
 import contextvars
+import gc
 import importlib
 import importlib.util
+import os
 import sys
 import threading
 import types
-from collections.abc import Callable, Mapping, Sequence
-from typing import Final
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 SDK_PACKAGE: Final = "litellm"
 CLI_PACKAGE: Final = "litellm.proxy.client"
@@ -191,3 +201,22 @@ def proxy_server() -> None:
     from litellm.proxy.proxy_cli import run_server
 
     run_server()
+
+
+@contextmanager
+def without_gc_pauses() -> Generator[None, None, None]:
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.freeze()
+        gc.enable()
+
+
+def proxy_worker_app() -> "FastAPI":
+    with without_gc_pauses():
+        from litellm.proxy.proxy_server import app
+    from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+
+    ProxyInitializationHelpers.apply_worker_log_config(os.environ)
+    return app

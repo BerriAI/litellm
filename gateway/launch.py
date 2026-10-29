@@ -10,6 +10,8 @@ pick the pooled URL up unchanged.
 
 LiteLLM imports wait for ``main``: every uvicorn worker imports this module again
 before it can answer its first 5 s health ping, so a slow host would kill each one.
+Workers then load the gateway app through ``worker_app`` without garbage collection
+pauses, which hold the GIL long enough to miss a ping.
 
 Run with:
     python -m gateway.launch --workers 4 --host 0.0.0.0 --port 4000
@@ -22,11 +24,15 @@ from typing import TYPE_CHECKING, Final
 
 from uvicorn.main import main as uvicorn_main
 
+from litellm_cli.main import without_gc_pauses
+
 if TYPE_CHECKING:
+    from fastapi import FastAPI
+
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
 
-GATEWAY_APP: Final = "gateway.main:app"
+GATEWAY_APP: Final = "gateway.launch:worker_app"
 KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
 
 
@@ -34,8 +40,8 @@ def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, 
     """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
     keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
     if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
-        return (GATEWAY_APP, *argv)
-    return (GATEWAY_APP, *argv, KEEPALIVE_FLAG, keepalive)
+        return (GATEWAY_APP, "--factory", *argv)
+    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
 
 
 def pool_database_url(
@@ -57,6 +63,12 @@ def pool_database_url(
     if upstream_url is None:
         return PgBouncerError("LITELLM_PGBOUNCER_ENABLED is set but no DATABASE_URL could be assembled")
     return start_in_container_pgbouncer(pgbouncer, upstream_url, token_auth=settings.token_auth())
+
+
+def worker_app() -> "FastAPI":
+    with without_gc_pauses():
+        from gateway.main import app
+    return app
 
 
 def _serve(argv: Sequence[str]) -> None:
