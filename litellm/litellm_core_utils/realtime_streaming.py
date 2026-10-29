@@ -24,6 +24,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
@@ -1702,23 +1703,28 @@ class RealTimeStreaming:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
             self._flush_unbilled_transcription_usage()
-            if self._backend_refused_session(close):
-                await self.log_backend_refusal(e)
-            else:
-                await self.log_messages()
+            await self._log_session_end(e if self._backend_refused_session(close) else None)
             return close
         except asyncio.CancelledError:
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             raise
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
         return not self._backend_sent_non_error_frames and (close.code != 1000 or self._backend_sent_frames)
+
+    async def _log_session_end(self, transport_refusal: Exception | None) -> None:
+        provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()
+        refusal: Final = provider_refusal or transport_refusal
+        if refusal is None:
+            await self.log_messages()
+            return
+        await self.log_backend_refusal(refusal)
 
     async def log_backend_refusal(self, error: Exception) -> None:
         if not self.logging_obj:
@@ -2201,7 +2207,13 @@ class RealTimeStreaming:
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
                 if msg_type == "session.update" and self.provider_config is None:
                     await self._send_session_gate_once()
-                sent = await self._send_to_backend(message)
+                try:
+                    sent = await self._send_to_backend(message)
+                except RealtimeTranscriptionProtocolError as e:
+                    await self.websocket.send_text(realtime_error_event(str(e), error_type="invalid_request_error"))
+                    if self._uses_deferred_backend_setup():
+                        raise
+                    continue
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 

@@ -68,6 +68,7 @@ from ..llms.openai.realtime.handler import (
     confirm_session_started,
 )
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
+from ..llms.soniox.realtime.transformation import SonioxRealtimeOptions, soniox_realtime_health_check
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
@@ -86,7 +87,7 @@ vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
-_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def _model_params_with_stored_credentials(model_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -136,8 +137,8 @@ _POLICY_PIPELINE_METADATA_KEYS: Final = ("_guardrail_pipelines", "_pipeline_mana
 
 
 def _build_litellm_metadata(kwargs: Mapping[str, object]) -> dict[str, object]:
-    request_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("metadata") or {})
-    internal_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("litellm_metadata") or {})
+    request_metadata: Final = _OBJECT_MAPPING.validate_python(kwargs.get("metadata") or {})
+    internal_metadata: Final = _OBJECT_MAPPING.validate_python(kwargs.get("litellm_metadata") or {})
     policy_pipeline_state: Final = {
         key: request_metadata[key] for key in _POLICY_PIPELINE_METADATA_KEYS if key in request_metadata
     }
@@ -149,7 +150,7 @@ _GUARDRAIL_OPT_OUT_METADATA_KEYS: Final = ("user_api_key_metadata", "user_api_ke
 
 
 def _translation_litellm_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    request_metadata: Final = _METADATA_ADAPTER.validate_python(kwargs.get("metadata") or {})
+    request_metadata: Final = _OBJECT_MAPPING.validate_python(kwargs.get("metadata") or {})
     guardrail_opt_outs: Final = {
         key: request_metadata[key] for key in _GUARDRAIL_OPT_OUT_METADATA_KEYS if key in request_metadata
     }
@@ -873,6 +874,7 @@ async def _arealtime(
         litellm_logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
         return
 
+    deployment_params: Final = _OBJECT_MAPPING.validate_python(kwargs)
     if live_session_start is not None:
         await _alive_session(
             model=model,
@@ -883,7 +885,7 @@ async def _arealtime(
             api_base=dynamic_api_base or litellm_params.api_base,
             api_key=dynamic_api_key,
             litellm_metadata=session_litellm_metadata,
-            litellm_params=kwargs,
+            litellm_params=deployment_params,
         )
         return
 
@@ -894,6 +896,7 @@ async def _arealtime(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
             drop_params=drop_params,
+            litellm_params=deployment_params,
         )
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(
@@ -1238,6 +1241,13 @@ async def realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
+    elif custom_llm_provider == "soniox":
+        return await soniox_realtime_health_check(
+            model=model,
+            api_base=resolved_api_base,
+            api_key=health_check_api_key,
+            options=SonioxRealtimeOptions.model_validate(dict(resolved_params)),
+        )
     elif custom_llm_provider == "xai":
         url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
