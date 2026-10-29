@@ -84,9 +84,10 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 ## Screenshots / Proof of Fix
 
 <!-- Include screenshots, screen recordings, or command (e.g., curl) + output demonstrating that your changes work as expected
-     The proof must be completely e2e with no mocks, using actual LLM calls costing real $$$ if applicable. `pytest` commands are not enough
-     Show ONLY the latest run: capture Before at the merge base and After at the PR's current tip, and when new commits change behavior, replace this whole section with the fresh run instead of stacking it on top of older ones. The run must be up to date. As soon as a new commit is made and it makes this PR description's after sha stale (it's no longer tip of PR), you must re-run the QA
-     Structure the section exactly as below: Before and After one heading level below this section, each naming the commit hash it was captured at, one lower-level heading per case inside each, the same case names in the same order on both sides, and numbered steps (command, observed output) under every case, never loose prose; shared setup (config, payloads) goes above Before, and with a single case, drop the case headings and number the steps directly
+     Simple PR exception (2026-10-28, #49030). A mechanical change fully proven by focused checks may skip before/after e2e. Follow AGENTS.md's eligibility rule, trace callers, and verify bug-fix regression sensitivity. Record E2E exception at <tip SHA>, scope, rationale, commands and results here. Tests/static checks suffice only for this exception. Keep CI and bot gates, reassess changed diffs, and honor explicit e2e requests. Omit the Before/After scaffold for an exception
+     Otherwise proof must be fully e2e, no mocks, with real provider calls where applicable. Pytest alone is insufficient. The following format applies to live proof
+     Show only the latest proof. Before uses the merge base and After the tested tip. Rerun affected QA after behavior changes. Verified neutral diffs may carry proof with the tested SHA, current tip, equivalence reason and focused checks, following AGENTS.md and /qa
+     Use matching Before/After case headings with numbered commands and observed output. Put shared setup above them. For one case, omit case headings
 
 ### Before (<hash>)
 
