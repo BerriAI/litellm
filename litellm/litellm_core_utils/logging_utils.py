@@ -44,6 +44,7 @@ Helper utils used for logging callbacks
 # Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
 # Captures: group(1)=mime_type, group(2)=base64_payload
 _DATA_URI_RE: Final = re.compile(r"data:([^;,\s]{1,255});base64,([A-Za-z0-9+/=]+)")
+_DATA_URI_BASE64_MARKER: Final = ";base64,"
 
 # Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
@@ -60,9 +61,13 @@ def _base64_data_uri_replacer(match: re.Match[str]) -> str:
     return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
 
 
+def _may_contain_base64_data_uri(value: str) -> bool:
+    return ";" in value and _DATA_URI_BASE64_MARKER in value
+
+
 def _truncate_base64_in_string(value: str) -> str:
     """Replace long base64 data-URI payloads in a string with a size placeholder."""
-    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0 or not _may_contain_base64_data_uri(value):
         return value
     return _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
 
@@ -155,14 +160,16 @@ async def truncate_base64_in_messages_async(
     messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
 ) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
     """
-    Same result as truncate_base64_in_messages, but payloads whose string content
-    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a worker
+    Same result as truncate_base64_in_messages, but payloads whose data-URI-bearing
+    strings reach BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a worker
     thread so the regex pass over multi-MB base64 images does not block the event loop.
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
-    total_chars: Final = sum(len(leaf) for leaf in _iter_string_leaves(messages))
-    if total_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
+    data_uri_chars: Final = sum(
+        len(leaf) for leaf in _iter_string_leaves(messages) if _may_contain_base64_data_uri(leaf)
+    )
+    if data_uri_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
         return truncate_base64_in_messages(messages)
     return await asyncio.to_thread(truncate_base64_in_messages, messages)
 

@@ -241,6 +241,38 @@ def scan_threads(monkeypatch):
     return threads
 
 
+@pytest.fixture
+def regex_scans(monkeypatch):
+    """Record every string the data URI regex runs over."""
+    scanned: list[str] = []
+    original = logging_utils._DATA_URI_RE
+
+    class RecordingPattern:
+        def sub(self, repl, string: str) -> str:
+            scanned.append(string)
+            return original.sub(repl, string)
+
+    monkeypatch.setattr(logging_utils, "_DATA_URI_RE", RecordingPattern())
+    return scanned
+
+
+def _tool_result_messages(tool_output: str) -> list:
+    return [
+        {"role": "user", "content": "Summarize the rows the tool returned."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "dump_rows", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": tool_output},
+    ]
+
+
+_PLAIN_TOOL_OUTPUT_CHARS = 400 * 1024
+
+
 class TestTruncateBase64InMessagesAsync:
     @pytest.mark.asyncio
     async def test_large_payload_is_scanned_off_the_event_loop(self, monkeypatch, scan_threads):
@@ -265,6 +297,29 @@ class TestTruncateBase64InMessagesAsync:
         result = await truncate_base64_in_messages_async(messages)
 
         assert result == truncate_base64_in_messages(messages)
+        assert scan_threads
+        assert set(scan_threads) == {threading.get_ident()}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "row",
+        [
+            '{"id": 7, "name": "widget", "status": "ok"}\n',
+            "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}\n\n",
+            "const total = rows.map((r) => r.price).reduce((a, b) => a + b, 0);\n",
+        ],
+        ids=["json_rows", "sse_lines", "code_with_semicolons"],
+    )
+    async def test_tool_message_without_data_uri_skips_the_regex_and_the_thread_hop(
+        self, scan_threads, regex_scans, row
+    ):
+        tool_output = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
+        messages = _tool_result_messages(tool_output)
+
+        result = await truncate_base64_in_messages_async(messages)
+
+        assert result == messages
+        assert regex_scans == []
         assert scan_threads
         assert set(scan_threads) == {threading.get_ident()}
 
