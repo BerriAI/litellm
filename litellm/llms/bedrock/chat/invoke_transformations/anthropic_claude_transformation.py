@@ -97,6 +97,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         super().__init__()
         self._deployment_model_info: Final = model_info
 
+    @classmethod
+    def get_config(cls, *, model: str | None = None) -> dict[str, object]:  # mutable-ok: overrides BaseConfig's dict
+        return {key: value for key, value in super().get_config(model=model).items() if key != "max_tokens"}
+
     @property
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
