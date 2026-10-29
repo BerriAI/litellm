@@ -21,7 +21,11 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import RESPONSES_LATE_SSE_FRAMING, ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.responses_stream_errors import responses_error_fields, sse_error_object
+from litellm.proxy.common_utils.responses_stream_errors import (
+    event_error_object,
+    responses_error_fields,
+    sse_error_object,
+)
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from litellm.types.llms.openai import ResponsesAPIStatus
 
@@ -85,6 +89,14 @@ class _StreamsBody(Protocol):
 
 def _sse_frame_data(frame: str) -> str | None:
     return next((line[6:].strip() for line in frame.splitlines() if line.startswith("data: ")), None)
+
+
+def _event_error(event: Mapping[str, object]) -> Mapping[str, object]:
+    match event.get("error"):
+        case str() as message if message:
+            return {**event, "message": message}
+        case _:
+            return event_error_object(event) or event
 
 
 def _first_chunk_error(response: object) -> Mapping[str, object] | None:
@@ -339,7 +351,7 @@ async def background_streaming_task(
 
                         elif event_type == "error":
                             terminal_status = "failed"
-                            terminal_error = responses_error_fields(event.get("error") or event)
+                            terminal_error = responses_error_fields(_event_error(event))
 
                         elif event_type in (
                             "response.completed",

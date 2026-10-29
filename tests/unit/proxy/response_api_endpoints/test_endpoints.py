@@ -7,7 +7,7 @@ import contextlib
 import dataclasses
 import json
 import unittest
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -176,6 +177,79 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert events[0]["object"] == "chat.completion.chunk", result.text
         assert "response.failed" not in result.text
         assert "error" in events[-1]
+
+
+class _FirstFrameHook(CustomLogger):
+    def __init__(self, frame: str | bytes) -> None:
+        super().__init__()
+        self.frame: Final = frame
+
+    async def async_post_call_streaming_iterator_hook(
+        self, user_api_key_dict: object, response: object, request_data: object
+    ) -> AsyncIterator[str | bytes]:
+        yield self.frame
+
+
+_DATA_ERROR_FRAME: Final = 'data: {"error": {"message": "denied", "type": "guardrail_scan_error", "code": 403}}\n\n'
+_NAMED_ERROR_FRAME: Final = (
+    b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "denied", "code": "529"}}\n\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,first_frame,expected_status",
+    [
+        ("/v1/responses", _DATA_ERROR_FRAME, 403),
+        ("/v1/chat/completions", _DATA_ERROR_FRAME, 403),
+        ("/v1/chat/completions", _NAMED_ERROR_FRAME, 200),
+        ("/v1/responses", _NAMED_ERROR_FRAME, 529),
+        ("/v1/responses", _NAMED_ERROR_FRAME.replace(b"event: error", b"event: response.created"), 200),
+        ("/v1/chat/completions", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
+        ("/v1/responses", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
+    ],
+)
+async def test_only_a_lone_first_error_frame_answers_with_its_status(
+    monkeypatch: pytest.MonkeyPatch, path: str, first_frame: str | bytes, expected_status: int
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    model: Final = "gpt-6-astra"
+    upstream_url: Final = "https://streaming.example/v1"
+    is_chat: Final = path == "/v1/chat/completions"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_FirstFrameHook(first_frame)])
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock as transport:
+        transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).respond(
+            200, content="data: [DONE]\n\n", headers={"Content-Type": "text/event-stream"}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.post(
+                path,
+                json={
+                    "model": model,
+                    "stream": True,
+                    **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
+                },
+            )
+
+    assert result.status_code == expected_status, result.text
+    if expected_status == 200:
+        assert result.headers["content-type"].startswith("text/event-stream"), result.text
+    else:
+        assert result.json()["error"]["message"] == "denied"
 
 
 @pytest.mark.parametrize("path", ["/v1/responses", "/v1/chat/completions"])

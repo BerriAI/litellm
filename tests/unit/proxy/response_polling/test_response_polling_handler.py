@@ -1555,12 +1555,23 @@ class TestBackgroundStreamingTerminalEvents:
         assert final_call.kwargs["error"] == {"code": "rate_limit_exceeded", "message": "rate limited"}
 
     @pytest.mark.asyncio
-    async def test_a_nested_only_error_event_keeps_its_reason(self):
+    @pytest.mark.parametrize(
+        ("nested_error", "expected_error"),
+        [
+            (
+                {"type": "guardrail_error", "code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+            ("output blocked by policy", {"code": "server_error", "message": "output blocked by policy"}),
+        ],
+    )
+    async def test_a_nested_only_error_event_keeps_its_reason(
+        self, nested_error: Mapping[str, str] | str, expected_error: Mapping[str, str]
+    ):
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
 
-        nested_error: Final = {"type": "guardrail_error", "code": "400", "message": "output blocked by policy"}
         error_event: Final = {"type": "error", "sequence_number": 9, "error": nested_error}
 
         async def _body_iterator():
@@ -1582,7 +1593,7 @@ class TestBackgroundStreamingTerminalEvents:
 
         final_call: Final = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "failed"
-        assert final_call.kwargs["error"] == {"code": "invalid_request_error", "message": "output blocked by policy"}
+        assert final_call.kwargs["error"] == expected_error
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1595,11 +1606,16 @@ class TestBackgroundStreamingTerminalEvents:
                 ),
                 {"code": "not_found_error", "message": "model not found"},
             ),
-            (429, "Too Many Requests", {"code": "rate_limit_exceeded", "message": None}),
+            (429, "rate limited", {"code": "rate_limit_exceeded", "message": "Too Many Requests"}),
+            (
+                403,
+                json.dumps({"error": {"type": "guardrail_scan_error", "code": 403}}),
+                {"code": "permission_error", "message": "Forbidden"},
+            ),
         ],
     )
     async def test_a_first_chunk_error_polls_failed_like_a_late_one(
-        self, status_code: int, body: str, expected_error: Mapping[str, str | None]
+        self, status_code: int, body: str, expected_error: Mapping[str, str]
     ):
         from fastapi import Response
 

@@ -71,6 +71,13 @@ def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
         return None
 
 
+def event_error_object(event: Mapping[str, object]) -> Mapping[str, object] | None:
+    try:
+        return _ErrorPayload.model_validate(event).error or None
+    except ValidationError:
+        return None
+
+
 def _original_failure(exception: Exception) -> Exception:
     current = exception  # rebind-ok: the recursion gate requires iterative wrapper traversal
     while isinstance(current, MidStreamFallbackError) and current.original_exception is not None:
@@ -126,11 +133,19 @@ def _response_error_code(details: _FailureDetails) -> str:
     return _status_error_code(details.status_code)
 
 
+_STATUS_PHRASES: Final = MappingProxyType({int(status): status.phrase for status in HTTPStatus})
+
+
+def _status_phrase(status_code: int | None) -> str:
+    return _STATUS_PHRASES.get(status_code, "Unknown error") if status_code is not None else "Unknown error"
+
+
 def responses_error_fields(error: Mapping[str, object]) -> Mapping[str, object]:
     details: Final = _FailureDetails.model_validate(error)
+    status_code: Final = _status_of(details.code)
     return {
-        "code": _response_error_code(details.model_copy(update={"status_code": _status_of(details.code)})),
-        "message": details.message,
+        "code": _response_error_code(details.model_copy(update={"status_code": status_code})),
+        "message": details.message or _status_phrase(status_code),
     }
 
 

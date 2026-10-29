@@ -49,6 +49,7 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
+    _responses_event_data_payload,
     include_guardrail_response_requested,
     is_azure_model_router_request,
     RESPONSES_LATE_SSE_FRAMING,
@@ -2170,7 +2171,9 @@ class TestCommonRequestProcessingHelpers:
         async def responses_stream():
             yield f"event: error\ndata: {json.dumps({'type': 'error', 'sequence_number': 0, 'error': error})}\n\n"
 
-        response: Final = await create_response(responses_stream(), "text/event-stream", {})
+        response: Final = await create_response(
+            responses_stream(), "text/event-stream", {}, first_chunk_payload=_responses_event_data_payload
+        )
 
         assert isinstance(response, JSONResponse)
         assert response.status_code == 400
@@ -2183,7 +2186,9 @@ class TestCommonRequestProcessingHelpers:
             event: Final = json.dumps({"type": "error", "sequence_number": 0, "error": error}, ensure_ascii=False)
             yield f"event: error\ndata: {event}\n\n"
 
-        response: Final = await create_response(responses_stream(), "text/event-stream", {})
+        response: Final = await create_response(
+            responses_stream(), "text/event-stream", {}, first_chunk_payload=_responses_event_data_payload
+        )
 
         assert isinstance(response, JSONResponse)
         assert response.status_code == 400

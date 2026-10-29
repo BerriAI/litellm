@@ -910,17 +910,31 @@ async def _enforce_guardrail_added_tag_budgets(
         ) from e
 
 
+SseDataPayload: TypeAlias = Callable[[str | bytes], str | None]
+
+
+def _sse_text(event_line: str | bytes) -> str:
+    return event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+
+
 def _sse_data_payload(event_line: str | bytes) -> str | None:
-    text: Final = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
-    return next(
-        (line.removeprefix("data: ").strip() for line in text.split("\n") if line.startswith("data: ")),
-        None,
-    )
+    text: Final = _sse_text(event_line)
+    return text.removeprefix("data: ").strip() if text.startswith("data: ") else None
 
 
-async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
+def _responses_event_data_payload(event_line: str | bytes) -> str | None:
+    match _sse_text(event_line).strip().split("\n"):
+        case ["event: error", data_line] if data_line.startswith("data: "):
+            return data_line.removeprefix("data: ").strip()
+        case _:
+            return _sse_data_payload(event_line)
+
+
+async def _parse_event_data_for_error(
+    event_line: str | bytes, data_payload: SseDataPayload = _sse_data_payload
+) -> int | None:
     """Parses an event line and returns an error code if present, else None."""
-    json_str: Final = _sse_data_payload(event_line)
+    json_str: Final = data_payload(event_line)
     if json_str is not None:
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
@@ -952,12 +966,13 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
     return None
 
 
-def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
+def _extract_error_from_sse_chunk(event_line: str | bytes, data_payload: SseDataPayload = _sse_data_payload) -> dict:
     """
     Extract error dictionary from SSE format chunk.
 
     Args:
         event_line: SSE format event line, e.g. "data: {"error": {...}}\n\n"
+        data_payload: Reads the JSON payload out of the event line
 
     Returns:
         Error dictionary in OpenAI API format
@@ -970,7 +985,7 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
         "code": "500",
     }
 
-    json_str: Final = _sse_data_payload(event_line)
+    json_str: Final = data_payload(event_line)
     if json_str is not None:
         if not json_str or json_str == "[DONE]":
             return default_error
@@ -1243,6 +1258,7 @@ async def create_response(
     request: Request | None = None,
     refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None = None,
     general_settings: Mapping[str, object] = _NO_GENERAL_SETTINGS,
+    first_chunk_payload: SseDataPayload = _sse_data_payload,
 ) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
@@ -1278,7 +1294,7 @@ async def create_response(
 
         if first_chunk_value is not None:
             try:
-                error_code_from_chunk: Final = await _parse_event_data_for_error(first_chunk_value)
+                error_code_from_chunk: Final = await _parse_event_data_for_error(first_chunk_value, first_chunk_payload)
                 if error_code_from_chunk is not None:
                     # First chunk is an error, stream hasn't really started yet
                     # Should return standard JSON error response instead of SSE format
@@ -1290,7 +1306,9 @@ async def create_response(
 
                     # Parse error content
                     error_dict: Final = with_call_id(
-                        JSON_OBJECT.validate_python(_extract_error_from_sse_chunk(first_chunk_value)),
+                        JSON_OBJECT.validate_python(
+                            _extract_error_from_sse_chunk(first_chunk_value, first_chunk_payload)
+                        ),
                         error_body_call_id(general_settings, resolved_headers.get(LITELLM_CALL_ID_HEADER)),
                     )
 
@@ -3217,6 +3235,9 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                         refresh_headers=refresh_stream_headers,
                         general_settings=general_settings,
+                        first_chunk_payload=(
+                            _responses_event_data_payload if route_type == "aresponses" else _sse_data_payload
+                        ),
                     )
 
             ### CALL HOOKS ### - modify outgoing data
