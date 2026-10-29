@@ -490,6 +490,11 @@ def anthropic_sse_event_type(event: str) -> object:
     return next((event_data.get("type") for event_data in _parsed_sse_events(event)), None)
 
 
+def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[object]:
+    """The ``type`` of every event the stream sent."""
+    return frozenset(event.get("type") for event in _parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+
+
 def _is_error_event(event: str) -> bool:
     return anthropic_sse_event_type(event) == "error"
 

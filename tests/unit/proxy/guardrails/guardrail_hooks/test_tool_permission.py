@@ -1467,6 +1467,13 @@ class TestToolPermissionGuardrailAnthropicMessages:
         lines: Final = b"".join(chunks).decode().split("\n")
         return [json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: ")]
 
+    def _tool_use_blocks(self, events: list[dict[str, object]]) -> list[dict[str, object]]:
+        return [
+            block
+            for event in events
+            if isinstance(block := event.get("content_block"), dict) and block.get("type") == "tool_use"
+        ]
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "delivered_events", [0, 1, 3, 7], ids=["before-message-start", "before-content", "mid-text", "after-allowed-tool"]
@@ -1474,8 +1481,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
     async def test_stream_ended_by_an_upstream_error_is_passed_through_verbatim(self, delivered_events):
         chunks = self._ended_by_upstream_error(self._sse_chunks("Bash")[:delivered_events])
 
-        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
-            out = await self._drain(self.blocking, chunks)
+        out = await self._drain(self.blocking, chunks)
 
         assert out == chunks, "the client must see the upstream error, not a guardrail block that hides it"
 
@@ -1483,24 +1489,33 @@ class TestToolPermissionGuardrailAnthropicMessages:
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
         chunks = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])
 
-        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
-            with pytest.raises(GuardrailRaisedException) as exc_info:
-                await self._drain(self.blocking, chunks)
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await self._drain(self.blocking, chunks)
 
         assert "deny_read" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("delivered_events", [5, 6], ids=["before-input", "full-input-before-stop"])
+    async def test_denied_tool_use_cut_off_by_an_upstream_error_never_reaches_the_client(self, delivered_events):
+        chunks = self._ended_by_upstream_error(self._sse_chunks("Read")[:delivered_events])
+
+        events = self._events(await self._drain(self.blocking, chunks))
+
+        assert events[-1] == self.UPSTREAM_ERROR
+        assert self._tool_use_blocks(events) == [], "a client can still read a cut-off call, so a denied one must not reach it"
+        assert any("working" in json.dumps(event) for event in events)
 
     @pytest.mark.asyncio
     async def test_rewrite_of_a_stream_cut_off_mid_tool_input_ends_in_the_upstream_error(self):
         chunks = self._ended_by_upstream_error([*self._sse_chunks("Read")[:7], *self._cut_off_tool_use(2, "Bash")])
 
-        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
-            events = self._events(await self._drain(self.rewriting, chunks))
+        events = self._events(await self._drain(self.rewriting, chunks))
 
         assert events[-1] == self.UPSTREAM_ERROR
         assert {"message_delta", "message_stop"}.isdisjoint(event["type"] for event in events)
-        assert not any(
-            isinstance(block := event.get("content_block"), dict) and block.get("type") == "tool_use" for event in events
-        ), "neither the denied call nor the call the upstream cut off may reach the client as a tool call"
+        assert self._tool_use_blocks(events) == [], (
+            "neither the denied call nor the call the upstream cut off may reach the client as a tool call"
+        )
         assert any("Permission denied" in json.dumps(event) for event in events)
 
     @pytest.mark.asyncio
@@ -1520,10 +1535,13 @@ class TestToolPermissionGuardrailAnthropicMessages:
         )
         chunks: Final = self._ended_by_upstream_error([*self._sse_chunks("Bash")[:4], *self._cut_off_tool_use(1, "Bash")])
 
-        with patch.object(guardrail, "should_run_guardrail", return_value=True):
-            out = await self._drain(guardrail, chunks)
+        events: Final = self._events(await self._drain(guardrail, chunks))
 
-        assert out == chunks, "the client must see the upstream error, not a block over input the upstream never finished"
+        assert events[-1] == self.UPSTREAM_ERROR, (
+            "the client must see the upstream error, not a block over input the upstream never finished"
+        )
+        assert self._tool_use_blocks(events) == []
+        assert any("working" in json.dumps(event) for event in events)
 
     def _resplit(self, chunks, size=7):
         joined = b"".join(chunks)

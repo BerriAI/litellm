@@ -18,6 +18,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_message_delta_fields,
     anthropic_sse_error_events,
     anthropic_sse_event_type,
+    anthropic_sse_event_types,
     anthropic_sse_started_blocks,
     anthropic_sse_stopped_block_index,
     anthropic_sse_unfinished_blocks,
@@ -111,27 +112,35 @@ def _rewritten_message_delta_fields(
 _MESSAGE_END_EVENT_TYPES: Final = frozenset({"message_delta", "message_stop"})
 
 
-def _text_blocks_left_open(rewritten_chunks: Sequence[bytes], source_chunks: Sequence[object]) -> frozenset[int]:
-    """Indices of the rewritten text blocks when the failed upstream never stopped its text block.
+def has_cut_off_tool_use(source_chunks: Sequence[object]) -> bool:
+    """Whether a failed upstream cut off a tool call, which assembly leaves out of what it checks."""
+    return any(block.get("type") == "tool_use" for block in anthropic_sse_unfinished_blocks(source_chunks).values())
+
+
+def _text_block_left_open(rewritten_chunks: Sequence[bytes], source_chunks: Sequence[object]) -> int | None:
+    """Index of the rewritten text block to leave open when the failed upstream never stopped its text.
 
     Assembly keeps a cut-off text block and drops every other cut-off block, and the round trip
-    merges all text into one block, so that block carries text the upstream left open.
+    merges all text into one block, so that block carries text the upstream left open. It stays
+    open only when it is the last block, since a client must see each block stop before the next
+    one starts.
     """
     upstream_left_text_open: Final = any(
         block.get("type") == "text" for block in anthropic_sse_unfinished_blocks(source_chunks).values()
     )
-    if not upstream_left_text_open:
-        return frozenset()
-    return frozenset(
-        index for index, block in anthropic_sse_started_blocks(rewritten_chunks).items() if block.get("type") == "text"
-    )
+    rewritten_blocks: Final = anthropic_sse_started_blocks(rewritten_chunks)
+    if not upstream_left_text_open or not rewritten_blocks:
+        return None
+    last_index: Final = max(rewritten_blocks)
+    return last_index if rewritten_blocks[last_index].get("type") == "text" else None
 
 
-def _sent_by_the_failed_upstream(chunk: bytes, blocks_left_open: frozenset[int]) -> bool:
+def _sent_by_the_failed_upstream(chunk: bytes, block_left_open: int | None, end_events_sent: frozenset[object]) -> bool:
     event: Final = chunk.decode()
-    if anthropic_sse_event_type(event) in _MESSAGE_END_EVENT_TYPES:
-        return False
-    return anthropic_sse_stopped_block_index(event) not in blocks_left_open
+    event_type: Final = anthropic_sse_event_type(event)
+    if event_type in _MESSAGE_END_EVENT_TYPES:
+        return event_type in end_events_sent
+    return block_left_open is None or anthropic_sse_stopped_block_index(event) != block_left_open
 
 
 def anthropic_sse_chunks_from_response(
@@ -144,7 +153,8 @@ def anthropic_sse_chunks_from_response(
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
     A source stream that ended in an upstream ``error`` event ends with that event again, never
-    with a ``content_block_stop``, ``message_delta``, or ``message_stop`` the upstream did not send.
+    with a ``message_delta`` or ``message_stop`` the upstream did not send, and with its cut-off
+    text block left open unless another block follows it.
     """
     from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
@@ -171,8 +181,9 @@ def anthropic_sse_chunks_from_response(
     error_events: Final = anthropic_sse_error_events(source_chunks)
     if not error_events:
         return tuple(rewritten_chunks)
-    blocks_left_open: Final = _text_blocks_left_open(rewritten_chunks, source_chunks)
+    block_left_open: Final = _text_block_left_open(rewritten_chunks, source_chunks)
+    end_events_sent: Final = _MESSAGE_END_EVENT_TYPES & anthropic_sse_event_types(source_chunks)
     return (
-        *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, blocks_left_open)),
+        *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, block_left_open, end_events_sent)),
         *(f"{event}\n\n".encode() for event in error_events),
     )

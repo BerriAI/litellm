@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
+    has_cut_off_tool_use,
     is_raw_sse_stream,
     is_sse_error_stream,
 )
@@ -966,7 +967,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return
 
         anthropic_denials: Final = self._check_assembled_stream(anthropic_response)
-        if not anthropic_denials:
+        if not anthropic_denials and not has_cut_off_tool_use(all_chunks):
             for chunk in all_chunks:
                 yield chunk
             return

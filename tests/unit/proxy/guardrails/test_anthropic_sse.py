@@ -107,6 +107,23 @@ def _upstream_stream(
     )
 
 
+_UPSTREAM_ERROR: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+
+
+def _masked_through_upstream_error(upstream: tuple[bytes, ...]) -> tuple[tuple[str, dict[str, object]], ...]:
+    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True, through_upstream_error=True)
+    assert assembled is not None
+    _set_text("call [PHONE]")(assembled)
+    return _decode(anthropic_sse_chunks_from_response(assembled, upstream))
+
+
+def _blocks_open_before(events: tuple[tuple[str, dict[str, object]], ...], position: int) -> set[object]:
+    earlier: Final = events[:position]
+    started: Final = {payload["index"] for event, payload in earlier if event == "content_block_start"}
+    stopped: Final = {payload["index"] for event, payload in earlier if event == "content_block_stop"}
+    return started - stopped
+
+
 def _safeguard_results(tool_uses: dict[str, dict[str, str]]) -> list[dict[str, object]]:
     return [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_uses}}]
 
@@ -342,15 +359,9 @@ def test_rewritten_stream_drops_the_verdict_of_a_tool_use_whose_input_the_guardr
 def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error(
     delivered_content: tuple[bytes, ...], upstream_stopped_indices: list[int]
 ):
-    upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
-    upstream: Final = (*delivered_content, _frame("error", upstream_error))
-    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True, through_upstream_error=True)
-    assert assembled is not None
-    _set_text("call [PHONE]")(assembled)
+    rewritten: Final = _masked_through_upstream_error((*delivered_content, _frame("error", _UPSTREAM_ERROR)))
 
-    rewritten: Final = _decode(anthropic_sse_chunks_from_response(assembled, upstream))
-
-    assert rewritten[-1] == ("error", upstream_error)
+    assert rewritten[-1] == ("error", _UPSTREAM_ERROR)
     assert {"message_delta", "message_stop"}.isdisjoint(event for event, _ in rewritten), (
         "a stream the upstream ended in an error must not be re-emitted as one that completed"
     )
@@ -361,3 +372,41 @@ def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error(
     assert not any(payload.get("content_block", {}).get("type") == "tool_use" for _, payload in rewritten), (
         "a tool call the upstream cut off must not be re-emitted as one the client can run"
     )
+
+
+def test_masked_text_cut_off_after_a_finished_tool_call_is_stopped_before_the_tool_call_starts():
+    upstream: Final = (
+        _upstream_stream({})[0],
+        *_tool_use_frames(0, "toolu_finished", "Bash"),
+        _frame(
+            "content_block_start",
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        ),
+        _frame(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "call 555-0100"}},
+        ),
+        _frame("error", _UPSTREAM_ERROR),
+    )
+
+    rewritten: Final = _masked_through_upstream_error(upstream)
+
+    block_starts: Final = [position for position, (event, _) in enumerate(rewritten) if event == "content_block_start"]
+    assert [_blocks_open_before(rewritten, position) for position in block_starts] == [set()] * len(block_starts), (
+        "a client must see each block stop before the next one starts"
+    )
+    assert rewritten[-1] == ("error", _UPSTREAM_ERROR)
+    assert any(payload.get("content_block", {}).get("type") == "tool_use" for _, payload in rewritten)
+    assert any(payload.get("delta") == {"type": "text_delta", "text": "call [PHONE]"} for _, payload in rewritten)
+
+
+def test_masked_stream_that_failed_after_its_message_delta_still_carries_that_message_delta():
+    upstream: Final = (
+        *_upstream_stream({"stop_reason": "end_turn", "stop_sequence": None})[:-1],
+        _frame("error", _UPSTREAM_ERROR),
+    )
+
+    rewritten: Final = _masked_through_upstream_error(upstream)
+
+    assert [event for event, _ in rewritten][-2:] == ["message_delta", "error"]
+    assert next(payload for event, payload in rewritten if event == "message_delta")["delta"]["stop_reason"] == "end_turn"
