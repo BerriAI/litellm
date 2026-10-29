@@ -26,9 +26,9 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
-    has_cut_off_tool_use,
     is_raw_sse_stream,
     is_sse_error_stream,
+    without_cut_off_tool_use,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
@@ -966,15 +966,17 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        anthropic_denials: Final = self._check_assembled_stream(anthropic_response)
-        if not anthropic_denials and not has_cut_off_tool_use(all_chunks):
-            for chunk in all_chunks:
-                yield chunk
-            return
-
-        self._modify_response_with_permission_errors(anthropic_response, anthropic_denials)
-        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response, all_chunks, keep_explanations=True):
+        for sse_chunk in self._anthropic_stream_to_deliver(anthropic_response, all_chunks):
             yield sse_chunk
+
+    def _anthropic_stream_to_deliver(
+        self, anthropic_response: ModelResponse, source_chunks: Sequence[object]
+    ) -> Sequence[object]:
+        denials: Final = self._check_assembled_stream(anthropic_response)
+        if not denials:
+            return without_cut_off_tool_use(source_chunks)
+        self._modify_response_with_permission_errors(anthropic_response, denials)
+        return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
     def _check_assembled_stream(
         self, assembled: ModelResponse

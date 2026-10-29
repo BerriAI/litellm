@@ -1543,6 +1543,22 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert self._tool_use_blocks(events) == []
         assert any("working" in json.dumps(event) for event in events)
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("sent_events", "cut_off_index"), [(1, 0), (4, 1)], ids=["tool-call-first", "after-finished-text"]
+    )
+    async def test_stream_cut_off_mid_tool_call_with_nothing_denied_reaches_the_client_as_sent_without_that_call(
+        self, sent_events, cut_off_index
+    ):
+        """Claude Code retries a stream that failed before any block finished, but not one that shows a
+        finished block, so the cut-off call is dropped from the stream as sent rather than rewritten."""
+        sent_before_the_cut: Final = self._sse_chunks("Bash")[:sent_events]
+        chunks: Final = self._ended_by_upstream_error([*sent_before_the_cut, *self._cut_off_tool_use(cut_off_index, "Bash")])
+
+        events: Final = self._events(await self._drain(self.blocking, chunks))
+
+        assert events == self._events(self._ended_by_upstream_error(sent_before_the_cut))
+
     def _resplit(self, chunks, size=7):
         joined = b"".join(chunks)
         return [joined[i : i + size] for i in range(0, len(joined), size)]

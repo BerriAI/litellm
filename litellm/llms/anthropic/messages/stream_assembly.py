@@ -561,6 +561,18 @@ def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, obje
     )
 
 
+def anthropic_sse_events_without_blocks(
+    all_chunks: Sequence[object], block_indices: frozenset[int]
+) -> tuple[bytes, ...]:
+    """The stream's events as raw SSE frames, minus every event of the content blocks at ``block_indices``."""
+    sse_stream: Final = _joined_sse_stream(all_chunks) or ""
+    return tuple(
+        f"{event}\n\n".encode()
+        for event, event_data in _sse_events_with_data(sse_stream)
+        if _block_index(event_data) not in block_indices
+    )
+
+
 def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...]:
     """The stream's events minus its upstream ``error`` and every cut-off block assembly cannot read.
 

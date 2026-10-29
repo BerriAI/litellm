@@ -19,6 +19,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_error_events,
     anthropic_sse_event_type,
     anthropic_sse_event_types,
+    anthropic_sse_events_without_blocks,
     anthropic_sse_started_blocks,
     anthropic_sse_stopped_block_index,
     anthropic_sse_unfinished_blocks,
@@ -112,9 +113,18 @@ def _rewritten_message_delta_fields(
 _MESSAGE_END_EVENT_TYPES: Final = frozenset({"message_delta", "message_stop"})
 
 
-def has_cut_off_tool_use(source_chunks: Sequence[object]) -> bool:
-    """Whether a failed upstream cut off a tool call, which assembly leaves out of what it checks."""
-    return any(block.get("type") == "tool_use" for block in anthropic_sse_unfinished_blocks(source_chunks).values())
+def without_cut_off_tool_use(source_chunks: Sequence[object]) -> Sequence[object]:
+    """The stream as the upstream sent it, minus the events of a tool call the failed upstream cut off.
+
+    Assembly leaves that call out of what a guardrail checks, since its input is a JSON prefix, yet a
+    client SDK's stream snapshot still holds it, so it must not reach the client unchecked.
+    """
+    cut_off: Final = frozenset(
+        index
+        for index, block in anthropic_sse_unfinished_blocks(source_chunks).items()
+        if block.get("type") == "tool_use"
+    )
+    return anthropic_sse_events_without_blocks(source_chunks, cut_off) if cut_off else source_chunks
 
 
 def _text_block_left_open(rewritten_chunks: Sequence[bytes], source_chunks: Sequence[object]) -> int | None:
