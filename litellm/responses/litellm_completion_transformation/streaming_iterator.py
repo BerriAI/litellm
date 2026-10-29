@@ -176,6 +176,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._upstream_exhausted: bool = False
         self._response_id_primed: bool = False
         self._pending_tool_events: list[BaseLiteLLMOpenAIResponseObject] = []
+        self._tool_calls_held_behind_text: tuple[object, ...] = ()
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
         self._tool_item_id_by_call_id: dict[str, str] = {}  # mutable-ok: filled per call id as tool call events stream
@@ -398,6 +399,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if index is None or index in self._ambiguous_tool_call_indexes:
             return ""
         return self._tool_call_id_by_index.get(index, "")
+
+    def _hold_tool_calls_behind_text(self, tool_calls: object) -> None:
+        if isinstance(tool_calls, list):
+            self._tool_calls_held_behind_text = (*self._tool_calls_held_behind_text, *tool_calls)
+
+    def _release_held_tool_calls(self) -> tuple[object, ...]:
+        held: Final = self._tool_calls_held_behind_text
+        self._tool_calls_held_behind_text = ()
+        return held
 
     def _queue_tool_call_delta_events(self, tool_calls: object) -> None:
         """
@@ -1376,6 +1386,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if delta_content:
             if not self.sent_message_item_added_event:
                 self._queue_message_item_added_events()
+            self._hold_tool_calls_behind_text(getattr(chunk.choices[0].delta, "tool_calls", None))
             self._sequence_number += 1
             text_delta_event: Final = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
@@ -1390,7 +1401,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Priority 3: Handle tool call deltas (if any) -> queue events and emit them
         # For each tool call delta, we emit events one at a time to match OpenAI's streaming behavior
         if chunk.choices and hasattr(chunk.choices[0].delta, "tool_calls") and chunk.choices[0].delta.tool_calls:
-            self._queue_tool_call_delta_events(chunk.choices[0].delta.tool_calls)
+            self._queue_tool_call_delta_events([*self._release_held_tool_calls(), *chunk.choices[0].delta.tool_calls])
             # Return one pending tool event at a time
             if self._pending_tool_events:
                 return self._pending_tool_events.pop(0)

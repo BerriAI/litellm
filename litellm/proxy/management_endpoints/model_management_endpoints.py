@@ -102,6 +102,8 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
     authorize_member_auto_router_write,
+    auto_router_environment_reference_error,
+    raise_auto_router_environment_reference_error,
 )
 from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.management_helpers.model_quota_policy import (
@@ -129,6 +131,23 @@ from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    STRATEGY_ROUTER_PARAM_FIELDS,
+    GatedAutoRouterCapability,
+    capability_limit_violation,
+    carries_complexity_router_settings,
+    count_capability_routers,
+    gated_capabilities_of,
+    is_complexity_router_model,
+    validate_complexity_router_config_placement,
+    validate_complexity_router_config_write,
+    validate_strategy_router_model_write,
+)
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
+    is_mutable_tuned_candidate,
+    tuning_quota_violation,
+)
 from litellm.router_strategy.complexity_router import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     ClassificationRubric,
@@ -142,20 +161,6 @@ from litellm.router_strategy.complexity_router import (
     normalize_classification_prompt,
 )
 from litellm.router_strategy.complexity_router.config import resolve_complexity_router_config_write
-from litellm.router_utils.auto_router_model_naming import (
-    GATED_AUTO_ROUTER_CAPABILITIES,
-    STRATEGY_ROUTER_PARAM_FIELDS,
-    GatedAutoRouterCapability,
-    capability_limit_violation,
-    carries_complexity_router_settings,
-    count_capability_routers,
-    gated_capabilities_of,
-    is_complexity_router_model,
-    validate_complexity_router_config_placement,
-    validate_complexity_router_config_write,
-    validate_strategy_router_model_write,
-)
-from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsSessionTag
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -2626,6 +2631,14 @@ class ModelManagementAuthChecks:
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
         ModelManagementAuthChecks._reject_team_inline_api_key_secret_reference(
             model_params=model_params, incoming_params=incoming_params, incoming_model_params=incoming_model_params
+        )
+        raise_auto_router_environment_reference_error(
+            auto_router_environment_reference_error(
+                config=_OPTIONAL_JSON_OBJECT.validate_python(
+                    incoming_params.get("complexity_router_config") if incoming_params is not None else None
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
         )
         # Federation fields choose which server-side secret is read and where the org-scoped token
         # it buys is sent, so only a proxy admin may point a federated deployment somewhere else.
