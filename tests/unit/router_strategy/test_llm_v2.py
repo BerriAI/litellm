@@ -4,11 +4,12 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import litellm
 from pydantic import ValidationError
 
+import litellm
 from litellm import ModelResponse, Router
 from litellm.caching.dual_cache import DualCache
+from litellm.router_strategy.auto_router.auto_router_model_naming import strategy_router_dependencies
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, ComplexityTier
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
@@ -21,7 +22,6 @@ from litellm.router_strategy.complexity_router.llm_v2 import (
     LLMV2Verdict,
     llm_v2_response_format,
 )
-from litellm.router_utils.auto_router_model_naming import strategy_router_dependencies
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 

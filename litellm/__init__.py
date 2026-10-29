@@ -681,6 +681,7 @@ moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
+zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
 opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
@@ -710,6 +711,7 @@ transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 coralbricks_models: Set[str] = set()
+aiand_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -968,6 +970,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             darkbloom_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
+        elif value.get("litellm_provider") == "zerogpu":
+            zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1022,6 +1026,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "aiand":
+            aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1139,6 +1145,7 @@ model_list = list(
     | publicai_models
     | darkbloom_models
     | openinfer_models
+    | zerogpu_models
     | v0_models
     | morph_models
     | opencode_go_models
@@ -1159,6 +1166,7 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | coralbricks_models
+    | aiand_models
     | set(clarifai_models)
 )
 
@@ -1257,6 +1265,7 @@ def _build_models_by_provider() -> dict:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
+        "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
         "opencode_go": opencode_go_models,
@@ -1283,6 +1292,7 @@ def _build_models_by_provider() -> dict:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "aiand": aiand_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1326,7 +1336,6 @@ all_embedding_models = (
 )
 
 ####### IMAGE GENERATION MODELS ###################
-openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
@@ -1444,6 +1453,7 @@ from .exceptions import (
     Timeout,
     APIConnectionError,
     UnsupportedParamsError,
+    UnsupportedEndpointError as UnsupportedEndpointError,
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
@@ -1732,6 +1742,9 @@ if TYPE_CHECKING:
     )
     from .llms.lm_studio.decisions.transformation import (
         LMStudioDecisionsConfig as LMStudioDecisionsConfig,
+    )
+    from .llms.ollama.decisions.transformation import (
+        OllamaDecisionsConfig as OllamaDecisionsConfig,
     )
     from .llms.laya.decisions.transformation import (
         LayaDecisionsConfig as LayaDecisionsConfig,
