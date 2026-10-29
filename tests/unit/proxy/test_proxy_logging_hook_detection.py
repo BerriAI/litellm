@@ -52,8 +52,22 @@ def test_has_streaming_callbacks_uses_custom_logger_detection(monkeypatch):
 
 
 def test_has_streaming_callbacks_detects_guardrails(monkeypatch):
+    # Unrestricted CustomGuardrail (event_hook=None) matches every lifecycle
+    # event, including response / streaming hooks.
     monkeypatch.setattr(litellm, "callbacks", [CustomGuardrail()])
     assert ProxyLogging.has_streaming_callbacks() is True
+
+
+def test_has_streaming_callbacks_ignores_pre_call_only_guardrails(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    assert ProxyLogging.has_streaming_callbacks() is False
+    caps = ProxyLogging._callback_capabilities()
+    assert caps.has_guardrail is True
+    assert caps.has_streaming_guardrail is False
 
 
 @pytest.mark.asyncio
