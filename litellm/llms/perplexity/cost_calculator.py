@@ -6,7 +6,11 @@ Helper util for handling perplexity-specific cost calculation
 from datetime import datetime
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    TokenRates,
+    apply_off_peak_pricing,
+    unbilled_minimum_input_tokens,
+)
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -67,7 +71,10 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     output_cost_per_token: Final = rates.output_rate
 
     ## CALCULATE INPUT COST
-    prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
+    prompt_tokens: Final = usage.prompt_tokens or 0
+    prompt_cost: float = (
+        prompt_tokens + unbilled_minimum_input_tokens(model_info, prompt_tokens)
+    ) * input_cost_per_token
 
     ## ADD CITATION TOKENS COST (if present)
     citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0

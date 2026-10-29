@@ -659,6 +659,10 @@ def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -
     return off_peak
 
 
+def unbilled_minimum_input_tokens(model_info: ModelInfo, prompt_tokens: int) -> int:
+    return max((model_info.get("min_billed_input_tokens") or 0) - prompt_tokens, 0)
+
+
 def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
     """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
     off_peak_pricing rules, the every-day hours_utc windows or a day-of-week-qualified entry in
@@ -1560,9 +1564,6 @@ def generic_cost_per_token(
         base_costs.cache_read_rate if resolved_cache_read_cost is None else resolved_cache_read_cost
     )
 
-    unbilled_minimum_input_tokens: Final = max(
-        (resolved_model_info.get("min_billed_input_tokens") or 0) - usage.prompt_tokens, 0
-    )
     prompt_cost = (
         _calculate_input_cost(
             prompt_tokens_details=prompt_tokens_details,
@@ -1573,7 +1574,7 @@ def generic_cost_per_token(
             cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
             service_tier=service_tier,
         )
-        + unbilled_minimum_input_tokens * base_costs.input_rate
+        + unbilled_minimum_input_tokens(resolved_model_info, usage.prompt_tokens) * base_costs.input_rate
     )
 
     ## CALCULATE OUTPUT COST

@@ -201,6 +201,74 @@ def test_vispark_drops_a_map_field_schema_with_drop_params():
     assert sent_schema == {"type": "object", "properties": {"facts": {"type": "object"}}, "required": ["facts"]}
 
 
+def test_vispark_keeps_a_schema_property_named_additional_properties():
+    schema: Final = {
+        "type": "object",
+        "properties": {"additionalProperties": {"type": "string", "additionalProperties": False}},
+        "required": ["additionalProperties"],
+        "additionalProperties": False,
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Describe Paris as JSON"}],
+            response_format={"type": "json_schema", "json_schema": {"name": "Notes", "schema": schema}},
+            api_key="vispark-test-key",
+        )
+
+    sent_schema: Final = json.loads(route.calls.last.request.content)["response_format"]["json_schema"]["schema"]
+    assert sent_schema == {
+        "type": "object",
+        "properties": {"additionalProperties": {"type": "string"}},
+        "required": ["additionalProperties"],
+    }
+
+
+def _file_id_messages() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file"},
+                {"type": "file", "file": {"file_id": "file-abc123"}},
+            ],
+        }
+    ]
+
+
+def test_vispark_rejects_a_file_part_sent_by_file_id_without_drop_params():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.BadRequestError, match="file_id") as error:
+            litellm.completion(model="vispark/vision-medium", messages=_file_id_messages(), api_key="vispark-test-key")
+
+    assert error.value.status_code == 400
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_vispark_drops_a_file_part_sent_by_file_id_with_drop_params(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        await litellm.acompletion(
+            model="vispark/vision-medium",
+            messages=_file_id_messages(),
+            drop_params=True,
+            api_key="vispark-test-key",
+        )
+
+    sent_content: Final = json.loads(route.calls.last.request.content)["messages"][0]["content"]
+    assert sent_content == [{"type": "text", "text": "Summarize this file"}]
+
+
 def test_other_json_providers_keep_additional_properties_and_file_parts():
     file_part: Final = {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0xLjQK"}}
     response_format: Final = {

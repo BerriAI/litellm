@@ -2,8 +2,7 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-import json
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, overload
 
 from pydantic import JsonValue, TypeAdapter
@@ -11,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     migrate_file_to_image_url,
@@ -19,12 +19,17 @@ from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionUserMessage,
+    OpenAIMessageContentListBlock,
+)
 
 from .json_loader import SimpleProviderConfig
 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _REQUESTED_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -40,25 +45,52 @@ def _with_file_parts_as_image_url(message: AllMessageValues) -> AllMessageValues
     return updated
 
 
-def _without_additional_properties_flags(node: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    return {key: item for key, item in node.items() if key != "additionalProperties" or not isinstance(item, bool)}
+def _is_unreadable_file_part(part: OpenAIMessageContentListBlock) -> bool:
+    return part["type"] == "file" and not part["file"].get("file_data")
 
 
-def _without_additional_properties_key(node: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    return {key: item for key, item in node.items() if key != "additionalProperties"}
+def _without_unreadable_file_parts(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "user" or not isinstance(message["content"], list):
+        return message
+    content: Final = [part for part in message["content"] if not _is_unreadable_file_part(part)]
+    updated: Final[ChatCompletionUserMessage] = {**message, "content": content}
+    return updated
 
 
-def _rebuilt_json(
-    value: JsonValue, object_hook: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]]
+def _messages_with_readable_file_parts(
+    messages: Sequence[AllMessageValues], provider_slug: str, drop_params: bool
+) -> tuple[AllMessageValues, ...]:
+    readable: Final = tuple(_without_unreadable_file_parts(message) for message in messages)
+    if readable == tuple(messages) or drop_params:
+        return readable
+    raise UnsupportedParamsError(
+        message=(
+            f"{provider_slug} cannot read file parts sent by file_id. "
+            "Send the file as file_data, or set `drop_params=True` to drop them"
+        ),
+        llm_provider=provider_slug,
+    )
+
+
+def _without_additional_properties(
+    node: JsonValue, keep: Callable[[JsonValue], bool], is_schema_map: bool = False
 ) -> JsonValue:
-    return _JSON_VALUE_ADAPTER.validate_python(json.loads(json.dumps(value), object_hook=object_hook))
+    if isinstance(node, list):
+        return [_without_additional_properties(item, keep) for item in node]
+    if not isinstance(node, dict):
+        return node
+    return {
+        key: _without_additional_properties(item, keep, not is_schema_map and key in _SCHEMA_MAP_KEYWORDS)
+        for key, item in node.items()
+        if is_schema_map or key != "additionalProperties" or keep(item)
+    }
 
 
 def _response_format_without_additional_properties(
     response_format: JsonValue, provider_slug: str, model: str, drop_params: bool
 ) -> JsonValue:
-    without_flags: Final = _rebuilt_json(response_format, _without_additional_properties_flags)
-    without_any: Final = _rebuilt_json(response_format, _without_additional_properties_key)
+    without_flags: Final = _without_additional_properties(response_format, lambda item: not isinstance(item, bool))
+    without_any: Final = _without_additional_properties(response_format, lambda _: False)
     if without_flags == without_any or drop_params:
         return without_any
     raise UnsupportedParamsError(
@@ -109,6 +141,24 @@ def create_config_class(provider: SimpleProviderConfig):
             if is_async:
                 return super()._transform_messages(messages=transformed, model=model, is_async=True)
             return super()._transform_messages(messages=transformed, model=model, is_async=False)
+
+        def _prompt_cache_ordered_messages(
+            self,
+            messages: list[AllMessageValues],  # mutable-ok: overrides OpenAIGPTConfig's list signature
+            litellm_params: Mapping[str, object],
+        ) -> list[AllMessageValues]:  # mutable-ok: overrides OpenAIGPTConfig's list signature
+            readable: Final = (
+                list(
+                    _messages_with_readable_file_parts(
+                        messages,
+                        provider_slug=provider.slug,
+                        drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
+                    )
+                )
+                if provider.special_handling.get("convert_file_parts_to_image_url")
+                else messages
+            )
+            return super()._prompt_cache_ordered_messages(readable, litellm_params)
 
         def _should_preserve_cache_control_for_endpoint(
             self,
