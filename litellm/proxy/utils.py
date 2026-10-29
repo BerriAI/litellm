@@ -168,7 +168,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_stream_output_texts,
 )
-from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -1139,7 +1139,9 @@ def _estimated_prompt_usage(
         None,
     )
     return _estimate_dispatched_failure_usage(
-        model=str(model_call_details.get("model") or ""),
+        model=usage_tokenizer_model(
+            str(model_call_details.get("model") or ""), get_base_model_from_metadata(model_call_details)
+        ),
         request_input=(
             messages_since_newest_compaction(dispatched_input)
             if dispatched_call_type in _RESPONSES_CALL_TYPES
