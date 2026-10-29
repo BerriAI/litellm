@@ -1108,12 +1108,6 @@ def test_unmapped_openai_family_model_routes_to_converse():
     ],
 )
 def test_unmapped_converse_only_family_model_routes_to_converse(unmapped: str):
-    """An id newer than the cost map from a family with no Invoke provider goes to Converse.
-
-    minimax, nvidia, writer, zai, google and xai have no transformation under
-    ``litellm/llms/bedrock/chat/invoke_transformations``. Such an id used to fall to the invoke route,
-    where ``get_bedrock_invoke_provider`` returns ``None`` and the request fails before it is sent.
-    """
     import litellm
 
     assert BedrockModelInfo.get_base_model(unmapped) not in litellm.bedrock_converse_models
@@ -1121,7 +1115,6 @@ def test_unmapped_converse_only_family_model_routes_to_converse(unmapped: str):
 
 
 def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
-    """The Converse default is scoped to ids with no Invoke provider, and ``meta`` has one."""
     from typing import Final
 
     import litellm
@@ -1153,9 +1146,6 @@ def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
 def test_completion_on_unmapped_model_posts_converse_unless_its_id_names_an_invoke_provider(
     model: str, model_path: bytes, response_json: dict[str, object]
 ):
-    """An id missing from the cost map used to be sent to Invoke, which fails locally for one naming no
-    Invoke provider (``Unknown provider=None``) before any request leaves, so a new vendor's model was unusable
-    without the ``converse/`` prefix."""
     import httpx
 
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

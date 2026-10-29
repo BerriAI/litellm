@@ -966,6 +966,13 @@ def _map_bedrock_exception(
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),
         )
+    elif "The provided model identifier is invalid" in error_str:
+        raise NotFoundError(
+            message=f"BedrockException - {error_str}",
+            model=model,
+            llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
+        )
     elif "Malformed input request" in error_str:
         raise BadRequestError(
             message=f"BedrockException - {error_str}",

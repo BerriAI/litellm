@@ -10,7 +10,7 @@ import json
 import os
 import re
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -1090,6 +1090,10 @@ _MODEL_COST_ENTRY_ADAPTER: Final = TypeAdapter(dict[str, object])
 def _model_cost_entry(key: str) -> Mapping[str, object] | None:
     raw: Final = litellm.model_cost.get(key)
     return None if raw is None else _MODEL_COST_ENTRY_ADAPTER.validate_python(raw)
+
+
+def bedrock_cost_map_has_row(keys: Iterable[str]) -> bool:
+    return any(_model_cost_entry(key) is not None for key in keys)
 
 
 def _bedrock_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
