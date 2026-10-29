@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import chain
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
@@ -130,6 +130,10 @@ def _is_absent(module_name: str) -> bool:
         return False
 
 
+def _still_importing(module: ModuleType) -> bool:
+    return attribute_or_none(attribute_or_none(module, "__spec__"), "_initializing") is True
+
+
 def _import_guardrail_translations(
     module_path: str,
 ) -> Mapping[CallTypes, type["BaseTranslation"]] | _UnavailablePackage:
@@ -140,6 +144,8 @@ def _import_guardrail_translations(
             reason=f"{type(e).__name__}: {e}",
             missing_dependency=isinstance(e, ModuleNotFoundError) and _is_absent(e.name or ""),
         )
+    if _still_importing(module):
+        return _UnavailablePackage(reason=f"{module_path} was still being imported", missing_dependency=False)
     declared: Final = attribute_or_none(module, "guardrail_translation_mappings")
     return declared if isinstance(declared, dict) else _NO_MAPPINGS
 
@@ -239,12 +245,15 @@ def load_guardrail_translation_mappings(
     return discovery.mappings
 
 
-def get_guardrail_translation_mapping(call_type: CallTypes) -> type["BaseTranslation"]:
+def get_guardrail_translation_mapping(
+    call_type: CallTypes, now: Callable[[], float] = time.monotonic
+) -> type["BaseTranslation"]:
     """
     Get the guardrail translation handler for a given call type.
 
     Args:
         call_type: The type of call (e.g., completion, acompletion, anthropic_messages)
+        now: Clock that decides whether a package that failed to import is due for another try
 
     Returns:
         The translation handler class for the given call type
@@ -252,7 +261,7 @@ def get_guardrail_translation_mapping(call_type: CallTypes) -> type["BaseTransla
     Raises:
         ValueError: If no translation mapping exists for the given call type
     """
-    mappings: Final = load_guardrail_translation_mappings()
+    mappings: Final = load_guardrail_translation_mappings(now)
     if call_type not in mappings:
         raise ValueError(
             f"No guardrail translation mapping found for call_type: {call_type}. "

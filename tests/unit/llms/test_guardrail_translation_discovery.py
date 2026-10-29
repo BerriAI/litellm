@@ -3,7 +3,6 @@ import importlib.machinery
 import importlib.util
 import logging
 import sys
-import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from types import ModuleType
@@ -58,6 +57,29 @@ def raising_on_import(module_path: str, error: BaseException) -> Iterator[Raisin
         mp.delitem(sys.modules, module_path, raising=False)
         mp.setattr(sys, "meta_path", [loader, *sys.meta_path])
         yield loader
+
+
+class DiscoveringDuringItsOwnImport(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def __init__(self, module_path: str) -> None:
+        self.module_path = module_path
+        self.seen_mid_import: llms_package.GuardrailTranslationDiscovery | None = None
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        if fullname != self.module_path:
+            return None
+        return importlib.util.spec_from_loader(fullname, self)
+
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType | None:
+        return None
+
+    def exec_module(self, module: ModuleType) -> None:
+        self.seen_mid_import = llms_package._discover((self.module_path,), already_found={})
+        module.guardrail_translation_mappings = {CallTypes.call_mcp_tool: _StandInMCPHandler}
 
 
 @contextmanager
@@ -172,11 +194,9 @@ def test_a_package_that_keeps_failing_is_reported_once_and_its_recovery_announce
 def test_lookup_recovers_after_a_failed_discovery() -> None:
     with unimportable(OPENAI_CHAT_TRANSLATION_MODULE):
         with pytest.raises(ValueError, match="acompletion"):
-            llms_package.get_guardrail_translation_mapping(CallTypes.acompletion)
+            llms_package.get_guardrail_translation_mapping(CallTypes.acompletion, now=at(0.0))
 
-    llms_package.load_guardrail_translation_mappings(now=at(time.monotonic() + RETRY_SECONDS))
-
-    assert llms_package.get_guardrail_translation_mapping(CallTypes.acompletion) is not None
+    assert llms_package.get_guardrail_translation_mapping(CallTypes.acompletion, now=at(RETRY_SECONDS)) is not None
 
 
 def test_an_mcp_package_that_fails_to_import_is_reported_and_retried(caplog: pytest.LogCaptureFixture) -> None:
@@ -230,6 +250,23 @@ def test_a_broken_mcp_dependency_is_reported_and_retried(caplog: pytest.LogCaptu
 
 class _StandInMCPHandler:
     pass
+
+
+def test_a_package_caught_mid_import_is_retried_instead_of_cached_as_complete() -> None:
+    module_path: Final = "mid_import_guardrail_translation_stub"
+    loader: Final = DiscoveringDuringItsOwnImport(module_path)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys, "meta_path", [loader, *sys.meta_path])
+        importlib.import_module(module_path)
+        mid_import: Final = loader.seen_mid_import
+        assert mid_import is not None
+        retried: Final = llms_package._discover(mid_import.unavailable, already_found=mid_import.mappings)
+        mp.delitem(sys.modules, module_path)
+
+    assert tuple(mid_import.unavailable) == (module_path,)
+    assert CallTypes.call_mcp_tool not in mid_import.mappings
+    assert not retried.unavailable
+    assert retried.mappings[CallTypes.call_mcp_tool] is _StandInMCPHandler
 
 
 def test_the_mcp_package_wins_a_handler_collision_with_a_bundled_package(monkeypatch: pytest.MonkeyPatch) -> None:

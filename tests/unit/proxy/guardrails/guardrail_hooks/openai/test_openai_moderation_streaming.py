@@ -1,6 +1,5 @@
 import os
 import sys
-import time
 from collections.abc import AsyncIterator
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -543,10 +542,10 @@ def reset_guardrail_translation_discovery(monkeypatch: pytest.MonkeyPatch) -> No
 async def test_moderation_still_runs_after_a_failed_translation_discovery(
     reset_guardrail_translation_discovery: None,
 ) -> None:
-    a_retry_interval_ago: Final = time.monotonic() - llms_package.GUARDRAIL_TRANSLATION_RETRY_SECONDS
+    long_before_any_clock_reading: Final = float("-inf")
     with pytest.MonkeyPatch.context() as poison:
         poison.setitem(sys.modules, "litellm.llms.openai.chat.guardrail_translation", None)
-        poisoned: Final = llms_package.load_guardrail_translation_mappings(now=lambda: a_retry_interval_ago)
+        poisoned: Final = llms_package.load_guardrail_translation_mappings(now=lambda: long_before_any_clock_reading)
     assert CallTypes.acompletion not in poisoned
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):

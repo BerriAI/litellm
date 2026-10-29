@@ -3272,46 +3272,92 @@ class TestUnscannedRequestIsAnnounced:
         ), self._warnings(caplog)
 
     @pytest.mark.asyncio
-    async def test_during_call_still_rejects_a_call_type_outside_the_enum(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize(
+        ("call_type", "forged_text"),
+        [
+            pytest.param(CallTypes.acompletion.value, "/v1/responses/resp_1ERROR forged entry", id="handled-call-type"),
+            pytest.param("not_a_call_type\r\nERROR forged entry", "not_a_call_typeERROR forged entry", id="call-type-outside-the-enum"),
+        ],
+    )
+    async def test_line_breaks_in_the_route_or_call_type_cannot_forge_log_lines(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, call_type: str, forged_text: str
+    ) -> None:
+        _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
+
+        with self._capturing(caplog):
+            await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test-key", request_route="/v1/responses/resp_1\r\nERROR forged entry"
+                ),
+                cache=DualCache(),
+                data=self._request(RecordingGuardrail()),
+                call_type=call_type,
+            )
+
+        warnings: Final = self._warnings(caplog)
+        assert any(forged_text in message for message in warnings), warnings
+        assert not any("\r" in message or "\n" in message for message in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_during_call_warns_instead_of_raising_on_a_call_type_outside_the_enum(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
         guardrail: Final = RecordingGuardrail()
 
-        with pytest.raises(ValueError, match="acompact_responses"):
-            await UnifiedLLMGuardrails().async_moderation_hook(
+        with self._capturing(caplog):
+            returned: Final = await UnifiedLLMGuardrails().async_moderation_hook(
                 data=self._request(guardrail),
                 user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses/compact"),
                 call_type="acompact_responses",
             )
 
         assert guardrail.apply_calls == []
+        assert returned["messages"] == [{"role": "user", "content": "hello world"}]
+        assert any(
+            "call type 'acompact_responses' is not one litellm can scan" in message
+            and "skipping during-call scanning" in message
+            for message in self._warnings(caplog)
+        ), self._warnings(caplog)
+
+    async def _pre_call_on(self, guardrail: CustomGuardrail, request_route: str, call_type: str | None) -> None:
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route=request_route),
+            cache=DualCache(),
+            data=self._request(guardrail),
+            call_type=call_type,
+        )
 
     @pytest.mark.asyncio
-    async def test_a_route_with_no_handler_warns_once_instead_of_once_per_request(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_a_call_type_with_no_handler_warns_once_however_many_resource_ids_reach_it(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
         guardrail: Final = RecordingGuardrail()
 
         with self._capturing(caplog):
-            for _ in range(5):
-                await UnifiedLLMGuardrails().async_pre_call_hook(
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses/resp_123"),
-                    cache=DualCache(),
-                    data=self._request(guardrail),
-                    call_type="aget_responses",
-                )
-            await UnifiedLLMGuardrails().async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/moderations"),
-                cache=DualCache(),
-                data=self._request(guardrail),
-                call_type="aget_responses",
-            )
+            for response_id in ("resp_1", "resp_2", "resp_3", "resp_1"):
+                await self._pre_call_on(guardrail, f"/v1/responses/{response_id}", "aget_responses")
+            await self._pre_call_on(guardrail, "/v1/responses/resp_1", "adelete_responses")
 
         unscanned: Final = [
             message for message in self._distinct_warnings(caplog) if "skipping pre-call scanning" in message
         ]
         assert len(unscanned) == 2, unscanned
-        assert "/v1/responses/resp_123" in unscanned[0]
-        assert "aget_responses" in unscanned[0]
-        assert "/v1/moderations" in unscanned[1]
+        assert "/v1/responses/resp_1" in unscanned[0] and "aget_responses" in unscanned[0]
+        assert "adelete_responses" in unscanned[1]
+
+    @pytest.mark.asyncio
+    async def test_routes_without_a_call_type_each_warn_once(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_translation_mappings(monkeypatch, {CallTypes.aembedding: _NoopTranslation})
+        guardrail: Final = RecordingGuardrail()
+
+        with self._capturing(caplog):
+            for request_route in ("/custom/route_a", "/custom/route_b", "/custom/route_a"):
+                await self._pre_call_on(guardrail, request_route, None)
+
+        unscanned: Final = [
+            message for message in self._distinct_warnings(caplog) if "its call type could not be resolved" in message
+        ]
+        assert len(unscanned) == 2, unscanned
+        assert "/custom/route_a" in unscanned[0]
+        assert "/custom/route_b" in unscanned[1]
 
     @pytest.mark.asyncio
     async def test_post_call_names_the_call_type_the_route_maps_to(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:

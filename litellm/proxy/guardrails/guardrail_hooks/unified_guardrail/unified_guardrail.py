@@ -11,6 +11,7 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime_checkable
 
@@ -238,24 +239,30 @@ def _resolved_call_type(call_type: str | None) -> CallTypes | None:
         return None
 
 
+def _without_line_breaks(value: str | None) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
+
+
 def _log_left_unscanned(
     guardrail_name: str | None,
     request_route: str | None,
     call_type: str | None,
     consequence: str,
 ) -> None:
+    route: Final = _without_line_breaks(request_route)
+    shown_call_type: Final = _without_line_breaks(call_type)
     if _resolved_call_type(call_type) is not None:
         verbose_proxy_logger.warning(
             "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; %s.",
             guardrail_name,
-            request_route,
-            call_type,
+            route,
+            shown_call_type,
             consequence,
         )
         return
     unscannable, remedy = (
         (
-            f"call type '{call_type}' is not one litellm can scan",
+            f"call type '{shown_call_type}' is not one litellm can scan",
             "Map the route to a CallTypes member in API_ROUTE_TO_CALL_TYPES",
         )
         if call_type
@@ -264,14 +271,32 @@ def _log_left_unscanned(
     verbose_proxy_logger.warning(
         "Guardrail '%s' selected for route '%s' but %s, so no guardrail can run on that route; %s. %s.",
         guardrail_name,
-        request_route,
+        route,
         unscannable,
         consequence,
         remedy,
     )
 
 
-_warn_left_unscanned_once: Final = lru_cache(maxsize=_UNSCANNED_WARNING_KEYS)(_log_left_unscanned)
+@dataclass(frozen=True, slots=True)
+class _UnscannedWarning:
+    guardrail_name: str | None
+    call_type_or_route: str | None
+    consequence: str
+    request_route: str | None = field(compare=False)
+    call_type: str | None = field(compare=False)
+
+
+def _log_unscanned_warning(warning: _UnscannedWarning) -> None:
+    _log_left_unscanned(
+        guardrail_name=warning.guardrail_name,
+        request_route=warning.request_route,
+        call_type=warning.call_type,
+        consequence=warning.consequence,
+    )
+
+
+_warn_left_unscanned_once: Final = lru_cache(maxsize=_UNSCANNED_WARNING_KEYS)(_log_unscanned_warning)
 
 
 def _warn_left_unscanned(
@@ -281,10 +306,13 @@ def _warn_left_unscanned(
     consequence: str,
 ) -> None:
     _warn_left_unscanned_once(
-        guardrail_name=guardrail_to_apply.guardrail_name,
-        request_route=user_api_key_dict.request_route,
-        call_type=call_type,
-        consequence=consequence,
+        _UnscannedWarning(
+            guardrail_name=guardrail_to_apply.guardrail_name,
+            call_type_or_route=call_type or user_api_key_dict.request_route,
+            consequence=consequence,
+            request_route=user_api_key_dict.request_route,
+            call_type=call_type,
+        )
     )
 
 
@@ -393,8 +421,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
-        resolved_call_type: Final = CallTypes(call_type)
-        if resolved_call_type not in mappings:
+        resolved_call_type: Final = _resolved_call_type(call_type)
+        if resolved_call_type is None or resolved_call_type not in mappings:
             _warn_left_unscanned(
                 guardrail_to_apply=guardrail_to_apply,
                 user_api_key_dict=user_api_key_dict,
