@@ -1192,6 +1192,12 @@ from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E40
     KeyRequestBase as KeyRequestBase,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    KeyTeamLimitField as KeyTeamLimitField,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
+    KeyTeamLimitWarning as KeyTeamLimitWarning,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
     LiteLLMKeyType as LiteLLMKeyType,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.management_endpoints.request_base import (  # noqa: E402  # re-export after the definitions above
@@ -1217,6 +1223,7 @@ class GenerateKeyResponse(KeyRequestBase):
     updated_by: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    warnings: Sequence[KeyTeamLimitWarning] | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -5,7 +5,11 @@ from types import MappingProxyType
 from typing import Any, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
 
 from pydantic import Field, PositiveInt, field_validator, model_validator
-from typing_extensions import TypeIs  # noqa: TID251  # narrows the raw payload a before-validator receives
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the raw payload a before-validator receives
+)
 
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
 from litellm.types.router import UpdateRouterConfig
@@ -15,6 +19,15 @@ from litellm.types.utils import LiteLLMPydanticObjectBase
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_name: str
     index_permissions: list[Literal["read", "write"]]
+
+
+KeyTeamLimitField = Literal["rpm_limit", "tpm_limit", "max_parallel_requests", "max_budget"]
+
+
+class KeyTeamLimitWarning(TypedDict):
+    field: ReadOnly[KeyTeamLimitField]
+    requested: ReadOnly[float | int]
+    effective_team_cap: ReadOnly[float | int]
 
 
 class KeyRequestBase(GenerateRequestBase):
