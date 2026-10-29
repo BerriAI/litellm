@@ -108,7 +108,7 @@ class _DropParamsSetting(BaseModel):
     drop_params: object = None
 
 
-def _drops_params(litellm_params: GenericLiteLLMParams) -> bool:
+def drops_params(litellm_params: GenericLiteLLMParams) -> bool:
     setting: Final = _DropParamsSetting.model_validate(litellm_params)
     return litellm.drop_params is True or normalize_drop_params(setting.drop_params) is True
 
@@ -541,7 +541,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         prompt_cache_options: object = None,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
-        validated_input: Final = self._validate_input_param(self._drop_bridge_minted_reasoning_items(input))
+        validated_input: Final = self._validate_input_param(
+            self._drop_bridge_minted_reasoning_items(input), drops_set_created_by=drops_params(litellm_params)
+        )
         marked_input: Final = (
             self._input_with_prompt_cache_breakpoints(validated_input)
             if self._reads_prompt_cache_breakpoints(
@@ -582,7 +584,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
         callers_own_search: Final = any(is_openai_tool_search_tool(tool) for tool in tools)
-        if callers_own_search or not _drops_params(litellm_params) or _runs_tool_search(model, tools):
+        if callers_own_search or not drops_params(litellm_params) or _runs_tool_search(model, tools):
             return tools_with_anthropic_tool_search_mapped(tools)
         verbose_logger.warning(
             "Dropping tool search under drop_params: OpenAI model '%s' cannot run it or no tool is deferred, so every "
@@ -775,7 +777,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         ]
         return tools if all(new is old for new, old in zip(sanitized, tools, strict=True)) else sanitized
 
-    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+    def _validate_input_param(
+        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+    ) -> str | ResponseInputParam:
         """
         Ensure all input fields if pydantic are converted to dict
 
@@ -787,18 +791,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             for item in input:
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
-                    validated_input.append(item.model_dump(exclude_none=True))
+                    validated_input.append(
+                        replayable_responses_item(
+                            item.model_dump(exclude_none=True), drops_set_created_by=drops_set_created_by
+                        )
+                    )
                 elif isinstance(item, dict):
-                    # Handle reasoning items specifically to filter out status=None
-                    if item.get("type") == "reasoning":
-                        verbose_logger.debug("Handling reasoning item: %s", item)
-                        # Type assertion since we know it's a dict at this point
-                        dict_item = cast(dict[str, object], item)
-                        filtered_item = self._handle_reasoning_item(dict_item)
-                    else:
-                        # For other dict items, just pass through
-                        filtered_item = cast(dict[str, object], item)
-                    validated_input.append(filtered_item)
+                    validated_input.append(
+                        replayable_responses_item(
+                            self._handle_reasoning_item(cast(dict[str, object], item))
+                            if item.get("type") == "reasoning"
+                            else item,
+                            drops_set_created_by=drops_set_created_by,
+                        )
+                    )
                 else:
                     validated_input.append(item)
             return validated_input
@@ -1212,7 +1218,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def compact_dropped_params(self, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
         if self.custom_llm_provider not in _PROVIDERS_WITH_STRICT_COMPACT_PARAMS:
             return frozenset()
-        if _drops_params(litellm_params):
+        if drops_params(litellm_params):
             return _COMPACT_TRACKING_PARAMS | _COMPACT_REJECTED_PARAMS
         return _COMPACT_TRACKING_PARAMS
 
