@@ -1240,7 +1240,7 @@ def generic_response_convertor(
     )
 
     token: Final = cast(dict[str, object], response)  # cast-ok: the IdP userinfo JSON object fastapi-sso hands back
-    all_teams: Final[list[str]] = []
+    all_teams: Final = []
     if sso_jwt_handler is not None:
         team_ids = sso_jwt_handler.get_all_jwt_team_ids(token)
         all_teams.extend(team_ids)
@@ -1268,8 +1268,9 @@ def generic_response_convertor(
         else None
     )
     team_id_to_upsert: Final = upsert_candidate if isinstance(upsert_candidate, str) else None
-    if team_id_to_upsert is not None and team_id_to_upsert not in all_teams:
-        all_teams.append(team_id_to_upsert)
+    team_ids_with_upsert: Final = (
+        all_teams if team_id_to_upsert is None or team_id_to_upsert in all_teams else [*all_teams, team_id_to_upsert]
+    )
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
@@ -1337,7 +1338,7 @@ def generic_response_convertor(
         first_name=get_nested_value(response, generic_user_first_name_attribute_name),
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
-        team_ids=all_teams,
+        team_ids=team_ids_with_upsert,
         team_id_to_upsert=team_id_to_upsert,
         user_role=user_role,
         extra_fields=extra_fields,
@@ -1872,9 +1873,7 @@ async def add_missing_team_member(
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
     """
-    # Handle None as empty list for new users
-    user_teams: Final = user_info.teams if user_info.teams is not None else []
-    missing_teams: Final = sorted(set(sso_teams) - set(user_teams))
+    missing_teams: Final = sorted(set(sso_teams) - set(user_info.teams or ()))
     results: Final = await asyncio.gather(
         *(
             create_team_member_add_task(team_id, user_info, upsert_team if team_id == team_id_to_upsert else None)
