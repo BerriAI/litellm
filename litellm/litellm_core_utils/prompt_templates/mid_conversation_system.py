@@ -35,11 +35,14 @@ from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
+from pydantic import ValidationError
+
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
     AnthropicMessagesSystemMessageParam,
     AnthropicSystemMessageContent,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -288,6 +291,15 @@ def _separate_thinking_blocks_render(message: object) -> bool:
 
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
+
+
+def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResultBlock | None:
+    if message_field(block, "type") != "tool_search_tool_result":
+        return None
+    try:
+        return AnthropicToolSearchToolResultBlock.model_validate(block)
+    except ValidationError:
+        return None
 
 
 def find_anthropic_server_tool_result(

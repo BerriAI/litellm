@@ -1,13 +1,17 @@
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import filterfalse
+from types import MappingProxyType
 from typing import Any, Final, cast
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
 from litellm.responses.litellm_completion_transformation.custom_tools import (
@@ -21,6 +25,10 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     build_tool_search_call,
     has_server_tool_search,
     is_anthropic_tool_search_use,
+)
+from litellm.responses.litellm_completion_transformation.tool_search_results import (
+    build_tool_search_output,
+    tool_search_results_by_call_id,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -63,6 +71,8 @@ from litellm.types.utils import (
     StreamingChoices,
     TextCompletionResponse,
 )
+
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int | None:
@@ -192,6 +202,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
         self._tool_search_requested: bool = has_server_tool_search(request_tools)
         self._tool_search_call_ids: frozenset[str] = frozenset()
+        self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
 
     def _is_tool_search_call(self, call_id: str, fn_name: str) -> bool:
         if call_id in self._tool_search_call_ids:
@@ -236,6 +247,45 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
             )
         )
+        self._queue_tool_search_output(call_id)
+
+    def _tool_search_output_index(self, call_id: str) -> int:
+        existing: Final = self._tool_search_output_index_by_call_id.get(call_id)
+        if existing is not None:
+            return existing
+        output_index: Final = self._allocate_output_index()
+        self._tool_search_output_index_by_call_id = MappingProxyType(
+            {**self._tool_search_output_index_by_call_id, call_id: output_index}
+        )
+        return output_index
+
+    def _reserve_tool_search_output_indexes(self) -> None:
+        if "tool_results" not in self._accumulated_provider_specific_fields:
+            return
+        for call_id in tool_search_results_by_call_id((self._accumulated_provider_specific_fields,)):
+            if call_id in self._tool_search_call_ids:
+                self._tool_search_output_index(call_id)
+
+    def _queue_tool_search_output(self, call_id: str) -> None:
+        result: Final = tool_search_results_by_call_id((self._accumulated_provider_specific_fields,)).get(call_id)
+        if result is None:
+            return
+        output_index: Final = self._tool_search_output_index(call_id)
+        request_tools: Final = parts_of(_REQUEST_FIELDS.validate_python(self.responses_api_request).get("tools"))
+        item: Final = build_tool_search_output(result, request_tools)
+        self._queue_output_item_added(
+            output_index,
+            BaseLiteLLMOpenAIResponseObject(**item.model_copy(update={"status": "in_progress"}).model_dump()),
+        )
+        self._sequence_number += 1
+        self._pending_tool_events.append(
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=output_index,
+                sequence_number=self._sequence_number,
+                item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+            )
+        )
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing: Final = self._tool_output_index_by_call_id.get(call_id)
@@ -268,6 +318,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 return self._reasoning_output_index
             case "compaction":
                 return self._compaction_output_index
+            case "tool_search_output":
+                return self._tool_search_output_index_by_call_id.get(str(getattr(item, "call_id", None)))
             case _:
                 call_id: Final = getattr(item, "call_id", None) or str(getattr(item, "id", "")).removeprefix("ws_")
                 return self._tool_output_index_by_call_id.get(str(call_id))
@@ -1231,6 +1283,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             if src and isinstance(src, dict):
                                 self._merge_provider_specific_fields(src)
                                 self._reserve_web_search_indexes(src)
+                                self._reserve_tool_search_output_indexes()
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
@@ -1291,6 +1344,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         if src and isinstance(src, dict):
                             self._merge_provider_specific_fields(src)
                             self._reserve_web_search_indexes(src)
+                            self._reserve_tool_search_output_indexes()
                     self._ensure_output_item_for_chunk(chunk)
                     # Always snapshot before returning any pending events so that
                     # finish_reason (e.g. content_filter) is captured even when

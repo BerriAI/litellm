@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
@@ -30,6 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    anthropic_tool_search_result,
     find_anthropic_server_tool_result,
     message_field,
     parts_of,
@@ -53,6 +55,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
@@ -1661,6 +1664,61 @@ def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_t
 
         message["content"] = new_content
     return messages
+
+
+def _assistant_blocks(message: AllAnthropicPassThroughMessageValues) -> tuple[object, ...]:
+    return parts_of(message["content"]) if message["role"] == "assistant" else ()
+
+
+def _stale_tool_search_ids(
+    messages: Sequence[AllAnthropicPassThroughMessageValues], tool_names: frozenset[str]
+) -> frozenset[str]:
+    blocks: Final = chain.from_iterable(map(_assistant_blocks, messages))
+    results: Final = (result for result in map(anthropic_tool_search_result, blocks) if result is not None)
+    return frozenset(result.tool_use_id for result in results if not tool_names.issuperset(result.tool_names))
+
+
+def _is_stale_tool_search_block(block: object, stale_ids: frozenset[str]) -> bool:
+    match message_field(block, "type"):
+        case "server_tool_use":
+            return message_field(block, "id") in stale_ids
+        case "tool_search_tool_result":
+            return message_field(block, "tool_use_id") in stale_ids
+        case _:
+            return False
+
+
+def _without_stale_tool_search_blocks(
+    message: AllAnthropicPassThroughMessageValues, stale_ids: frozenset[str]
+) -> AllAnthropicPassThroughMessageValues | None:
+    if message["role"] != "assistant":
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return message
+    blocks: Final = tuple(content)
+    kept: Final = [block for block in blocks if not _is_stale_tool_search_block(block, stale_ids)]
+    if len(kept) == len(blocks):
+        return message
+    return {**message, "content": kept} if kept else None
+
+
+def without_stale_tool_search_results(
+    messages: Sequence[AllAnthropicPassThroughMessageValues], tools: Sequence[object]
+) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
+    """
+    Drop a replayed tool search, its ``server_tool_use`` and its
+    ``tool_search_tool_result``, when a tool it found is no longer in ``tools``.
+    Anthropic rejects such a history with "Tool reference '<name>' not found in
+    available tools", for example after a follow-up turn removes a tool or sends none.
+    """
+    tool_names: Final = frozenset(name for tool in tools if isinstance(name := message_field(tool, "name"), str))
+    stale_ids: Final = _stale_tool_search_ids(messages, tool_names)
+    if not stale_ids:
+        return tuple(messages)
+    return tuple(
+        kept for message in messages if (kept := _without_stale_tool_search_blocks(message, stale_ids)) is not None
+    )
 
 
 def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:

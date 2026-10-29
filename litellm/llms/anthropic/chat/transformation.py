@@ -127,6 +127,7 @@ from ..common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     tools_marked_for_a_tool_config_point,
+    without_stale_tool_search_results,
 )
 
 if TYPE_CHECKING:
@@ -2370,8 +2371,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
         _all_tools: Final = optional_params.get("tools") or []
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
-        if not _has_advisor:
-            anthropic_messages = strip_advisor_blocks_from_messages(anthropic_messages)
+        anthropic_messages = list(
+            without_stale_tool_search_results(
+                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                _TOOLS_ADAPTER.validate_python(_all_tools),
+            )
+        )
 
         ## Add code_execution tool if container_upload is in messages
         _tools: Final = (

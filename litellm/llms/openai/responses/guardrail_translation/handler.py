@@ -47,7 +47,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import attribute_items, has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -247,6 +247,17 @@ class ResponsesStreamChunk(TypedDict, total=False):
 
 class _StreamEventFields(Protocol):
     def get(self, key: str, /) -> object: ...
+
+
+class _TextPart(Protocol):
+    text: str
+
+
+def _set_content_part_text(item: object, index: int, text: str) -> None:
+    parts: Final = tuple(attribute_items(item, "content"))
+    part: Final = parts[index] if index < len(parts) else None
+    if has_attributes(part, _TextPart, "text"):
+        part.text = text
 
 
 _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
@@ -1901,10 +1912,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                         if isinstance(content_item, OutputText):
                             content_item.text = guardrail_response
                             # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
-                                if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
+                            _set_content_part_text(output_item, content_idx, guardrail_response)
                 except Exception:
                     pass
             elif isinstance(output_item, dict):

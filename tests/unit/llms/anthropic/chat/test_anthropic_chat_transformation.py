@@ -3779,6 +3779,109 @@ def test_replayed_search_that_found_nothing_answers_every_tool_use_and_ends_on_a
     assert _block_ids(replayed[1], "server_tool_use", "id") == server_tool_use_ids
 
 
+def _function_tool(name: str) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {"name": name, "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+        "defer_loading": True,
+    }
+
+
+def _anthropic_request_after(
+    assistant_content: list[dict[str, object]], stop_reason: str, tool_names: tuple[str, ...] | None
+) -> dict[str, object]:
+    config: Final = AnthropicConfig()
+    message: Final = _parsed_assistant_message(assistant_content, stop_reason)
+    answers: Final = [
+        {"role": "tool", "tool_call_id": block["id"], "content": "18C"}
+        for block in assistant_content
+        if block["type"] == "tool_use"
+    ]
+    optional_params: Final = (
+        {}
+        if tool_names is None
+        else config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    *map(_function_tool, tool_names),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        )
+    )
+    return config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_names", "search_replayed"),
+    [
+        pytest.param(("get_weather", "get_local_time"), True, id="every_loaded_tool_is_still_sent"),
+        pytest.param(("get_local_time",), False, id="a_loaded_tool_is_no_longer_sent"),
+        pytest.param(None, False, id="no_tools_so_litellm_sends_a_dummy_tool"),
+    ],
+)
+def test_replayed_tool_search_is_sent_only_while_every_tool_it_loaded_is_still_sent(
+    tool_names: tuple[str, ...] | None, search_replayed: bool
+):
+    search_turn: Final = _tool_search_turn(["get_weather"], _WEATHER_CALL)
+
+    request: Final = _anthropic_request_after(search_turn, "tool_use", tool_names)
+
+    assert request["messages"][1]["content"] == (search_turn if search_replayed else [_WEATHER_CALL])
+    assert [block["type"] for block in request["messages"][2]["content"]] == ["tool_result", "text"]
+
+
+def test_replayed_tool_search_turn_that_held_only_the_search_is_dropped_once_its_tool_is_no_longer_sent():
+    request: Final = _anthropic_request_after(_tool_search_turn(["get_weather"], _WEATHER_CALL)[:2], "end_turn", ())
+
+    assert [message["role"] for message in request["messages"]] == ["user", "user"]
+    assert "srvtoolu_01Search" not in json.dumps(request["messages"])
+
+
+def test_replayed_tool_search_result_litellm_cannot_read_is_sent_as_the_client_replayed_it():
+    unreadable_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {"tool_references": "get_weather"},
+    }
+    message: Final = _parsed_assistant_message(_tool_search_turn(["get_weather"], _WEATHER_CALL), "tool_use")
+    replayed: Final = message.model_copy(update={"provider_specific_fields": {"tool_results": [unreadable_result]}})
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            replayed.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={"tools": [_function_tool("get_local_time")]},
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert unreadable_result in request["messages"][1]["content"]
+
+
 _CODE_EXECUTION_BLOCKS: Final = [
     {
         "type": "server_tool_use",

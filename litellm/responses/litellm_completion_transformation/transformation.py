@@ -113,6 +113,7 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -163,6 +164,12 @@ from .tool_search import (
     tool_search_call_ids,
     without_tool_search_calls,
     without_tool_search_uses,
+)
+from .tool_search_results import (
+    converted_with_tool_searches_replayed,
+    holds_tool_search_items,
+    tool_search_results_by_call_id,
+    with_tool_search_outputs,
 )
 
 NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
@@ -1184,6 +1191,8 @@ class LiteLLMCompletionResponsesConfig:
             item_cache_control=keeps_item_marks,
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
+            replay_tool_search=holds_tool_search_items(request_input)
+            and provider_builds_anthropic_request(model, custom_llm_provider),
         )
 
         litellm_completion_request: dict = {
@@ -1247,6 +1256,7 @@ class LiteLLMCompletionResponsesConfig:
         item_cache_control: bool = False,
         native_compaction: bool = False,
         only_since_compaction: bool = False,
+        replay_tool_search: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1281,6 +1291,11 @@ class LiteLLMCompletionResponsesConfig:
         messages, the way Anthropic ignores content before a compaction block.
         Guardrail scans leave it off because they write rewrites back by input
         item position.
+
+        ``replay_tool_search`` belongs to callers building history for a target
+        that builds an Anthropic request: a Claude ``tool_search_call`` and its
+        ``tool_search_output`` then go back as the search Claude ran. Everyone
+        else drops both items.
         """
         messages: list[
             AllMessageValues
@@ -1298,12 +1313,14 @@ class LiteLLMCompletionResponsesConfig:
 
         dumped_input: Final = with_compaction_items_as_params(input)
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
+        item_input: Final = read_input if item_cache_control else without_item_cache_control(read_input)
+        convert: Final = partial(
+            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
+            replay_reasoning=replay_reasoning,
+            native_compaction=native_compaction,
+        )
         messages.extend(
-            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=read_input if item_cache_control else without_item_cache_control(read_input),
-                replay_reasoning=replay_reasoning,
-                native_compaction=native_compaction,
-            )
+            converted_with_tool_searches_replayed(item_input, convert) if replay_tool_search else convert(item_input)
         )
 
         return messages
@@ -2936,7 +2953,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]:
+    ) -> list[
+        ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
+        | CustomToolCallOutputItem
+        | OutputToolSearchCall
+        | OutputToolSearchOutput
+    ]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -2944,7 +2967,8 @@ class LiteLLMCompletionResponsesConfig:
         with ``type="custom_tool_call"``. For regular function tools, returns
         ``ResponseFunctionToolCall`` with ``type="function_call"``. A provider-side
         tool search call made for a request's ``tool_search`` tool returns
-        ``OutputToolSearchCall`` with ``type="tool_search_call"``.
+        ``OutputToolSearchCall`` with ``type="tool_search_call"``, followed by
+        an ``OutputToolSearchOutput`` listing the tools it loaded.
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
@@ -3034,7 +3058,15 @@ class LiteLLMCompletionResponsesConfig:
                         )
 
                     responses_tools.append(output_tool_call)
-        return responses_tools
+        return list(
+            with_tool_search_outputs(
+                responses_tools,
+                tool_search_results_by_call_id(
+                    choice.message.provider_specific_fields for choice in chat_completion_response.choices
+                ),
+                request_tools,
+            )
+        )
 
     @staticmethod
     def _server_tool_call_item(
@@ -3324,6 +3356,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
         | OutputToolSearchCall
+        | OutputToolSearchOutput
         | ResponseCompactionItem
     ]:
         responses_output: list[
@@ -3335,6 +3368,7 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
             | ResponseCompactionItem
         ] = []
 

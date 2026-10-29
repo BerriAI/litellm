@@ -5011,3 +5011,31 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
             )
 
         assert ended_key(self.SUMMARY) != ended_key("The user lives elsewhere.")
+
+
+@pytest.mark.asyncio
+async def test_output_guardrail_rewrite_reaches_the_text_of_an_openai_sdk_message_item() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    response: Final = ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        model="gpt-4",
+        object="response",
+        status="completed",
+        output=[
+            ResponseOutputMessage(
+                type="message",
+                id="msg_123",
+                status="completed",
+                role="assistant",
+                content=[ResponseOutputText(type="output_text", text="My SSN is 123-45-6789", annotations=[])],
+            )
+        ],
+    )
+
+    await OpenAIResponsesHandler().process_output_response(
+        response, TextsReplacingGuardrail(guardrail_name="masker", texts=("My SSN is [MASKED]",))
+    )
+
+    assert [part.text for part in response.output[0].content] == ["My SSN is [MASKED]"]

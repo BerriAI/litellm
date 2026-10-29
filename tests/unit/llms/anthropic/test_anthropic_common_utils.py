@@ -4522,3 +4522,41 @@ def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_dro
     )
 
     assert optional_params == {"thinking": {"type": "adaptive"}}
+
+
+def test_dropping_a_stale_tool_search_keeps_every_other_turn_as_it_was_sent() -> None:
+    from litellm.llms.anthropic.common_utils import without_stale_tool_search_results
+
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather"},
+    }
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    weather_call: Final = {
+        "type": "tool_use",
+        "id": "toolu_01Weather",
+        "name": "get_weather",
+        "input": {"city": "Paris"},
+    }
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result, weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+        {"role": "assistant", "content": "It is 18C in Paris."},
+        {"role": "user", "content": "Thanks"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Anything else?"}]},
+        {"role": "user", "content": "And in Osaka?"},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_local_time"}])
+
+    assert kept == (messages[0], {"role": "assistant", "content": [weather_call]}, *messages[2:])

@@ -315,6 +315,7 @@ class ResponsesSessionHandler:
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
 
@@ -330,6 +331,7 @@ class ResponsesSessionHandler:
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
