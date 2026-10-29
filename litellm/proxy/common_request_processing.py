@@ -4053,11 +4053,13 @@ class ProxyBaseLLMRequestProcessing:
             _captured_user_api_key_dict: Final = user_api_key_dict
             _captured_logging_obj: Final = logging_obj
 
-            async def _on_deferred_stream_complete(assembled_response: object, cache_hit: object) -> None:
+            async def _on_deferred_stream_complete(
+                assembled_response: object, cache_hit: object, logged_on: LiteLLMLoggingObj | None = None
+            ) -> None:
                 await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                     captured_data=_captured_data,
                     captured_user_api_key_dict=_captured_user_api_key_dict,
-                    captured_logging_obj=_captured_logging_obj,
+                    captured_logging_obj=_captured_logging_obj if logged_on is None else logged_on,
                     assembled_response=assembled_response,
                     cache_hit=cache_hit,
                 )

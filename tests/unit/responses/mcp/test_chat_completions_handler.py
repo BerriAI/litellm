@@ -1823,13 +1823,14 @@ def _assert_one_stream_row_bills_both_rounds_once(
     charged_once: Final = _chat_round_cost(_CHAT_ROUND_ONE) + _chat_round_cost(_CHAT_ROUND_TWO) - _FIXED_MARGIN
     assert len(logged) == 1
     row: Final = logged[0]
-    assert row["id"] == chunks[-1].id
+    assert row["id"] == chunks[0].id
     assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149, 19 + 5)
     assert row["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 32 + 64
     assert row["response_cost"] == pytest.approx(charged_once)
     assert row["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
     usage: Final = _streamed_usage(chunks)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (71 + 149, 19 + 5, 90 + 154)
+    assert usage.cost == pytest.approx(row["response_cost"])
 
 
 def _assert_one_row_bills_round_one(logged: Sequence[StandardLoggingPayload]) -> None:

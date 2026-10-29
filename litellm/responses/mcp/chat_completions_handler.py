@@ -367,8 +367,10 @@ async def acompletion_with_mcp(
                     try:
                         return await self._next_chunk()
                     except StopAsyncIteration:
-                        round_billing.finish()
-                        raise
+                        usage_chunk: Final = round_billing.finish()
+                        if usage_chunk is None:
+                            raise
+                        return usage_chunk
                     except Exception:
                         round_billing.fail()
                         raise
@@ -434,7 +436,6 @@ async def acompletion_with_mcp(
                         from litellm._logging import verbose_logger
 
                         verbose_logger.debug("Follow-up chunk yielded: %s", chunk)
-                        return chunk if self._round_billing is None else self._round_billing.client_chunk(chunk)
                     except StopAsyncIteration:
                         self.follow_up_exhausted = True
                         from litellm._logging import verbose_logger
@@ -442,6 +443,10 @@ async def acompletion_with_mcp(
                         verbose_logger.debug("Follow-up stream exhausted")
                         # After follow-up stream is exhausted, check if we need to raise StopAsyncIteration
                         raise StopAsyncIteration
+                    client_chunk: Final = (
+                        chunk if self._round_billing is None else self._round_billing.client_chunk(chunk)
+                    )
+                    return await self._next_chunk() if client_chunk is None else client_chunk
 
                 # If we're here and follow_up_stream is None but we expected it, log a warning
                 if (
