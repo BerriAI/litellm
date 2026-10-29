@@ -18,6 +18,7 @@ from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIC
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
@@ -3336,6 +3337,18 @@ class TestMalformedParamsFollowDropParams:
         assert malformed not in dropped
         assert sent == params
 
+    def test_azure_o_series_forwards_a_row_disabled_effort_while_dropping_malformed_values(
+        self, local_model_cost_map, monkeypatch
+    ):
+        row: Final = litellm.model_cost["gpt-6.1-sol"]
+        monkeypatch.setitem(litellm.model_cost, "gpt-6.1-sol", {**row, "supports_minimal_reasoning_effort": False})
+
+        mapped: Final = AzureOpenAIOSeriesResponsesAPIConfig().map_openai_params(
+            {"reasoning": {"effort": "minimal"}, "tool_choice": "required"}, "gpt-6.1-sol", True
+        )
+
+        assert mapped == {"reasoning": {"effort": "minimal"}}
+
     @pytest.mark.parametrize(
         "params",
         [
@@ -3382,6 +3395,68 @@ class TestMalformedParamsFollowDropParams:
 
         assert dropped["reasoning"] == {key: kept for key, kept in declared.items() if key != field}
         assert sent["reasoning"] == reasoning
+
+    @pytest.mark.parametrize(("field", "declarations"), [("mode", "reasoning_modes"), ("context", "reasoning_contexts")])
+    def test_a_row_without_reasoning_declarations_drops_values_no_openai_row_declares(
+        self, local_model_cost_map, monkeypatch, field, declarations
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        undeclared_model: Final = next(
+            name
+            for name, row in litellm.model_cost.items()
+            if row.get("litellm_provider") == "openai" and row.get("supports_reasoning") and declarations not in row
+        )
+        declared_elsewhere: Final = litellm.model_cost["gpt-6.1-sol"][declarations][0]
+        malformed: Final = {"summary": "auto", field: "not-a-declared-value"}
+        declared: Final = {"summary": "auto", field: declared_elsewhere}
+        config: Final = OpenAIResponsesAPIConfig()
+
+        dropped: Final = config.map_openai_params({"reasoning": dict(malformed)}, undeclared_model, True)
+        sent: Final = config.map_openai_params({"reasoning": dict(malformed)}, undeclared_model, False)
+        kept: Final = config.map_openai_params({"reasoning": dict(declared)}, undeclared_model, True)
+
+        assert dropped["reasoning"] == {"summary": "auto"}
+        assert sent["reasoning"] == malformed
+        assert kept["reasoning"] == declared
+
+    def test_reasoning_on_a_non_reasoning_model_is_dropped_under_drop_params(self, local_model_cost_map, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        non_reasoning_model: Final = next(
+            name
+            for name, row in litellm.model_cost.items()
+            if row.get("litellm_provider") == "openai"
+            and not row.get("supports_reasoning")
+            and OpenAIGPTConfig.is_openai_catalog_model(name)
+        )
+        request: Final = {"reasoning": {"summary": "auto", "mode": "standard", "context": "auto"}, "tool_choice": "auto"}
+        config: Final = OpenAIResponsesAPIConfig()
+
+        dropped: Final = config.map_openai_params(dict(request), non_reasoning_model, True)
+        sent: Final = config.map_openai_params(dict(request), non_reasoning_model, False)
+
+        assert dropped == {"reasoning": {"summary": "auto"}, "tool_choice": "auto"}
+        assert sent == request
+
+    @pytest.mark.parametrize(
+        ("config", "model"),
+        [(OpenAIResponsesAPIConfig(), "gpt-6.1-sol"), (AzureOpenAIResponsesAPIConfig(), "gpt-6.1-sol")],
+        ids=["openai", "azure"],
+    )
+    def test_an_effort_outside_the_known_levels_is_dropped_unless_the_deployment_declares_it(
+        self, local_model_cost_map, monkeypatch, config, model
+    ):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        reasoning: Final = {"effort": "not-an-effort", "summary": "auto"}
+
+        dropped: Final = config.map_openai_params({"reasoning": dict(reasoning)}, model, True)
+        sent: Final = config.map_openai_params({"reasoning": dict(reasoning)}, model, False)
+        declared: Final = config.map_openai_params_for_deployment(
+            {"reasoning": dict(reasoning)}, model, True, declared_reasoning_efforts=("not-an-effort",)
+        )
+
+        assert dropped["reasoning"] == {"summary": "auto"}
+        assert sent["reasoning"] == reasoning
+        assert declared["reasoning"] == reasoning
 
     @pytest.mark.parametrize(
         ("config", "model"),

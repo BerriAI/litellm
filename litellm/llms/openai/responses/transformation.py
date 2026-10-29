@@ -2,7 +2,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, get_args, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -50,6 +50,7 @@ from litellm.responses.utils import openai_well_formed_reasoning
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
+from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -321,6 +322,7 @@ _TOOL_CHOICES_WITHOUT_TOOLS: Final = frozenset({"auto", "none"})
 
 
 _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES: Final = (LlmProviders.OPENAI, LlmProviders.AZURE)
+_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 
 
 def _accepts_tool_choice(tool_choice: object, params: Mapping[str, object]) -> bool:
@@ -499,19 +501,27 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return None
 
     def _accepted_reasoning(self, reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
-        if self.custom_llm_provider == LlmProviders.OPENAI and OpenAIGPTConfig.is_openai_catalog_model(model):
-            return openai_well_formed_reasoning(reasoning, model)
-        return reasoning
+        if self.custom_llm_provider != LlmProviders.OPENAI or not OpenAIGPTConfig.is_openai_catalog_model(model):
+            return reasoning
+        return openai_well_formed_reasoning(reasoning, model, model_reasons=self._supports_reasoning_param(model=model))
+
+    def _is_well_formed_effort(self, effort: object, declared_reasoning_efforts: Collection[str] | None) -> bool:
+        if effort is None or self.custom_llm_provider not in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES:
+            return True
+        return isinstance(effort, str) and (
+            effort in _REASONING_EFFORTS or effort in (declared_reasoning_efforts or ())
+        )
+
+    def _well_formed_params(self, params: Mapping[str, object]) -> Mapping[str, object]:
+        if self.custom_llm_provider not in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES:
+            return params
+        return {name: value for name, value in params.items() if _is_well_formed(name, value, params)}
 
     def params_dropped_for_deployment(
         self, params: Mapping[str, object], model: str, *, declared_reasoning_efforts: Collection[str] | None
     ) -> Mapping[str, object]:
         """The request params this deployment forwards under drop_params, malformed values removed."""
-        well_formed: Final = (
-            {name: value for name, value in params.items() if _is_well_formed(name, value, params)}
-            if self.custom_llm_provider in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES
-            else params
-        )
+        well_formed: Final = self._well_formed_params(params)
         without_reasoning: Final = {name: value for name, value in well_formed.items() if name != "reasoning"}
         reasoning: Final = well_formed.get("reasoning")
         refusal: Final = self._reasoning_refusal(reasoning, model, declared_reasoning_efforts)
@@ -520,7 +530,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         reasoning_fields: Final = as_str_mapping(reasoning)
         if reasoning_fields is None:
             return well_formed
-        effort_kept: Final = not isinstance(refusal, _EffortDisabled)
+        effort_kept: Final = not isinstance(refusal, _EffortDisabled) and self._is_well_formed_effort(
+            reasoning_fields.get("effort"), declared_reasoning_efforts
+        )
         kept_reasoning: Final = self._accepted_reasoning(
             {key: value for key, value in reasoning_fields.items() if effort_kept or key != "effort"}, model
         )

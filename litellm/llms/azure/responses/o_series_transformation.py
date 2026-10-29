@@ -65,9 +65,7 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         """
         if not drop_params:
             return dict(response_api_optional_params)
-        kept: Final = self.params_dropped_for_deployment(
-            response_api_optional_params, model, declared_reasoning_efforts=()
-        )
+        kept: Final = self._well_formed_params(response_api_optional_params)
         if "temperature" in kept:
             verbose_logger.debug(
                 "Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model %s", model

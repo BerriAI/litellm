@@ -10,7 +10,8 @@ import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
-from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils, openai_bridge_reasoning
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -1009,3 +1010,31 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
         else:
             litellm.model_cost[model] = previous_row
         _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("field", "declarations"), [("mode", "reasoning_modes"), ("context", "reasoning_contexts")])
+def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_under_drop_params(
+    local_model_cost_map, field, declarations
+):
+    undeclared_model: Final = next(
+        name
+        for name, row in litellm.model_cost.items()
+        if row.get("litellm_provider") == "openai"
+        and row.get("supports_reasoning")
+        and declarations not in row
+        and OpenAIGPTConfig.is_openai_catalog_model(name)
+    )
+    requested: Final = {"effort": "high", "summary": "auto", field: "not-a-declared-value"}
+
+    def bridged(drop_params: bool) -> object:
+        return openai_bridge_reasoning(
+            requested=requested,
+            effort_kept=True,
+            summary_alias=None,
+            model=undeclared_model,
+            drop_params=drop_params,
+            additional_drop_params=None,
+        )
+
+    assert bridged(True) == {"effort": "high", "summary": "auto"}
+    assert bridged(False) == requested
