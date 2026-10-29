@@ -5,7 +5,7 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 
 import json
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlparse
@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from unittest.mock import MagicMock
 
 import litellm
+from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
@@ -1995,16 +1996,18 @@ class TestVertexEmbeddingsBatchOutputTranslation:
 CLAUDE_DEPLOYMENT = {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/claude-sonnet-4-6"}
 
 
-def _claude_chat_entry(custom_id: str, content: str, **body: object) -> dict:
-    return {
-        "custom_id": custom_id,
+def _claude_chat_entry(custom_id: str | None, content: str, **body: object) -> dict[str, object]:
+    entry: Final[dict[str, object]] = {
         "method": "POST",
         "url": "/v1/chat/completions",
         "body": {"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": content}], **body},
     }
+    return entry if custom_id is None else {"custom_id": custom_id, **entry}
 
 
-def _uploaded_rows(config: VertexAIFilesConfig, litellm_params: Mapping[str, object], entries: list[dict]) -> list:
+def _uploaded_rows(
+    config: VertexAIFilesConfig, litellm_params: Mapping[str, object], entries: Sequence[Mapping[str, object]]
+) -> list:
     upload = config.transform_create_file_request(
         model="",
         create_file_data={
@@ -2014,11 +2017,14 @@ def _uploaded_rows(config: VertexAIFilesConfig, litellm_params: Mapping[str, obj
         optional_params={},
         litellm_params=dict(litellm_params),
     )
-    body = b"".join(upload["streaming_media_upload"]["body_stream"].iter_bytes())
-    return [json.loads(line) for line in body.splitlines()]
+    match upload:
+        case {"streaming_media_upload": {"body_stream": BaseFileUploadStream() as stream}}:
+            return [json.loads(line) for line in b"".join(stream.iter_bytes()).splitlines()]
+        case _:
+            pytest.fail(f"expected a streamed upload, got {upload!r}")
 
 
-def _claude_output_row(custom_id: str, text: str) -> dict:
+def _claude_output_row(custom_id: str, text: str, content: object = None) -> dict[str, object]:
     return {
         "custom_id": custom_id,
         "status": "",
@@ -2028,7 +2034,7 @@ def _claude_output_row(custom_id: str, text: str) -> dict:
             "type": "message",
             "role": "assistant",
             "model": "claude-sonnet-4-6",
-            "content": [{"type": "text", "text": text}],
+            "content": [{"type": "text", "text": text}] if content is None else content,
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": {"input_tokens": 12, "output_tokens": 5},
@@ -2089,8 +2095,12 @@ class TestVertexClaudeBatch:
         ]
 
     def test_claude_system_message_becomes_the_anthropic_system_field(self, config):
-        entry = _claude_chat_entry("r1", "Hello!", max_tokens=10)
-        entry["body"]["messages"].insert(0, {"role": "system", "content": "be brief"})
+        entry = _claude_chat_entry(
+            "r1",
+            "unused",
+            max_tokens=10,
+            messages=[{"role": "system", "content": "be brief"}, {"role": "user", "content": "Hello!"}],
+        )
 
         (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
 
@@ -2121,8 +2131,7 @@ class TestVertexClaudeBatch:
         assert exc_info.value.status_code == 400
 
     def test_claude_deployment_wins_over_a_gemini_body_model(self, config):
-        entry = _claude_chat_entry("r1", "hi", max_tokens=10)
-        entry["body"]["model"] = "gemini-2.5-flash"
+        entry = _claude_chat_entry("r1", "hi", max_tokens=10, model="gemini-2.5-flash")
 
         (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
 
@@ -2185,6 +2194,117 @@ class TestVertexClaudeBatch:
         assert rows_out["bad"]["error"]["code"] == "vertex_ai_error"
         assert "too long" in rows_out["bad"]["error"]["message"]
 
+    def test_claude_row_keeps_provider_only_params_and_leaves_out_litellm_ones(self, config):
+        (row,) = _uploaded_rows(
+            config,
+            CLAUDE_DEPLOYMENT,
+            [_claude_chat_entry("r1", "hi", max_tokens=10, top_k=5, drop_params=True, metadata={"team": "a"})],
+        )
+
+        assert row["request"]["top_k"] == 5
+        assert not {"drop_params", "metadata", "extra_body"} & set(row["request"])
+
+    def test_claude_row_top_k_follows_drop_params_on_a_model_without_sampling_params(self, config, monkeypatch):
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False})
+        monkeypatch.setattr(litellm, "drop_params", False)
+        deployment = {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9"}
+        entry = _claude_chat_entry("r1", "hi", max_tokens=10, top_k=5)
+
+        with pytest.raises(VertexAIError, match=r"line 1 .*top_k") as exc_info:
+            _uploaded_rows(config, deployment, [entry])
+        (row,) = _uploaded_rows(config, {**deployment, "drop_params": True}, [entry])
+
+        assert exc_info.value.status_code == 400
+        assert "top_k" not in row["request"]
+
+    @pytest.mark.parametrize("param", [{"n": 2}, {"seed": 7}, {"presence_penalty": 0.5}, {"logprobs": True}])
+    def test_claude_row_param_claude_does_not_support_follows_drop_params(self, config, monkeypatch, param):
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        (name,) = param
+        entry = _claude_chat_entry("r1", "hi", max_tokens=10, **param)
+
+        with pytest.raises(VertexAIError, match=rf"line 1 .*{name}") as exc_info:
+            _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+        (row,) = _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "drop_params": True}, [entry])
+
+        assert exc_info.value.status_code == 400
+        assert name not in row["request"]
+
+    def test_claude_row_refuses_a_tool_name_claude_would_rename(self, config):
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        def tool(name: str) -> dict[str, object]:
+            return {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}
+
+        renamed = _claude_chat_entry("r1", "hi", max_tokens=10, tools=[tool("get.weather")])
+        kept = _claude_chat_entry("r2", "hi", max_tokens=10, tools=[tool("get_weather")])
+
+        with pytest.raises(VertexAIError, match=r"line 1 .*get\.weather") as exc_info:
+            _uploaded_rows(config, CLAUDE_DEPLOYMENT, [renamed])
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [kept])
+
+        assert exc_info.value.status_code == 400
+        assert [t["name"] for t in row["request"]["tools"]] == ["get_weather"]
+
+    def test_claude_row_merges_extra_body_into_the_request(self, config):
+        (row,) = _uploaded_rows(
+            config, CLAUDE_DEPLOYMENT, [_claude_chat_entry("r1", "hi", max_tokens=10, extra_body={"top_k": 3})]
+        )
+
+        assert row["request"]["top_k"] == 3
+        assert "extra_body" not in row["request"]
+
+    def test_claude_response_format_row_round_trips_as_json_content(self, config):
+        schema = {"type": "object", "properties": {"color": {"type": "string"}}, "required": ["color"]}
+        (row,) = _uploaded_rows(
+            config,
+            CLAUDE_DEPLOYMENT,
+            [
+                _claude_chat_entry(
+                    "r1",
+                    "sky color?",
+                    max_tokens=50,
+                    response_format={"type": "json_schema", "json_schema": {"name": "sky", "schema": schema}},
+                )
+            ],
+        )
+        assert "json_mode" not in row["request"]
+        (json_tool,) = row["request"]["tools"]
+        output_row = _claude_output_row(
+            "r1",
+            "unused",
+            content=[{"type": "tool_use", "id": "toolu_1", "name": json_tool["name"], "input": {"color": "blue"}}],
+        )
+
+        (out,) = (
+            json.loads(line)
+            for line in config._try_transform_vertex_batch_output_to_openai(json.dumps(output_row).encode()).splitlines()
+        )
+
+        message = out["response"]["body"]["choices"][0]["message"]
+        assert json.loads(message["content"]) == {"color": "blue"}
+        assert not message.get("tool_calls")
+
+    def test_claude_output_keeps_a_user_tool_call_as_a_tool_call(self, config):
+        output_row = _claude_output_row(
+            "r1",
+            "unused",
+            content=[{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}],
+        )
+
+        (out,) = (
+            json.loads(line)
+            for line in config._try_transform_vertex_batch_output_to_openai(json.dumps(output_row).encode()).splitlines()
+        )
+
+        (tool_call,) = out["response"]["body"]["choices"][0]["message"]["tool_calls"]
+        assert tool_call["function"]["name"] == "get_weather"
+        assert json.loads(tool_call["function"]["arguments"]) == {"city": "Paris"}
+
     def test_claude_input_file_read_back_is_returned_unchanged(self, config):
         (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [_claude_chat_entry("r1", "hi", max_tokens=10)])
         content = json.dumps(row).encode()
@@ -2192,8 +2312,7 @@ class TestVertexClaudeBatch:
         assert config._try_transform_vertex_batch_output_to_openai(content) == content
 
     def test_malformed_claude_message_fails_only_its_own_row(self, config):
-        malformed = _claude_output_row("bad", "unused")
-        malformed["response"]["content"] = 5
+        malformed = _claude_output_row("bad", "unused", content=5)
         content = json.dumps(_claude_output_row("ok", "fine")).encode() + b"\n" + json.dumps(malformed).encode()
 
         ok_row, bad_row = (
@@ -2206,8 +2325,7 @@ class TestVertexClaudeBatch:
         assert bad_row["error"]["code"] == "transformation_error"
 
     def test_claude_row_without_custom_id_has_no_custom_id_field(self, config):
-        entry = _claude_chat_entry("unused", "hi", max_tokens=10)
-        del entry["custom_id"]
+        entry = _claude_chat_entry(None, "hi", max_tokens=10)
 
         (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
 

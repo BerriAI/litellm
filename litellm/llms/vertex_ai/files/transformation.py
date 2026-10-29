@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._uuid import uuid
+from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES
 from litellm.files.types import FileContentStreamingResult
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -39,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
@@ -86,6 +88,7 @@ from litellm.types.utils import (
     ModelResponse,
     Usage,
 )
+from litellm.utils import get_non_default_completion_params, get_optional_params
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
@@ -462,6 +465,7 @@ def _vertex_anthropic_batch_output_row_to_openai(
             completion_response=dict(anthropic_response),
             raw_response=mock_httpx_response,
             model_response=ModelResponse(),
+            json_mode=True,
         )
     except Exception as e:  # noqa: BLE001  # one malformed row must fail alone, not the whole output file
         return _openai_batch_output_row(
@@ -746,9 +750,14 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
     )
 
 
+_CLAUDE_BATCH_ROW_FIXED_PARAMS: Final = frozenset(("model", "messages", "custom_llm_provider", "drop_params"))
+_CLAUDE_BATCH_OPENAI_PARAMS: Final = frozenset(DEFAULT_CHAT_COMPLETION_PARAM_VALUES) - {"metadata"}
+
+
 def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
-    openai_entry: Mapping[str, object],
-    chat_request_body: Mapping[str, Any],
+    custom_id: object,
+    messages: list[AllMessageValues],
+    request_params: Mapping[str, object],
     model: str,
     deployment_drop_params: object,
 ) -> Mapping[str, object]:
@@ -758,23 +767,51 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     """
     config: Final = VertexAIAnthropicConfig()
     bare_model: Final = model.rsplit("/", 1)[-1]
-    optional_params: Final[Mapping[str, object]] = config.map_openai_params(
-        non_default_params={key: value for key, value in chat_request_body.items() if key not in ("model", "messages")},
-        optional_params={},
+    drop_params: Final = drops_unsupported_params(request_params.get("drop_params", deployment_drop_params))
+    chat_params: Final = {
+        **get_non_default_completion_params(request_params),
+        **{key: value for key, value in request_params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
+    }
+    optional_params: Final[Mapping[str, object]] = get_optional_params(
         model=bare_model,
-        drop_params=drops_unsupported_params(chat_request_body.get("drop_params", deployment_drop_params)),
+        custom_llm_provider="vertex_ai",
+        drop_params=drop_params,
+        messages=messages,
+        **{  # pyright: ignore[reportArgumentType]  # batch JSONL bodies are untyped; get_optional_params checks each param as chat does
+            key: value for key, value in chat_params.items() if key not in _CLAUDE_BATCH_ROW_FIXED_PARAMS
+        },
     )
+    request_state: Final[dict[str, object]] = {"drop_params": drop_params}
     anthropic_request: Final[Mapping[str, object]] = config.transform_request(
         model=bare_model,
-        messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
-        optional_params={**optional_params, "anthropic_version": VERTEX_ANTHROPIC_VERSION},
-        litellm_params={},
+        messages=messages,
+        optional_params={
+            **{key: value for key, value in optional_params.items() if key not in ("json_mode", "extra_body")},
+            "anthropic_version": VERTEX_ANTHROPIC_VERSION,
+        },
+        litellm_params=request_state,
         headers={},
     )
-    custom_id: Final = openai_entry.get("custom_id")
+    renamed_tools: Final = as_str_mapping(request_state.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY))
+    if renamed_tools:
+        raise ValueError(
+            f"tool names {sorted(map(str, renamed_tools.values()))} must match ^[a-zA-Z0-9_-]{{1,128}}$ for Claude on Vertex, "
+            "and batch output cannot map a renamed tool back, so rename these tools"
+        )
+    extra_body: Final = as_json_object(optional_params.get("extra_body"))
+    request: Final[Mapping[str, object]] = (
+        anthropic_request
+        if extra_body is None
+        else {
+            **anthropic_request,
+            **config.transform_extra_body(
+                extra_body=extra_body, request=anthropic_request, model=bare_model, litellm_params={}
+            ),
+        }
+    )
     if custom_id is None:
-        return {"request": anthropic_request}
-    return {"custom_id": str(custom_id), "request": anthropic_request}
+        return {"request": request}
+    return {"custom_id": str(custom_id), "request": request}
 
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
@@ -812,14 +849,21 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
+    chat_messages: Final = map_developer_role_to_system_role(chat_request_body.get("messages", []))
     if is_anthropic_model:
         return (
             _openai_batch_jsonl_entry_to_vertex_anthropic_row(
-                openai_entry, chat_request_body, model, deployment_drop_params
+                custom_id=openai_entry.get("custom_id"),
+                messages=chat_messages,
+                request_params={
+                    key: value for key, value in chat_request_body.items() if key not in ("model", "messages")
+                },
+                model=model,
+                deployment_drop_params=deployment_drop_params,
             ),
         )
     vertex_request_body: Final = transform_request_body(
-        messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
+        messages=chat_messages,
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",

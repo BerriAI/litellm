@@ -370,9 +370,7 @@ def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
     client.post.assert_not_called()
 
 
-def test_create_batch_sync_httpstatuserror_propagates():
-    """``HTTPHandler.post`` raises for non-2xx via ``raise_for_status``; the
-    sync create path must surface that error, not swallow it."""
+def test_create_batch_sync_http_error_surfaces_vertex_status_and_body():
     h = _make_handler()
     client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
@@ -382,7 +380,7 @@ def test_create_batch_sync_httpstatuserror_propagates():
     )
 
     with patch(f"{HMOD}.get_httpx_client", return_value=client):
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(VertexAIError, match="boom") as exc_info:
             h.create_batch(
                 _is_async=False,
                 create_batch_data=CREATE_DATA,
@@ -393,6 +391,7 @@ def test_create_batch_sync_httpstatuserror_propagates():
                 timeout=600.0,
                 max_retries=None,
             )
+    assert exc_info.value.status_code == 500
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -800,7 +799,7 @@ def test_cancel_batch_sync_httpstatuserror_logged_and_reraised():
     client.get.assert_not_called()
 
 
-def test_create_batch_async_httpstatuserror_logged_and_reraised():
+def test_create_batch_async_http_error_surfaces_vertex_status_and_body():
     h = _make_handler()
     async_client = MagicMock()
     request = httpx.Request("POST", "https://x/batchPredictionJobs")
@@ -825,8 +824,9 @@ def test_create_batch_async_httpstatuserror_logged_and_reraised():
             timeout=600.0,
             max_retries=None,
         )
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(VertexAIError, match="boom") as exc_info:
             _run(coro)
+    assert exc_info.value.status_code == 500
 
 
 def test_async_retrieve_batch_non_200_raises():
@@ -1043,15 +1043,7 @@ async def test_vertex_list_batches(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vertex_async_create_batch_logs_error_body_on_http_error():
-    """
-    When Vertex AI returns an HTTP error (e.g. 400), _async_create_batch should
-    re-raise httpx.HTTPStatusError (not swallow it) and log the response body.
-
-    Before the fix the error body was lost because AsyncHTTPHandler.post()
-    calls raise_for_status() internally, raising before the handler's own
-    status-code check could log the body.
-    """
+async def test_vertex_async_create_batch_error_carries_vertex_error_body():
     from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 
     handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
@@ -1073,12 +1065,12 @@ async def test_vertex_async_create_batch_logs_error_body_on_http_error():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         side_effect=http_error,
     ):
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        with pytest.raises(VertexAIError) as exc_info:
             await handler._async_create_batch(
                 vertex_batch_request={},
                 api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/batchPredictionJobs",
                 headers={"Authorization": "Bearer fake-token"},
             )
 
-        assert exc_info.value.response.status_code == 400
-        assert "gemini-2.0-flash" in exc_info.value.response.text
+        assert exc_info.value.status_code == 400
+        assert "Do not support publisher model gemini-2.0-flash" in exc_info.value.message
