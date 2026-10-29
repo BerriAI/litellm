@@ -176,6 +176,9 @@ def _trigger_cooldown_for_failed_deployment(
             deployment=deployment_id,
             time_to_cooldown=time_to_cooldown,
             request_kwargs=kwargs,
+            failed_pod=litellm_router.kubernetes_pod_discovery.pod_for_call(
+                deployment_dict, model_call_details.get("litellm_params")
+            ),
         )
 
         verbose_router_logger.debug("Triggered cooldown for fallback deployment %s", deployment_id)

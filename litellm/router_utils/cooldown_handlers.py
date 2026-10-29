@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.router_utils.kubernetes_pod_discovery import KubernetesPod
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -43,6 +44,7 @@ from litellm.types.videos.utils import VIDEO_ID_CALL_TYPES
 from .router_callbacks.track_deployment_metrics import (
     get_deployment_failures_for_current_minute,
     get_deployment_successes_for_current_minute,
+    increment_deployment_failures_for_current_minute,
 )
 
 if TYPE_CHECKING:
@@ -181,6 +183,7 @@ def _should_cooldown_based_on_deployment_policy(
     dep_policy: Mapping[str, int] | None,
     dep_allowed_fails: int | None,
     is_single_deployment_model_group: bool,
+    counter_id: str | None = None,
 ) -> bool:
     """Resolve deployment-level allowed-fails and delegate to the shared counting logic.
 
@@ -224,7 +227,7 @@ def _should_cooldown_based_on_deployment_policy(
 
     return should_cooldown_based_on_allowed_fails_policy(
         litellm_router_instance=litellm_router_instance,
-        deployment=deployment,
+        deployment=deployment if counter_id is None else counter_id,
         original_exception=original_exception,
         allowed_fails_override=allowed_fails_override,
         cooldown_time_override=cooldown_time_override,
@@ -461,12 +464,29 @@ def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_
     return bool(fallback_group)
 
 
+def _is_single_deployment_model_group(
+    litellm_router_instance: LitellmRouter,
+    deployment: str,
+    requested_model_group: str | None,
+) -> bool:
+    model_group: Final = litellm_router_instance.get_model_group(id=deployment)
+    return (
+        model_group is not None
+        and len(model_group) == 1
+        and not (
+            litellm_router_instance.routing_group_has_alternatives(requested_model_group)
+            or litellm_router_instance.team_model_has_alternatives(deployment)
+        )
+    )
+
+
 def _should_cooldown_deployment(
     litellm_router_instance: LitellmRouter,
     deployment: str,
     exception_status: str | int,
     original_exception: Exception,
     requested_model_group: str | None = None,
+    failed_pod: KubernetesPod | None = None,
 ) -> bool:
     """
     Helper that decides if a deployment should be put in cooldown
@@ -486,13 +506,10 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
-    model_group: Final = litellm_router_instance.get_model_group(id=deployment)
-    is_single_deployment_model_group = False
-    if model_group is not None and len(model_group) == 1:
-        is_single_deployment_model_group = not (
-            litellm_router_instance.routing_group_has_alternatives(requested_model_group)
-            or litellm_router_instance.team_model_has_alternatives(deployment)
-        )
+    is_single_deployment_model_group: Final = failed_pod is None and _is_single_deployment_model_group(
+        litellm_router_instance, deployment, requested_model_group
+    )
+    counter_id: Final = deployment if failed_pod is None else failed_pod.counter_id
     is_lone_deployment: Final = is_single_deployment_model_group and not _has_fallback_group(
         litellm_router_instance, requested_model_group
     )
@@ -516,6 +533,7 @@ def _should_cooldown_deployment(
             dep_policy,
             dep_allowed_fails,
             is_lone_deployment,
+            counter_id,
         )
 
     ## BASE CASE - single deployment
@@ -524,10 +542,10 @@ def _should_cooldown_deployment(
         and _is_allowed_fails_set_on_router(litellm_router_instance=litellm_router_instance) is False
     ):
         num_successes_this_minute: Final = get_deployment_successes_for_current_minute(
-            litellm_router_instance=litellm_router_instance, deployment_id=deployment
+            litellm_router_instance=litellm_router_instance, deployment_id=counter_id
         )
         num_fails_this_minute: Final = get_deployment_failures_for_current_minute(
-            litellm_router_instance=litellm_router_instance, deployment_id=deployment
+            litellm_router_instance=litellm_router_instance, deployment_id=counter_id
         )
 
         total_requests_this_minute: Final = num_successes_this_minute + num_fails_this_minute
@@ -564,7 +582,7 @@ def _should_cooldown_deployment(
             return False
         return should_cooldown_based_on_allowed_fails_policy(
             litellm_router_instance=litellm_router_instance,
-            deployment=deployment,
+            deployment=counter_id,
             original_exception=original_exception,
         )
 
@@ -579,6 +597,7 @@ def set_cooldown_deployments(
     time_to_cooldown: float | None = None,
     requested_model_group: str | None = None,
     request_kwargs: Mapping[str, object] | None = None,
+    failed_pod: KubernetesPod | None = None,
 ) -> bool:
     """
     Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -591,6 +610,11 @@ def set_cooldown_deployments(
     - True if the deployment should be put in cooldown
     - False if the deployment should not be put in cooldown
     """
+    if failed_pod is not None:
+        increment_deployment_failures_for_current_minute(
+            litellm_router_instance=litellm_router_instance, deployment_id=failed_pod.counter_id
+        )
+
     verbose_router_logger.debug("checks 'should_run_cooldown_logic'")
 
     if (
@@ -606,6 +630,18 @@ def set_cooldown_deployments(
         or deployment is None
     ):
         verbose_router_logger.debug("should_run_cooldown_logic returned False")
+        return False
+
+    if failed_pod is not None and litellm_router_instance.kubernetes_pod_discovery.has_other_live_pod(failed_pod):
+        _cool_down_kubernetes_pod_if_needed(
+            litellm_router_instance=litellm_router_instance,
+            failed_pod=failed_pod,
+            deployment=deployment,
+            exception_status=exception_status,
+            original_exception=original_exception,
+            time_to_cooldown=time_to_cooldown,
+            requested_model_group=requested_model_group,
+        )
         return False
 
     exception_status_int: Final = cast_exception_status_to_int(exception_status)
@@ -639,6 +675,37 @@ def set_cooldown_deployments(
 
 
 _set_cooldown_deployments = set_cooldown_deployments
+
+
+def _cool_down_kubernetes_pod_if_needed(
+    litellm_router_instance: LitellmRouter,
+    failed_pod: KubernetesPod,
+    deployment: str,
+    exception_status: str | int,
+    original_exception: Exception,
+    time_to_cooldown: float | None,
+    requested_model_group: str | None,
+) -> None:
+    if not _should_cooldown_deployment(
+        litellm_router_instance=litellm_router_instance,
+        deployment=deployment,
+        exception_status=exception_status,
+        original_exception=original_exception,
+        requested_model_group=requested_model_group,
+        failed_pod=failed_pod,
+    ):
+        return
+    cooldown_seconds: Final = (
+        time_to_cooldown if time_to_cooldown is not None else litellm_router_instance.cooldown_time
+    )
+    litellm_router_instance.kubernetes_pod_discovery.cool_down_pod(failed_pod, cooldown_seconds)
+    verbose_router_logger.info(
+        "Kubernetes pod %s behind %s is out of rotation for %ss, its deployment %s stays up",
+        failed_pod.ip,
+        failed_pod.service_host,
+        cooldown_seconds,
+        deployment,
+    )
 
 
 async def async_get_cooldown_deployments(

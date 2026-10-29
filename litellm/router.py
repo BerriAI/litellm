@@ -327,6 +327,7 @@ from litellm.router_utils.handle_error import (
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.router_utils.kubernetes_pod_discovery import (
+    KubernetesPod,
     KubernetesPodDiscovery,
     async_resolve_pods_after,
     async_resolve_pods_after_bound,
@@ -9516,27 +9517,28 @@ class Router:
                 return
             model_group: Final = metadata.get("model_group", None)
             model_info: Final = litellm_params.get("model_info", {}) or {}
-            deployment_id: Final = model_info.get("id", None)
-            if model_group is None or deployment_id is None or self.get_deployment(model_id=str(deployment_id)) is None:
+            raw_deployment_id: Final = model_info.get("id", None)
+            if model_group is None or raw_deployment_id is None:
                 return
+            deployment_id: Final = str(raw_deployment_id)
+            if self.get_deployment(model_id=deployment_id) is None:
+                return
+            typed_litellm_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)
 
             if self.session_affinity_repin_on_failover:
                 await self._repin_session_after_success(
-                    _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params),
+                    typed_litellm_params,
                     _OPAQUE_VALUE_ADAPTER.validate_python(completion_response),
                 )
 
             # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
-            increment_deployment_successes_for_current_minute(
-                litellm_router_instance=self,
-                deployment_id=str(deployment_id),
-            )
+            self._count_deployment_success(deployment_id, typed_litellm_params)
 
             total_tokens: Final[float] = standard_logging_object.get("total_tokens", 0)
-            counted_tokens: Final = get_counted_usage_tokens(litellm_params)
+            counted_tokens: Final = get_counted_usage_tokens(typed_litellm_params)
             deployment_name: Final = metadata.get("deployment", None)
             return await self._increment_deployment_usage(
-                deployment_id=str(deployment_id),
+                deployment_id=deployment_id,
                 deployment_name=deployment_name if isinstance(deployment_name, str) else None,
                 model_group=model_group,
                 total_tokens=total_tokens if counted_tokens is None else max(0, total_tokens - counted_tokens),
@@ -9694,26 +9696,28 @@ class Router:
         """
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return None
-        id = None
-        if kwargs["litellm_params"].get("metadata") is None:
-            pass
-        else:
-            model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
-            model_info: Final = kwargs["litellm_params"].get("model_info", {}) or {}
-            id = model_info.get("id", None)
-            if model_group is None or id is None:
-                return None
-            elif isinstance(id, int):
-                id = str(id)
+        litellm_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(kwargs["litellm_params"])
+        metadata: Final = litellm_params.get("metadata")
+        if metadata is None:
+            return None
+        model_group: Final = _REQUEST_KWARGS_ADAPTER.validate_python(metadata).get("model_group")
+        deployment_id: Final = _MODEL_INFO_ADAPTER.validate_python(litellm_params.get("model_info") or {}).get("id")
+        if model_group is None or deployment_id is None:
+            return None
+        return self._count_deployment_success(str(deployment_id), litellm_params)
 
-        if id is not None:
-            key: Final = increment_deployment_successes_for_current_minute(
-                litellm_router_instance=self,
-                deployment_id=id,
+    def _kubernetes_pod_for_call(self, deployment_id: str, call_litellm_params: object) -> KubernetesPod | None:
+        return self.kubernetes_pod_discovery.pod_for_call(self.get_model_info(id=deployment_id), call_litellm_params)
+
+    def _count_deployment_success(self, deployment_id: str, call_litellm_params: object) -> str:
+        pod: Final = self._kubernetes_pod_for_call(deployment_id, call_litellm_params)
+        if pod is not None:
+            increment_deployment_successes_for_current_minute(
+                litellm_router_instance=self, deployment_id=pod.counter_id
             )
-            return key
-
-        return None
+        return increment_deployment_successes_for_current_minute(
+            litellm_router_instance=self, deployment_id=deployment_id
+        )
 
     def deployment_callback_on_failure(
         self,
@@ -9822,19 +9826,16 @@ class Router:
                     litellm_router_instance=self,
                     deployment_id=deployment_id,
                 )
+                request_kwargs: Final = cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
                 result: Final = set_cooldown_deployments(
                     litellm_router_instance=self,
                     exception_status=exception_status,
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                    requested_model_group=(
-                        get_litellm_metadata_from_kwargs(
-                            cast("dict[str, object]", kwargs)  # cast-ok: untyped kwargs dict
-                        )
-                        or {}
-                    ).get("model_group"),
-                    request_kwargs=cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
+                    requested_model_group=(get_litellm_metadata_from_kwargs(request_kwargs) or {}).get("model_group"),
+                    request_kwargs=request_kwargs,
+                    failed_pod=self._kubernetes_pod_for_call(deployment_id, request_kwargs.get("litellm_params")),
                 )  # setting deployment_id in cooldown deployments
 
                 return result

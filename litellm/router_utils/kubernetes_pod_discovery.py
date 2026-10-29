@@ -24,6 +24,8 @@ from typing import (
 )
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
@@ -50,6 +52,24 @@ class KubernetesPodLookup:
     port: int | None
     pod_ips: tuple[str, ...]
     error: str | None
+
+
+class _CallParams(TypedDict, total=False):
+    api_base: ReadOnly[object]
+
+
+_CALL_PARAMS_ADAPTER: Final = TypeAdapter(_CallParams)
+
+
+@dataclass(frozen=True, slots=True)
+class KubernetesPod:
+    service_host: str
+    port: int | None
+    ip: str
+
+    @property
+    def counter_id(self) -> str:
+        return f"kubernetes_pod:{self.service_host}:{self.port}:{self.ip}"
 
 
 def _retry_count_from_metadata(metadata: object) -> int | None:
@@ -102,6 +122,7 @@ class KubernetesPodDiscovery:
         self.proxy_environment = proxy_environment
         self.clock = clock
         self._cache: Mapping[_CacheKey, _PodSet] = MappingProxyType({})
+        self._cooled_pods: Mapping[KubernetesPod, float] = MappingProxyType({})
         self._refreshing: frozenset[_CacheKey] = frozenset()
         self._timed_out: frozenset[_CacheKey] = frozenset()
         self._https_warning_hosts: frozenset[str] = frozenset()
@@ -207,6 +228,41 @@ class KubernetesPodDiscovery:
                 return KubernetesPodLookup(service_host=host, port=port, pod_ips=(), error=None)
             return KubernetesPodLookup(service_host=host, port=port, pod_ips=(), error=str(result))
         return KubernetesPodLookup(service_host=host, port=port, pod_ips=self._pod_ips(result), error=None)
+
+    def pod_for_call(self, deployment: object, call_litellm_params: object) -> KubernetesPod | None:
+        eligible: Final = self._eligible(deployment)
+        if eligible is None or not isinstance(call_litellm_params, Mapping):
+            return None
+        call_api_base: Final = _CALL_PARAMS_ADAPTER.validate_python(call_litellm_params).get("api_base")
+        if not isinstance(call_api_base, str):
+            return None
+        _, (host, port), _ = eligible
+        try:
+            pod_ip: Final = httpx.URL(call_api_base).host
+        except httpx.InvalidURL:
+            return None
+        with self._lock:
+            cached: Final = self._cache.get((host, port))
+        if cached is None or pod_ip not in cached.ips:
+            return None
+        return KubernetesPod(service_host=host, port=port, ip=pod_ip)
+
+    def has_other_live_pod(self, pod: KubernetesPod) -> bool:
+        now: Final = self.clock()
+        with self._lock:
+            cached: Final = self._cache.get((pod.service_host, pod.port))
+            sibling_ips: Final = () if cached is None else tuple(ip for ip in cached.ips if ip != pod.ip)
+            return any(not self._is_cooled(replace(pod, ip=ip), now) for ip in sibling_ips)
+
+    def cool_down_pod(self, pod: KubernetesPod, seconds: float) -> None:
+        now: Final = self.clock()
+        with self._lock:
+            self._cooled_pods = MappingProxyType(
+                {**{cooled: until for cooled, until in self._cooled_pods.items() if until > now}, pod: now + seconds}
+            )
+
+    def _is_cooled(self, pod: KubernetesPod, now: float) -> bool:
+        return self._cooled_pods.get(pod, now) > now
 
     @staticmethod
     def _session_id(request_kwargs: Mapping[str, object] | None) -> str | None:
@@ -451,18 +507,28 @@ class KubernetesPodDiscovery:
             if cached is None or not cached.ips:
                 return None
             pod_count: Final = len(cached.ips)
+            live_ips: Final = tuple(
+                ip
+                for ip in cached.ips
+                if not self._is_cooled(KubernetesPod(service_host=key[0], port=key[1], ip=ip), now)
+            )
+            candidate_ips: Final = live_ips or cached.ips
             ranked_ips: Final = (
                 tuple(
                     sorted(
-                        cached.ips,
+                        candidate_ips,
                         key=lambda address: (-session_rank(address), address),
                     )
                 )
                 if session_id is not None
                 else ()
             )
-            ip: Final = cached.ips[cached.cursor] if session_id is None else ranked_ips[retry_count % pod_count]
-            next_cursor: Final = (cached.cursor + 1) % len(cached.ips) if session_id is None else cached.cursor
+            ip: Final = (
+                candidate_ips[cached.cursor % len(candidate_ips)]
+                if session_id is None
+                else ranked_ips[retry_count % len(candidate_ips)]
+            )
+            next_cursor: Final = (cached.cursor + 1) % len(candidate_ips) if session_id is None else cached.cursor
             selection: Final = (
                 "round_robin"
                 if session_id is None

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import copy
 import hashlib
 import json
@@ -12,6 +13,7 @@ from itertools import chain, count, repeat
 from typing import Final, TypeAlias, cast
 
 import httpx
+import openai
 import pytest
 import respx
 from openai import AsyncOpenAI, OpenAI
@@ -19,11 +21,14 @@ from openai import AsyncOpenAI, OpenAI
 import litellm
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
+    DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
     KUBERNETES_POD_ROUTING_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.router import CustomRoutingStrategyBase, Router
+from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
 from litellm.router_utils.kubernetes_pod_discovery import (
+    KubernetesPod,
     KubernetesPodDiscovery,
     async_resolve_pods_after,
     async_resolve_pods_after_bound,
@@ -2262,3 +2267,280 @@ def test_unresolved_deployment_does_not_record_pod_selection(
 
     assert resolved is deployment
     assert KUBERNETES_POD_ROUTING_KEY not in resolved
+
+
+_PLAIN_URL: Final = "http://plain-vllm.ns.svc.cluster.local:8000/v1"
+_SERVICE_HOST: Final = "vllm-headless.ns.svc.cluster.local"
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+    def advance(self, seconds: float) -> None:
+        self.seconds += seconds
+
+
+def _stub_async_three_pod_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[_AddrInfo]:
+        return _records("10.0.0.1", "10.0.0.2", "10.0.0.3", port=int(port or 0))
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", getaddrinfo)
+
+
+def _failing_pods(status_code: int, *pod_ips: str) -> Callable[[httpx.Request], httpx.Response]:
+    def response_for(request: httpx.Request) -> httpx.Response:
+        if request.url.host not in pod_ips:
+            return httpx.Response(200, json=_CHAT_RESPONSE, request=request)
+        return httpx.Response(status_code, json={"error": {"message": "pod failed", "type": "error"}}, request=request)
+
+    return response_for
+
+
+def _ordered_deployment(deployment: dict[str, object], deployment_id: str, order: int) -> dict[str, object]:
+    params: Final = deployment["litellm_params"]
+    assert isinstance(params, Mapping)
+    return {**deployment, "litellm_params": {**params, "order": order}, "model_info": {"id": deployment_id}}
+
+
+def _pods_and_plain_router() -> Router:
+    return Router(
+        model_list=[
+            _ordered_deployment(_deployment(), "pods", 1),
+            _ordered_deployment(_deployment(_PLAIN_URL, kubernetes_pod_discovery=None), "plain", 2),
+        ],
+        num_retries=0,
+    )
+
+
+async def _send_chats(router: Router, model: str, requests: int) -> None:
+    for _ in range(requests):
+        with contextlib.suppress(openai.APIStatusError):
+            await router.acompletion(model=model, messages=[{"role": "user", "content": "hello"}])
+
+
+def _hosts(route: respx.Route) -> tuple[str, ...]:
+    return tuple(call.request.url.host for call in route.calls)
+
+
+@pytest.mark.asyncio
+async def test_pod_429_takes_only_that_pod_out_and_keeps_its_deployment_serving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_async_three_pod_dns(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        pod_route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
+            side_effect=_failing_pods(429, "10.0.0.3")
+        )
+        respx_mock.post(f"{_PLAIN_URL}/chat/completions").mock(return_value=httpx.Response(200, json=_CHAT_RESPONSE))
+        _patch_router_discovery(
+            monkeypatch, KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+        )
+        router: Final = _pods_and_plain_router()
+
+        await _send_chats(router, "gpu-model", 9)
+        cooled_deployments: Final = await async_get_cooldown_deployments(router, None)
+
+    assert _hosts(pod_route) == (
+        "10.0.0.1",
+        "10.0.0.2",
+        "10.0.0.3",
+        "10.0.0.1",
+        "10.0.0.2",
+        "10.0.0.1",
+        "10.0.0.2",
+        "10.0.0.1",
+        "10.0.0.2",
+    )
+    assert cooled_deployments == []
+
+
+@pytest.mark.asyncio
+async def test_deployment_cools_down_once_its_last_live_pod_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_async_three_pod_dns(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        pod_route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
+            side_effect=_failing_pods(429, "10.0.0.1", "10.0.0.2", "10.0.0.3")
+        )
+        respx_mock.post(f"{_PLAIN_URL}/chat/completions").mock(return_value=httpx.Response(200, json=_CHAT_RESPONSE))
+        _patch_router_discovery(
+            monkeypatch, KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+        )
+        router: Final = _pods_and_plain_router()
+
+        await _send_chats(router, "gpu-model", 5)
+        cooled_deployments: Final = await async_get_cooldown_deployments(router, None)
+
+    assert tuple(sorted(_hosts(pod_route))) == ("10.0.0.1", "10.0.0.2", "10.0.0.3")
+    assert cooled_deployments == ["pods"]
+
+
+@pytest.mark.asyncio
+async def test_pod_429_in_a_single_deployment_group_takes_that_pod_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_async_three_pod_dns(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as respx_mock:
+        pod_route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
+            side_effect=_failing_pods(429, "10.0.0.3")
+        )
+        _patch_router_discovery(
+            monkeypatch, KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+        )
+        router: Final = Router(model_list=[_deployment()], num_retries=0)
+
+        await _send_chats(router, "gpu-model", 7)
+
+    assert _hosts(pod_route) == ("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.1", "10.0.0.2", "10.0.0.1", "10.0.0.2")
+
+
+@pytest.mark.asyncio
+async def test_pod_failing_most_of_its_calls_with_500s_is_taken_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_async_three_pod_dns(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    requests_until_threshold: Final = DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS * 3
+    with respx.mock(assert_all_called=True) as respx_mock:
+        pod_route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
+            side_effect=_failing_pods(500, "10.0.0.3")
+        )
+        _patch_router_discovery(
+            monkeypatch, KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+        )
+        router: Final = Router(model_list=[_deployment()], num_retries=0)
+
+        await _send_chats(router, "gpu-model", requests_until_threshold + 4)
+        hosts: Final = _hosts(pod_route)
+
+    assert hosts.count("10.0.0.3") == DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS
+    assert hosts[requests_until_threshold:] == ("10.0.0.1", "10.0.0.2", "10.0.0.1", "10.0.0.2")
+
+
+@pytest.mark.asyncio
+async def test_pod_failing_half_its_calls_stays_in_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_async_three_pod_dns(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    third_pod_calls: Final = count()
+    third_pod_requests: Final = DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS * 3
+
+    def response_for(request: httpx.Request) -> httpx.Response:
+        third_pod_failure: Final = request.url.host == "10.0.0.3" and next(third_pod_calls) % 2 == 1
+        if third_pod_failure:
+            return httpx.Response(500, json={"error": {"message": "pod failed", "type": "error"}}, request=request)
+        return httpx.Response(200, json=_CHAT_RESPONSE, request=request)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        pod_route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(side_effect=response_for)
+        _patch_router_discovery(
+            monkeypatch, KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+        )
+        router: Final = Router(model_list=[_deployment()], num_retries=0)
+
+        await _send_chats(router, "gpu-model", third_pod_requests * 3)
+
+    assert _hosts(pod_route).count("10.0.0.3") == third_pod_requests
+
+
+@pytest.mark.asyncio
+async def test_fallback_pod_429_takes_only_that_pod_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_async_three_pod_dns(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as respx_mock:
+        pod_route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
+            side_effect=_failing_pods(429, "10.0.0.3")
+        )
+        respx_mock.post(f"{_PLAIN_URL}/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "primary failed", "type": "error"}})
+        )
+        _patch_router_discovery(
+            monkeypatch, KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+        )
+        primary: Final = {
+            "model_name": "primary-model",
+            "litellm_params": {"model": "openai/primary", "api_base": _PLAIN_URL, "api_key": "fake"},
+            "model_info": {"id": "primary"},
+        }
+        router: Final = Router(
+            model_list=[primary, _deployment()],
+            fallbacks=[{"primary-model": ["gpu-model"]}],
+            num_retries=0,
+        )
+
+        await _send_chats(router, "primary-model", 6)
+
+    assert _hosts(pod_route) == ("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.1", "10.0.0.2", "10.0.0.1")
+
+
+def test_cooled_pod_moves_only_its_own_sessions_until_its_cooldown_ends(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_sync_dns(monkeypatch, "10.0.0.1", "10.0.0.2", "10.0.0.3")
+    clock: Final = _ManualClock()
+    discovery: Final = KubernetesPodDiscovery(clock=clock, proxy_environment=_empty_proxy_environment)
+    sessions: Final = tuple(f"session-{index}" for index in range(30))
+
+    def session_hosts() -> tuple[str, ...]:
+        return tuple(
+            httpx.URL(
+                _api_base(discovery.resolve_deployment(_deployment(), {"metadata": {"session_id": session}}))
+            ).host
+            for session in sessions
+        )
+
+    before: Final = session_hosts()
+    cooled_pod: Final = discovery.pod_for_call(_deployment(), {"api_base": "http://10.0.0.3:8000/v1"})
+    assert cooled_pod is not None
+    discovery.cool_down_pod(cooled_pod, 5.0)
+    during: Final = session_hosts()
+    clock.advance(5.0)
+    after: Final = session_hosts()
+
+    assert "10.0.0.3" in before
+    assert "10.0.0.3" not in during
+    assert all(
+        during_host == before_host for before_host, during_host in zip(before, during) if before_host != "10.0.0.3"
+    )
+    assert after == before
+
+
+def test_every_pod_cooled_keeps_rotating_over_all_pods(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_sync_dns(monkeypatch, "10.0.0.1", "10.0.0.2", "10.0.0.3")
+    discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+    first_host: Final = httpx.URL(_api_base(discovery.resolve_deployment(_deployment()))).host
+    pods: Final = tuple(
+        KubernetesPod(service_host=_SERVICE_HOST, port=8000, ip=ip) for ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3")
+    )
+    for pod in pods:
+        discovery.cool_down_pod(pod, 5.0)
+
+    later_hosts: Final = tuple(httpx.URL(_api_base(discovery.resolve_deployment(_deployment()))).host for _ in pods)
+
+    assert first_host == "10.0.0.1"
+    assert later_hosts == ("10.0.0.2", "10.0.0.3", "10.0.0.1")
+    assert not discovery.has_other_live_pod(pods[0])
+
+
+def test_pod_for_call_names_only_a_discovered_pod_of_a_discovery_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_sync_dns(monkeypatch, "10.0.0.1", "10.0.0.2")
+    discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
+    discovery.resolve_deployment(_deployment())
+
+    assert discovery.pod_for_call(_deployment(), {"api_base": "http://10.0.0.2:8000/v1"}) == KubernetesPod(
+        service_host=_SERVICE_HOST, port=8000, ip="10.0.0.2"
+    )
+    assert discovery.pod_for_call(_deployment(), {"api_base": _SERVICE_URL}) is None
+    assert discovery.pod_for_call(_deployment(), {"api_base": "http://10.0.0.9:8000/v1"}) is None
+    assert (
+        discovery.pod_for_call(_deployment(kubernetes_pod_discovery=None), {"api_base": "http://10.0.0.2:8000/v1"})
+        is None
+    )
+    assert discovery.pod_for_call(_deployment(), {}) is None
+    assert discovery.pod_for_call(_deployment(), {"api_base": "http://10.0.0.2:port/v1"}) is None

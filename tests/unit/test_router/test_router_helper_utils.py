@@ -21,6 +21,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.router import AlertingConfig, Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
@@ -456,9 +457,7 @@ async def test_deployment_callback_on_success(sync_mode):
     ]
     router = Router(model_list=model_list)
     # Get the actual deployment ID that was generated
-    gpt_deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     deployment_id = gpt_deployment["model_info"]["id"]
 
     standard_logging_payload = create_standard_logging_payload()
@@ -492,6 +491,31 @@ async def test_deployment_callback_on_success(sync_mode):
             end_time=time.time(),
         )
     assert tpm_key is not None
+
+
+def test_sync_deployment_callback_on_success_skips_a_call_the_router_did_not_route():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "unrouted-deployment"},
+            }
+        ]
+    )
+
+    key: Final = router.sync_deployment_callback_on_success(
+        kwargs={"litellm_params": {"model_info": {"id": "unrouted-deployment"}}},
+        completion_response=litellm.ModelResponse(model="gpt-5-mini"),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert key is None
+    assert (
+        get_deployment_successes_for_current_minute(litellm_router_instance=router, deployment_id="unrouted-deployment")
+        == 0
+    )
 
 
 @pytest.mark.asyncio
@@ -563,9 +587,16 @@ async def _finish_35_token_websocket_turn(routed: Mapping[str, object], call_id:
         litellm_call_id=call_id,
         function_id=call_id,
     )
-    turn.update_environment_variables(litellm_params={"litellm_metadata": routed["litellm_metadata"]}, optional_params={})
+    turn.update_environment_variables(
+        litellm_params={"litellm_metadata": routed["litellm_metadata"]}, optional_params={}
+    )
     await turn.dispatch_success_handlers(
-        [{"type": "response.completed", "response": {"usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}}}],
+        [
+            {
+                "type": "response.completed",
+                "response": {"usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}},
+            }
+        ],
         prefer_async_handlers=True,
     )
 
@@ -968,9 +999,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
 
     router = Router(model_list=model_list)
 
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
 
     litellm_logging_obj = Logging(
         model="gpt-5-mini",
@@ -985,9 +1014,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
         router.routing_strategy_pre_call_checks(deployment)
     else:
         ## NO EXCEPTION
-        await router.async_routing_strategy_pre_call_checks(
-            deployment, litellm_logging_obj
-        )
+        await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
 
         ## WITH EXCEPTION - rate limit error
         with patch.object(
@@ -1002,27 +1029,19 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
             ),
         ):
             with pytest.raises(litellm.RateLimitError):
-                await router.async_routing_strategy_pre_call_checks(
-                    deployment, litellm_logging_obj
-                )
+                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
 
         ## WITH EXCEPTION - generic error
-        with patch.object(
-            callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))
-        ):
+        with patch.object(callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))):
             with pytest.raises(Exception, match="Error"):
-                await router.async_routing_strategy_pre_call_checks(
-                    deployment, litellm_logging_obj
-                )
+                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
 
 
 @pytest.mark.parametrize(
     "set_supported_environments, supported_environments, is_supported",
     [(True, ["staging"], True), (False, None, True), (True, ["development"], False)],
 )
-def test_create_deployment(
-    model_list, set_supported_environments, supported_environments, is_supported
-):
+def test_create_deployment(model_list, set_supported_environments, supported_environments, is_supported):
     """Test if the '_create_deployment' function is working correctly"""
     router = Router(model_list=model_list)
 
@@ -1056,20 +1075,14 @@ def test_deployment_is_active_for_environment(
 ):
     """Test if the '_deployment_is_active_for_environment' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-5-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
     if set_supported_environments:
         os.environ["LITELLM_ENVIRONMENT"] = "staging"
     deployment["model_info"]["supported_environments"] = supported_environments
     if is_supported:
-        assert (
-            router.deployment_is_active_for_environment(deployment=deployment) is True
-        )
+        assert router.deployment_is_active_for_environment(deployment=deployment) is True
     else:
-        assert (
-            router.deployment_is_active_for_environment(deployment=deployment) is False
-        )
+        assert router.deployment_is_active_for_environment(deployment=deployment) is False
 
 
 def test_set_model_list(model_list):
@@ -1474,27 +1487,19 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     minute = get_utc_datetime().strftime("%H-%M")
     keys_and_values = [
         (
-            RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
-            ),
+            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
             30,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
-            ),
+            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
             10,
         ),
         (
-            RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
-            ),
+            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
             70,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
-            ),
+            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
             20,
         ),
     ]
@@ -1816,9 +1821,7 @@ def test_initialize_alerting(model_list):
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
     from litellm.types.router import AlertingConfig
 
-    router = Router(
-        model_list=model_list, alerting_config=AlertingConfig(webhook_url="test")
-    )
+    router = Router(model_list=model_list, alerting_config=AlertingConfig(webhook_url="test"))
     router._initialize_alerting()
 
     callback_added = False
@@ -2093,7 +2096,6 @@ async def test_discard_releases_per_request_override_selector():
     assert selector_ref() is None
 
 
-
 def test_discard_registers_the_selector_of_a_same_strategy_survivor_built_without_a_model_list():
     retired: Final = Router(model_list=[], routing_strategy="latency-based-routing")
     survivor: Final = Router(routing_strategy="latency-based-routing")
@@ -2170,6 +2172,7 @@ async def test_discard_releases_its_router_budget_limiter():
     gc.collect()
 
     assert budget_limiter_ref() is None
+
 
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""
@@ -3187,6 +3190,7 @@ def test_resolve_model_name_from_model_id_keeps_a_wildcard_name_only_for_the_ids
 ):
     router = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-fake"}}])
     assert router.resolve_model_name_from_model_id(model_id, custom_llm_provider) == expected
+
 
 def test_get_valid_args():
     """Test get_valid_args static method returns valid Router.__init__ arguments"""

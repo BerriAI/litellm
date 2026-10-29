@@ -180,6 +180,7 @@
     "get_model_info",
     "get_model_list",
     "get_router_model_info",
+    "kubernetes_pod_discovery",
     "log_retry",
     "model_list",
     "provider_default_deployment_ids",
