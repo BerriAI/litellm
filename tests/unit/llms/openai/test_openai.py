@@ -528,7 +528,67 @@ async def test_retryable_error_keeps_the_decoded_upstream_body_and_its_headers(
     assert error_response.status_code == status_code
     assert error_response.text == _UPSTREAM_SERVER_ERROR_BODY
     assert error_response.json() == json.loads(_UPSTREAM_SERVER_ERROR_BODY)
-    assert dict(error_response.headers) == _CHUNKED_UPSTREAM_HEADERS
+    assert dict(error_response.headers) == {
+        **_CHUNKED_UPSTREAM_HEADERS,
+        **({"content-encoding": content_encoding} if content_encoding else {}),
+    }
+
+
+_REFUSAL_BODY: Final = '{"error":{"message":"upstream refused","type":"upstream_refusal","param":null,"code":null}}'
+_PROVIDER_KEY: Final = "sk-provider-secret"
+_QUERY_SECRET: Final = "query-secret"
+
+
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize(
+    ("status_code", "mapped_error"),
+    (
+        (400, litellm.BadRequestError),
+        (403, litellm.APIError),
+        (408, litellm.Timeout),
+        (409, litellm.APIError),
+        (413, litellm.APIError),
+        (429, litellm.RateLimitError),
+        (500, litellm.InternalServerError),
+        (504, litellm.Timeout),
+    ),
+)
+def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
+    provider: str, status_code: int, mapped_error: type[Exception]
+) -> None:
+    client: Final = OpenAI(
+        api_key=_PROVIDER_KEY,
+        base_url=_UPSTREAM_BASE,
+        default_query={"key": _QUERY_SECRET},
+        max_retries=0,
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    status_code, content=_REFUSAL_BODY, headers={"content-type": "application/json"}
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        litellm.completion(
+            model=f"{provider}/gpt-5.6",
+            messages=_MESSAGES,
+            client=client,
+            api_base=_UPSTREAM_BASE,
+            api_key=_PROVIDER_KEY,
+            num_retries=0,
+        )
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.status_code == status_code
+    assert error_response.text == _REFUSAL_BODY
+    assert error_response.json() == json.loads(_REFUSAL_BODY)
+    assert str(error_response.request.url) == f"{_UPSTREAM_BASE}/chat/completions"
+    for exposed in (error_response.request, getattr(raised.value, "request")):
+        assert _QUERY_SECRET not in str(exposed.url)
+        assert _PROVIDER_KEY not in str(exposed.headers)
+        assert exposed.content == b""
 
 
 @pytest.mark.asyncio

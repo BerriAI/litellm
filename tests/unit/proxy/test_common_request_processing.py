@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import copy
 import datetime
+import gzip
 import json
 from collections.abc import AsyncIterable, Mapping
 from types import MappingProxyType, SimpleNamespace
@@ -11685,27 +11686,36 @@ async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_r
     assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
 
 
-_UPSTREAM_REJECTION_BODY: Final = b'{"error":{"message":"upstream said no","type":"invalid_request_error"}}'
-_UPSTREAM_REJECTION_HEADERS: Final = {
-    "x-request-id": "req_upstream",
-    "x-upstream-trace": "trace-7",
-    "content-type": "application/json",
-    "content-length": str(len(_UPSTREAM_REJECTION_BODY)),
-}
+_UPSTREAM_REJECTION_BODY: Final = b'{"error":{"message":"upstream said no","type":"upstream_rejection"}}'
+
+
+def _upstream_rejection_wire(content_encoding: Literal["gzip"] | None) -> tuple[bytes, dict[str, str]]:
+    wire_body: Final = gzip.compress(_UPSTREAM_REJECTION_BODY) if content_encoding else _UPSTREAM_REJECTION_BODY
+    return wire_body, {
+        "x-request-id": "req_upstream",
+        "x-upstream-trace": "trace-7",
+        "content-type": "application/json",
+        "content-length": str(len(wire_body)),
+        **({"content-encoding": content_encoding} if content_encoding else {}),
+    }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status_code", "mapped_error"),
-    ((400, litellm.BadRequestError), (429, litellm.RateLimitError)),
+    (
+        (400, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+    ),
 )
+@pytest.mark.parametrize("content_encoding", (None, "gzip"))
 async def test_handle_llm_api_exception_forwards_exactly_the_upstream_headers_of_a_mapped_openai_error(
-    status_code: int, mapped_error: type[Exception]
+    status_code: int, mapped_error: type[Exception], content_encoding: Literal["gzip"] | None
 ) -> None:
+    wire_body, upstream_headers = _upstream_rejection_wire(content_encoding)
     transport: Final = httpx.MockTransport(
-        lambda _request: httpx.Response(
-            status_code, content=_UPSTREAM_REJECTION_BODY, headers=_UPSTREAM_REJECTION_HEADERS
-        )
+        lambda _request: httpx.Response(status_code, content=wire_body, headers=upstream_headers)
     )
     with pytest.raises(mapped_error) as mapped:
         await litellm.acompletion(
@@ -11733,7 +11743,7 @@ async def test_handle_llm_api_exception_forwards_exactly_the_upstream_headers_of
     assert forwarded.value.code == str(status_code)
     assert "upstream said no" in forwarded.value.message
     assert {name: value for name, value in forwarded.value.headers.items() if name.startswith("llm_provider-")} == {
-        f"llm_provider-{name}": value for name, value in _UPSTREAM_REJECTION_HEADERS.items()
+        f"llm_provider-{name}": value for name, value in upstream_headers.items()
     }
 
 

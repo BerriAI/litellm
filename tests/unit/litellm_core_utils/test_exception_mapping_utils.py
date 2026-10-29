@@ -2807,3 +2807,28 @@ def test_transport_timeout_maps_to_timeout(
 
     assert exc_info.value.status_code == 408
     assert f"Request timed out. Error_str: {reason}" in str(exc_info.value)
+
+
+def test_bedrock_server_error_keeps_the_aws_body_without_the_signed_request() -> None:
+    body: Final = '{"message":"Bedrock is unable to process your request."}'
+    signed_request: Final = httpx.Request(
+        "POST",
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-5-5/converse",
+        headers={"authorization": "AWS4-HMAC-SHA256 Credential=AKIDSIGNED/20261029/us-east-1/bedrock/aws4_request"},
+        content=b'{"messages":[{"role":"user","content":[{"text":"hi"}]}]}',
+    )
+    upstream: Final = httpx.Response(
+        500, content=body, headers={"x-amzn-requestid": "req-aws"}, request=signed_request
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as raised:
+        exception_type(
+            model="bedrock/anthropic.claude-opus-5-5",
+            original_exception=BedrockError(status_code=500, message=body, response=upstream),
+            custom_llm_provider="bedrock",
+        )
+
+    assert raised.value.response.text == body
+    assert raised.value.response.headers["x-amzn-requestid"] == "req-aws"
+    assert "AKIDSIGNED" not in str(raised.value.request.headers)
+    assert raised.value.request.content == b""

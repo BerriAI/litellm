@@ -124,23 +124,31 @@ def _upstream_body(response: object) -> bytes:
         return b""
 
 
-def _decoded_body_headers(response: object) -> httpx.Headers:
-    upstream_headers: Final = httpx.Headers(getattr(response, "headers", None))
-    return httpx.Headers([item for item in upstream_headers.multi_items() if item[0] != "content-encoding"])
+def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.Request:
+    if not isinstance(upstream, httpx.Response):
+        return httpx.Request(method="POST", url=fallback_url)
+    try:
+        upstream_request: Final = upstream.request
+    except RuntimeError:
+        return httpx.Request(method="POST", url=fallback_url)
+    return httpx.Request(
+        method=upstream_request.method,
+        url=upstream_request.url.copy_with(userinfo=b"", query=None, fragment=None),
+    )
 
 
-def _status_error_response(status_code: int, upstream: httpx.Response | None) -> httpx.Response:
+def error_response_without_credentials(status_code: int, upstream: object, fallback_url: str) -> httpx.Response:
     response: Final = httpx.Response(
         status_code=status_code,
-        headers=_decoded_body_headers(upstream),
         stream=httpx.ByteStream(_upstream_body(upstream)),
-        request=httpx.Request(
-            method="POST",
-            url=" https://cloud.google.com/vertex-ai/",
-        ),
+        request=_request_without_credentials(upstream, fallback_url),
     )
     _ = response.read()
+    response.headers = httpx.Headers(upstream.headers if isinstance(upstream, httpx.Response) else None)
     return response
+
+
+_NO_UPSTREAM_REQUEST_URL: Final = " https://cloud.google.com/vertex-ai/"
 
 
 _MINIMAL_ERROR_RESPONSE: httpx.Response | None = None
@@ -538,7 +546,7 @@ class RateLimitError(openai.RateLimitError):
         # Mirrors FastAPI HTTPException.detail so the same instance can be
         # serialized through both the ProxyException and HTTPException paths.
         self.detail = detail if detail is not None else self.message
-        self.response = _status_error_response(429, response)
+        self.response = error_response_without_credentials(429, response, _NO_UPSTREAM_REQUEST_URL)
         super().__init__(
             self.message,
             response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
@@ -763,7 +771,7 @@ class ServiceUnavailableError(openai.APIStatusError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.response = _status_error_response(self.status_code, response)
+        self.response = error_response_without_credentials(self.status_code, response, _NO_UPSTREAM_REQUEST_URL)
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -806,7 +814,7 @@ class BadGatewayError(openai.APIStatusError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.response = _status_error_response(self.status_code, response)
+        self.response = error_response_without_credentials(self.status_code, response, _NO_UPSTREAM_REQUEST_URL)
         super().__init__(
             self.message,
             response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
@@ -852,7 +860,7 @@ class InternalServerError(openai.InternalServerError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.response = _status_error_response(self.status_code, response)
+        self.response = error_response_without_credentials(self.status_code, response, _NO_UPSTREAM_REQUEST_URL)
         super().__init__(
             self.message,
             response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
@@ -890,6 +898,7 @@ class APIError(openai.APIError):
         max_retries: int | None = None,
         num_retries: int | None = None,
         body: object | None = None,
+        response: httpx.Response | None = None,
     ):
         self.status_code = status_code
         self.message = f"litellm.APIError: {message}"
@@ -898,6 +907,8 @@ class APIError(openai.APIError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        if response is not None:
+            self.response = response
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(self.message, request=request, body=body)

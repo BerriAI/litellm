@@ -632,3 +632,85 @@ def test_azure_content_policy_wins_over_context_length_code(monkeypatch: pytest.
     error: Final = _azure_chat_error(monkeypatch, _azure_error_response(400, policy_error))
 
     assert type(error) is ContentPolicyViolationError
+
+
+_AZURE_REFUSAL_BODY: Final = '{"error":{"message":"azure refused","type":"upstream_refusal","code":"refused"}}'
+_AZURE_KEY: Final = "azure-provider-secret"
+_AZURE_BASE: Final = "https://azure-upstream.openai.azure.com"
+_AZURE_ARGS: Final = {"api_base": _AZURE_BASE, "api_version": "2024-10-21", "api_key": _AZURE_KEY, "max_retries": 0}
+
+
+async def _azure_completion() -> None:
+    litellm.completion(model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], **_AZURE_ARGS)
+
+
+async def _azure_completion_stream() -> None:
+    list(
+        litellm.completion(
+            model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], stream=True, **_AZURE_ARGS
+        )
+    )
+
+
+async def _azure_acompletion() -> None:
+    await litellm.acompletion(model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], **_AZURE_ARGS)
+
+
+async def _azure_acompletion_stream() -> None:
+    stream: Final = await litellm.acompletion(
+        model="azure/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], stream=True, **_AZURE_ARGS
+    )
+    async for _ in stream:
+        pass
+
+
+async def _azure_embedding() -> None:
+    litellm.embedding(model="azure/text-embedding-3-large", input=["hi"], **_AZURE_ARGS)
+
+
+async def _azure_aembedding() -> None:
+    await litellm.aembedding(model="azure/text-embedding-3-large", input=["hi"], **_AZURE_ARGS)
+
+
+async def _azure_image_generation() -> None:
+    litellm.image_generation(model="azure/gpt-image-2", prompt="a cat", **_AZURE_ARGS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (
+        _azure_completion,
+        _azure_completion_stream,
+        _azure_acompletion,
+        _azure_acompletion_stream,
+        _azure_embedding,
+        _azure_aembedding,
+        _azure_image_generation,
+    ),
+    ids=lambda route: route.__name__.removeprefix("_azure_"),
+)
+@pytest.mark.parametrize(("status_code", "mapped_error"), ((400, BadRequestError), (403, litellm.APIError)))
+@respx.mock
+async def test_azure_error_keeps_the_upstream_body_without_the_api_key(
+    route: Callable[[], Awaitable[None]],
+    status_code: int,
+    mapped_error: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
+        return_value=httpx.Response(
+            status_code, content=_AZURE_REFUSAL_BODY, headers={"content-type": "application/json"}
+        )
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        await route()
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.text == _AZURE_REFUSAL_BODY
+    assert error_response.json() == json.loads(_AZURE_REFUSAL_BODY)
+    for exposed in (error_response.request, getattr(raised.value, "request")):
+        assert _AZURE_KEY not in str(exposed.headers)
+        assert exposed.content == b""
