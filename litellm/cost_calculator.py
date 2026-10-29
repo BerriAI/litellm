@@ -1506,8 +1506,8 @@ def _response_time_ms_for_cost(
 
 
 def _breakdown_total(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
-    breakdown: Final[object] = getattr(litellm_logging_obj, "cost_breakdown", None)
-    total: Final[object] = breakdown.get("total_cost") if isinstance(breakdown, Mapping) else None
+    breakdown: Final = None if litellm_logging_obj is None else litellm_logging_obj.cost_breakdown
+    total: Final[object] = None if breakdown is None else breakdown.get("total_cost")
     return float(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
 
 
