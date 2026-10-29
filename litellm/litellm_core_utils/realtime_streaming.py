@@ -1362,8 +1362,12 @@ class RealTimeStreaming:
         return self._has_realtime_guardrails_for_event_hooks([GuardrailEventHooks.realtime_input_transcription])
 
     def _should_disable_vad_auto_response(self) -> bool:
-        """Transcription-only sessions have no assistant turn to gate and reject realtime session updates."""
-        return not self._is_transcription_session and self._has_audio_transcription_guardrails()
+        """Transcription and translation sessions have no assistant turn to gate and reject realtime session updates."""
+        return (
+            not self._is_transcription_session
+            and not self._is_translation_session
+            and self._has_audio_transcription_guardrails()
+        )
 
     async def run_realtime_guardrails(
         self,

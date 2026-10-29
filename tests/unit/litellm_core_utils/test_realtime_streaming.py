@@ -3403,6 +3403,33 @@ async def test_translation_rejects_applicable_guardrails_before_forwarding_audio
 
 
 @pytest.mark.asyncio
+async def test_translation_for_a_key_opted_out_of_a_legacy_callback_guardrail_gets_no_realtime_session_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [CustomGuardrail(guardrail_name="legacy-callback")])
+    session_update: Final = json.dumps({"type": "session.update", "session": {"audio": {"output": {"language": "es"}}}})
+    session_created: Final = {"type": "session.created", "session": {"type": "translation"}}
+    client: Final = _ga_client_ws()
+    client.receive_text = AsyncMock(side_effect=[session_update, ConnectionClosed(None, None)])
+    client.close = AsyncMock()
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    backend.recv = AsyncMock(side_effect=[json.dumps(session_created), ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=_mock_logging(),
+        translation_session=True,
+        request_data={"litellm_metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}}},
+    )
+
+    await streaming.bidirectional_forward()
+
+    assert tuple(call.args[0] for call in backend.send.await_args_list) == (session_update,)
+    assert session_created in tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("retain_close", (False, True))
 @pytest.mark.parametrize("reported_input,expected_input", [(None, 2.0), (0.0, 0.0), (0.25, 0.25)])
 async def test_translation_terminal_usage_fills_only_missing_input_duration(
