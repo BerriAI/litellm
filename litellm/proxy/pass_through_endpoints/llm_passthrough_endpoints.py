@@ -3923,7 +3923,7 @@ def _vertex_live_setup_model(frame_data: str | bytes) -> str | _UnreadableVertex
         frame: Final = _VERTEX_LIVE_CLIENT_FRAME.validate_python(
             json.loads(frame_data, object_pairs_hook=_object_with_unique_keys)
         )
-    except ValueError:
+    except (ValueError, RecursionError):
         return _UnreadableVertexLiveFrame()
     setup: Final = frame.get("setup")
     return None if setup is None else setup.get("model") or None
@@ -3958,10 +3958,23 @@ def _vertex_upstream_model(deployment: DeploymentTypedDict) -> str | None:
     return upstream if provider is None or provider in VERTEX_LIVE_PROVIDERS else None
 
 
+def _routed_deployments(llm_router: Router) -> tuple[DeploymentTypedDict, ...]:
+    """Every deployment under the name a request reaches it by, which leaves out a group a router alias shares a name
+    with, since the alias wins"""
+    return (
+        *llm_router.get_model_list_from_model_alias(),
+        *(
+            deployment
+            for deployment in llm_router.get_model_list() or ()
+            if deployment["model_name"] not in llm_router.model_group_alias
+        ),
+    )
+
+
 def _vertex_deployments(llm_router: Router | None) -> tuple[DeploymentTypedDict, ...]:
     if llm_router is None:
         return ()
-    return tuple(deployment for deployment in (llm_router.get_model_list() or ()) if _vertex_upstream_model(deployment))
+    return tuple(deployment for deployment in _routed_deployments(llm_router) if _vertex_upstream_model(deployment))
 
 
 def _live_deployment(setup_model: str, llm_router: Router | None) -> DeploymentTypedDict | None:
@@ -3981,19 +3994,15 @@ def _live_deployment(setup_model: str, llm_router: Router | None) -> DeploymentT
 def _vertex_live_model_names(setup_model: str, llm_router: Router | None) -> tuple[str, ...]:
     """
     The names a key can hold for the model a ``setup`` frame runs: the Vertex AI group the setup rewriter sends it
-    through, else every Vertex AI group serving the publisher model Vertex runs, and that model's id bare or under
-    LiteLLM's ``vertex_ai/`` prefix unless a group holds that name for another model.
+    through, else every Vertex AI group serving the publisher model Vertex runs, and either way that model's id bare
+    or under LiteLLM's ``vertex_ai/`` prefix unless a group holds that name.
 
     A full resource path skips the rewriter and reaches Vertex as sent, so only its publisher model counts, and
     a wildcard is matched against that id alone so addressing in front of it cannot satisfy the pattern
     """
     deployment: Final = _live_deployment(setup_model, llm_router)
-    if deployment is not None and _vertex_upstream_model(deployment) is not None:
-        group: Final = deployment["model_name"]
-        alias_target: Final = (
-            None if llm_router is None or group in llm_router.model_names else llm_router.get_model_from_alias(group)
-        )
-        return (alias_target or group,)
+    if deployment is not None and (upstream := _vertex_upstream_model(deployment)) is not None:
+        return (deployment["model_name"], *_publisher_model_id_names(upstream, llm_router))
     opened_model: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
     publisher_model: Final = _vertex_publisher_model_suffix(opened_model)
     serving_groups: Final = tuple(
@@ -4003,22 +4012,31 @@ def _vertex_live_model_names(setup_model: str, llm_router: Router | None) -> tup
             if _vertex_publisher_model_suffix(_vertex_upstream_model(candidate) or "") == publisher_model
         )
     )
+    return (*serving_groups, *_publisher_model_id_names(opened_model, llm_router))
+
+
+def _publisher_model_id_names(model: str, llm_router: Router | None) -> tuple[str, ...]:
     group_names: Final = frozenset(
         candidate["model_name"] for candidate in (() if llm_router is None else llm_router.get_model_list() or ())
     )
-    publisher_model_id: Final = opened_model.rsplit("/", 1)[-1]
-    return (
-        *serving_groups,
-        *(name for name in (publisher_model_id, f"vertex_ai/{publisher_model_id}") if name not in group_names),
-    )
+    publisher_model_id: Final = model.rsplit("/", 1)[-1]
+    return tuple(name for name in (publisher_model_id, f"vertex_ai/{publisher_model_id}") if name not in group_names)
 
 
-def _is_model_alias(name: str, valid_token: UserAPIKeyAuth, llm_router: Router | None) -> bool:
+def _is_listed_router_alias(name: str, llm_router: Router) -> bool:
+    return any(deployment["model_name"] == name for deployment in llm_router.get_model_list_from_model_alias())
+
+
+def _is_alias_the_rewriter_ignores(name: str, valid_token: UserAPIKeyAuth, llm_router: Router | None) -> bool:
     return (
         name in (key_model_aliases_for_auth_check(valid_token) or ())
         or name in (team_model_aliases_for_auth_check(valid_token) or ())
         or name in litellm.model_alias_map
-        or (llm_router is not None and name in llm_router.model_group_alias)
+        or (
+            llm_router is not None
+            and name in llm_router.model_group_alias
+            and not _is_listed_router_alias(name, llm_router)
+        )
     )
 
 
@@ -4070,14 +4088,30 @@ async def _model_reauthorization_denial(
     return None
 
 
-async def _first_reauthorization_denial(
-    model_names: tuple[str, ...], authorize_model: VertexLiveModelAuthorizer
-) -> LoggedClientFrameRefusal | None:
-    denial: Final = await _model_reauthorization_denial(model_names[0], authorize_model)
+async def _first_model_denial(
+    model_names: tuple[str, ...],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router | None,
+    authorize_model: VertexLiveModelAuthorizer,
+) -> ClientFrameRefusal | None:
+    """
+    The first name the key may call that also passes re-authorization opens the session, and no later name is
+    checked. Otherwise the refusal is the first re-authorization denial, which says more than an access denial
+    """
+    name: Final = model_names[0]
+    denial: Final = await _model_access_denial(name, valid_token, llm_router) or await _model_reauthorization_denial(
+        name, authorize_model
+    )
     if denial is None or len(model_names) == 1:
         return denial
-    later_denial: Final = await _first_reauthorization_denial(model_names[1:], authorize_model)
-    return None if later_denial is None else denial
+    later_denial: Final = await _first_model_denial(model_names[1:], valid_token, llm_router, authorize_model)
+    if later_denial is None:
+        return None
+    return (
+        later_denial
+        if isinstance(later_denial, LoggedClientFrameRefusal) and isinstance(denial, ProxyException)
+        else denial
+    )
 
 
 async def _vertex_live_model_denial(
@@ -4087,14 +4121,14 @@ async def _vertex_live_model_denial(
     authorize_model: VertexLiveModelAuthorizer,
 ) -> ClientFrameRefusal | None:
     """
-    The setup rewriter forwards an alias name as sent unless it is a listed router alias, which already resolved to
-    its target group, so an alias name grants nothing here. A name the key may call is then authorized the way a
-    request naming it at connect time is
+    The setup rewriter runs a listed router alias as its target group, the way a request naming it does, and sends
+    any other alias name to Vertex as written, so only a listed router alias grants anything here. A name the key may
+    call is then authorized the way a request naming it at connect time is
     """
     model_names: Final = tuple(
         name
         for name in _vertex_live_model_names(setup_model, llm_router)
-        if not _is_model_alias(name, valid_token, llm_router)
+        if not _is_alias_the_rewriter_ignores(name, valid_token, llm_router)
     )
     if not model_names:
         return (
@@ -4108,11 +4142,7 @@ async def _vertex_live_model_denial(
             if await _caller_has_model_limits(valid_token)
             else None
         )
-    denials: Final = tuple([await _model_access_denial(name, valid_token, llm_router) for name in model_names])
-    callable_names: Final = tuple(name for name, denial in zip(model_names, denials, strict=True) if denial is None)
-    if not callable_names:
-        return denials[0]
-    return await _first_reauthorization_denial(callable_names, authorize_model)
+    return await _first_model_denial(model_names, valid_token, llm_router, authorize_model)
 
 
 async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:

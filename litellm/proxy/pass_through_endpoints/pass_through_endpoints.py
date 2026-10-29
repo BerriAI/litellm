@@ -2413,7 +2413,7 @@ def _rewrite_vertex_live_setup_model(
         return frame_data
     try:
         message: Final[object] = _DECODED_JSON.validate_python(json.loads(frame_data))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return frame_data
     if not isinstance(message, dict):
         return frame_data
@@ -2461,7 +2461,7 @@ def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
         decoded: Final[object] = _DECODED_JSON.validate_python(
             json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
         )
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return None
     return decoded if isinstance(decoded, dict) else None
 

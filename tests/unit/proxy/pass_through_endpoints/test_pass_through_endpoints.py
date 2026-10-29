@@ -7755,6 +7755,18 @@ async def test_vertex_live_setup_frame_only_vertex_can_parse_is_refused(lenient_
 
 
 @pytest.mark.asyncio
+async def test_vertex_live_setup_frame_nested_too_deep_to_parse_is_refused() -> None:
+    nested_setup: Final = '{"setup": ' + "[" * 100_000 + "]" * 100_000 + "}"
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [{"type": "websocket.receive", "text": nested_setup}],
+        UserAPIKeyAuth(token="hashed", models=["gemini-live-2.5-flash"]),
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) is not None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "lenient_setup",
     [
@@ -8207,9 +8219,9 @@ async def test_vertex_live_setup_frame_naming_an_alias_cannot_open_the_model_the
 async def test_vertex_live_setup_frame_naming_a_router_alias_cannot_open_the_model_the_alias_shadows(
     hidden: bool, shadows_a_group: bool
 ) -> None:
-    """A listed router alias runs as its target group, while the setup rewriter cannot see a hidden one, or one named
-    like a group, and sends it to Vertex as the model whose id it reuses, which a key holding only the target must
-    not open"""
+    """A listed router alias runs as its target group even when a group shares its name, while the setup rewriter
+    cannot see a hidden one and sends it to Vertex as the model whose id it reuses, which a key holding only the
+    target must not open"""
     shadowed_group: Final = {"model_name": "gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-3-pro-live"}}
     llm_router: Final = litellm.Router(
         model_list=[
@@ -8228,10 +8240,51 @@ async def test_vertex_live_setup_frame_naming_a_router_alias_cannot_open_the_mod
     sent_models = [json.loads(call.args[0])["setup"]["model"] for call in upstream_ws.send.await_args_list]
     assert not any(model.endswith("/gemini-3-pro-live") for model in sent_models)
     assert sent_models == (
-        []
-        if hidden or shadows_a_group
-        else ["projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"]
+        [] if hidden else ["projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("held_model", ["gemini-3-pro-live", "gemini-live-2.5-flash"], ids=["alias", "alias-target"])
+async def test_vertex_live_setup_frame_naming_a_router_alias_named_like_a_group_is_authorized_like_a_request(
+    held_model: str,
+) -> None:
+    """A request naming a router alias reaches its target even when a group shares the alias name, so a key holding
+    the alias or its target runs the target on Live too, and still cannot reach the group the alias shadows"""
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-live-2.5-flash", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+            {"model_name": "gemini-3-pro-live", "litellm_params": {"model": "vertex_ai/gemini-3-pro-live"}},
+        ],
+        model_group_alias={"gemini-3-pro-live": "gemini-live-2.5-flash"},
+    )
+    key: Final = UserAPIKeyAuth(token="hashed", models=[held_model])
+
+    _, alias_upstream = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("models/gemini-3-pro-live")], key, llm_router=llm_router
+    )
+    _, shadowed_upstream = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(VERTEX_LIVE_FULL_PATH.format(model="gemini-3-pro-live"))], key, llm_router=llm_router
+    )
+
+    sent_models = [json.loads(call.args[0])["setup"]["model"] for call in alias_upstream.send.await_args_list]
+    assert sent_models == [VERTEX_LIVE_FULL_PATH.format(model="gemini-live-2.5-flash")]
+    shadowed_upstream.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("addressing", VERTEX_LIVE_CLIENT_ADDRESSINGS)
+async def test_vertex_live_setup_frame_is_authorized_by_the_litellm_model_id_in_every_addressing(addressing):
+    """A request naming a deployment's ``vertex_ai/`` id reaches that deployment, so a key holding the id runs the
+    model it names on Live whichever addressing the setup frame uses"""
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(addressing.format(model=VERTEX_LIVE_GROUP))],
+        UserAPIKeyAuth(token="hashed", models=[f"vertex_ai/{VERTEX_LIVE_GROUP}"]),
+    )
+
+    assert _policy_close_reason(websocket) is None
+    sent_setup = json.loads(upstream_ws.send.await_args.args[0])["setup"]
+    assert sent_setup["model"] == VERTEX_LIVE_FULL_PATH.format(model=VERTEX_LIVE_GROUP)
 
 
 @pytest.mark.asyncio
