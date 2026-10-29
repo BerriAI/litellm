@@ -12594,6 +12594,7 @@ _DOWNSTREAM_LEAKABLE_VALUES: Final = (
     "abcd1234efgh5678",
     "cs-0123456789",
     "tok-0123456789abcdef",
+    "4815162342108",
 )
 
 
@@ -12604,7 +12605,12 @@ async def test_a_chained_proxy_redacts_secrets_and_internal_details_from_relayed
         "exception": "connect to http://guard-scan.internal.corp:9000/v1/check failed at /srv/secret/app/guard.py",
         "api_key": "abcd1234efgh5678",
         "access_token": ["tok-0123456789abcdef"],
-        "scanner": {"hosts": ["10.0.4.17:8080"], "client_secret": "cs-0123456789", "attempts": 2},
+        "scanner": {
+            "hosts": ["10.0.4.17:8080"],
+            "client_secret": "cs-0123456789",
+            "api_secret": 4815162342108,
+            "attempts": 2,
+        },
     }
     rejection: Final = _downstream_proxy_rejection(
         "responses",
