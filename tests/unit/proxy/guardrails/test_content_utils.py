@@ -2,6 +2,7 @@
 
 import json
 from functools import reduce
+from typing import Final
 
 import pytest
 from pydantic import JsonValue
@@ -922,6 +923,34 @@ def test_native_tool_arguments_keep_their_bytes_when_nothing_is_masked():
 def test_native_writer_visits_each_tool_and_system_slot(data):
     assert walk_user_text(data, lambda text: text.replace("payload", "[MASKED]")) == 1
     assert "payload" not in json.dumps(data)
+
+
+def test_skip_tool_message_leaves_tool_results_and_masks_the_rest() -> None:
+    data: Final[dict[str, object]] = {
+        "messages": [
+            {"role": "user", "content": "secret"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tool", "name": "read", "input": {"env": "secret"}}],
+                "tool_calls": [{"id": "call", "function": {"name": "read", "arguments": '{"env": "secret"}'}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool", "content": "secret"}]},
+            {"role": "tool", "tool_call_id": "call", "content": "secret"},
+        ]
+    }
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]"), skip_tool_message=True) == 3
+    assert data == {
+        "messages": [
+            {"role": "user", "content": "[MASKED]"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tool", "name": "read", "input": {"env": "[MASKED]"}}],
+                "tool_calls": [{"id": "call", "function": {"name": "read", "arguments": '{"env": "[MASKED]"}'}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool", "content": "secret"}]},
+            {"role": "tool", "tool_call_id": "call", "content": "secret"},
+        ]
+    }
 
 
 @pytest.mark.parametrize(

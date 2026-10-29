@@ -359,6 +359,7 @@ from litellm.router_utils.request_priority import (
     InvalidPriority,
     parse_default_priority,
     priority_error,
+    priority_header_fields,
     request_drops_params,
     resolve_request_priority,
     unqueueable_priority_message,
@@ -1369,7 +1370,7 @@ class Router:
             },
         ]
 
-        router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
+        router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": ["openai-gpt-3.5-turbo"]}])
         ```
         """
 
@@ -1595,6 +1596,10 @@ class Router:
 
         if default_fallbacks is not None or litellm.default_fallbacks is not None:
             _fallbacks = default_fallbacks or litellm.default_fallbacks
+            if isinstance(_fallbacks, str):
+                raise TypeError(
+                    f"default_fallbacks must be a list of model names, got '{_fallbacks}'. Use ['{_fallbacks}']"
+                )
             if self.fallbacks is not None:
                 self.fallbacks.append({"*": _fallbacks})
             else:
@@ -2838,7 +2843,7 @@ class Router:
         self._initialize_core_endpoints()
         self._initialize_specialized_endpoints()
 
-    def validate_fallbacks(self, fallback_param: list | None):
+    def validate_fallbacks(self, fallback_param: Sequence[Mapping[str, object]] | None):
         """
         Validate the fallbacks parameter.
         """
@@ -2851,6 +2856,13 @@ class Router:
                 raise ValueError(
                     f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
                 )
+            ((model_group, targets),) = fallback_dict.items()
+            if isinstance(targets, list) or check_non_standard_fallback_format(fallbacks=[fallback_dict]):
+                continue
+            raise TypeError(
+                f"Fallbacks for '{model_group}' must be a list of model names, got '{targets}'. "
+                f"Use {{'{model_group}': ['{targets}']}}"
+            )
 
     def _add_encrypted_content_affinity_check(self, enable_global_affinity: bool) -> None:
         def _move_before_deployment_affinity(
@@ -5411,13 +5423,21 @@ class Router:
         request_priority: Final = resolve_request_priority(
             requested=kwargs.get("priority"),
             default_priority=self.default_priority,
-            drops_params=lambda: request_drops_params(
-                kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
-            ),
+            drops_params=lambda: self._drops_params(model=model, kwargs=kwargs),
         )
         if isinstance(request_priority, InvalidPriority):
             raise priority_error(model=model, message=request_priority.message)
         return request_priority, {key: value for key, value in kwargs.items() if key != "priority"}
+
+    def priority_header_update(
+        self, model: str, kwargs: Mapping[str, object], header: str | None
+    ) -> Mapping[str, int | str]:
+        return priority_header_fields(header, drops_params=lambda: self._drops_params(model=model, kwargs=kwargs))
+
+    def _drops_params(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return request_drops_params(
+            kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
+        )
 
     async def _schedule_factory(
         self,
@@ -6456,6 +6476,9 @@ class Router:
         hop_kwargs: Final = mid_stream_fallback_hop_kwargs(
             model=model, original_generic_function=original_generic_function, controls=controls, kwargs=kwargs
         )
+        shared_logging: Final = kwargs.get("litellm_logging_obj")
+        if isinstance(shared_logging, LiteLLMLogging):
+            shared_logging.carry_failed_attempt_usage()
         response: Final = await self._ageneric_api_call_with_fallbacks_helper(
             model=model, original_generic_function=original_generic_function, **kwargs
         )
@@ -11846,6 +11869,11 @@ class Router:
         with self._deployment_index_lock:
             indices: Final = self.model_name_to_deployment_indices.get(model_name)
             return None if indices is None else tuple(self.model_list[idx] for idx in indices)
+
+    def team_public_model_names_of(self, team_id: str) -> frozenset[str]:
+        """The public names `team_id` serves its own deployments under."""
+        with self._deployment_index_lock:
+            return frozenset(name for owner, name in self.team_model_to_deployment_indices if owner == team_id)
 
     def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[DeploymentTypedDict, ...] | None:
         """The deployments `team_id` serves under `public_model_name`, or None when that pair is not indexed."""
