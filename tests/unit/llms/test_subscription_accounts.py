@@ -5,9 +5,11 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.constants import SUBSCRIPTION_BACKED_PROVIDERS
 from litellm.llms.chatgpt.common_utils import OPENAI_AUTH_CLAIM_KEY
 from litellm.llms.subscription_accounts import SUBSCRIPTION_ACCOUNT_ID_RESOLVERS, resolve_subscription_account_id
+from litellm.types.utils import CredentialItem
 
 
 def _write_login(path: Path, account_id: str) -> Path:
@@ -73,3 +75,22 @@ def test_resolving_an_account_leaves_the_login_file_untouched(signed_in_chatgpt_
 
     assert resolve_subscription_account_id("chatgpt", {"chatgpt_auth_file": str(login)}) == "acct-derived"
     assert login.read_text() == saved
+
+
+@pytest.mark.parametrize("credential_field", ["chatgpt_auth_file", "api_key"])
+def test_a_named_credential_resolves_to_the_account_it_signs_in_as(
+    credential_field: str, signed_in_chatgpt_token_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    login: Final = _write_login(signed_in_chatgpt_token_dir / "named" / "auth.json", "acct-named-credential")
+    values: Final = {
+        "chatgpt_auth_file": {"chatgpt_auth_file": str(login)},
+        "api_key": {"api_key": _access_token_for("acct-named-credential")},
+    }[credential_field]
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="chatgpt-team", credential_values=values, credential_info={})],
+    )
+    litellm_params: Final = {"model": "chatgpt/gpt-5.6-terra", "litellm_credential_name": "chatgpt-team"}
+
+    assert resolve_subscription_account_id("chatgpt", litellm_params) == "acct-named-credential"

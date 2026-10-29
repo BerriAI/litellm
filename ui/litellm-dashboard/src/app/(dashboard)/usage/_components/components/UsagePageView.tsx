@@ -113,7 +113,7 @@ interface UsagePageProps {
 }
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
-  const { accessToken, userRole, userId: userID, premiumUser, isLoading: authorizationLoading } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly, isLoading: authLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
   const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
@@ -188,7 +188,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   };
 
   const { isLoading: organizationsLoading } = useOrganizations();
-  const authorizationSettled = !authorizationLoading && userRole !== null;
+  const authorizationSettled = !authLoading && userRole !== null;
   const accessSettled = authorizationSettled && !organizationsLoading && !teamsLoading;
   useEffect(() => {
     if (!accessSettled) return;
@@ -551,7 +551,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                         endTime={endTime}
                         enabled={isAdmin && effectiveUserId === null}
                         meteredSpend={totals.spend}
-                        canEdit={isProxyAdminRole(userRole || "")}
+                        canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
                       />
                     }
                     topKeys={

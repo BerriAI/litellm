@@ -773,12 +773,11 @@ def _aggregate_grouping_sets_records_sync(
         metadata: Mapping[str, object] | None = None,
     ) -> None:
         existing: Final = target.get(key)
-        if existing is None:
-            target[key] = MetricWithMetadata(metrics=metrics, metadata=dict(metadata or {}))
-            return
-        existing.metrics = metrics
-        if metadata:
-            existing.metadata = {**existing.metadata, **metadata}
+        target[key] = (
+            MetricWithMetadata(metrics=metrics, metadata=dict(metadata or {}))
+            if existing is None
+            else existing.model_copy(update={"metrics": metrics, "metadata": {**existing.metadata, **(metadata or {})}})
+        )
 
     def assign_api_key_breakdown(
         target: dict[str, MetricWithMetadata],

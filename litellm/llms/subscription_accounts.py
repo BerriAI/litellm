@@ -8,13 +8,15 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.chatgpt.authenticator import Authenticator, get_cached_authenticator, get_chatgpt_auth_file
+from litellm.utils import with_named_credential
 
 
 def _chatgpt_account_id(litellm_params: Mapping[str, object]) -> str | None:
-    auth_file: Final = get_chatgpt_auth_file(litellm_params)
+    params: Final = with_named_credential(litellm_params)
+    auth_file: Final = get_chatgpt_auth_file(params)
     if auth_file:
         return get_cached_authenticator(auth_file).read_account_id()
-    api_key: Final = litellm_params.get("api_key")
+    api_key: Final = params.get("api_key")
     return Authenticator().read_account_id(api_key if isinstance(api_key, str) and api_key else None)
 
 

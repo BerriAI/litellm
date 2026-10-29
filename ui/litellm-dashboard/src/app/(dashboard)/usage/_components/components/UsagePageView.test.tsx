@@ -148,8 +148,8 @@ vi.mock("./EntityUsage/SpendByProvider", () => ({
 }));
 
 vi.mock("./SubscriptionCost/SubscriptionCostCard", () => ({
-  default: ({ usage }: { usage: unknown }) => (
-    <div data-testid="subscription-cost-card" data-usage={JSON.stringify(usage)}>
+  default: ({ usage, canEdit }: { usage: unknown; canEdit: boolean }) => (
+    <div data-testid="subscription-cost-card" data-usage={JSON.stringify(usage)} data-can-edit={String(canEdit)}>
       Subscription Cost
     </div>
   ),
@@ -634,6 +634,34 @@ describe("UsagePage", () => {
       expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-usage", "null");
       rendered.unmount();
     }
+  });
+
+  it("lets a proxy admin edit subscription fees but shows an admin viewer the same card read-only", async () => {
+    const adminRender = renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute(
+        "data-usage",
+        JSON.stringify(mockSubscriptionUsage),
+      );
+    });
+    expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-can-edit", "true");
+    adminRender.unmount();
+
+    const adminViewerSession = {
+      ...nonAdminSession,
+      userRole: "Admin",
+      userRoleLabel: "Admin Viewer",
+      isViewOnly: true,
+    };
+    mockUseAuthorized.mockReturnValue(adminViewerSession);
+    renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute(
+        "data-usage",
+        JSON.stringify(mockSubscriptionUsage),
+      );
+    });
+    expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-can-edit", "false");
   });
 
   it("never sets an account-wide subscription fee beside one user's spend when an admin filters by user", async () => {
