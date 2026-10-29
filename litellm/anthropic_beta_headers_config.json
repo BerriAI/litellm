@@ -74,7 +74,10 @@
     "user-profiles-2026-03-24": "user-profiles-2026-03-24",
     "user-profiles-2026-08-18": "user-profiles-2026-08-18",
     "user-profiles-2026-09-04": "user-profiles-2026-09-04",
-    "webhooks-2026-10-07": "webhooks-2026-10-07"
+    "webhooks-2026-10-07": "webhooks-2026-10-07",
+    "afk-mode-2026-01-31": "afk-mode-2026-01-31",
+    "redact-thinking-2026-02-12": "redact-thinking-2026-02-12",
+    "structured-outputs-2025-12-15": "structured-outputs-2025-12-15"
   },
   "azure_ai": {
     "advisor-tool-2026-03-01": null,
@@ -150,7 +153,10 @@
     "user-profiles-2026-03-24": "user-profiles-2026-03-24",
     "user-profiles-2026-08-18": "user-profiles-2026-08-18",
     "user-profiles-2026-09-04": "user-profiles-2026-09-04",
-    "webhooks-2026-10-07": "webhooks-2026-10-07"
+    "webhooks-2026-10-07": "webhooks-2026-10-07",
+    "afk-mode-2026-01-31": "afk-mode-2026-01-31",
+    "redact-thinking-2026-02-12": "redact-thinking-2026-02-12",
+    "structured-outputs-2025-12-15": "structured-outputs-2025-12-15"
   },
   "bedrock_converse": {
     "advisor-tool-2026-03-01": null,
@@ -335,7 +341,10 @@
     "user-profiles-2026-03-24": "user-profiles-2026-03-24",
     "user-profiles-2026-08-18": "user-profiles-2026-08-18",
     "user-profiles-2026-09-04": "user-profiles-2026-09-04",
-    "webhooks-2026-10-07": null
+    "webhooks-2026-10-07": null,
+    "afk-mode-2026-01-31": "afk-mode-2026-01-31",
+    "redact-thinking-2026-02-12": "redact-thinking-2026-02-12",
+    "structured-outputs-2025-12-15": "structured-outputs-2025-12-15"
   },
   "databricks": {
     "advisor-tool-2026-03-01": null,

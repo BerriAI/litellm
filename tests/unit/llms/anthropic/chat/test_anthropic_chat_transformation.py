@@ -9190,6 +9190,7 @@ async def test_litellm_anthropic_prompt_caching_system(
     }
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
 def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(

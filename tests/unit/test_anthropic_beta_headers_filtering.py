@@ -501,6 +501,18 @@ class TestAnthropicBetaHeadersFiltering:
         assert headers == {"anthropic-beta": expected_beta}
 
     @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_claude_code_betas_reach_the_probed_platforms(self, provider: str) -> None:
+        """Claude Code 2.1.299 sends these betas outside the anthropic SDK's list, and live probes on
+        2026-10-28 found Anthropic, Vertex, and Azure AI Foundry accept each of them."""
+        claude_code_betas: Final = frozenset(
+            ("afk-mode-2026-01-31", "redact-thinking-2026-02-12", "structured-outputs-2025-12-15")
+        )
+
+        headers: Final = update_headers_with_filtered_beta({"anthropic-beta": ",".join(claude_code_betas)}, provider)
+
+        assert frozenset(headers["anthropic-beta"].split(",")) == claude_code_betas
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
     def test_every_anthropic_sdk_beta_has_a_decision_for_the_probed_platforms(self, provider: str) -> None:
         sdk_betas: Final = _literal_strings(AnthropicBetaParam)
         provider_column: Final = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()[provider]

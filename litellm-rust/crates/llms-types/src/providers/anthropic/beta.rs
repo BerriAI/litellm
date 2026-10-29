@@ -124,6 +124,8 @@ pub enum AnthropicBeta {
     ToolSearchTool20251019,
     #[strum(serialize = "inline-tools-2026-09-15")]
     InlineTools20260915,
+    #[strum(serialize = "afk-mode-2026-01-31")]
+    AfkMode20260131,
     #[strum(serialize = "agent-memory-2026-07-22")]
     AgentMemory20260722,
     #[strum(serialize = "analytics-usage-cost-2026-08-24")]
@@ -170,12 +172,16 @@ pub enum AnthropicBeta {
     Pdfs20240925,
     #[strum(serialize = "prompt-caching-2024-07-31")]
     PromptCaching20240731,
+    #[strum(serialize = "redact-thinking-2026-02-12")]
+    RedactThinking20260212,
     #[strum(serialize = "server-side-fallback-2026-06-01")]
     ServerSideFallback20260601,
     #[strum(serialize = "server-side-fallback-2026-07-01")]
     ServerSideFallback20260701,
     #[strum(serialize = "spend-limit-reads-2026-09-26")]
     SpendLimitReads20260926,
+    #[strum(serialize = "structured-outputs-2025-12-15")]
+    StructuredOutputs20251215,
     #[strum(serialize = "task-budgets-2026-03-13")]
     TaskBudgets20260313,
     #[strum(serialize = "telemetry-destinations-2026-08-11")]
@@ -197,7 +203,7 @@ pub enum AnthropicBeta {
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 74] = [
+    pub const KNOWN: [Self; 77] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -238,6 +244,7 @@ impl AnthropicBeta {
         Self::ToolExamples20251029,
         Self::ToolSearchTool20251019,
         Self::InlineTools20260915,
+        Self::AfkMode20260131,
         Self::AgentMemory20260722,
         Self::AnalyticsUsageCost20260824,
         Self::CacheDiagnosis20260407,
@@ -261,9 +268,11 @@ impl AnthropicBeta {
         Self::Output300k20260324,
         Self::Pdfs20240925,
         Self::PromptCaching20240731,
+        Self::RedactThinking20260212,
         Self::ServerSideFallback20260601,
         Self::ServerSideFallback20260701,
         Self::SpendLimitReads20260926,
+        Self::StructuredOutputs20251215,
         Self::TaskBudgets20260313,
         Self::TelemetryDestinations20260811,
         Self::ThinkingTokenCount20260513,
@@ -339,7 +348,8 @@ impl AnthropicBeta {
                 BetaProvider::VertexAi,
                 BetaProvider::Databricks,
             ],
-            Self::CePlugins20260901
+            Self::AfkMode20260131
+            | Self::CePlugins20260901
             | Self::CeUserManagement20260713
             | Self::Compact20260904
             | Self::Dreaming20260421
@@ -356,8 +366,10 @@ impl AnthropicBeta {
             | Self::Pdfs20240925
             | Self::PromptCaching20240731
             | Self::PromptCachingScope20260105
+            | Self::RedactThinking20260212
             | Self::ServerSideFallback20260601
             | Self::SpendLimitReads20260926
+            | Self::StructuredOutputs20251215
             | Self::TaskBudgets20260313
             | Self::TelemetryDestinations20260811
             | Self::ThinkingTokenCount20260513
@@ -550,6 +562,7 @@ mod tests {
             AnthropicBeta::ToolExamples20251029,
             AnthropicBeta::ToolSearchTool20251019,
             AnthropicBeta::InlineTools20260915,
+            AnthropicBeta::AfkMode20260131,
             AnthropicBeta::AgentMemory20260722,
             AnthropicBeta::AnalyticsUsageCost20260824,
             AnthropicBeta::CacheDiagnosis20260407,
@@ -573,9 +586,11 @@ mod tests {
             AnthropicBeta::Output300k20260324,
             AnthropicBeta::Pdfs20240925,
             AnthropicBeta::PromptCaching20240731,
+            AnthropicBeta::RedactThinking20260212,
             AnthropicBeta::ServerSideFallback20260601,
             AnthropicBeta::ServerSideFallback20260701,
             AnthropicBeta::SpendLimitReads20260926,
+            AnthropicBeta::StructuredOutputs20251215,
             AnthropicBeta::TaskBudgets20260313,
             AnthropicBeta::TelemetryDestinations20260811,
             AnthropicBeta::ThinkingTokenCount20260513,
