@@ -2431,6 +2431,7 @@ class Router:
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: dict | None,
+        reserve: bool,
     ) -> Any | None:
         """
         Asks the strategy selector for a deployment. Caller handles
@@ -2444,7 +2445,7 @@ class Router:
                 return await selector.async_get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
-                    reserve=request_kwargs not in (None, {}),
+                    reserve=reserve,
                 )
             case "usage-based-routing":
                 # `LowestTPMLoggingHandler` (v1) only exposes the sync
@@ -2485,6 +2486,7 @@ class Router:
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: dict | None,
+        reserve: bool,
     ) -> Any | None:
         """
         Sync sibling of `_select_deployment_async`. Caller handles
@@ -2501,7 +2503,7 @@ class Router:
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
-                    reserve=request_kwargs not in (None, {}),
+                    reserve=reserve,
                 )
             case "usage-based-routing" | "usage-based-routing-v2":
                 return selector.get_available_deployments(
@@ -10257,6 +10259,7 @@ class Router:
             messages=None,
             input=None,
             request_kwargs=routing_kwargs,
+            reserve=False,
         )
         if selected is None:
             no_deployment: Final = await async_raise_no_deployment_exception(
@@ -15550,6 +15553,7 @@ class Router:
                     messages=messages,
                     input=input,
                     request_kwargs=request_kwargs,
+                    reserve=request_kwargs not in (None, {}),
                 )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
@@ -15719,6 +15723,7 @@ class Router:
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                reserve=request_kwargs not in (None, {}),
             )
 
             if deployment is None:
@@ -16581,6 +16586,7 @@ class Router:
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
+            reserve=request_kwargs not in (None, {}),
         )
 
         if deployment is None:
@@ -16763,6 +16769,7 @@ class Router:
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
+            reserve=request_kwargs not in (None, {}),
         )
 
         if deployment is None:

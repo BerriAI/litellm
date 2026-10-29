@@ -102,6 +102,31 @@ def test_sync_pick_reads_the_shared_counts() -> None:
     assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
+def _routed_through_litellm_metadata(deployment_id: str) -> dict[str, object]:
+    return {
+        "litellm_params": {
+            "metadata": {"tags": ["caller-tag"]},
+            "litellm_metadata": {"model_group": GROUP},
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+
+def test_a_request_routed_through_litellm_metadata_counts_while_in_flight() -> None:
+    shared: Final = SharedRedisCounters()
+    calling_worker: Final = _worker(shared)
+    picking_worker: Final = _worker(shared)
+
+    assert calling_worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    calling_worker.log_pre_api_call(model="m", messages=[], kwargs=_routed_through_litellm_metadata("dep-a"))
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    calling_worker.log_success_event(_routed_through_litellm_metadata("dep-a"), None, None, None)
+
+    assert calling_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
 def test_the_handler_never_pushes_a_counters_ttl_forward() -> None:
     """A worker that dies mid-request leaves a +1 nobody will ever decrement. Redis expires that
     stuck count an hour after the key was created, which only works while nothing writes the TTL
@@ -211,7 +236,9 @@ class OpenBreakerRedis(SharedRedisCounters):
 
 
 @pytest.mark.asyncio
-async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(caplog: pytest.LogCaptureFixture) -> None:
+async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     worker: Final = _worker(OpenBreakerRedis())
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
@@ -383,9 +410,7 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
         if use_async
         else router.get_available_deployment(model=ROUTER_GROUP, messages=None)
     )
-    response: Final = await router.acompletion(
-        model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}])
     for _ in range(10):
         await asyncio.sleep(0)
         await GLOBAL_LOGGING_WORKER.flush()
@@ -488,3 +513,23 @@ def test_a_request_started_through_another_selector_on_the_same_cache_releases_t
 
     assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
     assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_cache_hit_releases_the_pick_it_reserved() -> None:
+    worker: Final = _worker(None)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+    await worker.async_log_success_event({**_call_kwargs("dep-b"), "cache_hit": True}, None, None, None)
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+
+
+def test_a_cache_hit_leaves_requests_in_flight_on_its_deployment_counted() -> None:
+    worker: Final = _worker(None)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    worker.log_success_event({**_call_kwargs("dep-a"), "cache_hit": True}, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B

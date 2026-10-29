@@ -1,7 +1,7 @@
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -27,6 +27,7 @@ class _Metadata(TypedDict, total=False):
 
 class _LitellmParams(TypedDict, total=False):
     metadata: ReadOnly[_Metadata | None]
+    litellm_metadata: ReadOnly[_Metadata | None]
     model_info: ReadOnly[_ModelInfo | None]
 
 
@@ -44,12 +45,16 @@ class _Deployment(TypedDict):
 
 _CALL_KWARGS: Final = TypeAdapter(_CallKwargs)
 _DEPLOYMENTS: Final = TypeAdapter(list[_Deployment])
-_MEMORY_COUNTS: Final = TypeAdapter(tuple[float | None, ...] | None)
-_RESERVATION_TIMES: Final = TypeAdapter(tuple[float, ...] | None)
+_MEMORY_COUNTS: Final[TypeAdapter[tuple[float | None, ...] | None]] = TypeAdapter(tuple[float | None, ...] | None)
+_RESERVATION_TIMES: Final[TypeAdapter[tuple[float, ...] | None]] = TypeAdapter(tuple[float, ...] | None)
 
 
 def _request_count_key(model_group: str, deployment_id: str) -> str:
     return f"{model_group}_request_count:{deployment_id}"
+
+
+def _model_group(metadata: _Metadata | None) -> str | None:
+    return metadata.get("model_group") if metadata else None
 
 
 def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
@@ -59,10 +64,11 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
         call: Final = _CALL_KWARGS.validate_python(kwargs)
     except ValidationError:
         return None
-    litellm_params: Final = call.get("litellm_params")
-    metadata: Final = litellm_params.get("metadata") if litellm_params else None
-    model_info: Final = litellm_params.get("model_info") if litellm_params else None
-    model_group: Final = metadata.get("model_group") if metadata else None
+    litellm_params: Final = call.get("litellm_params") or _LitellmParams()
+    model_info: Final = litellm_params.get("model_info")
+    model_group: Final = _model_group(litellm_params.get("litellm_metadata")) or _model_group(
+        litellm_params.get("metadata")
+    )
     deployment_id: Final = model_info.get("id") if model_info else None
     if model_group is None or deployment_id is None:
         return None
@@ -118,6 +124,14 @@ def _warn_unwritable(key: str, error: Exception) -> None:
     )
 
 
+class _ReservationStore(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: tuple[float, ...], *, ttl: float) -> None: ...
+
+    def delete_cache(self, key: str) -> None: ...
+
+
 class LeastBusyLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
@@ -128,16 +142,19 @@ class LeastBusyLoggingHandler(CustomLogger):
         self.router_cache_id = str(id(router_cache))
         self._clock = clock
 
+    def _reservation_store(self) -> _ReservationStore:
+        return self.router_cache.in_memory_cache
+
     def _live_reservations(self, key: str, now: float) -> tuple[float, ...]:
-        raw: Final = self.router_cache.get_cache(_reservation_key(key), local_only=True)
+        raw: Final = self._reservation_store().get_cache(_reservation_key(key))
         return _unexpired(_RESERVATION_TIMES.validate_python(raw) or (), now)
 
     def _store_reservations(self, key: str, times: tuple[float, ...]) -> None:
         # InMemoryCache keeps a live key's first TTL, so drop the key to restart it
-        local: Final = self.router_cache.in_memory_cache
-        local.delete_cache(_reservation_key(key))
+        store: Final = self._reservation_store()
+        store.delete_cache(_reservation_key(key))
         if times:
-            local.set_cache(_reservation_key(key), times, ttl=SELECTION_RESERVATION_TTL_SECONDS)
+            store.set_cache(_reservation_key(key), times, ttl=SELECTION_RESERVATION_TTL_SECONDS)
 
     def _select(
         self,
@@ -172,7 +189,10 @@ class LeastBusyLoggingHandler(CustomLogger):
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self._increment(kwargs, -1)
+        if kwargs.get("cache_hit") is True:
+            self._release_reservation(kwargs)
+        else:
+            self._increment(kwargs, -1)
         if self.test_flag:
             self.logged_success += 1
 
@@ -188,7 +208,10 @@ class LeastBusyLoggingHandler(CustomLogger):
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        await self._async_increment(kwargs, -1)
+        if kwargs.get("cache_hit") is True:
+            self._release_reservation(kwargs)
+        else:
+            await self._async_increment(kwargs, -1)
         if self.test_flag:
             self.logged_success += 1
 

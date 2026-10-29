@@ -481,6 +481,33 @@ def test_two_least_busy_groups_count_a_request_once(monkeypatch):
     assert router.cache.get_cache("filtered-model_request_count:deploy-1") == 0
 
 
+
+def _filtered_model_pick(router: Router) -> str:
+    deployment: Final = router.get_available_deployment(
+        "filtered-model", request_kwargs=_proxy_shaped_request(model="filtered-model")
+    )
+    return deployment["model_info"]["id"]
+
+
+def test_a_least_busy_group_pick_stops_counting_once_its_request_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router: Final = _build_router(
+        routing_strategy="least-busy",
+        routing_groups=[{"group_name": "fast", "models": ["filtered-model"], "routing_strategy": "least-busy"}],
+    )
+
+    first: Final = _filtered_model_pick(router)
+    kwargs: Final = {"litellm_params": {"metadata": {"model_group": "filtered-model"}, "model_info": {"id": first}}}
+    for callback in litellm.input_callback:
+        if isinstance(callback, CustomLogger):
+            callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, None, None)
+
+    assert _filtered_model_pick(router) == first
+
 def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
     """
     Least-busy hangs its counting off litellm's global callback lists, and those lists keep one
@@ -613,6 +640,7 @@ async def test_select_deployment_async_returns_none_without_selector():
         messages=None,
         input=None,
         request_kwargs=None,
+        reserve=False,
     )
     assert result is None
 
@@ -627,6 +655,7 @@ def test_select_deployment_sync_returns_none_without_selector():
         messages=None,
         input=None,
         request_kwargs=None,
+        reserve=False,
     )
     assert result is None
 
@@ -661,6 +690,7 @@ def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
         messages=None,
         input=None,
         request_kwargs=None,
+        reserve=False,
     )
     assert result is None
 
@@ -707,6 +737,7 @@ async def test_async_dispatch_falls_back_to_sync_for_usage_based_routing_v1():
             messages=[{"role": "user", "content": "hi"}],
             input=None,
             request_kwargs={},
+            reserve=False,
         )
 
     assert v1_spy.called, "async dispatch must route v1 strategy through sync method"
