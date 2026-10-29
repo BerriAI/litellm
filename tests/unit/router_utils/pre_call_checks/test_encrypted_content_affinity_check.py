@@ -2715,3 +2715,141 @@ async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_th
 
     assert [deployment["model_info"]["id"] for deployment in result] == ["region-a"]
     assert reasoning_input[0] == original_reasoning
+
+
+def _default_endpoint_deployment(model_id: str, litellm_params: dict[str, object]) -> dict[str, object]:
+    return {"model_name": "gpt-5.5", "litellm_params": litellm_params, "model_info": {"id": model_id}}
+
+
+def _deployment_of(router: litellm.Router, model_id: str) -> dict[str, object]:
+    return next(deployment for deployment in router.model_list if deployment["model_info"]["id"] == model_id)
+
+
+SUMMARY_ONLY_REASONING: Final = {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
+UNMARKED_REASONING: Final = {**SUMMARY_ONLY_REASONING, "id": "rs_test", "encrypted_content": "gAAAAA-blob"}
+OPENAI_SHARED_KEY: Final = {"model": "openai/gpt-5.5", "api_key": "shared-key"}
+MANTLE_SHARED_KEY: Final = {"model": "bedrock_mantle/openai.gpt-6-astra", "api_key": "shared-key"}
+
+
+@pytest.fixture
+def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
+    for name in ("AZURE_API_BASE", "BEDROCK_MANTLE_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.usefixtures("no_process_wide_api_base")
+@pytest.mark.parametrize("marked", [True, False], ids=["marked origin", "unmarked origin"])
+@pytest.mark.parametrize(
+    "origin_params, target_params, target_can_decrypt",
+    [
+        pytest.param(OPENAI_SHARED_KEY, OPENAI_SHARED_KEY, True, id="same key on the provider default endpoint"),
+        pytest.param(
+            {"model": "gpt-5.5", "custom_llm_provider": "openai", "api_key": "shared-key"},
+            OPENAI_SHARED_KEY,
+            True,
+            id="provider named apart from the model",
+        ),
+        pytest.param(OPENAI_SHARED_KEY, {**OPENAI_SHARED_KEY, "api_key": "other-key"}, False, id="different key"),
+        pytest.param(
+            {**MANTLE_SHARED_KEY, "aws_region_name": "us-east-2"},
+            {**MANTLE_SHARED_KEY, "aws_region_name": "us-east-1"},
+            False,
+            id="same key in different Mantle regions",
+        ),
+        pytest.param(
+            {"model": "anthropic/claude-opus-5-5", "api_key": "shared-key"},
+            {"model": "anthropic/claude-opus-5-5", "api_key": "shared-key"},
+            False,
+            id="provider without a Responses URL builder",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-5.5", "api_key": "shared-key"},
+            {"model": "azure/gpt-5.5", "api_key": "shared-key"},
+            False,
+            id="provider whose builder needs an api_base",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "api_base": "https://openai-proxy.example.com/v1"},
+            OPENAI_SHARED_KEY,
+            False,
+            id="explicit api_base beside the default endpoint",
+        ),
+    ],
+)
+def test_hop_strip_keeps_reasoning_between_same_key_deployments_on_the_default_endpoint(
+    origin_params: dict[str, object], target_params: dict[str, object], target_can_decrypt: bool, marked: bool
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", origin_params),
+            _default_endpoint_deployment("target", target_params),
+        ]
+    )
+    reasoning: Final = _reasoning_input_minted_by("origin")[0] if marked else dict(UNMARKED_REASONING)
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        router,
+        request_input,
+        None,
+        (_deployment_of(router, "target"),),
+        unmarked_origin=None if marked else "origin",
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+def test_boundary_key_puts_pydantic_and_plain_params_on_one_default_endpoint_boundary():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+    from litellm.types.router import LiteLLM_Params
+
+    pydantic_key: Final = EncryptedContentAffinityCheck._encryption_boundary_key(LiteLLM_Params(**OPENAI_SHARED_KEY))
+
+    assert pydantic_key is not None
+    assert pydantic_key == EncryptedContentAffinityCheck._encryption_boundary_key(dict(OPENAI_SHARED_KEY))
+
+
+def test_boundary_key_has_no_default_endpoint_for_a_model_no_provider_claims():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    unmapped: Final = {"model": "unmapped-model-name", "api_key": "shared-key"}
+
+    assert EncryptedContentAffinityCheck._encryption_boundary_key(unmapped) is None
+
+
+@pytest.mark.asyncio
+async def test_affinity_pins_to_the_same_key_peer_on_the_default_endpoint_when_the_origin_cannot_serve():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("peer", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("other-org", {**OPENAI_SHARED_KEY, "api_key": "other-key"}),
+        ]
+    )
+    healthy: Final = [_deployment_of(router, "peer"), _deployment_of(router, "other-org")]
+    reasoning_input: Final = _reasoning_input_minted_by("origin")
+    original_reasoning: Final = dict(reasoning_input[0])
+
+    result: Final = await EncryptedContentAffinityCheck(router=router).async_filter_deployments(
+        model="gpt-5.5",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"litellm_metadata": {}, "input": reasoning_input},
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in result] == ["peer"]
+    assert reasoning_input[0] == original_reasoning
