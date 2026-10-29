@@ -13,12 +13,13 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.responses.main import strip_responses_routing_prefix
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_valid_models
+from litellm.utils import ProviderConfigManager, get_valid_models, potential_model_names_in_lookup_order
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
 
@@ -330,6 +331,25 @@ def _routes_back_to(
     )
 
 
+def _resolves_to_catalog_model(model: str, provider: str, provider_model_ids: frozenset[str]) -> bool:
+    provider_id_prefix: Final = f"{provider}/"
+    resolved_model: Final = (
+        f"{provider_id_prefix}{strip_responses_routing_prefix(model.removeprefix(provider_id_prefix))}"
+    )
+    return any(
+        name.removeprefix(provider_id_prefix) in provider_model_ids
+        for name in potential_model_names_in_lookup_order(resolved_model, provider)
+    )
+
+
+def _routes_to_catalog_model(
+    routes_to_model: Callable[[str, str], bool], provider: str, provider_model_ids: frozenset[str]
+) -> Callable[[str, str], bool]:
+    return lambda listed_id, model: (
+        routes_to_model(listed_id, model) and _resolves_to_catalog_model(model, provider, provider_model_ids)
+    )
+
+
 def _ids_routing_to_catalog_models(
     name_pattern: str,
     deployment_pattern: str,
@@ -343,8 +363,14 @@ def _ids_routing_to_catalog_models(
         return ()
     provider_id_prefix: Final = f"{provider}/"
     provider_model_ids: Final = tuple(catalog_id.removeprefix(provider_id_prefix) for catalog_id in catalog_ids)
+    deployment_model_pattern_without_provider: Final = deployment_pattern.removeprefix(provider_id_prefix)
     catalog_pattern: Final = _without_routing_segments(
-        deployment_pattern.removeprefix(provider_id_prefix), provider, name_pattern, provider_model_ids
+        deployment_model_pattern_without_provider, provider, name_pattern, provider_model_ids
+    )
+    reaches_catalog_model: Final = (
+        routes_to_model
+        if catalog_pattern == deployment_model_pattern_without_provider
+        else _routes_to_catalog_model(routes_to_model, provider, frozenset(provider_model_ids))
     )
     deployment_model_pattern: Final = f"{provider_id_prefix}{catalog_pattern}"
     deployment_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(deployment_model_pattern))
@@ -368,7 +394,7 @@ def _ids_routing_to_catalog_models(
             for listed_id, catalog_id in listed_ids
             if listed_id
             and _routes_back_to(
-                listed_id, name_regex, (deployment_model_pattern, catalog_id), deployment_pattern, routes_to_model
+                listed_id, name_regex, (deployment_model_pattern, catalog_id), deployment_pattern, reaches_catalog_model
             )
         )
     )

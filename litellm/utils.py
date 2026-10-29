@@ -6601,6 +6601,26 @@ def _first_registered_match(
     return next(matches, (None, None))
 
 
+def _model_cost_lookup_order(
+    model: str, potential_model_names: PotentialModelNamesAndCustomLLMProvider
+) -> tuple[str, ...]:
+    return (
+        potential_model_names["combined_model_name"],
+        model,
+        potential_model_names["region_free_combined_model_name"],
+        potential_model_names["split_model"],
+        potential_model_names["combined_stripped_model_name"],
+        potential_model_names["stripped_model_name"],
+        potential_model_names["provider_prefixed_model_name"],
+    )
+
+
+def potential_model_names_in_lookup_order(model: str, custom_llm_provider: str) -> tuple[str, ...]:
+    return _model_cost_lookup_order(
+        model, get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider)
+    )
+
+
 def _get_model_info_from_generalization(
     model: str,
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
@@ -6619,15 +6639,7 @@ def _get_model_info_from_generalization(
     still had a priced exact name to try. O(number of rules); only call after the
     exact lookups have missed.
     """
-    candidates: Final = (
-        potential_model_names["combined_model_name"],
-        model,
-        potential_model_names["region_free_combined_model_name"],
-        potential_model_names["split_model"],
-        potential_model_names["combined_stripped_model_name"],
-        potential_model_names["stripped_model_name"],
-        potential_model_names["provider_prefixed_model_name"],
-    )
+    candidates: Final = _model_cost_lookup_order(model, potential_model_names)
     if any(get_model_cost_key(candidate) is not None for candidate in candidates):
         return None
     for candidate in candidates:
@@ -6850,11 +6862,6 @@ def get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
         )
 
-        combined_model_name: Final = potential_model_names["combined_model_name"]
-        stripped_model_name: Final = potential_model_names["stripped_model_name"]
-        combined_stripped_model_name: Final = potential_model_names["combined_stripped_model_name"]
-        provider_prefixed_model_name: Final = potential_model_names["provider_prefixed_model_name"]
-        split_model: Final = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
@@ -6921,16 +6928,9 @@ def get_model_info_helper(
                and strip it. Tried last so no model that already resolves through 1-6 can change.
             """
 
-            lookup_order: Final = (
-                combined_model_name,
-                model,
-                potential_model_names["region_free_combined_model_name"],
-                split_model,
-                combined_stripped_model_name,
-                stripped_model_name,
-                provider_prefixed_model_name,
+            lookup: Final = _first_registered_match(
+                _model_cost_lookup_order(model, potential_model_names), model_cost_custom_llm_provider
             )
-            lookup: Final = _first_registered_match(lookup_order, model_cost_custom_llm_provider)
             key: str | None = lookup[0]
             _model_info: dict[str, Any] | None = lookup[1]
 
