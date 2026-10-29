@@ -1142,9 +1142,6 @@ class Logging(LiteLLMLoggingBaseClass):
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
-        if is_debugging_on() or self.litellm_request_debug:
-            verbose_logger.debug("self.optional_params: %s", self.optional_params)
-
         self.model_call_details.update(
             {
                 "model": self.model,
@@ -5113,6 +5110,23 @@ class Logging(LiteLLMLoggingBaseClass):
         return result_copy
 
 
+_SENSITIVE_KEYWORDS: Final = (
+    "authorization",
+    "token",
+    "key",
+    "secret",
+    "vertex_credentials",
+    "credentials",
+    "password",
+    "passwd",
+)
+
+
+def has_sensitive_keyword(key: str) -> bool:
+    lowered: Final = key.lower()
+    return any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS)
+
+
 def get_masked_values(
     sensitive_object: Mapping[str, object],
     ignore_sensitive_values: bool = False,
@@ -5131,16 +5145,6 @@ def get_masked_values(
         masked_length: Optional length for the masked portion (number of *). If set, will use exactly this many *
                      regardless of original string length. The total length will be unmasked_length + masked_length.
     """
-    sensitive_keywords: Final = (
-        "authorization",
-        "token",
-        "key",
-        "secret",
-        "vertex_credentials",
-        "credentials",
-        "password",
-        "passwd",
-    )
 
     def _mask_value(v: object) -> object:
         if isinstance(v, dict):
@@ -5167,12 +5171,7 @@ def get_masked_values(
         return v[: unmasked_length // 2] + "*" * (len(v) - unmasked_length) + v[-unmasked_length // 2 :]
 
     return {
-        k: (
-            v
-            if ignore_sensitive_values
-            or not any(sensitive_keyword in k.lower() for sensitive_keyword in sensitive_keywords)
-            else _mask_value(v)
-        )
+        k: (v if ignore_sensitive_values or not has_sensitive_keyword(k) else _mask_value(v))
         for k, v in sensitive_object.items()
     }
 
