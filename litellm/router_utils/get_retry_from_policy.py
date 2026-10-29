@@ -13,6 +13,7 @@ from litellm.exceptions import (
     RateLimitError,
     ServiceUnavailableError,
     Timeout,
+    UnsupportedEndpointError,
 )
 from litellm.types.router import RetryPolicy
 
@@ -34,7 +35,7 @@ def _retries_for_a_404_answer(exception: Exception, policy: RetryPolicy) -> int 
     return policy.NotFoundErrorRetries if status_code == 404 else None
 
 
-def _resolve_policy(
+def resolve_retry_policy(
     retry_policy: RetryPolicy | Mapping[str, int | None] | None,
     model_group: str | None,
     model_group_retry_policy: Mapping[str, RetryPolicy | Mapping[str, int | None]] | None,
@@ -56,9 +57,11 @@ def get_num_retries_from_retry_policy(
     model_group_retry_policy: Mapping[str, RetryPolicy | Mapping[str, int | None]] | None = None,
 ) -> int | None:
     """Prefer NotFoundErrorRetries for any 404 answer, then walk the exception's MRO most specific class first."""
-    policy: Final = _resolve_policy(retry_policy, model_group, model_group_retry_policy)
+    policy: Final = resolve_retry_policy(retry_policy, model_group, model_group_retry_policy)
     if policy is None:
         return None
+    if isinstance(exception, UnsupportedEndpointError):
+        return policy.DefaultRetries
     by_class: Final = (
         _RETRIES_BY_EXCEPTION_TYPE[cls](policy) for cls in type(exception).__mro__ if cls in _RETRIES_BY_EXCEPTION_TYPE
     )

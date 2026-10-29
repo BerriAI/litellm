@@ -5,7 +5,7 @@ use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Number;
 
-use super::Error;
+use super::{Error, Unsupported};
 
 /// The parts of a request body the host's budget counter reads. Chat and
 /// Anthropic Messages bodies carry `messages`; completions carry `prompt`;
@@ -33,7 +33,7 @@ pub struct CountableRequest {
 
 impl CountableRequest {
     pub fn parse(body: &[u8]) -> Result<Self, Error> {
-        serde_json::from_slice(body).map_err(Error::RequestParse)
+        serde_json::from_slice(body).map_err(|error| Unsupported::RequestParse(error).into())
     }
 }
 
@@ -158,12 +158,12 @@ pub(crate) enum MessageContent {
 #[serde(untagged)]
 pub(crate) enum ContentItem {
     Text(String),
-    Block(ContentBlock),
+    Block(CountableContentBlock),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "type")]
-pub(crate) enum ContentBlock {
+pub(crate) enum CountableContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]

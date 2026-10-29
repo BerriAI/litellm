@@ -1,8 +1,9 @@
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Final, cast
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 
 
 def _form_field_value(value: object) -> str:
@@ -16,9 +17,7 @@ def _form_field_value(value: object) -> str:
 def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
     pending_fields: Final[  # mutable-ok: depth-capped stack walks nested JSON into multipart names
         list[tuple[str, object, int]]
-    ] = [  # mutable-ok: depth-capped stack walks nested JSON into multipart names
-        (key, value, 0)
-    ]
+    ] = [(key, value, 0)]
     flat_fields: Final[list[tuple[str, str]]] = []  # mutable-ok: local accumulator
     while pending_fields:
         current_key, current_value, depth = pending_fields.pop()
@@ -48,9 +47,7 @@ def _is_form_scalar(value: object) -> bool:
 def _flatten_form_data_field(key: str, value: object) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
     pending_fields: Final[  # mutable-ok: depth-capped stack walks nested JSON into multipart names
         list[tuple[str, object, int]]
-    ] = [  # mutable-ok: depth-capped stack walks nested JSON into multipart names
-        (key, value, 0)
-    ]
+    ] = [(key, value, 0)]
     flat_fields: Final[list[tuple[str, str | tuple[str, ...]]]] = []  # mutable-ok: local accumulator
     while pending_fields:
         current_key, current_value, depth = pending_fields.pop()
@@ -110,7 +107,7 @@ def serialize_multipart_form_fields(data: Mapping[str, object]) -> tuple[tuple[s
     )
 
 
-def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:
+def ensure_extra_body_is_safe(extra_body: dict[str, object] | None) -> dict[str, object] | None:
     """
     Ensure that the extra_body sent in the request is safe,  otherwise users will see this error
 
@@ -121,20 +118,26 @@ def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:
     """
     if extra_body is None:
         return None
-
     if not isinstance(extra_body, dict):
         return extra_body
-
     if "metadata" in extra_body and isinstance(extra_body["metadata"], dict):
-        if "prompt" in extra_body["metadata"]:
-            _prompt: Final = extra_body["metadata"].get("prompt")
-
+        if "prompt" in cast(dict[str, object], extra_body["metadata"]):
+            prompt: Final = cast(  # cast-ok: request metadata is caller-provided
+                dict[str, object], extra_body["metadata"]
+            ).get("prompt")
             # users can send Langfuse TextPromptClient objects, so we need to convert them to dicts
             # Langfuse TextPromptClients have .__dict__ attribute
-            if _prompt is not None and hasattr(_prompt, "__dict__"):
-                extra_body["metadata"]["prompt"] = _prompt.__dict__
+            if prompt is not None and hasattr(prompt, "__dict__"):
+                cast(dict[str, object], extra_body["metadata"])["prompt"] = (
+                    cast(  # cast-ok: prompt is an external SDK object
+                        object, getattr(prompt, "__dict__")
+                    )
+                )
 
     return extra_body
+
+
+_ensure_extra_body_is_safe = ensure_extra_body_is_safe
 
 
 def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
@@ -151,24 +154,33 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     if custom_llm_provider not in litellm.models_by_provider:
         return []
 
-    known_models: Final = litellm.models_by_provider.get(custom_llm_provider, [])
-    model_costs: Final = []
+    known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
+    ranked_rows: Final = (
+        (route_rank, cost, model)
+        for model, cost in _chat_row_costs(known_models, custom_llm_provider)
+        if (route_rank := _route_rank(model, custom_llm_provider)) is not None
+    )
+    return [model for _, _, model in sorted(ranked_rows, key=lambda row: row[:2])[:n]]
 
-    for model in known_models:
+
+def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float]]:
+    for model in models:
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
-        model_costs.append((model, _cost))
+        yield model, (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
 
-    # Sort by cost (ascending)
-    model_costs.sort(key=lambda x: x[1])
 
-    # Return the top n cheapest models
-    return [model for model, _ in model_costs[:n]]
+def _route_rank(model: str, custom_llm_provider: str) -> int | None:
+    routed_provider: Final = inferred_provider(model)
+    if routed_provider is None:
+        return 1
+    if routed_provider == inferred_provider(f"{custom_llm_provider}/{model}"):
+        return 0
+    return None
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:

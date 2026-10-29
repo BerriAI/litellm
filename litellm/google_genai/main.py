@@ -1,11 +1,10 @@
 import asyncio
 import contextvars
-from collections.abc import Iterator
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import request_timeout
@@ -17,6 +16,8 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
@@ -38,6 +39,7 @@ else:
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
+_GENERATE_CONTENT_RESULT: Final = TypeAdapter(object)
 #################################################
 
 
@@ -46,7 +48,7 @@ def _mark_async_entrypoint(logging_obj: LiteLLMLoggingObj | None, marker: str, i
         logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
 
 
-class GenerateContentSetupResult(BaseModel):
+class GenerateContentSetupResult(LiteLLMBaseModel):
     """Internal Type - Result of setting up a generate content call"""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
@@ -144,6 +146,7 @@ class GenerateContentHelper:
             ProviderConfigManager.get_provider_google_genai_generate_content_config(
                 model=model,
                 provider=litellm.LlmProviders(custom_llm_provider),
+                litellm_params=litellm_params.model_dump(include={"base_model", "api_base"}),
             )
         )
 
@@ -192,12 +195,14 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
+        vertex_location: Final = VertexBase.explicit_vertex_ai_location(dict(litellm_params))
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                **({"vertex_location": vertex_location} if vertex_location else {}),
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -246,7 +251,7 @@ async def agenerate_content(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Any:
+) -> object:
     """
     Async: Generate content using Google GenAI
     """
@@ -284,7 +289,7 @@ async def agenerate_content(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response = _GENERATE_CONTENT_RESULT.validate_python(await init_response)
         else:
             response = init_response
 
@@ -314,7 +319,7 @@ def generate_content(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Any:
+) -> object:
     """
     Generate content using Google GenAI
     """
@@ -360,22 +365,24 @@ def generate_content(
             )
 
         # Call the standard handler
-        response: Final = base_llm_http_handler.generate_content_handler(
-            model=setup_result.model,
-            contents=contents,
-            tools=tools,
-            generate_content_provider_config=setup_result.generate_content_provider_config,
-            generate_content_config_dict=setup_result.generate_content_config_dict,
-            custom_llm_provider=setup_result.custom_llm_provider,
-            litellm_params=setup_result.litellm_params,
-            logging_obj=setup_result.litellm_logging_obj,
-            extra_headers=extra_headers,
-            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
-            timeout=timeout or request_timeout,
-            _is_async=_is_async,
-            client=kwargs.get("client"),
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
-            system_instruction=system_instruction,
+        response: Final = _GENERATE_CONTENT_RESULT.validate_python(
+            base_llm_http_handler.generate_content_handler(
+                model=setup_result.model,
+                contents=contents,
+                tools=tools,
+                generate_content_provider_config=setup_result.generate_content_provider_config,
+                generate_content_config_dict=setup_result.generate_content_config_dict,
+                custom_llm_provider=setup_result.custom_llm_provider,
+                litellm_params=setup_result.litellm_params,
+                logging_obj=setup_result.litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
+                timeout=timeout or request_timeout,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                system_instruction=system_instruction,
+            )
         )
 
         return response
@@ -404,7 +411,7 @@ async def agenerate_content_stream(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Any:
+) -> object:
     """
     Async: Generate content using Google GenAI with streaming response
     """
@@ -455,23 +462,25 @@ async def agenerate_content_stream(
 
         # Call the handler with async enabled and streaming
         # Return the coroutine directly for the router to handle
-        return await base_llm_http_handler.generate_content_handler(
-            model=setup_result.model,
-            contents=contents,
-            generate_content_provider_config=setup_result.generate_content_provider_config,
-            generate_content_config_dict=setup_result.generate_content_config_dict,
-            tools=tools,
-            custom_llm_provider=setup_result.custom_llm_provider,
-            litellm_params=setup_result.litellm_params,
-            logging_obj=setup_result.litellm_logging_obj,
-            extra_headers=extra_headers,
-            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
-            timeout=timeout or request_timeout,
-            _is_async=True,
-            client=kwargs.get("client"),
-            stream=True,
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
-            system_instruction=system_instruction,
+        return _GENERATE_CONTENT_RESULT.validate_python(
+            await base_llm_http_handler.generate_content_handler(
+                model=setup_result.model,
+                contents=contents,
+                generate_content_provider_config=setup_result.generate_content_provider_config,
+                generate_content_config_dict=setup_result.generate_content_config_dict,
+                tools=tools,
+                custom_llm_provider=setup_result.custom_llm_provider,
+                litellm_params=setup_result.litellm_params,
+                logging_obj=setup_result.litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
+                timeout=timeout or request_timeout,
+                _is_async=True,
+                client=kwargs.get("client"),
+                stream=True,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                system_instruction=system_instruction,
+            )
         )
 
     except Exception as e:
@@ -499,7 +508,7 @@ def generate_content_stream(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Iterator[Any]:
+) -> object:
     """
     Generate content using Google GenAI with streaming response
     """
@@ -544,23 +553,25 @@ def generate_content_stream(
             )
 
         # Call the handler with streaming enabled (sync version)
-        return base_llm_http_handler.generate_content_handler(
-            model=setup_result.model,
-            contents=contents,
-            generate_content_provider_config=setup_result.generate_content_provider_config,
-            generate_content_config_dict=setup_result.generate_content_config_dict,
-            tools=tools,
-            custom_llm_provider=setup_result.custom_llm_provider,
-            litellm_params=setup_result.litellm_params,
-            logging_obj=setup_result.litellm_logging_obj,
-            extra_headers=extra_headers,
-            extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
-            timeout=timeout or request_timeout,
-            _is_async=_is_async,
-            client=kwargs.get("client"),
-            stream=True,
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
-            system_instruction=system_instruction,
+        return _GENERATE_CONTENT_RESULT.validate_python(
+            base_llm_http_handler.generate_content_handler(
+                model=setup_result.model,
+                contents=contents,
+                generate_content_provider_config=setup_result.generate_content_provider_config,
+                generate_content_config_dict=setup_result.generate_content_config_dict,
+                tools=tools,
+                custom_llm_provider=setup_result.custom_llm_provider,
+                litellm_params=setup_result.litellm_params,
+                logging_obj=setup_result.litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
+                timeout=timeout or request_timeout,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
+                stream=True,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                system_instruction=system_instruction,
+            )
         )
 
     except Exception as e:

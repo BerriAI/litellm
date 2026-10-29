@@ -1,6 +1,5 @@
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
-use litellm_auth_azure::SECRET_NAMES as AZURE_AUTH_SECRET_NAMES;
+use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
@@ -9,13 +8,11 @@ use crate::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
         handler::OcrClient,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrRequestContext,
-            OcrResponseFormat, PreparedOcrRequest,
-        },
+        transformation::{BaseOcrConfig, OcrConnection, OcrRequestContext, PreparedOcrRequest},
     },
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 pub const AZURE_AI_OCR_PATH: [&str; 4] = ["providers", "mistral", "azure", "ocr"];
 
@@ -136,7 +133,7 @@ impl AzureAiOcrConfig {
             .or_else(|| nonblank(env_lookup(AZURE_AI_API_BASE_ENV)))
             .ok_or(Error::Auth(litellm_auth::Error::MissingApiBase {
                 provider: "Azure AI",
-                environment_variable: AZURE_AI_API_BASE_ENV,
+                guidance: "Set AZURE_AI_API_BASE environment variable or pass api_base parameter",
             }))
     }
 
@@ -172,7 +169,10 @@ impl AzureAiOcrConfig {
         }
         let key = super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
-            .ok_or(Error::MissingAzureAiCredentials)?;
+            .ok_or(Error::MissingCredential {
+                credential: "Azure AI credentials",
+                guidance: "set AZURE_AI_API_KEY or configure Entra ID",
+            })?;
         super::common_utils::validate_destination(connection, key.source())?;
         Ok(bearer_headers(connection, key.value()))
     }
@@ -186,9 +186,7 @@ impl AzureAiOcrConfig {
         ApiUrl::parse(&base)
             .and_then(|url| url.complete_path(&AZURE_AI_OCR_PATH))
             .map(|url| url.into_string())
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
+            .map_err(|error| Error::request_field("api_base", error))
     }
 }
 
@@ -237,13 +235,13 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn missing_api_base_is_structured() {
         assert!(matches!(
             AzureAiOcrConfig::resolve_api_base(None, &|_| None),
             Err(Error::Auth(litellm_auth::Error::MissingApiBase {
                 provider: "Azure AI",
-                environment_variable: AZURE_AI_API_BASE_ENV,
+                guidance: "Set AZURE_AI_API_BASE environment variable or pass api_base parameter",
             }))
         ));
     }
@@ -305,7 +303,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            error
+            litellm_error::Report::new(&error)
                 .to_string()
                 .contains("request-controlled Azure endpoint")
         );

@@ -14,7 +14,7 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 """
 
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -28,9 +28,11 @@ from litellm.constants import (
     SPEND_LOG_PARTITION_INTERVAL,
     SPEND_LOG_PARTITION_PRECREATE_AHEAD,
 )
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from prisma.client import TransactionManager
+    from typing_extensions import LiteralString
 
     from litellm.proxy.utils import PrismaClient
 
@@ -126,7 +128,7 @@ def select_partitions_to_drop(partitions: list[tuple[str, datetime | None]], cut
 _TX_COMMIT_SLACK: Final = timedelta(seconds=5)
 
 
-def _bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionManager":
+def bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionManager":
     """
     Open an interactive transaction that outlives the statement bound it
     carries. prisma's default 5s transaction timeout would close it mid
@@ -135,6 +137,12 @@ def _bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionM
     return cast(  # cast-ok: PrismaWrapper delegates tx via __getattr__ (untyped)
         "TransactionManager",
         prisma_client.db.tx(timeout=timedelta(milliseconds=timeout_ms) + _TX_COMMIT_SLACK),
+    )
+
+
+def trusted_sql(sql: str) -> "LiteralString":
+    return cast(  # cast-ok: identifiers come from constants or the catalog, values are bound as $n parameters
+        "LiteralString", sql
     )
 
 
@@ -159,7 +167,10 @@ class SpendLogsPartitionManager:
         if budget_ms is None:
             return False
         try:
-            async with _bounded_tx(prisma_client, budget_ms) as tx:
+            async with (
+                db_span("check_spend_log_partitioning", "LiteLLM_SpendLogs"),
+                bounded_tx(prisma_client, budget_ms) as tx,
+            ):
                 await tx.execute_raw(f"SET LOCAL statement_timeout = {budget_ms}")
                 rows: Final = await tx.query_raw(
                     """
@@ -194,7 +205,10 @@ class SpendLogsPartitionManager:
         wait for the lock and statement_timeout bounds the work itself, so a
         partition this run cannot get is simply left for the next one.
         """
-        async with _bounded_tx(prisma_client, timeout_ms) as tx:
+        async with (
+            db_span("create_spend_log_partition", "LiteLLM_SpendLogs"),
+            bounded_tx(prisma_client, timeout_ms) as tx,
+        ):
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
             await tx.execute_raw(statement)
@@ -231,7 +245,10 @@ class SpendLogsPartitionManager:
     async def _list_partitions(
         self, prisma_client: "PrismaClient", timeout_ms: int
     ) -> list[tuple[str, datetime | None]]:
-        async with _bounded_tx(prisma_client, timeout_ms) as tx:
+        async with (
+            db_span("list_spend_log_partitions", "LiteLLM_SpendLogs"),
+            bounded_tx(prisma_client, timeout_ms) as tx,
+        ):
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             rows: Final = await tx.query_raw(
                 """
@@ -247,6 +264,52 @@ class SpendLogsPartitionManager:
                 SPEND_LOGS_TABLE,
             )
         return [(row["name"], parse_partition_upper_bound(row.get("bound") or "")) for row in rows]
+
+    async def drop_oldest_partitions_while(
+        self,
+        prisma_client: "PrismaClient",
+        now: datetime,
+        remaining_timeout_ms: RemainingTimeoutMs,
+        still_over_target: Callable[[], Awaitable[bool]],
+    ) -> tuple[str, ...]:
+        """
+        DROP fully elapsed partitions oldest first until `still_over_target` says the size rule is satisfied.
+
+        Only partitions whose whole range lies before `now` are candidates, so the partition receiving
+        current writes and the DEFAULT partition are never dropped. The callback runs after every drop
+        because a DROP returns its disk at once, so a re-measure is what tells the loop to stop.
+        """
+        list_budget_ms: Final = remaining_timeout_ms()
+        if list_budget_ms is None:
+            return ()
+        now_naive: Final = now.astimezone(timezone.utc).replace(tzinfo=None)
+        partitions: Final = await self._list_partitions(prisma_client, list_budget_ms)
+        elapsed: Final = sorted(
+            ((upper, name) for name, upper in partitions if upper is not None and upper <= now_naive),
+        )
+        drops: Final = self._drop_each_while(prisma_client, elapsed, remaining_timeout_ms, still_over_target)
+        return tuple([name async for name in drops])
+
+    async def _drop_each_while(
+        self,
+        prisma_client: "PrismaClient",
+        elapsed: Sequence[tuple[datetime, str]],
+        remaining_timeout_ms: RemainingTimeoutMs,
+        still_over_target: Callable[[], Awaitable[bool]],
+    ) -> AsyncIterator[str]:
+        for _, name in elapsed:
+            budget_ms: int | None = remaining_timeout_ms()
+            if budget_ms is None:
+                verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
+                return
+            try:
+                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
+            except Exception as e:  # noqa: BLE001  # a partition this run cannot drop is left for the next one
+                verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
+                return
+            yield name
+            if not await still_over_target():
+                return
 
     async def drop_partitions_older_than(
         self, prisma_client: "PrismaClient", cutoff: datetime, remaining_timeout_ms: RemainingTimeoutMs

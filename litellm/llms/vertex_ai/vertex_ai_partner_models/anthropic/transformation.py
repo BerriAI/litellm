@@ -1,8 +1,12 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
+import base64
+import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
@@ -15,6 +19,21 @@ from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_VERTEX_LABELS_HEADER: Final = "X-Vertex-AI-Labels"
+_LABELS: Final = TypeAdapter(Mapping[object, object])
+
+
+def _vertex_labels_header(labels: object, header_names: Mapping[str, object]) -> str | None:
+    if not isinstance(labels, dict) or any(name.lower() == _VERTEX_LABELS_HEADER.lower() for name in header_names):
+        return None
+    string_labels: Final = {
+        key: value
+        for key, value in _LABELS.validate_python(labels).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return base64.b64encode(json.dumps(string_labels).encode()).decode() if string_labels else None
 
 
 class VertexAIError(Exception):
@@ -98,6 +117,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
+        labels_header: Final = _vertex_labels_header(params.get("labels"), _NON_DEFAULT_PARAMS.validate_python(headers))
+        if "labels" in params:
+            del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+        if labels_header is not None:
+            headers[_VERTEX_LABELS_HEADER] = labels_header  # rebind-ok: outbound headers are returned by mutation
         data: Final = super().transform_request(
             model=model,
             messages=messages,
@@ -149,6 +174,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         return data
 
+    def uses_native_structured_output(self, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        return (
+            AnthropicModelInfo._get_provider_resolved_capability(
+                model, "supports_native_structured_output", "vertex_ai"
+            )
+            is True
+        )
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -156,36 +191,25 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        """
-        Override parent method so VertexAI uses tool-based structured outputs
-        unless the vertex map entry advertises native structured output
-        (``output_format``, which Vertex AI Claude forwards for those models).
-        """
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        original_model: Final = model
-        native_structured_output: Final = AnthropicModelInfo._get_provider_resolved_capability(
-            model, "supports_native_structured_output", "vertex_ai"
-        )
-        if "response_format" in non_default_params and native_structured_output is not True:
-            model = "claude-3-sonnet-20240229"  # Use a model that will use tool-based approach
-
-        # Call parent method with potentially modified model name
-        optional_params = super().map_openai_params(
-            non_default_params=non_default_params,
+        mapped_params: Final = super().map_openai_params(
+            non_default_params={
+                **non_default_params,
+                **self._tools_param_with_openai_tool_search_mapped(
+                    _NON_DEFAULT_PARAMS.validate_python(non_default_params), model, drop_params
+                ),
+            },
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
         )
 
-        # Restore original model name for any other processing
-        model = original_model
-
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=original_model, optional_params=optional_params, custom_llm_provider="vertex_ai"
+            model=model, optional_params=mapped_params, custom_llm_provider="vertex_ai", drop_params=drop_params
         )
 
-        return optional_params
+        return mapped_params
 
     def transform_response(
         self,

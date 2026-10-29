@@ -1,8 +1,13 @@
+from typing import Final
+
 import httpx
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_request_utils import (
+    ensure_extra_body_is_safe,
     flatten_form_field_values,
+    pick_cheapest_chat_models_from_llm_provider,
     serialize_multipart_form_fields,
 )
 
@@ -105,3 +110,58 @@ def test_flatten_form_field_values_rejects_over_deep_nesting():
     assert isinstance(nested, dict)
     with pytest.raises(ValueError, match="max depth"):
         flatten_form_field_values(nested)
+
+
+def test_ensure_extra_body_is_safe_converts_prompt_without_filtering_metadata_keys():
+    from typing import cast
+
+    class Prompt:
+        pass
+
+    prompt = Prompt()
+    metadata: dict[object, object] = {"prompt": prompt, 1: "retained"}
+    extra_body = cast(dict[str, object], {"metadata": metadata})
+
+    result = ensure_extra_body_is_safe(extra_body)
+
+    assert result is extra_body
+    assert metadata == {"prompt": prompt.__dict__, 1: "retained"}
+
+
+def test_ensure_extra_body_is_safe_returns_non_dict_unchanged():
+    from collections import UserDict
+    from typing import cast
+
+    extra_body = UserDict({"metadata": {"prompt": object()}})
+
+    result = ensure_extra_body_is_safe(cast(dict[str, object], extra_body))
+
+    assert result is extra_body
+
+
+PICKER_PROVIDER: Final = "deepseek"
+
+
+@pytest.fixture
+def deepseek_rows_whose_cheapest_ids_route_elsewhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows: Final = {
+        "deepseek/fake-pricey-chat": {"input_cost_per_token": 3e-12, "output_cost_per_token": 3e-12, "mode": "chat"},
+        "deepseek/fake-cheapest-embedding": {"input_cost_per_token": 1e-13, "mode": "embedding"},
+        "openai/fake-free-chat": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0, "mode": "chat"},
+        "deepseek/fake-cheap-chat": {"input_cost_per_token": 1e-12, "output_cost_per_token": 1e-12, "mode": "chat"},
+        "fake-free-chat-without-provider": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0, "mode": "chat"},
+    }
+    for name, row in rows.items():
+        monkeypatch.setitem(litellm.model_cost, name, {**row, "litellm_provider": PICKER_PROVIDER})
+    monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, tuple(rows))
+
+
+def test_pick_cheapest_chat_models_prefers_provider_routed_ids_and_skips_ids_routed_elsewhere(
+    deepseek_rows_whose_cheapest_ids_route_elsewhere: None,
+) -> None:
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=10) == [
+        "deepseek/fake-cheap-chat",
+        "deepseek/fake-pricey-chat",
+        "fake-free-chat-without-provider",
+    ]
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=1) == ["deepseek/fake-cheap-chat"]

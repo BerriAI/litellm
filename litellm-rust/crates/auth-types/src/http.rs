@@ -21,13 +21,17 @@ pub fn apply_credential(
     placement: CredentialPlacement,
 ) -> Result<Vec<(String, String)>, Error> {
     if credential.trim().is_empty() {
-        return Err(Error::EmptyCredential);
+        return Err(Error::InvalidConfiguration(crate::ErrorDetail::Empty {
+            subject: "credential",
+        }));
     }
     if headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case(placement.header_name()))
     {
-        return Err(Error::DuplicateHeader(placement.header_name()));
+        return Err(Error::InvalidConfiguration(
+            crate::ErrorDetail::DuplicateHeader(placement.header_name()),
+        ));
     }
     let value = match placement {
         CredentialPlacement::Bearer => format!("Bearer {credential}"),
@@ -67,6 +71,10 @@ mod tests {
         )
         .expect_err("provider policy must handle existing credentials");
 
-        assert!(error.to_string().contains("already exists"));
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("already exists")
+        );
     }
 }

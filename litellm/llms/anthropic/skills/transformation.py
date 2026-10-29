@@ -2,13 +2,14 @@
 Anthropic Skills API configuration and transformations
 """
 
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.skills.transformation import (
     BaseSkillsAPIConfig,
     LiteLLMLoggingObj,
@@ -35,40 +36,35 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
 
     def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """Add Anthropic-specific headers"""
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+        from litellm.constants import ANTHROPIC_SKILLS_API_BETA_VERSION
+        from litellm.llms.anthropic.common_utils import (
+            AnthropicModelInfo,
+            merge_anthropic_beta_headers,
+            without_caller_credential_headers,
+        )
 
-        # Get API key from litellm_params if available
-        api_key = None
-        api_base = None
-        if litellm_params is not None:
-            api_key = litellm_params.api_key
-            api_base = litellm_params.api_base
-
-        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(
+            api_key=litellm_params.api_key if litellm_params is not None else None,
+            api_base=litellm_params.api_base if litellm_params is not None else None,
+            litellm_params=MappingProxyType(dict(litellm_params)) if litellm_params is not None else None,
+            allow_workload_identity=True,
+        )
         if auth_header is None:
             raise ValueError("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API")
 
-        headers.update(auth_header)
-        headers["anthropic-version"] = "2023-06-01"
-
-        # Add beta header for skills API
-        from litellm.constants import ANTHROPIC_SKILLS_API_BETA_VERSION
-
-        if "anthropic-beta" not in headers:
-            headers["anthropic-beta"] = ANTHROPIC_SKILLS_API_BETA_VERSION
-        elif isinstance(headers["anthropic-beta"], list):
-            if ANTHROPIC_SKILLS_API_BETA_VERSION not in headers["anthropic-beta"]:
-                headers["anthropic-beta"].append(ANTHROPIC_SKILLS_API_BETA_VERSION)
-        elif isinstance(headers["anthropic-beta"], str):
-            if ANTHROPIC_SKILLS_API_BETA_VERSION not in headers["anthropic-beta"]:
-                headers["anthropic-beta"] = [
-                    headers["anthropic-beta"],
-                    ANTHROPIC_SKILLS_API_BETA_VERSION,
-                ]
-
-        headers["content-type"] = "application/json"
-
-        return headers
+        merged_beta: Final = merge_anthropic_beta_headers(
+            merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
+            ANTHROPIC_SKILLS_API_BETA_VERSION,
+        )
+        # The deployment's own credential is applied here, so a caller-supplied one must not ride
+        # along upstream beside a minted federation Bearer.
+        return {
+            **without_caller_credential_headers(headers),
+            **auth_header,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": merged_beta,
+            "content-type": "application/json",
+        }
 
     def get_complete_url(
         self,
@@ -79,13 +75,11 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         """Get complete URL for Anthropic Skills API"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        if api_base is None:
-            api_base = AnthropicModelInfo.get_api_base()
-
+        resolved_api_base: Final = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
         if skill_id:
             encoded_skill_id: Final = encode_url_path_segment(skill_id, field_name="skill_id")
-            return f"{api_base}/v1/skills/{encoded_skill_id}"
-        return f"{api_base}/v1/{endpoint}"
+            return join_api_base(resolved_api_base, f"v1/skills/{encoded_skill_id}")
+        return join_api_base(resolved_api_base, f"v1/{endpoint}")
 
     def transform_create_skill_request(
         self,

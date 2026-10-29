@@ -2,13 +2,14 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_AccessGroupTable,
@@ -16,13 +17,18 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-from litellm.proxy.auth.auth_checks import (
-    _cache_access_object,
-    _cache_key_object,
-    _cache_team_object,
-    _get_team_object_from_cache,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _cache_team_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _get_team_object_from_cache,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    cache_access_object,
+    cache_key_object,
+    cache_team_object,
+    get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_cache
 from litellm.proxy.management_helpers.resource_display_names import (
@@ -30,6 +36,7 @@ from litellm.proxy.management_helpers.resource_display_names import (
     key_display_names,
     mcp_server_display_names,
 )
+from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
 from litellm.repositories.table_repositories import AccessGroupRepository, TeamRepository
 from litellm.types.access_group import (
@@ -38,6 +45,9 @@ from litellm.types.access_group import (
     AccessGroupResponse,
     AccessGroupUpdateRequest,
 )
+
+if TYPE_CHECKING:
+    from prisma import Json
 
 router: Final = APIRouter(
     tags=["access group management"],
@@ -50,6 +60,9 @@ class _AccessGroupRecord(Protocol):
 
     @property
     def access_mcp_server_ids(self) -> Sequence[str] | None: ...
+
+    @property
+    def mcp_tool_permissions(self) -> "Mapping[str, Sequence[str]] | Json | None": ...
 
     @property
     def access_agent_ids(self) -> Sequence[str] | None: ...
@@ -154,6 +167,16 @@ class _AccessGroupTx(Protocol):
     def litellm_agentstable(self) -> _AgentTable: ...
 
 
+class _AccessGroupTransaction(Protocol):
+    async def __aenter__(self) -> _AccessGroupTx: ...
+
+    async def __aexit__(self, *exc_info: object) -> None: ...
+
+
+def _access_group_transaction(prisma_client: PrismaClient) -> _AccessGroupTransaction:
+    return prisma_client.db.tx()
+
+
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -164,13 +187,23 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
 
 def _require_admin_view(user_api_key_dict: UserAPIKeyAuth) -> None:
     """Admin Viewer parity: PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY may read."""
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
 
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
+
+
+def _tool_permissions_json(value: Mapping[str, Sequence[str]] | None) -> "Json":
+    from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+    return Json(None) if value is None else Json({server: list(tools) for server, tools in value.items()})
+
+
+def _explicitly_set_fields(data: AccessGroupUpdateRequest) -> Mapping[str, object]:
+    return data.model_dump(exclude_unset=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,9 +293,9 @@ async def _teams_touching(team_table: _TeamTable, records: Sequence[_AccessGroup
     """Team rows listed on any of the groups or carrying any of them in access_group_ids."""
     group_ids: Final = tuple(record.access_group_id for record in records)
     stored_team_ids: Final = _ids_across(records, lambda record: record.assigned_team_ids)
-    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}  # mutable-ok: prisma where is a dict
-    listed: Final = {"team_id": {"in": stored_team_ids}}  # mutable-ok: prisma where is a dict
-    return await team_table.find_many(where={"OR": (carrying, listed)})  # mutable-ok: prisma where is a dict
+    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}
+    listed: Final = {"team_id": {"in": stored_team_ids}}
+    return await team_table.find_many(where={"OR": (carrying, listed)})
 
 
 async def _attached_team_ids_for(
@@ -276,7 +309,7 @@ async def _attached_team_ids_for(
 async def _require_teams_exist(tx: _AccessGroupTx, team_ids: Sequence[str]) -> None:
     if not team_ids:
         return
-    where: Final = {"team_id": {"in": team_ids}}  # mutable-ok: prisma where is a dict
+    where: Final = {"team_id": {"in": team_ids}}
     found: Final = await tx.litellm_teamtable.find_many(where=where)
     missing: Final = frozenset(team_ids) - frozenset(team.team_id for team in found)
     if missing:
@@ -301,7 +334,7 @@ async def _cache_access_group_record(record: _AccessGroupRecord) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     access_group_table: Final = _record_to_access_group_table(record)
-    await _cache_access_object(
+    await cache_access_object(
         access_group_id=record.access_group_id,
         access_group_table=access_group_table,
         user_api_key_cache=user_api_key_cache,
@@ -406,7 +439,7 @@ async def _patch_team_caches_add_access_group(
 ) -> None:
     """Patch cached team objects to include access_group_id."""
     for team_id in team_ids:
-        cached_team = await _get_team_object_from_cache(
+        cached_team = await get_team_object_from_cache(
             key=f"team_id:{team_id}",
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
@@ -419,7 +452,7 @@ async def _patch_team_caches_add_access_group(
             cached_team.access_group_ids = list(cached_team.access_group_ids) + [access_group_id]
         else:
             continue
-        await _cache_team_object(
+        await cache_team_object(
             team_id=team_id,
             team_table=cached_team,
             user_api_key_cache=user_api_key_cache,
@@ -435,14 +468,14 @@ async def _patch_team_caches_remove_access_group(
 ) -> None:
     """Patch cached team objects to remove access_group_id."""
     for team_id in team_ids:
-        cached_team = await _get_team_object_from_cache(
+        cached_team = await get_team_object_from_cache(
             key=f"team_id:{team_id}",
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
         if cached_team is not None and cached_team.access_group_ids:
             cached_team.access_group_ids = [ag for ag in cached_team.access_group_ids if ag != access_group_id]
-            await _cache_team_object(
+            await cache_team_object(
                 team_id=team_id,
                 team_table=cached_team,
                 user_api_key_cache=user_api_key_cache,
@@ -450,6 +483,7 @@ async def _patch_team_caches_remove_access_group(
             )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _patch_key_caches_add_access_group(
     key_tokens: list[str],
     access_group_id: str,
@@ -470,7 +504,7 @@ async def _patch_key_caches_add_access_group(
             cached_key.access_group_ids = list(cached_key.access_group_ids) + [access_group_id]
         else:
             continue
-        await _cache_key_object(
+        await cache_key_object(
             hashed_token=token,
             user_api_key_obj=cached_key,
             user_api_key_cache=user_api_key_cache,
@@ -478,6 +512,7 @@ async def _patch_key_caches_add_access_group(
         )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _patch_key_caches_remove_access_group(
     key_tokens: list[str],
     access_group_id: str,
@@ -492,7 +527,7 @@ async def _patch_key_caches_remove_access_group(
         )
         if cached_key is not None and cached_key.access_group_ids:
             cached_key.access_group_ids = [ag for ag in cached_key.access_group_ids if ag != access_group_id]
-            await _cache_key_object(
+            await cache_key_object(
                 hashed_token=token,
                 user_api_key_obj=cached_key,
                 user_api_key_cache=user_api_key_cache,
@@ -519,7 +554,7 @@ async def create_access_group(
 
     try:
         tx: _AccessGroupTx
-        async with prisma_client.db.tx() as tx:
+        async with _access_group_transaction(prisma_client) as tx:
             existing: Final = await tx.litellm_accessgrouptable.find_unique(
                 where={"access_group_name": data.access_group_name}
             )
@@ -536,7 +571,9 @@ async def create_access_group(
                     "description": data.description,
                     "access_model_names": data.access_model_names or [],
                     "access_mcp_server_ids": data.access_mcp_server_ids or [],
+                    "mcp_tool_permissions": _tool_permissions_json(data.mcp_tool_permissions),
                     "access_agent_ids": data.access_agent_ids or [],
+                    "access_skill_names": list(data.access_skill_names or ()),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -625,22 +662,21 @@ async def update_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    update_fields: Final = data.model_dump(exclude_unset=True)
+    update_fields: Final = _explicitly_set_fields(data)
     update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
-        if (
-            field
-            in (
-                "assigned_team_ids",
-                "assigned_key_ids",
-                "access_model_names",
-                "access_mcp_server_ids",
-                "access_agent_ids",
-            )
-            and value is None
+        if field in (
+            "assigned_team_ids",
+            "assigned_key_ids",
+            "access_model_names",
+            "access_mcp_server_ids",
+            "access_agent_ids",
+            "access_skill_names",
         ):
-            value = []
-        update_data[field] = value
+            value = list(iter_items(value or ()))
+        update_data[field] = (
+            _tool_permissions_json(data.mcp_tool_permissions) if field == "mcp_tool_permissions" else value
+        )
 
     # Initialize delta lists before the try block so they remain accessible
     # for cache updates after the transaction, even if an error path is added later.
@@ -651,7 +687,7 @@ async def update_access_group(
 
     try:
         tx: _AccessGroupTx
-        async with prisma_client.db.tx() as tx:
+        async with _access_group_transaction(prisma_client) as tx:
             # Read inside the transaction so delta computation is consistent with the write,
             # avoiding a TOCTOU race where a concurrent update could make deltas stale.
             existing: Final = await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": access_group_id})
@@ -666,10 +702,10 @@ async def update_access_group(
             old_team_ids: Final[set[str]] = set(attached[access_group_id])
             old_key_ids: Final[set[str]] = set(existing.assigned_key_ids or [])
             new_team_ids: Final[set[str]] = (
-                set(update_fields["assigned_team_ids"] or []) if "assigned_team_ids" in update_fields else old_team_ids
+                set(data.assigned_team_ids or []) if "assigned_team_ids" in update_fields else old_team_ids
             )
             new_key_ids: Final[set[str]] = (
-                set(update_fields["assigned_key_ids"] or []) if "assigned_key_ids" in update_fields else old_key_ids
+                set(data.assigned_key_ids or []) if "assigned_key_ids" in update_fields else old_key_ids
             )
 
             teams_to_add = list(new_team_ids - old_team_ids)
@@ -726,7 +762,7 @@ async def delete_access_group(
         affected_key_tokens: list[str] = []
 
         tx: _AccessGroupTx
-        async with prisma_client.db.tx() as tx:
+        async with _access_group_transaction(prisma_client) as tx:
             existing: Final = await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": access_group_id})
             if existing is None:
                 raise HTTPException(

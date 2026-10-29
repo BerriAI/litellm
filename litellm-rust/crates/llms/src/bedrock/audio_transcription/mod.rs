@@ -1,17 +1,24 @@
+use litellm_auth::AwsParams;
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
+use litellm_llms_types::{
+    formats::audio_transcription::{AudioTranscriptionResponseData, AudioTranscriptionUsage},
+    providers::bedrock::{ConverseResponse, ConverseUsage},
+};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use strum::IntoStaticStr;
 
 use crate::{
-    Error,
+    Error, ErrorDetail,
     base_llm::{
         audio_transcription::transformation::{
-            AudioTranscriptionRequestData, AudioTranscriptionResponseData,
-            BaseAudioTranscriptionConfig, Headers, ValidatedEnvironment,
+            AudioTranscriptionRequestData, BaseAudioTranscriptionConfig, Headers,
+            ValidatedEnvironment,
         },
         auth::AuthScheme,
     },
@@ -24,7 +31,25 @@ pub static BEDROCK_AUDIO_TRANSCRIPTION_CONFIG: BedrockAudioTranscriptionConfig =
 
 pub struct BedrockAudioTranscriptionConfig;
 
-fn audio_fields(audio: Value) -> Result<(String, String), Error> {
+#[derive(Clone, Copy, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "lowercase")]
+enum AudioFormat {
+    #[strum(serialize = "wav")]
+    Wav,
+    #[strum(serialize = "mp3")]
+    Mp3,
+    #[strum(serialize = "flac")]
+    Flac,
+    #[strum(serialize = "ogg")]
+    Ogg,
+}
+
+struct AudioInput {
+    data: String,
+    format: AudioFormat,
+}
+
+fn audio_fields(audio: Value) -> Result<AudioInput, Error> {
     let object = audio.as_object().ok_or_else(|| Error::InvalidType {
         expected: "object",
         actual: json_type_name(&audio),
@@ -36,12 +61,14 @@ fn audio_fields(audio: Value) -> Result<(String, String), Error> {
         .ok_or(Error::MissingField("audio.data"))?;
     let format = object
         .get("format")
-        .and_then(Value::as_str)
-        .filter(|value| matches!(*value, "wav" | "mp3" | "flac" | "ogg"))
-        .ok_or_else(|| {
-            Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string())
-        })?;
-    Ok((data.to_string(), format.to_string()))
+        .cloned()
+        .ok_or(Error::MissingField("audio.format"))?;
+    let format: AudioFormat = serde_json::from_value(format)
+        .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("audio.format", error)))?;
+    Ok(AudioInput {
+        data: data.to_string(),
+        format,
+    })
 }
 
 fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
@@ -52,6 +79,10 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 }
 
 impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
+    fn secret_names(&self) -> Vec<&'static str> {
+        litellm_auth::AwsParams::secret_names().to_vec()
+    }
+
     fn get_supported_openai_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
@@ -62,7 +93,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         audio: Value,
         optional_params: Map<String, Value>,
     ) -> Result<AudioTranscriptionRequestData, Error> {
-        let (data, format) = audio_fields(audio)?;
+        let audio = audio_fields(audio)?;
         let mut instruction = "Transcribe the audio. Respond with only the transcript.".to_string();
         if let Some(language) = optional_string(&optional_params, "language") {
             instruction.push_str(&format!(" The audio language is {language}."));
@@ -70,21 +101,20 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         if let Some(prompt) = optional_string(&optional_params, "prompt") {
             instruction.push_str(&format!(" Additional context: {prompt}"));
         }
-        let mut inference_config = Map::from_iter([("maxTokens".to_string(), json!(4096))]);
-        if let Some(temperature) = optional_params.get("temperature") {
-            inference_config.insert("temperature".to_string(), temperature.clone());
-        }
+        let temperature = optional_params
+            .get("temperature")
+            .cloned()
+            .unwrap_or(json!(0));
         Ok(AudioTranscriptionRequestData {
             body: json!({
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {"audio": {"format": format, "source": {"bytes": data}}},
+                        {"audio": {"format": <&'static str>::from(audio.format), "source": {"bytes": audio.data}}},
                         {"text": instruction}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": inference_config,
+                "inferenceConfig": {"maxTokens": 4096, "temperature": temperature},
             }),
         })
     }
@@ -94,21 +124,21 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         _model: &str,
         response_json: Value,
     ) -> Result<AudioTranscriptionResponseData, Error> {
-        let content = response_json
-            .get("output")
-            .and_then(|value| value.get("message"))
-            .and_then(|value| value.get("content"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                Error::InvalidResponse("Bedrock response has no output content".to_string())
+        let reports_usage = response_json.get("usage").is_some();
+        let response: ConverseResponse =
+            serde_json::from_value(response_json).map_err(|error| {
+                Error::InvalidResponse(ErrorDetail::invalid("Converse response", error))
             })?;
-        let mut text = String::new();
-        for block in content {
-            if let Some(value) = block.get("text").and_then(Value::as_str) {
-                text.push_str(value);
-            }
+        if response.message_content_is_non_text() {
+            return Err(Error::InvalidResponse(ErrorDetail::Expected {
+                subject: "Bedrock transcript content",
+                expected: "text",
+            }));
         }
-        Ok(AudioTranscriptionResponseData { text })
+        Ok(AudioTranscriptionResponseData {
+            text: response.content_text(),
+            usage: reports_usage.then(|| transcription_usage(&response.usage)),
+        })
     }
 
     fn get_complete_url(
@@ -119,7 +149,11 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
-        let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
+        let region = resolve_bedrock_region(
+            model_region.as_deref(),
+            &AwsParams::from_optional_params(optional_params),
+            env_lookup,
+        );
         let endpoint = optional_params
             .get("aws_bedrock_runtime_endpoint")
             .and_then(Value::as_str)
@@ -134,6 +168,10 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         ))
     }
 
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[("Content-Type", "application/json")]
+    }
+
     fn validate_environment(
         &self,
         headers: Headers,
@@ -142,40 +180,53 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
+        let params = AwsParams::from_optional_params(optional_params);
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(
-                    model_region.as_deref(),
-                    optional_params,
-                    env_lookup,
-                ),
+                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(
-                    optional_params,
-                    env_lookup,
-                )),
+                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
             },
         })
+    }
+}
+
+fn transcription_usage(usage: &ConverseUsage) -> AudioTranscriptionUsage {
+    AudioTranscriptionUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage
+            .total_tokens
+            .unwrap_or(usage.input_tokens + usage.output_tokens),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn no_env(_: &str) -> Option<String> {
         None
     }
 
-    #[test]
-    fn request_matches_python_shape() {
-        let params = Map::from_iter([
-            ("language".to_string(), json!("en")),
-            ("prompt".to_string(), json!("Speaker names")),
-            ("temperature".to_string(), json!(0)),
-            ("timestamp_granularities".to_string(), json!(["word"])),
-        ]);
+    #[rstest]
+    #[case::caller_temperature(Some(json!(0.4)), json!(0.4))]
+    #[case::default_temperature(None, json!(0))]
+    fn request_sends_audio_and_instruction_without_system_block(
+        #[case] temperature: Option<Value>,
+        #[case] expected_temperature: Value,
+    ) {
+        let params = Map::from_iter(
+            [
+                ("language".to_string(), json!("en")),
+                ("prompt".to_string(), json!("Speaker names")),
+                ("timestamp_granularities".to_string(), json!(["word"])),
+            ]
+            .into_iter()
+            .chain(temperature.map(|value| ("temperature".to_string(), value))),
+        );
         let params = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.map_transcription_params(&params);
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .transform_audio_transcription_request(
@@ -194,22 +245,48 @@ mod tests {
                         {"text": "Transcribe the audio. Respond with only the transcript. The audio language is en. Additional context: Speaker names"}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
+                "inferenceConfig": {"maxTokens": 4096, "temperature": expected_temperature}
             })
         );
     }
 
-    #[test]
-    fn response_concatenates_content_blocks() {
+    #[rstest]
+    #[case::reported_total(
+        json!({"inputTokens": 390, "outputTokens": 60, "totalTokens": 450}),
+        json!({"text": "hello world", "usage": {"type": "tokens", "input_tokens": 390, "output_tokens": 60, "total_tokens": 450}})
+    )]
+    #[case::derived_total(
+        json!({"inputTokens": 1, "outputTokens": 2}),
+        json!({"text": "hello world", "usage": {"type": "tokens", "input_tokens": 1, "output_tokens": 2, "total_tokens": 3}})
+    )]
+    fn response_carries_text_and_converse_usage(#[case] usage: Value, #[case] expected: Value) {
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .transform_audio_transcription_response(
                 "model",
-                json!({"output": {"message": {"content": [{"text": "hello "}, {"text": "world"}]}}}),
+                json!({"output": {"message": {"content": [{"text": "hello "}, {"text": "world"}]}}, "usage": usage}),
             )
             .expect("response");
-        assert_eq!(result.text, "hello world");
-        assert_eq!(result.into_json(), json!({"text": "hello world"}));
+        assert_eq!(result.into_json(), expected);
+    }
+
+    #[rstest]
+    fn response_without_usage_reports_none() {
+        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
+            .transform_audio_transcription_response(
+                "model",
+                json!({"output": {"message": {"content": [{"text": "hello"}]}}}),
+            )
+            .expect("response");
+        assert_eq!(result.into_json(), json!({"text": "hello"}));
+    }
+
+    #[test]
+    fn malformed_response_content_is_rejected() {
+        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.transform_audio_transcription_response(
+            "model",
+            json!({"output": {"message": {"content": [{"image": {}}]}}, "usage": {"inputTokens": 1, "outputTokens": 2}}),
+        );
+        assert!(matches!(result, Err(Error::InvalidResponse(_))));
     }
 
     #[test]

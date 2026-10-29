@@ -17,6 +17,7 @@ base64.workspace = true
 crc32c = "0.6.8"
 serde_json.workspace = true
 thiserror.workspace = true
+url.workspace = true
 veil.workspace = true
 google-cloud-kms-v1 = "1.14.0"
 google-cloud-gax = { version = "1.14.0", default-features = false }
@@ -28,4 +29,4 @@ reqwest.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 google-cloud-auth.workspace = true
 rstest.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true

@@ -13,9 +13,8 @@ from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_v
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.assertions import assert_exact
 from integration.cost_calculation.conftest import poll_rows, poll_rows_where, read_rows_now
+from integration.cost_calculation.catalog import BATCH_CASES, REALTIME_CASES
 from integration.cost_calculation.cost_tracking_case import (
-    BATCH_CASES,
-    REALTIME_CASES,
     BatchCostCase,
     JsonResponse,
     RealtimeCostCase,

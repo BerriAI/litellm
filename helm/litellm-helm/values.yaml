@@ -3,6 +3,20 @@
 # Declare variables to be passed into your templates.
 
 replicaCount: 1
+liteadmin:
+  enabled: false
+  existingSecret: ""
+  gatewayUrl: ""
+  model: ""
+  readOnly: false
+  storageSize: 1Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
 # numWorkers: 2
 
 image:
@@ -166,17 +180,7 @@ proxyConfigMap:
 #  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
 #  Reference: https://docs.litellm.ai/docs/proxy/configs
 proxy_config:
-  model_list:
-    # At least one model must exist for the proxy to start.
-    - model_name: gpt-3.5-turbo
-      litellm_params:
-        model: gpt-3.5-turbo
-        api_key: eXaMpLeOnLy
-    - model_name: fake-openai-endpoint
-      litellm_params:
-        model: openai/fake
-        api_key: fake-key
-        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  model_list: []
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
@@ -362,6 +366,30 @@ db:
   endpoint: localhost
   database: litellm
   url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
+  # Authenticate with a short-lived token instead of a password. useIAMAuth is
+  # AWS RDS / Aurora IAM database authentication (the pod needs AWS credentials,
+  # e.g. IRSA or EKS Pod Identity, and the database user needs GRANT rds_iam);
+  # useAzureEntraAuth is Azure Database for PostgreSQL with a Microsoft Entra ID
+  # identity (workload identity). Mutually exclusive, and both need
+  # useExisting: true with deployStandalone: false. The chart then sets
+  # IAM_TOKEN_DB_AUTH or AZURE_POSTGRESQL_AUTH, emits DATABASE_HOST, DATABASE_PORT,
+  # DATABASE_USERNAME and DATABASE_NAME and skips DATABASE_PASSWORD and db.url:
+  # the proxy, the migrations job and the collector sidecar each mint their own
+  # token and build DATABASE_URL from those parts. Set DATABASE_SSLMODE /
+  # DATABASE_SSLROOTCERT under envVars for TLS options you would otherwise put
+  # in db.url.
+  useIAMAuth: false
+  useAzureEntraAuth: false
+  # Postgres port, used to build the token-auth URL (password auth takes the
+  # port from db.url)
+  port: 5432
+  # Postgres schema for the LiteLLM tables, rendered as DATABASE_SCHEMA under
+  # token auth only (password auth carries it as ?schema= in db.url)
+  schema: ""
+  # Database user as a plain value. Empty means read it from
+  # db.secret.usernameKey. With token auth the user name is the only credential
+  # the chart needs, so setting it here removes the need for db.secret entirely.
+  username: ""
   secret:
     name: postgres
     usernameKey: username
@@ -426,10 +454,10 @@ db:
 # Prefer the native /health/drain preStop hook over a fixed `sleep`: it marks
 # the pod NotReady and blocks only until in-flight requests actually finish
 # (bounded by GRACEFUL_SHUTDOWN_TIMEOUT, default 30s), instead of always
-# waiting the worst-case duration. The drain runs once (the preStop hook and
-# the SIGTERM handler share it), so set terminationGracePeriodSeconds a few
-# seconds above GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before
-# SIGKILL.
+# waiting the worst-case duration. After SIGTERM the server waits up to
+# GRACEFUL_SHUTDOWN_TIMEOUT again for connections still open and then cancels
+# them, so set terminationGracePeriodSeconds a few seconds above twice
+# GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before SIGKILL.
 #
 # /health/drain is off by default; enable it with
 # general_settings.enable_drain_endpoint: true. The kubelet calls preStop
@@ -545,7 +573,6 @@ redis:
 # Prisma migration job settings
 migrationJob:
   enabled: true # Enable or disable the schema migration Job
-  retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
   # Wall-clock budget for the whole Job, shared across every `backoffLimit`
   # retry rather than granted per attempt. Without it a migration that blocks
@@ -554,12 +581,16 @@ migrationJob:
   # stop reconciling the whole chart until someone deletes the Job by hand.
   # Set to null to opt out and restore the unbounded behaviour.
   activeDeadlineSeconds: 1800
-  disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   # Optional service account for the migration job.
   # Only used when migrationJob.hooks.helm.enabled=true and serviceAccount.create=true.
   # In that case, pre-install/pre-upgrade hooks run before normal resources, so this defaults to "default".
   serviceAccountName: ""
   annotations: {}
+  jobLabels: {} # Custom labels for the Job metadata
+  jobAnnotations: {} # Custom annotations for the Job metadata
+  podLabels: {} # Custom labels for the Job pod template
+  command: [] # Override container command (defaults to ["python", "litellm/proxy/prisma_migration.py"])
+  args: [] # Override container args
   ttlSecondsAfterFinished: 120
   resources: {}
   #  Unset by default. This job runs the database migration and exits, so it does not
@@ -635,3 +666,72 @@ serviceMonitor:
   namespaceSelector:
     matchNames: []
     # - test-namespace
+
+lens:
+  library: true
+
+lensWorker:
+  retainResources: false
+  mode: ""
+  externalUrl: ""
+  externalServiceName: ""
+  gateway:
+    secretName: ""
+    secretKey: gateway-secret
+  standaloneUrl: ""
+  adminTokenSecret:
+    name: ""
+    key: admin-token
+  extraEnv: []
+  extraEnvFrom: []
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/berriai/lens
+    tag: "0.1.0-dev.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  tokenSecret:
+    name: ""
+    key: token
+  serviceTokenSecret:
+    name: ""
+    key: service-token
+  clickhouse:
+    enabled: true
+    image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
+    storage: 20Gi
+    storageClassName: null
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+  clickhouseDatabase: litellm
+  retentionDays: 14
+  clickhouseSecret:
+    name: ""
+    key: url
+  publicUrl: ""
+  service:
+    port: 4318
+    annotations: {}
+  ingress:
+    enabled: false
+    path: /v1/
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
+  url: ""
+  tmpSizeLimit: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

@@ -134,7 +134,7 @@ reporting failures as test errors. Already deleted files and batches that are
 terminal are safe to clean up again. Managed batch cancellation polls for up to two minutes
 before input deletion. A managed batch still `cancelling` after that is left for the provider to
 finish, and its input file is left in place because LiteLLM refuses to delete a file a non-terminal
-batch references. Both are reported as `BatchCleanupLeftover` warnings naming their ids rather than
+batch references. Both are reported as `UserWarning`s naming their ids rather than
 failing the test. Any other status or error still fails
 Accepted cancellation may still report validating or in_progress while the provider
 updates its state. Raw and model-encoded batches are polled until cancelling or
@@ -185,6 +185,6 @@ never landed.
 Unified (managed) batch cost is owned by the hourly `CheckBatchCost` poller, and a
 terminal DB status short-circuits retrieve for those ids, so the terminal-state cell
 uses the encoded path; poller timing does not fit an e2e gate and belongs in a
-DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Gemini
+DI-stubbed proxy integration test under `tests/unit/proxy/`. Gemini
 (non-Vertex) file content raises `NotImplementedError` upstream and is not a
 coverage cell.

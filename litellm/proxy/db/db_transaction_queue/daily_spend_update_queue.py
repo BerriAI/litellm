@@ -58,9 +58,7 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         self.update_queue: asyncio.Queue[dict[str, BaseDailySpendTransaction]] = asyncio.Queue(
             maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
         )
-        self.interrupted_commits: set[asyncio.Task[None]] = (
-            set()
-        )  # mutable-ok: registry of in-flight commit outcomes, entries leave via their done callback
+        self.interrupted_commits: set[asyncio.Task[None]] = set()
 
     def track_interrupted_commit(self, settle: Coroutine[object, object, None]) -> None:
         task: Final = asyncio.ensure_future(settle)

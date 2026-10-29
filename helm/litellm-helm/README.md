@@ -70,11 +70,18 @@ proxyConfigMap:
 proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
+  model_list: []
+```
+
+The chart ships no models, so add them under `proxy_config.model_list` or from the Admin UI with `store_model_in_db: true`
+
+```
+proxy_config:
   model_list:
-    - model_name: gpt-3.5-turbo
+    - model_name: gpt-5.6
       litellm_params:
-        model: gpt-3.5-turbo
-        api_key: eXaMpLeOnLy
+        model: openai/gpt-5.6
+        api_key: os.environ/OPENAI_API_KEY
 ```
 
 #### Example using existing `proxyConfigMap` instead of creating it:
@@ -126,6 +133,11 @@ Set `billingMetrics.caSecretName` only when the collector is a private or test o
 | `db.secret.name`          | If `db.useExisting` is `true`, the name of the Kubernetes Secret that contains credentials.                                                                                                                                                                                               | `postgres`                                                                                 |
 | `db.secret.usernameKey`   | If `db.useExisting` is `true`, the name of the key within the Kubernetes Secret that holds the username for authenticating with the Postgres instance.                                                                                                                                    | `username`                                                                                 |
 | `db.secret.passwordKey`   | If `db.useExisting` is `true`, the name of the key within the Kubernetes Secret that holds the password associates with the above user.                                                                                                                                                   | `password`                                                                                 |
+| `db.username`             | If `db.useExisting` is `true`, the database user as a plain value. When set, `db.secret.usernameKey` is not read.                                                                                                                                                                        | `""`                                                                                       |
+| `db.port`                 | If `db.useExisting` is `true` with token auth, the Postgres port used to build the connection URL. Password auth takes the port from `db.url`.                                                                                                                                           | `5432`                                                                                     |
+| `db.schema`               | With token auth, the Postgres schema holding the LiteLLM tables, rendered as `DATABASE_SCHEMA` when the tables are not in `public`. Ignored with password auth, where the schema stays in `db.url` as `?schema=`.                                                                        | `""`                                                                                       |
+| `db.useIAMAuth`           | If `db.useExisting` is `true` and `db.deployStandalone` is `false`, authenticate with an AWS RDS IAM token instead of a password. See [Token auth](#token-auth-to-an-existing-postgres-rds-iam-or-microsoft-entra-id).                                                                  | `false`                                                                                    |
+| `db.useAzureEntraAuth`    | If `db.useExisting` is `true` and `db.deployStandalone` is `false`, authenticate with a Microsoft Entra ID token instead of a password. Mutually exclusive with `db.useIAMAuth`.                                                                                                        | `false`                                                                                    |
 | `db.useStackgresOperator` | Not yet implemented.                                                                                                                                                                                                                                                                      | `false`                                                                                    |
 | `db.deployStandalone`     | Deploy a standalone, single instance deployment of Postgres, using the Bitnami postgresql chart. This is useful for getting started but doesn't provide HA or (by default) data backups.                                                                                                  | `true`                                                                                     |
 | `postgresql.*`            | If `db.deployStandalone` is `true`, configuration passed to the Bitnami postgresql chart. See the [Bitnami Documentation](https://github.com/bitnami/charts/tree/main/bitnami/postgresql) for full configuration details. See [values.yaml](./values.yaml) for the default configuration. | See [values.yaml](./values.yaml)                                                           |
@@ -155,6 +167,22 @@ data:
   password: <some secure password, base64 encoded>
 type: Opaque
 ```
+
+#### Token auth to an existing Postgres (RDS IAM or Microsoft Entra ID)
+
+When the database accepts short-lived tokens instead of a password (AWS RDS or Aurora with IAM database authentication, or Azure Database for PostgreSQL with Microsoft Entra ID), there is no password to put in a Secret. Turn on `db.useIAMAuth` or `db.useAzureEntraAuth` and the chart stops referencing `db.secret.passwordKey` and `db.url`. It sets `IAM_TOKEN_DB_AUTH` (or `AZURE_POSTGRESQL_AUTH`) and emits `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME` and `DATABASE_NAME` for the proxy, the migrations job and the collector sidecar. Each of them mints its own token at startup and builds `DATABASE_URL` from those parts, and the in-container pgbouncer (`db.connectionPool`) refreshes the token before it expires.
+
+```yaml
+db:
+  useExisting: true
+  deployStandalone: false
+  useIAMAuth: true
+  endpoint: litellm.cluster-abc123.us-west-1.rds.amazonaws.com
+  database: litellm
+  username: litellm_iam   # the role granted rds_iam; no db.secret needed
+```
+
+The pod needs cloud credentials for the token: on EKS use IRSA or Pod Identity on the chart's `serviceAccount` (and `migrationJob.serviceAccountName` when the Helm hook runs before the ServiceAccount exists), on AKS use workload identity. Set `AWS_RDS_REGION` under `envVars` when the RDS hostname is not a standard regional endpoint (the token must be signed for the region the database lives in). TLS options that would otherwise go in `db.url` are set as `DATABASE_SSLMODE` and `DATABASE_SSLROOTCERT` under `envVars`. Leaving `db.username` empty reads the user from `db.secret.usernameKey` as before.
 
 #### Examples for `environmentSecrets` and `environemntConfigMaps`
 
@@ -225,3 +253,9 @@ At the time of writing, the Admin UI is unable to add models. This is because
 it would need to update the `config.yaml` file which is a exposed ConfigMap, and
 therefore, read-only. This is a limitation of this helm chart, not the Admin UI
 itself.
+
+## Connect Lens
+
+`lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
+
+Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published

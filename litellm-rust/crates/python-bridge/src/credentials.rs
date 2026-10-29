@@ -1,8 +1,8 @@
 //! Credentials the caller supplies as Python callables, projected out of a route's
 //! keyword arguments and acquired on the host's own thread when the call asks for one.
 
+use crate::callable::wrap_failure;
 use litellm_auth::{ResolvedCredential, SecretValue};
-use litellm_host_python::wrap_failure;
 use pyo3::{
     exceptions::PyTypeError,
     gc::{PyTraverseError, PyVisit},
@@ -10,9 +10,18 @@ use pyo3::{
     types::{PyDict, PyString},
 };
 
-const NOT_CALLABLE: &str = "Azure AD token provider must be callable";
 const NOT_A_STRING: &str = "Azure AD token must be a string, got {}";
 const FAILED: &str = "Failed to get Azure AD token: {}";
+
+#[derive(Debug, thiserror::Error)]
+#[error("Azure AD token provider must be callable")]
+struct NotCallable;
+
+impl From<NotCallable> for PyErr {
+    fn from(error: NotCallable) -> Self {
+        PyTypeError::new_err(litellm_error::Report::new(&error).to_string())
+    }
+}
 
 /// The `azure_ad_token_provider` keyword argument, kept alive for the rest of the call.
 pub(crate) struct CallerTokenProvider {
@@ -36,7 +45,7 @@ impl CallerTokenProvider {
     pub(crate) fn acquire(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
         let provider = self.provider.bind(py);
         if !provider.is_callable() {
-            return Err(PyTypeError::new_err(NOT_CALLABLE));
+            return Err(NotCallable.into());
         }
         let token = wrap_failure(
             py,
@@ -267,37 +276,24 @@ kwargs = {'azure_ad_token_provider': Provider()}
         });
     }
 
-    #[test]
-    fn only_callable_and_truthy_providers_project() {
+    #[rstest::rstest]
+    #[case::missing(c"kwargs = {}")]
+    #[case::none(c"kwargs = {'azure_ad_token_provider': None}")]
+    #[case::not_callable(c"kwargs = {'azure_ad_token_provider': 'not-callable'}")]
+    #[case::falsy_callable(
+        c"class Falsy:\n    def __call__(self):\n        return 'ey.token'\n    def __bool__(self):\n        return False\nkwargs = {'azure_ad_token_provider': Falsy()}\n"
+    )]
+    #[case::truthiness_error(
+        c"class Unusable:\n    def __call__(self):\n        return 'ey.token'\n    def __bool__(self):\n        raise RuntimeError('cannot decide')\nkwargs = {'azure_ad_token_provider': Unusable()}\n"
+    )]
+    fn only_callable_and_truthy_providers_project(#[case] source: &std::ffi::CStr) {
         Python::initialize();
         Python::attach(|py| {
-            for source in [
-                c"kwargs = {}",
-                c"kwargs = {'azure_ad_token_provider': None}",
-                c"kwargs = {'azure_ad_token_provider': 'not-callable'}",
-                c"
-class Falsy:
-    def __call__(self):
-        return 'ey.token'
-    def __bool__(self):
-        return False
-kwargs = {'azure_ad_token_provider': Falsy()}
-",
-                c"
-class Unusable:
-    def __call__(self):
-        return 'ey.token'
-    def __bool__(self):
-        raise RuntimeError('cannot decide')
-kwargs = {'azure_ad_token_provider': Unusable()}
-",
-            ] {
-                assert!(
-                    azure_ad_token_provider(&kwargs(py, source))
-                        .unwrap()
-                        .is_none()
-                );
-            }
+            assert!(
+                azure_ad_token_provider(&kwargs(py, source))
+                    .unwrap()
+                    .is_none()
+            );
         });
     }
 }

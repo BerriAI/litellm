@@ -3,12 +3,13 @@ import json
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from litellm._uuid import uuid4
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.user_banner_repository import USER_BANNER_ROW_ID, UserBannerRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
@@ -17,7 +18,7 @@ USER_BANNER_MAX_MESSAGE_LENGTH: Final = 4000
 UserBannerSeverity = Literal["info", "warning", "error"]
 
 
-class UserBannerUpdate(BaseModel):
+class UserBannerUpdate(LiteLLMBaseModel):
     enabled: bool = Field(
         default=False,
         description="If true, the banner is shown to all authenticated dashboard users.",
@@ -49,7 +50,7 @@ class UserBanner(UserBannerUpdate):
     )
 
 
-class UpdateUserBannerResponse(BaseModel):
+class UpdateUserBannerResponse(LiteLLMBaseModel):
     message: str
     banner: UserBanner
 
@@ -66,8 +67,8 @@ def parse_user_banner(raw_settings: object) -> UserBanner:
 
 @router.get(
     "/get/user_banner",
-    tags=["UI Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=UserBanner,
 )
 async def get_user_banner() -> UserBanner:
@@ -86,7 +87,7 @@ async def get_user_banner() -> UserBanner:
 
 @router.patch(
     "/update/user_banner",
-    tags=["UI Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    tags=["UI Settings"],
     response_model=UpdateUserBannerResponse,
 )
 async def update_user_banner(

@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
+from litellm.llms.openai.chat.gpt_reasoning_transformation import GPT_REASONING_SERIES_MARKERS
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -44,7 +44,7 @@ def sanitized_tools_update(optional_params: Mapping[str, object]) -> Mapping[str
     tools: Final = optional_params.get("tools")
     if not isinstance(tools, list):
         return _NO_TOOLS_UPDATE
-    sanitized: Final = [  # mutable-ok: request tools are a JSON list
+    sanitized: Final = [
         tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
         if isinstance(tool, dict)
         else tool
@@ -93,7 +93,7 @@ class AzureOpenAIConfig(BaseConfig):
         temperature: int | None = None,
         top_p: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
