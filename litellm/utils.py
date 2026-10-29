@@ -79,7 +79,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
-    PROVIDER_MODEL_DISCOVERY_FAILURE_CACHE_TTL_SECONDS,
+    PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -8455,12 +8455,15 @@ def _get_valid_models_from_provider_api(
 
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
-    except Exception as e:
-        verbose_logger.warning("Error getting valid models: %s", e)
+    except httpx.TimeoutException as e:
+        verbose_logger.warning("Timed out getting valid models: %s", e)
         with suppress(ValueError):
             _model_cache.set_cached_model_info(
-                custom_llm_provider, litellm_params, [], ttl=PROVIDER_MODEL_DISCOVERY_FAILURE_CACHE_TTL_SECONDS
+                custom_llm_provider, litellm_params, [], ttl=PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
             )
+        return []
+    except Exception as e:
+        verbose_logger.warning("Error getting valid models: %s", e)
         return []
 
 
