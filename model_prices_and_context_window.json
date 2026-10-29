@@ -30066,6 +30066,11 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
+        ],
         "supports_audio_input": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -30132,6 +30137,11 @@
         ],
         "supported_output_modalities": [
             "text"
+        ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
@@ -76109,6 +76119,11 @@
         ],
         "supported_output_modalities": [
             "text"
+        ],
+        "supported_regions": [
+            "global",
+            "us",
+            "eu"
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
