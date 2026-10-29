@@ -51,10 +51,6 @@ def proxy_error_status_code(exc: object, message: str) -> int:
     return routed if routed is not None else error_status_code(exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-def is_gateway_failure(status_code: int) -> bool:
-    return status_code == status.HTTP_408_REQUEST_TIMEOUT or status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR
-
-
 def openai_error_type_for_status(status_code: int) -> str:
     mapped: Final = _OPENAI_ERROR_TYPE_BY_STATUS.get(status_code)
     if mapped is not None:

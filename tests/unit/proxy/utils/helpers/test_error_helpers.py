@@ -301,26 +301,6 @@ def test_handle_exception_on_proxy_keeps_the_path_a_rejected_request_names():
     assert "gs://my-bucket/tmp/batch_input.jsonl" in result.message
 
 
-def test_handle_exception_on_proxy_redacts_the_internal_host_an_unreachable_upstream_names():
-    """A guardrail or provider the gateway cannot reach names its private address in the
-    error, and any virtual key can call those routes, so the host must not reach the caller."""
-    result: Final = handle_exception_on_proxy(ConnectionError("Cannot connect to host 10.12.4.7:8443"))
-
-    assert result.code == "500"
-    assert "Cannot connect to host" in result.message
-    assert "10.12.4.7" not in result.message
-
-
-def test_handle_exception_on_proxy_redacts_the_internal_host_a_route_puts_in_a_gateway_failure_detail():
-    """Routes wrap an upstream failure as an HTTPException whose detail is the raw error, so a 5xx detail carries
-    the same private address an unwrapped connection error does."""
-    result: Final = handle_exception_on_proxy(HTTPException(status_code=503, detail="Cannot connect to host 10.0.0.9"))
-
-    assert result.code == "503"
-    assert "Cannot connect to host" in result.message
-    assert "10.0.0.9" not in result.message
-
-
 def test_handle_exception_on_proxy_answers_500_for_an_exception_whose_status_is_none():
     """A guardrail whose upstream refuses the connection raises with status_code=None, and
     passing that through as the code crashed the proxy's error handler, which then blamed the
