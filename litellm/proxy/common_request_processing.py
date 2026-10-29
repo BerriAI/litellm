@@ -156,6 +156,7 @@ KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
 )
 
+SseErrorDialect: TypeAlias = Literal["openai", "anthropic"]
 ProxyRouteType: TypeAlias = Literal[
     "acompletion",
     "aembedding",
@@ -1374,13 +1375,38 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
-async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+def _late_failure_frames(exc: Exception, error_dialect: SseErrorDialect) -> tuple[str, ...]:
+    match error_dialect:
+        case "openai":
+            return _sse_error_frames(sse_error_payload(exc)[1])
+        case "anthropic":
+            proxy_exc: Final = proxy_exception_from_route_error(exc)
+            return (
+                anthropic_error_sse_frame(
+                    status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
+                    raw_message=proxy_exc.message,
+                ),
+            )
+
+
+def _late_body_frames(produced: Response, error_dialect: SseErrorDialect) -> tuple[bytes, ...]:
+    body: Final = bytes(produced.body) or b"{}"
+    if error_dialect == "anthropic" and produced.status_code >= status.HTTP_400_BAD_REQUEST:
+        return (
+            anthropic_error_sse_frame(
+                status_code=produced.status_code, raw_message=body.decode(errors="replace")
+            ).encode(),
+        )
+    return b"data: " + body + b"\n\n", b"data: [DONE]\n\n"
+
+
+async def _relay_late_response(produced: Response, error_dialect: SseErrorDialect) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
         # The status line is already on the wire, so a non-streaming body, an error
         # body included, can only reach the client as an SSE frame.
-        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
-        yield b"data: [DONE]\n\n"
+        for frame in _late_body_frames(produced, error_dialect):
+            yield frame
         return
 
     try:
@@ -1422,6 +1448,7 @@ async def open_sse_before_first_byte(
     ping_interval_seconds: float | str | None,
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+    error_dialect: SseErrorDialect = "openai",
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1467,11 +1494,10 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                _, error_obj = sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
-                for frame in _sse_error_frames(error_obj):
+                for frame in _late_failure_frames(await _sanitized_late_failure(exc, on_late_failure), error_dialect):
                     yield frame.encode()
                 return
-            async for chunk in _relay_late_response(produced):
+            async for chunk in _relay_late_response(produced, error_dialect):
                 yield chunk
         finally:
             if not produce_task.done():
@@ -2907,6 +2933,7 @@ class ProxyBaseLLMRequestProcessing:
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
+            error_dialect="anthropic" if route_type == "anthropic_messages" else "openai",
         )
 
     async def _process_llm_request(

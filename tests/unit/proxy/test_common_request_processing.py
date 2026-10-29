@@ -10541,6 +10541,74 @@ async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame()
     assert collected[-1] == b"data: [DONE]\n\n"
 
 
+def _anthropic_sdk_stream_error(wire: bytes) -> anthropic.APIStatusError:
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire)
+
+    client: Final = anthropic.Anthropic(
+        api_key="sk-test",
+        base_url="http://proxy.test",
+        http_client=httpx.Client(transport=httpx.MockTransport(serve)),
+        max_retries=0,
+    )
+    with pytest.raises(anthropic.APIStatusError) as raised:
+        for _ in client.messages.create(
+            model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "hi"}], stream=True
+        ):
+            pass
+    return raised.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "late_failure, expected_message",
+    [
+        (HTTPException(status_code=429, detail="rate limited"), "rate limited"),
+        (
+            litellm.RateLimitError(message="No deployments available", llm_provider="anthropic", model="m"),
+            "No deployments available",
+        ),
+    ],
+    ids=["http-exception", "router-exception"],
+)
+async def test_ttft_keepalive_raises_a_late_failure_in_the_anthropic_sdk(late_failure, expected_message):
+    """An Anthropic client picks stream events by their `event:` name, so a bare
+    `data:` error frame is skipped and the stream just ends with no message."""
+
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise late_failure
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, error_dialect="anthropic"
+    )
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    body = _anthropic_sdk_stream_error(b"".join(collected)).body
+    assert isinstance(body, dict)
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "rate_limit_error"
+    assert expected_message in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_raises_a_late_error_body_in_the_anthropic_sdk():
+    """On /v1/messages a stream that fails before its first byte comes back as an
+    Anthropic JSON error, which has to reach the client as an `event: error`."""
+    envelope = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+
+    async def slow_json():
+        await asyncio.sleep(0.2)
+        return JSONResponse(status_code=529, content=envelope)
+
+    response = await open_sse_before_first_byte(slow_json(), ping_interval_seconds=0.05, error_dialect="anthropic")
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert _anthropic_sdk_stream_error(b"".join(collected)).body == envelope
+
+
 @pytest.mark.asyncio
 async def test_ttft_keepalive_closes_the_upstream_stream_it_relayed():
     """Starlette never calls the produced response, so its own cleanup never runs
@@ -10819,6 +10887,35 @@ async def test_base_process_llm_request_audits_a_failure_that_lands_after_its_ke
 
     assert collected[0] == TTFT_PING
     assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_base_process_llm_request_raises_a_late_messages_failure_in_the_anthropic_sdk():
+    async def slow_failure(self, **kwargs):
+        await asyncio.sleep(0.25)
+        raise HTTPException(status_code=503, detail="upstream exploded")
+
+    proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "claude-sonnet-4-5", "stream": True})
+
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_failure):
+            response = await processor.base_process_llm_request(
+                request=MagicMock(spec=Request),
+                fastapi_response=Response(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                route_type="anthropic_messages",
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+            )
+        collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    body = _anthropic_sdk_stream_error(b"".join(collected)).body
+    assert isinstance(body, dict)
+    assert body["error"]["message"] == "upstream exploded"
 
 
 @pytest.mark.asyncio
