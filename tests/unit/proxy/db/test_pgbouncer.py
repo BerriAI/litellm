@@ -706,10 +706,10 @@ def _runtime_dir_listening_on(port: int) -> Path:
 
 
 class TestStartInContainerPgBouncer:
-    def test_returns_the_loopback_url_once_the_pooler_listens(self, tmp_path: Path):
+    def test_returns_the_loopback_url_once_the_pooler_listens(self, socket_tempdir: Path):
         port: Final = _free_port()
-        auth_log: Final = tmp_path / "auth.log"
-        binary: Final = _fake_pooler(tmp_path, port, auth_log=auth_log)
+        auth_log: Final = socket_tempdir / "auth.log"
+        binary: Final = _fake_pooler(socket_tempdir, port, auth_log=auth_log)
         settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(binary))
         pooled: Final = start_in_container_pgbouncer(settings, "postgresql://app:pw@db/litellm?connection_limit=5")
         assert isinstance(pooled, str), pooled
@@ -725,9 +725,9 @@ class TestStartInContainerPgBouncer:
         assert auth_log.read_text() == repr(f'"app" "pw"\n"litellm_pgbouncer" "{parsed.password}"\n') + "\n"
 
     @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
-    def test_a_forked_worker_exiting_leaves_the_pooler_and_its_files_to_the_parent(self, tmp_path: Path):
+    def test_a_forked_worker_exiting_leaves_the_pooler_and_its_files_to_the_parent(self, socket_tempdir: Path):
         port: Final = _free_port()
-        settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(tmp_path, port)))
+        settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(socket_tempdir, port)))
         exit_hooks: Final[list[Callable[[], None]]] = []
         pooled: Final = start_in_container_pgbouncer(
             settings, "postgresql://app:pw@db/litellm", register_exit_hook=exit_hooks.append
@@ -768,10 +768,10 @@ class TestStartInContainerPgBouncer:
         assert "IAM_TOKEN_DB_AUTH" in outcome.reason
         assert not _listening(port)
 
-    def test_token_auth_mints_the_first_token_into_the_auth_file_before_the_pooler_starts(self, tmp_path: Path):
+    def test_token_auth_mints_the_first_token_into_the_auth_file_before_the_pooler_starts(self, socket_tempdir: Path):
         port: Final = _free_port()
-        auth_log: Final = tmp_path / "auth.log"
-        binary: Final = _fake_pooler(tmp_path, port, auth_log=auth_log)
+        auth_log: Final = socket_tempdir / "auth.log"
+        binary: Final = _fake_pooler(socket_tempdir, port, auth_log=auth_log)
         settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(binary))
         token: Final = _entra_jwt(datetime.now(tz=timezone.utc) + timedelta(hours=1))
         pooled: Final = start_in_container_pgbouncer(
@@ -839,9 +839,9 @@ class TestStartInContainerPgBouncer:
         assert "1.19" in outcome.reason
         assert not _listening(port)
 
-    def test_the_first_version_that_dies_on_a_failed_tcp_bind_is_accepted(self, tmp_path: Path):
+    def test_the_first_version_that_dies_on_a_failed_tcp_bind_is_accepted(self, socket_tempdir: Path):
         port: Final = _free_port()
-        binary: Final = _fake_pooler(tmp_path, port, version_banner="PgBouncer 1.19.0")
+        binary: Final = _fake_pooler(socket_tempdir, port, version_banner="PgBouncer 1.19.0")
         settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(binary))
         pooled: Final = start_in_container_pgbouncer(settings, "postgresql://app:pw@db/litellm")
         assert isinstance(pooled, str), pooled

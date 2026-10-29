@@ -220,25 +220,35 @@ def _flush_client_caches() -> None:
 
 
 _MACOS_LONGEST_SOCKET_PATH: Final = 103
-_LONGEST_SOCKET_SUFFIX: Final = len("/sock12345678/.s.PGSQL.65535")
+_LONGEST_SOCKET_SUFFIX: Final = len("/sock12345678/d/litellm-pgbouncer-12345678/.s.PGSQL.65535")
 
 
 def _socket_root() -> str:
     default: Final = tempfile.gettempdir()
-    return default if len(default) + _LONGEST_SOCKET_SUFFIX <= _MACOS_LONGEST_SOCKET_PATH else "/tmp"
+    fits: Final = len(os.fsencode(default)) + _LONGEST_SOCKET_SUFFIX <= _MACOS_LONGEST_SOCKET_PATH
+    return default if fits else "/tmp"
 
 
 @pytest.fixture
-def socket_dir() -> Iterator[Path]:
-    """A directory whose unix socket paths fit the kernel's sun_path limit, which pytest's tmp_path exceeds on macOS."""
-    directory: Final = Path(tempfile.mkdtemp(prefix="sock", dir=_socket_root()))
-    yield directory
-    shutil.rmtree(directory, ignore_errors=True)
+def socket_dir(tmp_path: Path) -> Iterator[Path]:
+    """``tmp_path`` behind a short link, so unix socket paths fit the sun_path limit that it exceeds on macOS."""
+    link_dir: Final = Path(tempfile.mkdtemp(prefix="sock", dir=_socket_root()))
+    link: Final = link_dir / "d"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    yield link
+    shutil.rmtree(link_dir, ignore_errors=True)
 
 
 @pytest.fixture
 def socket_path(socket_dir: Path) -> Path:
     return socket_dir / "spend.sock"
+
+
+@pytest.fixture
+def socket_tempdir(socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point ``tempfile``'s default directory at ``socket_dir``, for code that picks its own socket directory."""
+    monkeypatch.setattr(tempfile, "tempdir", str(socket_dir))
+    return socket_dir
 
 
 @pytest.fixture(autouse=True, scope="session")
