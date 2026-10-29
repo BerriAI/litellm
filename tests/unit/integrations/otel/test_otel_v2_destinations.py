@@ -3281,7 +3281,7 @@ ARIZE_DEST = OtelDestination(
 
 class _ExporterCapture:
     """Stands an in-memory exporter in for every exporter the provider builds, keyed
-    by the headers it would have sent (``None`` for a headerless exporter), so a test
+    by the headers it would have sent (``None`` for the stdout placeholder), so a test
     reads what each account received rather than which processors were wired."""
 
     def __init__(self) -> None:
@@ -3445,13 +3445,13 @@ class TestLangfuseDestinationFields:
     ) -> None:
         """With ``langfuse_otel`` only in a key's or team's logging, the startup logger is the
         generic one; the key's project still gets the user, session and tags, and the
-        operator gets no unconfigured stdout copy."""
+        operator's stdout placeholder still gets no Langfuse request metadata."""
         credential_less_proxy(monkeypatch)
         capture: Final = _ExporterCapture()
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
         config: Final = OpenTelemetryV2Config()
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         call: Final = replace(
@@ -3477,7 +3477,7 @@ class TestLangfuseDestinationFields:
             "langfuse.trace.tags": ("agent:orders",),
         }
         assert "langfuse.observation.metadata" in to_langfuse
-        assert None not in received
+        assert "langfuse.observation.metadata" not in received[None]
 
     @staticmethod
     def _received_by_account(
@@ -3491,7 +3491,7 @@ class TestLangfuseDestinationFields:
         capture: Final = _ExporterCapture()
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         call: Final = replace(
@@ -3515,11 +3515,7 @@ class TestLangfuseDestinationFields:
     ) -> None:
         """The operator's own exporter and the key's Arize destination get the model call as they would with no
         Langfuse destination on the request."""
-        received: Final = self._received_by_account(
-            monkeypatch,
-            OpenTelemetryV2Config(exporters=[ExporterSpec(kind="console")]),
-            (LANGFUSE_DEST, ARIZE_DEST),
-        )
+        received: Final = self._received_by_account(monkeypatch, OpenTelemetryV2Config(), (LANGFUSE_DEST, ARIZE_DEST))
 
         assert received[LANGFUSE_DEST.header_string()]["user.id"] == "user-42"
         assert {
@@ -3532,9 +3528,7 @@ class TestLangfuseDestinationFields:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         received: Final = self._received_by_account(
-            monkeypatch,
-            OpenTelemetryV2Config(mapper_names=["genai", "langfuse"], exporters=[ExporterSpec(kind="console")]),
-            (LANGFUSE_DEST,),
+            monkeypatch, OpenTelemetryV2Config(mapper_names=["genai", "langfuse"]), (LANGFUSE_DEST,)
         )
 
         assert {key: received[None].get(key) for key in ("user.id", "session.id", "langfuse.trace.tags")} == {
@@ -3632,10 +3626,7 @@ class TestLangfuseDestinationFields:
         assert arize is not None
 
         received: Final = self._received_by_account(
-            monkeypatch,
-            OpenTelemetryV2Config(exporters=[ExporterSpec(kind="console")]),
-            (destination, arize),
-            with_content=True,
+            monkeypatch, OpenTelemetryV2Config(), (destination, arize), with_content=True
         )
 
         assert {headers: "langfuse.observation.input" in attributes for headers, attributes in received.items()} == {
@@ -3650,8 +3641,8 @@ class TestLangfuseDestinationFields:
         capture: Final = _ExporterCapture()
         for kind in ("otlp_grpc", "otlp_http", "console"):
             monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
-        config: Final = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="console")])
-        provider: Final = build_tracer_provider(config, tenant_overrides=True)
+        config: Final = OpenTelemetryV2Config()
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
         attach_tenant_fan_out(provider, config)
         emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
         destination: Final = destination_for(
