@@ -9184,16 +9184,25 @@ def test_bedrock_tools_transformation_valid_params():
 
 
 def test_not_found_error():
+    sent: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            404, json={"message": "model not found"}, headers={"x-amzn-ErrorType": "ResourceNotFoundException"}
+        )
+
     with pytest.raises(litellm.NotFoundError):
         completion(
             model="bedrock/bad_model",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What is the meaning of life",
-                }
-            ],
+            messages=[{"role": "user", "content": "What is the meaning of life"}],
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+            aws_region_name="us-west-2",
         )
+
+    assert [request.url.raw_path for request in sent] == [b"/model/bad_model/converse"]
 
 
 @pytest.mark.parametrize(
