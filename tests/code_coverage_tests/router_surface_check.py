@@ -39,6 +39,7 @@ ROUTER_FILES = {
     "litellm/router.py",
     "litellm/router_api.py",
     "litellm/router_deprecated.py",
+    "litellm/router_host.py",
 }
 ROUTER_CLASS_FILES = ["litellm/router.py", "litellm/router_deprecated.py"]
 ROUTER_CLASS_NAMES = {"Router", "DeprecatedRouterMembers"}

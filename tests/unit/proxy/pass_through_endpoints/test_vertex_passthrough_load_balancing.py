@@ -20,7 +20,7 @@ from litellm.types.router import DeploymentTypedDict
 @pytest.mark.asyncio
 async def test_vertex_passthrough_load_balancing():
     """
-    Test that _base_vertex_proxy_route uses llm_router.get_available_deployment_for_pass_through
+    Test that _base_vertex_proxy_route uses llm_router.select(model, kind="pass_through")
     instead of get_model_list to ensure load balancing works with pass-through filtering.
     """
     # Setup mocks
@@ -39,7 +39,8 @@ async def test_vertex_passthrough_load_balancing():
             "use_in_pass_through": True,
         }
     }
-    mock_router.get_available_deployment_for_pass_through.return_value = mock_deployment
+    mock_router.select = AsyncMock()
+    mock_router.select.return_value = mock_deployment
 
     # Mock get_vertex_model_id_from_url to return a model ID
     with (
@@ -95,10 +96,8 @@ async def test_vertex_passthrough_load_balancing():
         )
 
         # Verify
-        # 1. Check that get_available_deployment_for_pass_through was called with the correct model ID
-        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(
-            model="gemini-pro"
-        )
+        # 1. Check that select(kind="pass_through") was called with the correct model ID
+        mock_router.select.assert_awaited_once_with("gemini-pro", kind="pass_through")
 
         # 2. Check that get_model_list was NOT called (this ensures we aren't doing the old logic)
         mock_router.get_model_list.assert_not_called()
@@ -706,7 +705,8 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         }
     }
     mock_router = MagicMock()
-    mock_router.get_available_deployment_for_pass_through.return_value = mock_deployment
+    mock_router.select = AsyncMock()
+    mock_router.select.return_value = mock_deployment
 
     # The URL contains project/location AND a custom model name with slashes
     test_endpoint = "v1/projects/nv-gcpllmgwit-20250411173346/locations/global/publishers/google/models/gcp/google/gemini-3-pro:generateContent"
@@ -753,9 +753,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         )
 
         # Verify the router was called with the custom model name (extracted from URL)
-        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(
-            model="gcp/google/gemini-3-pro"
-        )
+        mock_router.select.assert_awaited_once_with("gcp/google/gemini-3-pro", kind="pass_through")
 
         # Verify the target URL passed to create_pass_through_route contains
         # the REAL Vertex AI model name, not the custom one
@@ -787,7 +785,8 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
     mock_handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
 
     mock_router = MagicMock()
-    mock_router.get_available_deployment_for_pass_through.return_value = {
+    mock_router.select = AsyncMock()
+    mock_router.select.return_value = {
         "model_name": "gemini-3.8-flash",
         "litellm_params": {
             "model": "vertex_ai/gemini-3.8-flash",
@@ -847,27 +846,28 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
 
 def _router_without_deployment() -> MagicMock:
     router = MagicMock()
-    router.get_available_deployment_for_pass_through.return_value = None
+    router.select = AsyncMock(return_value=None)
     return router
 
 
 def _router_raising_on_lookup() -> MagicMock:
     router = MagicMock()
-    router.get_available_deployment_for_pass_through.side_effect = ValueError("no healthy deployment")
+    router.select = AsyncMock(side_effect=ValueError("no healthy deployment"))
     return router
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "llm_router",
     [None, _router_without_deployment(), _router_raising_on_lookup()],
     ids=["no-router", "no-matching-deployment", "lookup-raises"],
 )
-def test_vertex_passthrough_without_a_resolved_deployment_keeps_the_url_and_reports_no_model_info(
+async def test_vertex_passthrough_without_a_resolved_deployment_keeps_the_url_and_reports_no_model_info(
     llm_router: MagicMock | None,
 ):
     """A Vertex passthrough call that no router deployment serves must keep the URL-derived values and carry no
     deployment model_info, so logging cannot attribute it to a deployment that never handled it."""
-    resolved = _resolve_vertex_model_from_router(
+    resolved = await _resolve_vertex_model_from_router(
         model_id="gemini-3.8-flash",
         llm_router=llm_router,
         encoded_endpoint="/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",

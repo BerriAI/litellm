@@ -425,7 +425,7 @@ async def test_resync_model_deployments_mutates_router_under_model_reconcile_loc
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[MagicMock()])
     router: Final = MagicMock()
-    router.get_model_list.return_value = []
+    router.registry.return_value.deployments.return_value = []
     lock_states: list[bool] = []
 
     def record_add_deployment(db_models) -> None:
@@ -458,7 +458,7 @@ async def test_resync_model_deployments_loads_db_credentials_before_reconciling_
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=rows)
     router: Final = MagicMock()
-    router.get_model_list.return_value = []
+    router.registry.return_value.deployments.return_value = []
     installed: Final = MagicMock()
 
     async def load_credentials_from_db(prisma_client: object) -> None:
@@ -763,13 +763,14 @@ async def test_resync_model_deployments_reconciles_every_db_row_when_the_missed_
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[row])
     router: Final = MagicMock()
-    router.model_names = []
-    router.has_model_id.return_value = False
+    registry: Final = router.registry.return_value
+    registry.names.return_value = []
+    registry.has_deployment.return_value = False
     reconciled: Final = MagicMock()
 
     async def reconcile_every_row(prisma_client: object, proxy_logging_obj: object) -> None:
         reconciled(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
-        router.model_names = (
+        registry.names.return_value = (
             [router_name, "simple-tier", "complex-tier"] if router_holds_the_name_after_reconcile else []
         )
 
