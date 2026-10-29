@@ -262,6 +262,18 @@
       "/v1/messages"
     ]
   },
+  "hopper": {
+    "base_url": "https://api.withhopper.com/v1",
+    "api_key_env": "HOPPER_API_KEY",
+    "api_base_env": "HOPPER_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/messages"
+    ]
+  },
   "refuseless": {
     "base_url": "https://api.refuseless.com/v1",
     "api_key_env": "REFUSELESS_API_KEY",
