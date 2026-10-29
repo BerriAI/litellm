@@ -10,7 +10,7 @@ GET /router/fields - Get router settings field definitions without values (for U
 import inspect
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, get_args
+from typing import Final, get_args
 
 from fastapi import APIRouter, Depends
 from pydantic import Field
@@ -32,7 +32,7 @@ router: Final = APIRouter()
 
 class RouterSettingsResponse(LiteLLMBaseModel):
     fields: list[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
-    current_values: dict[str, Any] = Field(description="Current values of router settings")
+    current_values: dict[str, object] = Field(description="Current values of router settings")
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
     routing_group_strategies: tuple[str, ...] = Field(
         description="Strategies supported when constructing a routing group"
