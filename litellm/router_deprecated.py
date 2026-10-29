@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, TypeVar, overload
 
-from litellm.router_api import SETTING_FIELDS, ChangeSet
+from litellm.router_api import ASSIGNABLE_ALIASES, SETTING_FIELDS, ChangeSet
 
 if TYPE_CHECKING:
     from typing import Any  # noqa: TID251  # only to repeat two old signatures that had Any, unchanged
@@ -65,7 +65,7 @@ _INTERNAL_PREFIX: Final = "litellm.router"
 
 
 # Router's own attribute hooks: a write or delete through an old name passes through them first.
-_ATTRIBUTE_HOOKS: Final = frozenset({"__setattr__", "__delattr__"})
+_ATTRIBUTE_HOOKS: Final = frozenset({"__getattribute__", "__setattr__", "__delattr__"})
 
 
 def _note(name: str, replacement: str) -> None:
@@ -88,9 +88,10 @@ def _note(name: str, replacement: str) -> None:
 def _as_router(obj: "DeprecatedRouterMembers") -> "Router":
     """The Router this mixin is part of (it is mixed into ``litellm.Router`` only)."""
     from litellm.router import Router
+    from litellm.router_python_core import PythonCore
 
-    if isinstance(obj, Router):
-        return obj
+    if isinstance(obj, (Router, PythonCore)):
+        return obj  # pyright: ignore[reportReturnType]  # a PythonCore carries every member the mixin reads
     raise TypeError(f"{type(obj).__name__} is not a litellm.Router; DeprecatedRouterMembers is mixed into Router only")
 
 
@@ -134,7 +135,7 @@ class _DeprecatedAttribute(Generic[_T]):
 
     def __set__(self, obj: "DeprecatedRouterMembers", value: _T) -> None:
         _note(self.name, self.replacement)
-        if self.name in SETTING_FIELDS:
+        if self.name in SETTING_FIELDS or self.name in ASSIGNABLE_ALIASES:
             _as_router(obj).apply(ChangeSet(assign={self.name: value}))
         else:
             setattr(obj, "_core_" + self.name, value)
@@ -502,9 +503,9 @@ class DeprecatedRouterMembers:
     @staticmethod
     def deployment_usable_by_team(model: "Mapping[str, object] | Deployment", team_id: str | None) -> bool:
         _note("deployment_usable_by_team", "registry().includes(deployment, team_id=...)")
-        from litellm.router import Router
+        from litellm.router_python_core import PythonCore
 
-        return Router._core_deployment_usable_by_team(model, team_id)
+        return PythonCore._core_deployment_usable_by_team(model, team_id)
 
     _deployment_usable_by_team = deployment_usable_by_team
 
