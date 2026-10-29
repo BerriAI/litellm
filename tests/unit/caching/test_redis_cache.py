@@ -506,48 +506,92 @@ def test_sync_get_cache_failure_feeds_the_breaker_and_logs_a_well_formed_record(
         sync_batch_redis_cache.get_cache("lit7468")
 
 
-def test_batch_get_counts_raises_where_batch_get_cache_reports_a_miss(sync_batch_redis_cache):
+def test_batch_count_in_flight_raises_where_batch_get_cache_reports_a_miss(redis_no_ping: None):
     """A caller that must fall back when Redis is unreachable needs the failure, not zeros.
 
     The batch read answers a dead Redis with an empty dict, which a counting caller cannot tell
-    apart from "every counter is unset". Least-busy routing read that as an idle deployment and
+    apart from "nothing is in flight". Least-busy routing read that as an idle deployment and
     kept sending traffic to it instead of falling back to this worker's own in-flight counts.
     """
-    assert sync_batch_redis_cache.batch_get_cache(key_list=["lit7039"]) == {}
+    from fakeredis import FakeRedis, FakeServer
+    from redis.exceptions import ConnectionError as RedisConnectionError
 
-    with pytest.raises(OSError, match="redis unavailable"):
-        sync_batch_redis_cache.batch_get_counts(["lit7039"])
+    unreachable = FakeServer()
+    unreachable.connected = False
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=FakeRedis(server=unreachable)
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379)
+
+    assert cache.batch_get_cache(key_list=["lit7039"]) == {}
+
+    with pytest.raises(RedisConnectionError):
+        cache.batch_count_in_flight(["lit7039"], since=0.0)
+
+
+@pytest.fixture
+def in_flight_redis() -> Iterator[RedisCache]:
+    from fakeredis import FakeRedis, FakeServer
+    from fakeredis.aioredis import FakeRedis as AsyncFakeRedis
+
+    server = FakeServer()
+    with (
+        patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")),
+        patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+            "litellm._redis.get_redis_client", return_value=FakeRedis(server=server)
+        ),
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379, namespace="ns")
+    with patch.object(cache, "init_async_client", return_value=AsyncFakeRedis(server=server)):
+        yield cache
+
+
+IN_FLIGHT_START: Final = 1_700_000_000.0
+IN_FLIGHT_MAX_AGE: Final = 600
+
+
+def test_finishing_a_request_removes_only_that_request(in_flight_redis: RedisCache):
+    for call_id in ("old-1", "old-2", "old-3", "new-1"):
+        in_flight_redis.track_in_flight("dep-a", call_id, IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+    for call_id in ("old-1", "old-2", "old-3", "old-3", "never-started"):
+        in_flight_redis.untrack_in_flight("dep-a", call_id)
+
+    assert in_flight_redis.batch_count_in_flight(["dep-a"], since=IN_FLIGHT_START) == (1,)
+
+
+def test_in_flight_counts_come_back_in_key_order_with_unknown_keys_as_zero(in_flight_redis: RedisCache):
+    in_flight_redis.track_in_flight("dep-a", "a-1", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+    in_flight_redis.track_in_flight("dep-c", "c-1", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+    in_flight_redis.track_in_flight("dep-c", "c-2", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+
+    assert in_flight_redis.batch_count_in_flight(["dep-c", "dep-b", "dep-a"], since=IN_FLIGHT_START) == (2, 0, 1)
+
+
+def test_requests_that_started_before_the_cutoff_are_not_counted(in_flight_redis: RedisCache):
+    in_flight_redis.track_in_flight("dep-a", "older", IN_FLIGHT_START - 1, IN_FLIGHT_MAX_AGE)
+    in_flight_redis.track_in_flight("dep-a", "at-cutoff", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+
+    assert in_flight_redis.batch_count_in_flight(["dep-a"], since=IN_FLIGHT_START) == (1,)
+
+
+def test_tracking_a_request_drops_members_older_than_max_age(in_flight_redis: RedisCache):
+    in_flight_redis.track_in_flight("dep-a", "orphan", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+    in_flight_redis.track_in_flight("dep-a", "edge", IN_FLIGHT_START + 1, IN_FLIGHT_MAX_AGE)
+    in_flight_redis.track_in_flight("dep-a", "new", IN_FLIGHT_START + 1 + IN_FLIGHT_MAX_AGE, IN_FLIGHT_MAX_AGE)
+
+    assert in_flight_redis.redis_client.zrange("ns:dep-a", 0, -1) == [b"edge", b"new"]
+    assert 0 < in_flight_redis.redis_client.ttl("ns:dep-a") <= IN_FLIGHT_MAX_AGE
 
 
 @pytest.mark.asyncio
-async def test_async_batch_get_counts_raises_where_async_batch_get_cache_reports_a_miss(redis_no_ping: None):
-    """Async twin: the async batch read hides the same failure behind an empty dict."""
-    failing_client = AsyncMock()
-    failing_client.mget.side_effect = OSError("redis unavailable")
-    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
-        "litellm._redis.get_redis_client", return_value=MagicMock()
-    ):
-        cache = RedisCache(host="127.0.0.1", port=6379)
+async def test_async_in_flight_tracking_shares_the_sync_state(in_flight_redis: RedisCache):
+    await in_flight_redis.async_track_in_flight("dep-a", "async-1", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+    in_flight_redis.track_in_flight("dep-a", "sync-1", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+    await in_flight_redis.async_track_in_flight("dep-b", "async-2", IN_FLIGHT_START, IN_FLIGHT_MAX_AGE)
+    await in_flight_redis.async_untrack_in_flight("dep-a", "sync-1")
 
-    with patch.object(cache, "init_async_client", return_value=failing_client):
-        assert await cache.async_batch_get_cache(key_list=["lit7039"]) == {}
-
-        with pytest.raises(OSError, match="redis unavailable"):
-            await cache.async_batch_get_counts(["lit7039"])
-
-
-@pytest.mark.parametrize("stored", [b"3", "3"])
-def test_batch_get_counts_reads_counters_in_order_and_keeps_unset_keys_apart(stored, redis_no_ping: None):
-    """Counters come back positionally, so an unset key has to stay a hole rather than shift the
-    rest of the row onto the wrong deployments, and a count has to survive whether the client
-    hands it back as bytes or as text."""
-    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
-        "litellm._redis.get_redis_client", return_value=MagicMock()
-    ):
-        cache = RedisCache(host="127.0.0.1", port=6379)
-    cache.redis_client.mget.return_value = [stored, None, b"0"]
-
-    assert cache.batch_get_counts(["dep-a", "dep-b", "dep-c"]) == (3, None, 0)
+    assert await in_flight_redis.async_batch_count_in_flight(["dep-a", "dep-b"], since=IN_FLIGHT_START) == (1, 1)
+    assert in_flight_redis.batch_count_in_flight(["dep-a", "dep-b"], since=IN_FLIGHT_START) == (1, 1)
 
 
 @pytest.fixture
@@ -1033,8 +1077,9 @@ def test_prometheus_services_logger_starts_from_the_breakers_already_built(monke
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     gc.collect()
     ServiceLogging()
-    assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
-        redis_breaker_state_counts()["closed"]
+    assert (
+        REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"})
+        == (redis_breaker_state_counts()["closed"])
     )
 
 
