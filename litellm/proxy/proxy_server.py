@@ -4472,7 +4472,7 @@ async def update_cache(
     if response_cost is None:
         return
 
-    if user_id is not None:
+    if user_id is not None and not is_team_key_exempt_from_user_budget(team_id):
         _add_spend(user_id, LiteLLM_UserTable, response_cost)
     if end_user_id is not None:
         _add_spend(end_user_cache_key(end_user_id), LiteLLM_EndUserTable, response_cost)

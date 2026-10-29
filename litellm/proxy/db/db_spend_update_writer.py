@@ -1282,7 +1282,7 @@ class DBSpendUpdateWriter:
         """
         try:
             if prisma_client is not None:  # update
-                user_ids: Final = [user_id if not is_team_key_exempt_from_user_budget(team_id) else None]
+                user_ids: Final = [] if is_team_key_exempt_from_user_budget(team_id) else [user_id]
                 if litellm.max_budget > 0:  # track global proxy budget, if user set max budget
                     user_ids.append(litellm_proxy_budget_name)
 

@@ -15,12 +15,15 @@ import pytest
 
 import litellm
 import litellm.proxy.proxy_server as ps
-from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     admission_counter_keys,
+    is_team_key_exempt_from_user_budget,
     post_call_counter_keys,
 )
 
@@ -166,10 +169,76 @@ async def test_admission_counter_keys_include_user_counter_when_toggle_is_on(tog
 async def test_user_counter_reseed_reads_only_the_user_row(toggle_off):
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=SimpleNamespace(spend=51.77)  # personal-key spend only, team spend never written here
+        return_value=SimpleNamespace(spend=50.0)  # personal-key spend only, team spend never written here
     )
 
     reseeded = await SpendCounterReseed.from_db(prisma_client, counter_key="spend:user:u1")
 
-    assert reseeded == 51.77
+    assert reseeded == 50.0
     prisma_client.db.litellm_usertable.find_unique.assert_awaited_once_with(where={"user_id": "u1"})
+
+
+# 6. Post-cost user cache (update_cache): a team key must not inflate the cached
+#    LiteLLM_UserTable.spend — it is the fallback_spend of the user budget check
+#    (auth_checks.py) when Redis and the counters are cold.
+def _seeded_user_cache() -> UserApiKeyCache:
+    cache = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    cache.set_cache(
+        key="u1",
+        value=LiteLLM_UserTable(user_id="u1", spend=10.0),
+        local_only=True,
+        model_type=LiteLLM_UserTable,
+    )
+    seeded = cache.get_cache(key="u1", local_only=True, model_type=LiteLLM_UserTable)
+    assert seeded is not None and seeded.spend == 10.0
+    return cache
+
+
+async def _update_cache_user(user_cache: UserApiKeyCache, team_id: str | None) -> None:
+    await ps.update_cache(
+        token=None,
+        user_id="u1",
+        end_user_id=None,
+        team_id=team_id,
+        response_cost=5.0,
+        parent_otel_span=None,
+        cache=user_cache,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_cache_does_not_inflate_the_user_cache_for_team_keys(toggle_off):
+    cache = _seeded_user_cache()
+
+    await _update_cache_user(cache, team_id="t1")
+
+    user_obj = cache.get_cache(key="u1", local_only=True, model_type=LiteLLM_UserTable)
+    assert user_obj is not None
+    assert user_obj.spend == 10.0
+
+    # Control: the same call on a personal key (no team_id) still counts.
+    personal = _seeded_user_cache()
+    await _update_cache_user(personal, team_id=None)
+    personal_obj = personal.get_cache(key="u1", local_only=True, model_type=LiteLLM_UserTable)
+    assert personal_obj is not None
+    assert personal_obj.spend == 15.0
+
+
+@pytest.mark.asyncio
+async def test_update_cache_inflates_the_user_cache_when_toggle_is_on(toggle_on):
+    cache = _seeded_user_cache()
+
+    await _update_cache_user(cache, team_id="t1")
+
+    user_obj = cache.get_cache(key="u1", local_only=True, model_type=LiteLLM_UserTable)
+    assert user_obj is not None
+    assert user_obj.spend == 15.0
+
+
+# 7. Only string team ids can exempt the user budget: a non-string placeholder
+#    (None, or an unresolved value in synthetic payloads) never exempts — same
+#    philosophy as the counter keys, where only string ids name a counter.
+def test_non_string_team_id_never_exempts(toggle_off):
+    assert is_team_key_exempt_from_user_budget(123) is False
+    assert is_team_key_exempt_from_user_budget(None) is False
+    assert is_team_key_exempt_from_user_budget("t1") is True

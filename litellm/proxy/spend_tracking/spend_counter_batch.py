@@ -187,8 +187,8 @@ def is_team_key_exempt_from_user_budget(team_id: object) -> bool:
     apply_user_budget_to_team_keys`` is True (auth_checks.py), so measuring a team key's
     spend against the owner's ``spend:user:`` counter would fill their personal envelope
     with their team's spend. Same convention as budget_reservation.py."""
-    if team_id is None:
-        return False
+    if not isinstance(team_id, str):
+        return False  # only string ids name a team counter; a placeholder never exempts
     from litellm.proxy.proxy_server import general_settings
 
     return general_settings.get("apply_user_budget_to_team_keys") is not True
