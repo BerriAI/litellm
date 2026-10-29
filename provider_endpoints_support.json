@@ -3724,7 +3724,7 @@
         "ocr": false,
         "search": false,
         "moderations": false,
-        "realtime": false,
+        "realtime": true,
         "video_generations": false,
         "batches": false,
         "messages": false,

@@ -10759,6 +10759,7 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] = MappingProxyType({}),
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -10768,6 +10769,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig(drop_params=drop_params)
+        if LlmProviders.SONIOX == provider:
+            from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+
+            return SonioxRealtimeConfig.from_litellm_params(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod

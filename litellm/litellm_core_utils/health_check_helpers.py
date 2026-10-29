@@ -31,7 +31,13 @@ EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = Mapping
 )
 
 
-def native_health_check_mode(model: str, custom_llm_provider: str | None) -> Literal["anthropic_messages"] | None:
+def native_health_check_mode(
+    model: str, custom_llm_provider: str | None
+) -> Literal["anthropic_messages", "realtime"] | None:
+    if custom_llm_provider == "soniox":
+        from litellm.llms.soniox.common_utils import soniox_health_check_mode
+
+        return soniox_health_check_mode(model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
