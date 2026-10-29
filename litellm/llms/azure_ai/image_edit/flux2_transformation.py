@@ -4,6 +4,7 @@ from io import BufferedReader
 from types import MappingProxyType
 from typing import Any, Final
 
+import httpx
 from httpx._types import RequestFiles
 
 import litellm
@@ -11,14 +12,17 @@ from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.azure_ai.image_generation.cost_calculator import record_megapixel_usage
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
+from litellm.llms.base_llm.image_edit.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ImageResponse
 
 
 class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
@@ -134,6 +138,16 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
             raise ValueError(f"Unsupported image type: {type(image)}")
 
         return base64.b64encode(image_bytes).decode("utf-8")
+
+    def transform_image_edit_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ImageResponse:
+        image_response: Final = super().transform_image_edit_response(model, raw_response, logging_obj)
+        record_megapixel_usage(image_response, raw_response.content)
+        return image_response
 
     def get_complete_url(
         self,

@@ -178,6 +178,31 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     assert response._hidden_params["response_cost"] == pytest.approx(5e-08 * 2048 * 1024 * 2)
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_flux2_image_edit_bills_the_reported_reference_megapixels() -> None:
+    metered_body: Final = {
+        "data": [{"b64_json": "aW1n"}],
+        "request_meta": {"cost": 999.0, "input_mp": 2.0, "output_mp": 1.0, "total_pixels": 1},
+    }
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=metered_body)))
+    )
+
+    response: Final = litellm.image_edit(
+        model="azure_ai/flux.2-pro",
+        image=[b"first", b"second"],
+        prompt="Combine them",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=client,
+    )
+
+    prices: Final = litellm.model_cost["azure_ai/flux.2-pro"]
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        prices["output_cost_per_first_megapixel"] + 2 * prices["input_cost_per_megapixel"]
+    )
+
+
 def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
     optional_params: Final = ImageEditRequestUtils.get_optional_params_image_edit(
         model="FLUX.2-pro",

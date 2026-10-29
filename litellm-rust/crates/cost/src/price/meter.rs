@@ -32,6 +32,7 @@ pub enum InputUnit {
     Character,
     Image,
     Pixel,
+    Megapixel,
     Query { over_results: Option<NonZeroU64> },
     Request,
     Second,
@@ -47,6 +48,8 @@ pub enum OutputUnit {
     Character,
     Image(Option<ImageSize>),
     Pixel,
+    FirstMegapixel,
+    Megapixel,
     Second(Option<Resolution>),
     VideoSecond,
 }

@@ -61,8 +61,8 @@ struct RegistryDocument {
 
 pub(crate) const FLAT_KEY_PATTERN: &str = concat!(
     r"^(",
-    r"input_cost_per_((audio_|image_|video_)?token|character|image|pixel|query|request|second|text_message|audio_per_second|video_per_second(_above_\d+s_interval)?)",
-    r"|output_cost_per_((audio_|image_|video_|reasoning_)?token|character|image(_\d+(\.\d+)?K?)?|pixel|second(_\d+[pk])?|video_per_second)",
+    r"input_cost_per_((audio_|image_|video_)?token|character|image|pixel|megapixel|query|request|second|text_message|audio_per_second|video_per_second(_above_\d+s_interval)?)",
+    r"|output_cost_per_((audio_|image_|video_|reasoning_)?token|character|image(_\d+(\.\d+)?K?)?|pixel|(first_)?megapixel|second(_\d+[pk])?|video_per_second)",
     r"|cache_read_input_(audio_|image_|video_)?token_cost",
     r"|explicit_cache_read_input_token_cost",
     r"|cache_creation_input_(audio_|image_|video_)?token_cost(_above_1hr|_above_12hr)?",
@@ -186,6 +186,9 @@ mod tests {
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens"
     )]
     #[case::image_label("output_cost_per_image_0.5K")]
+    #[case::input_megapixel("input_cost_per_megapixel")]
+    #[case::first_output_megapixel("output_cost_per_first_megapixel")]
+    #[case::output_megapixel("output_cost_per_megapixel")]
     #[case::resolution_tier("output_cost_per_second_4k_flex")]
     #[case::feature_batch("annotation_cost_per_page_batches")]
     #[case::video_interval("input_cost_per_video_per_second_above_8s_interval")]

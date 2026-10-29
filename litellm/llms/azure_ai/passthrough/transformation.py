@@ -13,6 +13,7 @@ from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.azure_ai.image_generation.cost_calculator import record_megapixel_usage
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
@@ -85,9 +86,16 @@ def relay_query_params(
     return MappingProxyType({**(request_query_params or EMPTY_QUERY), "api-version": api_version})
 
 
+def metered_image_response(body: Mapping[str, object]) -> ImageResponse:
+    image_response: Final = ImageResponse.model_validate(body)
+    record_megapixel_usage(image_response, body)
+    return image_response
+
+
 FOUNDRY_RELAY_SHAPES: Final = (
     RelayShape("/rerank", CallTypes.arerank, RerankResponse.model_validate),
-    RelayShape("/providers/blackforestlabs/v1/flux-2-pro", CallTypes.aimage_generation, ImageResponse.model_validate),
+    RelayShape("/providers/blackforestlabs/v1/flux-2-pro", CallTypes.aimage_generation, metered_image_response),
+    RelayShape("/providers/blackforestlabs/v1/flux-2-flex", CallTypes.aimage_generation, metered_image_response),
 )
 
 

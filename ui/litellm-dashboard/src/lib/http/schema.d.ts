@@ -35440,6 +35440,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Megapixel */
+            input_cost_per_megapixel?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -35555,6 +35557,8 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Character Above 128K Tokens */
             output_cost_per_character_above_128k_tokens?: number | null;
+            /** Output Cost Per First Megapixel */
+            output_cost_per_first_megapixel?: number | null;
             /** Output Cost Per Image */
             output_cost_per_image?: number | null;
             /** Output Cost Per Image 1024 */
@@ -35567,6 +35571,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Megapixel */
+            output_cost_per_megapixel?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -50838,6 +50844,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Megapixel */
+            input_cost_per_megapixel?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -50953,6 +50961,8 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Character Above 128K Tokens */
             output_cost_per_character_above_128k_tokens?: number | null;
+            /** Output Cost Per First Megapixel */
+            output_cost_per_first_megapixel?: number | null;
             /** Output Cost Per Image */
             output_cost_per_image?: number | null;
             /** Output Cost Per Image 1024 */
@@ -50965,6 +50975,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Megapixel */
+            output_cost_per_megapixel?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */

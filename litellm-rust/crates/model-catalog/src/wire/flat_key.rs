@@ -180,6 +180,7 @@ fn input_unit(unit: &str) -> Option<InputUnit> {
         "character" => Some(InputUnit::Character),
         "image" => Some(InputUnit::Image),
         "pixel" => Some(InputUnit::Pixel),
+        "megapixel" => Some(InputUnit::Megapixel),
         "query" => Some(InputUnit::Query { over_results: None }),
         "request" => Some(InputUnit::Request),
         "second" => Some(InputUnit::Second),
@@ -208,6 +209,8 @@ fn output_unit(unit: &str) -> Option<OutputUnit> {
         "character" => Some(OutputUnit::Character),
         "image" => Some(OutputUnit::Image(None)),
         "pixel" => Some(OutputUnit::Pixel),
+        "first_megapixel" => Some(OutputUnit::FirstMegapixel),
+        "megapixel" => Some(OutputUnit::Megapixel),
         "second" => Some(OutputUnit::Second(None)),
         "video_per_second" => Some(OutputUnit::VideoSecond),
         _ => None,
@@ -288,6 +291,18 @@ mod tests {
     #[case::image_token_is_a_token(
         "output_cost_per_image_token",
         key(Meter::Output(OutputUnit::Token(TokenKind::Image)), Band::Base, None)
+    )]
+    #[case::input_megapixel(
+        "input_cost_per_megapixel",
+        key(Meter::Input(InputUnit::Megapixel), Band::Base, None)
+    )]
+    #[case::first_output_megapixel(
+        "output_cost_per_first_megapixel",
+        key(Meter::Output(OutputUnit::FirstMegapixel), Band::Base, None)
+    )]
+    #[case::output_megapixel(
+        "output_cost_per_megapixel",
+        key(Meter::Output(OutputUnit::Megapixel), Band::Base, None)
     )]
     #[case::resolution(
         "output_cost_per_second_720p",
