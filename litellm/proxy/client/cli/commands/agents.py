@@ -828,7 +828,7 @@ def _codex_debug_models(
             encoding="utf-8",
             timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as e:
         return ModelSyncSkipped(f"`{name} debug models` failed: {e}")
     if completed.returncode == 0:
         return completed.stdout

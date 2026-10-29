@@ -34,7 +34,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.reasoning_effort_strength import (
-    REASONING_EFFORT_STRENGTH_RANK,
+    REASONING_EFFORT_STRENGTH_ORDER,
     ReasoningEffortRounding,
     nearest_declared_reasoning_effort,
 )
@@ -136,7 +136,7 @@ def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[s
 
 def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
     declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
-    return declared is not None and any(level in REASONING_EFFORT_STRENGTH_RANK for level in declared)
+    return declared is not None and any(level in REASONING_EFFORT_STRENGTH_ORDER for level in declared)
 
 
 def with_adaptive_thinking_as_effort(

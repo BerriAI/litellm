@@ -1271,7 +1271,13 @@ class TestCodexModelSync:
         assert result.reason == "`codex debug models` exited 1: no output"
 
     @pytest.mark.parametrize(
-        "error", [OSError("codex vanished"), subprocess.TimeoutExpired("codex", 10)], ids=["oserror", "timeout"]
+        "error",
+        [
+            OSError("codex vanished"),
+            subprocess.TimeoutExpired("codex", 10),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ],
+        ids=["oserror", "timeout", "undecodable"],
     )
     def test_unrunnable_preflight_is_reported_not_raised(self, tmp_path, error):
         def failing_run(*a, **k):
