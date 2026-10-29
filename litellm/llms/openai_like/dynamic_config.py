@@ -55,6 +55,15 @@ def create_config_class(provider: SimpleProviderConfig):
             else:
                 return super()._transform_messages(messages=messages, model=model, is_async=False)
 
+        def _should_preserve_cache_control_for_endpoint(
+            self,
+            custom_llm_provider: str | None,
+            api_base: str | None,
+        ) -> bool:
+            return provider.special_handling.get(
+                "preserve_cache_control", False
+            ) or super()._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base)
+
         def _get_openai_compatible_provider_info(
             self, api_base: str | None, api_key: str | None
         ) -> tuple[str | None, str | None]:
@@ -177,7 +186,7 @@ def create_config_class(provider: SimpleProviderConfig):
     return JSONProviderConfig
 
 
-_responses_config_cache: Final[dict] = {}
+_responses_config_cache: Final[dict[str, "type[OpenAILikeResponsesConfig]"]] = {}
 
 
 def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenAILikeResponsesConfig]":

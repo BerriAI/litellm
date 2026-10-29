@@ -3,6 +3,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -12,6 +13,7 @@ from litellm._logging import verbose_logger
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
+_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 
 
 class SimpleProviderConfig:
@@ -20,12 +22,14 @@ class SimpleProviderConfig:
     def __init__(self, slug: str, data: dict):
         self.slug = slug
         self.base_url = data["base_url"]
-        self.api_key_env = data["api_key_env"]
-        self.api_base_env = data.get("api_base_env")
+        self.api_key_env: str = data["api_key_env"]
+        self.api_base_env: str | None = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
-        self.special_handling = data.get("special_handling", {})
+        self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
+            data.get("special_handling", {})
+        )
         self.supported_endpoints = data.get("supported_endpoints", [])
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
