@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
@@ -11,6 +12,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.secret_managers.main import (
+    GOOGLE_OIDC_SECRET_PREFIX,
     UnresolvableSecretReference,
     get_secret_str,
     resolve_local_oidc_reference,
@@ -46,6 +48,14 @@ def _credential_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | 
 def _resolve_oidc_reference(credential: str | None) -> str | None:
     if credential is None:
         return None
+    if credential.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "pass-through credential oidc/google secret reference could not be resolved: pass-through routes "
+                "do not fetch Google ID tokens. Use a static key, oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>."
+            ),
+        )
     match resolve_local_oidc_reference(credential):
         case UnresolvableSecretReference(kind=kind, reason=reason):
             raise HTTPException(
@@ -87,6 +97,14 @@ class PassthroughEndpointRouter:
             custom_llm_provider=custom_llm_provider,
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
+
+    def has_credentials(self, custom_llm_provider: str) -> bool:
+        if self._get_deployment_api_key(custom_llm_provider=custom_llm_provider, region_name=None) is not None:
+            return True
+        env_variable_name: Final = self._get_default_env_variable_name_passthrough_endpoint(
+            custom_llm_provider=custom_llm_provider,
+        )
+        return bool(os.environ.get(env_variable_name))
 
     def _get_deployment_api_key(
         self,

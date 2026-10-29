@@ -5074,7 +5074,7 @@ async def test_spend_log_request_id_is_the_message_id_a_bridged_streaming_caller
     adapter mints itself, and it is the only request id that call ever shows the caller, so
     GET /spend/logs?request_id=msg_... has to land on the row."""
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator import (
+    from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
         AnthropicResponsesStreamWrapper,
     )
     from litellm.types.llms.openai import (
@@ -5382,6 +5382,28 @@ def test_get_logging_payload_router_rejected_request_takes_provider_from_model_g
 
     assert payload["model_group"] == model_group
     assert payload["custom_llm_provider"] == expected_provider
+
+
+@pytest.mark.parametrize("client_model_group", [7, ["embed-only"], {"name": "embed-only"}])
+def test_get_logging_payload_drops_a_client_model_group_that_is_not_a_string(client_model_group: object):
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "embed-only",
+            "litellm_params": {
+                "metadata": {"user_api_key": "test-key", "model_group": client_model_group, "status": "failure"}
+            },
+            "standard_logging_object": {
+                **_make_failed_request_standard_logging_payload(),
+                "model_group": client_model_group,
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=None,
+    )
+
+    assert payload["model_group"] == ""
 
 
 def test_get_logging_payload_router_rejected_request_without_router_leaves_provider_empty():
@@ -6830,7 +6852,7 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys()
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)

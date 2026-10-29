@@ -3258,7 +3258,7 @@ async def test_streaming_hook_fails_closed_when_assembler_raises_api_error():
     guardrail = _sse_guardrail()
 
     with patch(
-        "litellm.llms.anthropic.pass_through.stream_assembly.build_complete_streaming_response",
+        "litellm.llms.anthropic.messages.stream_assembly.build_complete_streaming_response",
         side_effect=litellm.APIError(
             status_code=500,
             message="Error building chunks for logging/streaming usage calculation",
