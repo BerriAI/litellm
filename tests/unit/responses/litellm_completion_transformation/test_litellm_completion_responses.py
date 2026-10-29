@@ -31,7 +31,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.base import HiddenParams
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -4952,6 +4952,12 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     assert convert(openai)["id"] == "call_tokyo"
 
 
+_WEATHER_TOOL_USE: Final = {
+    "type": "tool_use",
+    "id": "toolu_01Weather",
+    "name": "get_weather",
+    "input": {"city": "Paris"},
+}
 _FETCHED_URL: Final = "https://example.com/"
 _BLOCKED_URL: Final = "https://blocked.invalid/"
 _ANTHROPIC_WEB_FETCH_TURN: Final[tuple[dict[str, object], ...]] = (
@@ -4972,11 +4978,11 @@ _ANTHROPIC_WEB_FETCH_TURN: Final[tuple[dict[str, object], ...]] = (
         "content": {"type": "web_fetch_tool_result_error", "error_code": "url_not_allowed"},
     },
     {"type": "text", "text": "The page is titled Example."},
-    {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+    _WEATHER_TOOL_USE,
 )
 
 
-def test_anthropic_web_fetch_is_a_hosted_open_page_call_on_responses() -> None:
+def _anthropic_turn_on_responses(content: Sequence[Mapping[str, object]]) -> ResponsesAPIResponse:
     from unittest.mock import MagicMock
 
     import httpx
@@ -4988,10 +4994,10 @@ def test_anthropic_web_fetch_is_a_hosted_open_page_call_on_responses() -> None:
         "type": "message",
         "role": "assistant",
         "model": "claude-sonnet-5-5",
-        "content": list(_ANTHROPIC_WEB_FETCH_TURN),
+        "content": list(content),
         "stop_reason": "tool_use",
         "stop_sequence": None,
-        "usage": {"input_tokens": 100, "output_tokens": 50, "server_tool_use": {"web_fetch_requests": 2}},
+        "usage": {"input_tokens": 100, "output_tokens": 50},
     }
     raw_response: Final = MagicMock(spec=httpx.Response)
     raw_response.json.return_value = anthropic_response
@@ -5004,11 +5010,11 @@ def test_anthropic_web_fetch_is_a_hosted_open_page_call_on_responses() -> None:
         json_mode=False,
         prefix_prompt=None,
     )
-
-    response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-        request_input="Fetch two pages and check the weather in Paris.",
+    return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Use the web and check the weather in Paris.",
         responses_api_request={
             "tools": [
+                {"type": "web_search_20250305", "name": "web_search"},
                 {"type": "web_fetch_20250910", "name": "web_fetch"},
                 {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
             ]
@@ -5016,12 +5022,45 @@ def test_anthropic_web_fetch_is_a_hosted_open_page_call_on_responses() -> None:
         chat_completion_response=chat_response,
     )
 
+
+def test_anthropic_web_fetch_is_a_hosted_open_page_call_on_responses() -> None:
+    response: Final = _anthropic_turn_on_responses(_ANTHROPIC_WEB_FETCH_TURN)
+
     assert [
         (item.id, item.status, item.action.model_dump()) for item in response.output if item.type == "web_search_call"
     ] == [
         ("ws_srvtoolu_01Fetch", "completed", {"type": "open_page", "url": _FETCHED_URL}),
         ("ws_srvtoolu_02Fetch", "failed", {"type": "open_page", "url": _BLOCKED_URL}),
     ]
+    assert [item.name for item in response.output if item.type == "function_call"] == ["get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("server_tool_use", "expected_action"),
+    [
+        (
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01Pending",
+                "name": "web_fetch",
+                "input": {"url": _FETCHED_URL},
+            },
+            {"type": "open_page", "url": _FETCHED_URL},
+        ),
+        (
+            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+            {"type": "search", "query": "python"},
+        ),
+    ],
+)
+def test_anthropic_server_web_call_without_a_result_is_an_in_progress_hosted_call_on_responses(
+    server_tool_use: Mapping[str, object], expected_action: Mapping[str, object]
+) -> None:
+    response: Final = _anthropic_turn_on_responses((server_tool_use, _WEATHER_TOOL_USE))
+
+    web_calls: Final = [item for item in response.output if item.type == "web_search_call"]
+    assert [(item.id, item.status) for item in web_calls] == [("ws_srvtoolu_01Pending", "in_progress")]
+    assert expected_action.items() <= web_calls[0].action.model_dump().items()
     assert [item.name for item in response.output if item.type == "function_call"] == ["get_weather"]
 
 

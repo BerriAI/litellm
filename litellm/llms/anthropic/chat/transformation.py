@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -263,6 +264,16 @@ def _hosted_web_tool_use(block: object) -> tuple[str, str, object] | None:
             return call_id, name, tool_input
         case _:
             return None
+
+
+def _hosted_web_call(call_id: str, tool_name: str, tool_input: object, result: object) -> ResponseFunctionWebSearch:
+    return build_web_search_call(
+        tool_id=call_id,
+        tool_input=tool_input,
+        result=result,
+        status=None if result is not None else "in_progress",
+        tool_name=tool_name,
+    )
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -2913,25 +2924,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         web_search_results: Sequence[object],
         completion_response: Mapping[str, object],
-    ) -> list[object]:
+    ) -> list[ResponseFunctionWebSearch]:
         content: Final = completion_response.get("content")
         blocks: Final = content if isinstance(content, Sequence) else ()
-        server_tool_uses: Final = {
-            call_id: (tool_name, tool_input)
-            for call_id, tool_name, tool_input in filter(None, map(_hosted_web_tool_use, blocks))
+        results_by_call: Final = {
+            (tool_use_id, result.get("type")): result
+            for result in web_search_results
+            if isinstance(result, dict) and isinstance((tool_use_id := result.get("tool_use_id")), str)
         }
         return [
-            build_web_search_call(
-                tool_id=tool_use_id,
-                tool_input=server_tool_uses[tool_use_id][1],
-                result=result,
-                tool_name=server_tool_uses[tool_use_id][0],
-            )
-            for result in web_search_results
-            if isinstance(result, dict)
-            and isinstance((tool_use_id := result.get("tool_use_id")), str)
-            and tool_use_id in server_tool_uses
-            and result.get("type") == f"{server_tool_uses[tool_use_id][0]}_tool_result"
+            _hosted_web_call(call_id, tool_name, tool_input, results_by_call.get((call_id, f"{tool_name}_tool_result")))
+            for call_id, tool_name, tool_input in filter(None, map(_hosted_web_tool_use, blocks))
         ]
 
     def _build_provider_specific_fields(
@@ -2955,10 +2958,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if web_search_results is not None:
             provider_specific_fields["web_search_results"] = web_search_results
-            provider_specific_fields["web_search_calls"] = self._build_web_search_calls(
-                web_search_results,
-                completion_response,
-            )
+
+        web_search_calls: Final = self._build_web_search_calls(web_search_results or (), completion_response)
+        if web_search_calls:
+            provider_specific_fields["web_search_calls"] = web_search_calls
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
