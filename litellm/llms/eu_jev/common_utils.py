@@ -26,9 +26,7 @@ def eu_jev_upstream_body(hook_body: Mapping[str, object], client_body: Mapping[s
         client_model: Final = client_body.get("model")
         if isinstance(client_model, str):
             return MappingProxyType({**without_model, "model": client_model.removeprefix(_EU_JEV_PREFIX)})
-        return MappingProxyType(
-            {**without_model, **{key: value for key, value in client_body.items() if key == "model"}}
-        )
+        return MappingProxyType(without_model)
     if isinstance(hook_model, str):
         return MappingProxyType({**without_model, "model": hook_model.removeprefix(_EU_JEV_PREFIX)})
     return hook_body

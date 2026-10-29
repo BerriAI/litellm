@@ -8569,6 +8569,19 @@ class TestEuJevPassthroughRoute:
         assert recorder.models == [hook_model]
         assert json.loads(route.calls.last.request.content) == body
 
+    def test_a_null_model_is_limited_as_the_latest_release_and_left_out_upstream(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": None, "state": "x"})
+
+        assert response.status_code == 200
+        assert recorder.models == ["eu_jev/eu-jeff-latest"]
+        assert json.loads(route.calls.last.request.content) == {"state": "x"}
+
     def test_forwards_the_release_a_pre_call_hook_switched_to(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
