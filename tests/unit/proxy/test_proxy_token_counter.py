@@ -91,6 +91,8 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 
 def _hugging_face_offline() -> NoReturn:
     raise OSError("unit tests never download the Kimi K3 tokenizer")
@@ -645,6 +647,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
     ):
         # Mock router to return Anthropic deployment
         with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+            route_entry_points_to_stubs(mock_router)
             mock_router.model_list = [
                 {
                     "model_name": "claude-3-5-sonnet",
@@ -706,6 +709,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
 
             # Mock router to return GPT-4 deployment
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                route_entry_points_to_stubs(mock_router)
                 mock_router.model_list = [
                     {
                         "model_name": "gpt-4",
@@ -765,6 +769,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
 
             # Mock router to return Anthropic deployment
             with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                route_entry_points_to_stubs(mock_router)
                 mock_router.model_list = [
                     {
                         "model_name": "claude-3-5-sonnet",
@@ -1105,7 +1110,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
 
         litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.async_get_available_deployment = AsyncMock(
             return_value={
                 "litellm_params": {
@@ -1160,7 +1165,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
         "model_info": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
@@ -1224,7 +1229,7 @@ async def test_proxy_token_counter_error_raises_when_enabled():
         "model_info": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)

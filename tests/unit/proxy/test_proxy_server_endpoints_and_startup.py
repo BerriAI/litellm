@@ -16,6 +16,8 @@ from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import click
 import fastapi.routing
 import httpx
@@ -1258,7 +1260,7 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     }
 
     # Mock proxy_config.get_config and router settings
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1308,7 +1310,7 @@ def test_get_config_callbacks_fall_back_to_process_env(mock_env_vars, monkeypatc
         "general_settings": {},
         "environment_variables": {},
     }
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1355,7 +1357,7 @@ def test_get_config_callback_env_secrets_redacted_for_non_admin(mock_env_vars, m
         "general_settings": {},
         "environment_variables": {},
     }
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1405,7 +1407,7 @@ def test_get_config_returns_email_settings(monkeypatch):
         },
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1442,7 +1444,7 @@ def test_get_config_returns_email_settings(monkeypatch):
 def _get_email_alert_variables(monkeypatch, config_data):
     from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1561,7 +1563,7 @@ def test_get_config_returns_slack_webhook(monkeypatch):
         "environment_variables": {"SLACK_WEBHOOK_URL": webhook_url},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
 
@@ -1611,7 +1613,7 @@ def test_get_config_cleared_slack_webhook_not_overridden_by_os_env(monkeypatch):
         "environment_variables": {"SLACK_WEBHOOK_URL": ""},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
 
@@ -2019,7 +2021,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many = AsyncMock()
 
     # Mock router
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
@@ -2147,7 +2149,7 @@ def test_add_team_models_to_all_models():
     team_db_objects_typed.team_id = "team1"
     team_db_objects_typed.models = ["all-proxy-models"]
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_list.return_value = [
         {"model_info": {"id": "gpt-4-model-1", "team_id": "team2"}},
         {"model_info": {"id": "gpt-4-model-2"}},
@@ -2161,7 +2163,7 @@ def test_add_team_models_to_all_models():
 
 
 def _make_router_with_access_groups(model_names, model_access_groups, deployments):
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_names.return_value = model_names
     llm_router.get_model_access_groups.return_value = model_access_groups
 
@@ -2319,7 +2321,7 @@ async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_list.return_value = [
         user_added_model,
         {"model_name": "team-model", "model_info": {"id": "team-model-1", "team_id": "team-a"}},
@@ -2671,7 +2673,7 @@ async def test_filter_models_by_team_id_excludes_viewer_direct_access():
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
     prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_access_groups = MagicMock(return_value={})
     # team-111 only resolves "some-other-model", which has no deployments
     router.get_model_list = MagicMock(return_value=[])
@@ -2760,7 +2762,7 @@ async def test_filter_models_by_team_id_allows_team_member():
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
     prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_access_groups = MagicMock(return_value={})
     router.get_model_list = MagicMock(return_value=[byok])
 
@@ -2847,7 +2849,7 @@ async def test_add_access_group_models_to_team_models():
     team_all_proxy.access_group_ids = ["premium"]
 
     # Mock router
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "claude-3":
@@ -2925,7 +2927,7 @@ async def test_add_access_group_models_multiple_teams_shared_group():
     team_b.models = ["gpt-3.5"]
     team_b.access_group_ids = ["shared-group", "extra-group"]
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "claude-3":
@@ -3034,7 +3036,7 @@ async def test_get_all_team_models_with_access_groups():
     mock_db.litellm_accessgrouptable = MagicMock()
     mock_db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[mock_ag_row])
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
@@ -3092,7 +3094,7 @@ async def test_delete_deployment_type_mismatch():
     pc = ProxyConfig()
 
     # Mock llm_router with string IDs (this is the source of the type mismatch)
-    mock_llm_router = MagicMock()
+    mock_llm_router = route_entry_points_to_stubs(MagicMock())
     mock_llm_router.get_model_ids.return_value = [
         "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695",
         "a40186dd0fdb9b7282380277d7f57044d29de95bfbfcd7f4322b3493702d5cd3",
@@ -3463,7 +3465,7 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
             # Create ProxyConfig instance and load config
             proxy_config = ProxyConfig()
             # Create a mock router since load_config requires it
-            mock_router = MagicMock()
+            mock_router = route_entry_points_to_stubs(MagicMock())
             await proxy_config.load_config(router=mock_router, config_file_path=config_file_path)
 
             # Verify get_instance_fn was called with correct parameters
@@ -5468,7 +5470,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
     proxy_config = ProxyConfig()
 
     # Mock router
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     # Test Case 1: Both config and DB settings exist - should merge them
@@ -5595,7 +5597,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     config_data = {
@@ -5644,7 +5646,7 @@ async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unc
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     config_data = {"router_settings": {"num_retries": 1}}
@@ -5676,7 +5678,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     # Test Case 1: No router provided
@@ -5765,7 +5767,7 @@ async def test_add_router_settings_shallow_merge_behavior():
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     # Config with nested dictionary
@@ -5830,7 +5832,7 @@ async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeyp
 
     mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=db_row)
-    mock_router: Final = MagicMock()
+    mock_router: Final = route_entry_points_to_stubs(MagicMock())
     monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
     monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma_client)
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
@@ -5912,7 +5914,7 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     }
 
     # Mock the llm_router to return our test data
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
@@ -5979,7 +5981,7 @@ def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
             "supported_regions": frozenset({"eu"}),
         },
     }
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_list = [model_data]
     mock_router.get_model_list_from_model_alias.return_value = []
     mock_router.get_model_names.return_value = ["gpt-4o"]
@@ -6989,7 +6991,7 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
         "environment_variables": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -11324,7 +11326,7 @@ class TestDeleteDeploymentSync:
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.get_model_ids.return_value = ["model-id-to-evict"]
         mock_router.delete_deployment.return_value = MagicMock()
 
@@ -11349,7 +11351,7 @@ class TestDeleteDeploymentSync:
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
             with patch.object(proxy_config, "get_config", AsyncMock(return_value={})):
@@ -14168,7 +14170,7 @@ async def test_ptu_rollup_job_hands_the_rollup_the_proxys_router(monkeypatch):
 
     import litellm.proxy.proxy_server as ps
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     monkeypatch.setattr(ps, "llm_router", router)
     await scheduler.get_job(PTU_ROLLUP_JOB_ID).func()
 

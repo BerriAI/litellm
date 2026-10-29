@@ -34,6 +34,7 @@ else:
         pass
 
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.router_api import ChangeSet
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -153,7 +154,8 @@ async def create_fallback(
             )
 
         # Validate that the model exists in the router
-        known_model_names: Final = frozenset(llm_router.model_names) | llm_router.team_public_model_names
+        registry: Final = llm_router.registry()
+        known_model_names: Final = frozenset(registry.names(kind="group_set")) | registry.names(kind="team_public")
         if data.model not in known_model_names:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -219,7 +221,7 @@ async def create_fallback(
         await _write_rules(prisma_client, proxy_config, router_settings, fallback_key, existing_fallbacks)
 
         # Update the in-memory router configuration
-        setattr(llm_router, fallback_key, existing_fallbacks)
+        llm_router.apply(ChangeSet(assign={fallback_key: existing_fallbacks}))
 
         verbose_proxy_logger.info(
             "Fallback configured: %s -> %s (type: %s)", data.model, data.fallback_models, data.fallback_type
@@ -368,7 +370,7 @@ async def delete_fallback(
         await _write_rules(prisma_client, proxy_config, router_settings, fallback_key, updated_fallbacks)
 
         # Update the in-memory router configuration
-        setattr(llm_router, fallback_key, updated_fallbacks)
+        llm_router.apply(ChangeSet(assign={fallback_key: updated_fallbacks}))
 
         verbose_proxy_logger.info("Fallback deleted: %s (type: %s)", model, fallback_type)
 

@@ -11341,6 +11341,7 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
 
 
+
 @pytest.mark.parametrize(
     ("provider", "expected_warnings"),
     (("streamlake", 1), ("veniceai", 1), ("my-own-llm", 0)),
@@ -11359,3 +11360,34 @@ def test_custom_provider_named_like_a_built_in_warns_once(
     warnings: Final = [r for r in caplog.records if f"provider '{provider}'" in r.getMessage()]
     assert len(warnings) == expected_warnings
     assert provider in litellm._custom_providers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred", (False, True))
+async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronously(deferred: bool) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+    from litellm.utils import _schedule_async_success_logging
+
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="shutdown-enqueue",
+        function_id="shutdown-enqueue",
+    )
+    logging_obj.defer_async_logging = deferred
+    _schedule_async_success_logging(logging_obj, ModelResponse(), now, now, False)
+    if deferred:
+        assert not logging_obj.async_success_log_enqueued
+        assert logging_obj.enqueue_deferred_logging is not None
+        logging_obj.enqueue_deferred_logging()
+    assert "has_logged_async_success" not in logging_obj.model_call_details
+    await drain_logging_tasks()
+    assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
+    await GLOBAL_LOGGING_WORKER.flush()
+    assert logging_obj.model_call_details["has_logged_async_success"] is True
