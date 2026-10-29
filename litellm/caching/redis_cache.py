@@ -2177,6 +2177,7 @@ class RedisCache(BaseCache):
                     duration=_duration,
                     call_type="async_rpush",
                     caller=_get_call_stack_info(),
+                    parent_otel_span=parent_otel_span,
                 )
             )
             return response
@@ -2192,6 +2193,7 @@ class RedisCache(BaseCache):
                     error=e,
                     call_type="async_rpush",
                     caller=_get_call_stack_info(),
+                    parent_otel_span=parent_otel_span,
                 )
             )
             log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache RPUSH: - Got exception from REDIS", e)
@@ -2364,6 +2366,7 @@ class RedisCache(BaseCache):
                     duration=_duration,
                     call_type="async_lpop",
                     caller=_get_call_stack_info(),
+                    parent_otel_span=parent_otel_span,
                 )
             )
 
@@ -2391,6 +2394,7 @@ class RedisCache(BaseCache):
                     error=e,
                     call_type="async_lpop",
                     caller=_get_call_stack_info(),
+                    parent_otel_span=parent_otel_span,
                 )
             )
             log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache LPOP: - Got exception from REDIS", e)
