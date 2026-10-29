@@ -51,6 +51,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
+    ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
@@ -599,6 +600,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if not isinstance(thinking, dict):
             return False
         return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+
+    def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
+        return (
+            *(
+                (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
+                if self.is_thinking_display_updates_used(thinking)
+                else ()
+            ),
+            *(
+                (ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,)
+                if isinstance(thinking, dict) and "block_binding" in thinking
+                else ()
+            ),
+        )
 
     def is_mid_conversation_tool_change_used(self, messages: Sequence[object]) -> bool:
         for message in messages:
@@ -1197,7 +1212,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         *,
         custom_llm_provider: str,
         is_mid_conversation_output_config_used: bool = False,
-        is_thinking_display_updates_used: bool = False,
+        thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
     ) -> list[str]:
         """
@@ -1234,13 +1249,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_mid_conversation_output_config_used:
             betas.append(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
-        thinking_display_betas: Final = (
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else ()
-        )
         tool_change_betas: Final = (
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else ()
         )
-        return list(set(betas).union(thinking_display_betas, tool_change_betas))
+        return list(set(betas).union(self.thinking_betas(thinking), tool_change_betas))
 
     @staticmethod
     def _make_api_key_auth_header(
@@ -1302,7 +1314,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
         is_mid_conversation_output_config_used: bool = False,
-        is_thinking_display_updates_used: bool = False,
+        thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
         wif_minted: bool = False,
     ) -> dict:
@@ -1363,7 +1375,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.update(user_anthropic_beta_headers)
 
         all_betas: Final = betas.union(
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else (),
+            self.thinking_betas(thinking),
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else (),
         )
 
@@ -1450,7 +1462,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             auth_token=auth_token,
             file_id_used=file_id_used,
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
-            is_thinking_display_updates_used=self.is_thinking_display_updates_used(optional_params.get("thinking")),
+            thinking=optional_params.get("thinking"),
             is_mid_conversation_tool_change_used=self.is_mid_conversation_tool_change_used(messages),
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),

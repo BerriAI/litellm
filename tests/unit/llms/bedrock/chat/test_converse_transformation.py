@@ -25,9 +25,9 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
@@ -5356,7 +5356,6 @@ def test_recursive_output_config_format_follows_the_profile_native_key(
     assert ("outputConfig" in request) is forwarded
 
 
-
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -10673,7 +10672,10 @@ def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_infere
 
 
 _CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {
-    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}}}
+    "textFormat": {
+        "type": "json_schema",
+        "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}},
+    }
 }
 _BEDROCK_SCHEMA_TYPE_ERROR: Final = "outputConfig.textFormat.structure.jsonSchema.schema must be a string"
 
@@ -10843,3 +10845,121 @@ def test_bedrock_deepseek_r1_drop_of_an_unadvertised_param_does_not_warn(
         )
 
     assert _warnings_naming(caplog, param) == ()
+
+
+def _converse_bound_thinking_request(
+    headers: dict[str, str] | None, body_betas: tuple[str, ...] = (), drop_params: bool = True
+) -> dict[str, object]:
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    data: Final = AmazonConverseConfig()._transform_request_helper(
+        model="anthropic.claude-opus-4-8-v1:0",
+        system_content_blocks=[],
+        optional_params={"thinking": thinking, **({"anthropic_beta": list(body_betas)} if body_betas else {})},
+        messages=[{"role": "user", "content": "hi"}],
+        headers=headers,
+        drop_params=drop_params,
+    )
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }, "the caller's thinking dict must survive for a fallback leg"
+    return data["additionalModelRequestFields"]
+
+
+def test_converse_keeps_beta_gated_thinking_fields_the_bedrock_converse_row_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        {"anthropic-beta": "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"}
+    )
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_converse_adds_the_thinking_betas_so_gated_thinking_fields_are_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(None)
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    assert sorted(fields["anthropic_beta"]) == [
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]
+
+
+def test_converse_keeps_the_callers_body_betas_next_to_the_added_thinking_betas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(None, body_betas=("context-1m-2025-08-07",))
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]
+
+
+def test_converse_sends_beta_gated_thinking_fields_as_is_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    fields: Final = _converse_bound_thinking_request(None, drop_params=False)
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_converse_keeps_beta_gated_thinking_fields_the_body_anthropic_beta_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        None, body_betas=("thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18")
+    )
+    assert fields["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_converse_drops_body_betas_the_bedrock_converse_row_rejects_when_adding_thinking_betas(
+    local_beta_headers_config: None,
+) -> None:
+    fields: Final = _converse_bound_thinking_request(
+        None, body_betas=("per-turn-control-2026-07-01", "context-1m-2025-08-07")
+    )
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]
+
+
+def test_converse_sends_only_the_header_betas_when_header_and_body_both_carry_betas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    fields: Final = _converse_bound_thinking_request(
+        {"anthropic-beta": "context-1m-2025-08-07"}, body_betas=("not-a-real-beta-2099",)
+    )
+    assert sorted(fields["anthropic_beta"]) == [
+        "context-1m-2025-08-07",
+        "thinking-binding-controls-2026-08-01",
+        "thinking-display-updates-2026-08-18",
+    ]

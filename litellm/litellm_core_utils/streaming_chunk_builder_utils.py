@@ -12,7 +12,11 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    USAGE_COST_BILLED_PROVIDERS,
+    chunk_usage,
+    provider_reported_usage_cost,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1352,7 +1356,7 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value}) | USAGE_COST_BILLED_PROVIDERS
 
 
 def _logged_provider(logging_obj: Optional["Logging"]) -> object:
