@@ -2253,8 +2253,9 @@ async def _bill_rejected_frame(
     exception: Exception,
     frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
 ) -> None:
-    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
-    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
+    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's release of the
+    connection's slot and TPM reservation, alerting) belong to the live connection, which stays open. Billing never
+    replaces the guardrail's own error."""
     for callback in litellm.callbacks:
         if isinstance(callback, ProxyDBLogger):
             try:
@@ -2452,7 +2453,7 @@ async def _responses_websocket_session(
     try:
         failure_row: Final = await relay_and_bill_failure()
     finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+        await proxy_logging_obj.arelease_responses_websocket_admission(user_api_key_dict)
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)

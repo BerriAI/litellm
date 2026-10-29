@@ -4964,13 +4964,16 @@ class ProxyLogging:
     arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
 
-    async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
+    async def arelease_responses_websocket_admission(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release what a Responses WebSocket took at admission. Only call this once that admission succeeded:
         the legacy limiter keeps no record of its acquisitions and decrements unconditionally."""
-        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
-        if not isinstance(limiter, (PROXY_MaxParallelRequestsHandler_v3, _PROXY_MaxParallelRequestsHandler)):
-            return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+        match self.get_proxy_hook("parallel_request_limiter"):
+            case PROXY_MaxParallelRequestsHandler_v3() as limiter:
+                await limiter.async_release_responses_websocket_admission(user_api_key_dict)
+            case _PROXY_MaxParallelRequestsHandler() as legacy_limiter:
+                await legacy_limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+            case _:
+                return
 
     async def enforce_mcp_server_rate_limits(
         self,

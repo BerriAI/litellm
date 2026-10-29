@@ -721,6 +721,7 @@ class RequestRateLimiterStash:
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
     parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    reservation_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
@@ -5821,26 +5822,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         relayed here with recovered partial usage settles the reservation at
         that usage instead of refunding it.
         """
+        await self._release_stashed_admission(
+            request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
+            user_api_key_dict.parent_otel_span,
+        )
+
+    @with_service_target("rate_limits")
+    async def async_release_responses_websocket_admission(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Free the slot and the TPM reservation a Responses WebSocket took at admission, once it closes. Its turns
+        log under their own call ids and charge their own usage, so the reservation is refunded in full."""
+        await self._release_stashed_admission(MappingProxyType({}), user_api_key_dict.parent_otel_span)
+
+    async def _release_stashed_admission(
+        self, request_data: Mapping[str, object], parent_otel_span: Span | None
+    ) -> None:
         try:
             stash: Final = get_request_stash()
             if stash is None:
                 return
-            await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+            await self._release_stashed_parallel_slot(stash, parent_otel_span)
+            await self._settle_stashed_reservations(stash, request_data, parent_otel_span)
+        except Exception as e:
+            verbose_proxy_logger.exception("Error releasing the request's rate limit admission: %s", e)
 
-            if stash.batch_enqueued_reservation is not None:
-                await self.batch_enqueued_token_store.refund(
-                    reservation=stash.batch_enqueued_reservation,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                )
-                stash.batch_enqueued_reservation = None
+    async def _settle_stashed_reservations(
+        self,
+        stash: RequestRateLimiterStash,
+        request_data: Mapping[str, object],
+        parent_otel_span: Span | None,
+    ) -> None:
+        if stash.batch_enqueued_reservation is not None:
+            await self.batch_enqueued_token_store.refund(
+                reservation=stash.batch_enqueued_reservation,
+                litellm_parent_otel_span=parent_otel_span,
+            )
+            stash.batch_enqueued_reservation = None  # rebind-ok: marks the batch reservation as refunded
 
-            if stash.batch_tpd_refund_ops:
-                await self.async_increment_reservation_aware_tokens(
-                    pipeline_operations=stash.batch_tpd_refund_ops,
-                    parent_otel_span=user_api_key_dict.parent_otel_span,
-                )
-                stash.batch_tpd_refund_ops = ()
+        if stash.batch_tpd_refund_ops:
+            await self.async_increment_reservation_aware_tokens(
+                pipeline_operations=stash.batch_tpd_refund_ops,
+                parent_otel_span=parent_otel_span,
+            )
+            stash.batch_tpd_refund_ops = ()  # rebind-ok: marks the batch TPD refund as applied
 
+        async with stash.reservation_release_lock:
             if stash.reservation_released:
                 return
             reserved_tokens: Final = stash.reserved_tokens
@@ -5861,13 +5886,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else ()
             )
             ptu_ops: Final = (
-                self._build_ptu_failure_settlement_ops(
-                    stash,
-                    request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
-                    tpm_actual,
-                )
-                if reserved_tokens > 0
-                else ()
+                self._build_ptu_failure_settlement_ops(stash, request_data, tpm_actual) if reserved_tokens > 0 else ()
             )
             itpm_ops: Final = (
                 self._build_project_reservation_ops(
@@ -5907,7 +5926,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             if combined_ops or ptu_ops or itpm_ops or otpm_ops:
                 verbose_proxy_logger.debug(
-                    "Releasing reserved tokens on proxy-level rejection: tpm=%s, itpm=%s, otpm=%s",
+                    "Releasing reserved tokens: tpm=%s, itpm=%s, otpm=%s",
                     reserved_tokens,
                     itpm_reserved,
                     otpm_reserved,
@@ -5915,23 +5934,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if combined_ops:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=list(combined_ops),
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    litellm_parent_otel_span=parent_otel_span,
                 )
             for project_ops in (itpm_ops, otpm_ops, ptu_ops):
                 if isinstance(project_ops, list):
                     await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                         increment_list=project_ops,
-                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                        litellm_parent_otel_span=parent_otel_span,
                     )
                 elif project_ops:
                     await self.async_increment_reservation_aware_tokens(
                         pipeline_operations=project_ops,
-                        parent_otel_span=user_api_key_dict.parent_otel_span,
+                        parent_otel_span=parent_otel_span,
                     )
-            stash.reservation_released = True
-        except Exception as e:
-            verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
-        return
+            stash.reservation_released = True  # rebind-ok: settles the reservation exactly once
 
 
 PROXY_MaxParallelRequestsHandler_v3 = _PROXY_MaxParallelRequestsHandler_v3

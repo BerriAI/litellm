@@ -7,7 +7,7 @@ import contextvars
 import logging
 import sys
 import time
-from collections.abc import AsyncGenerator, Iterator, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -5107,6 +5107,162 @@ async def test_release_max_parallel_requests_on_disconnect_noop_v3():
         UserAPIKeyAuth(api_key=None, max_parallel_requests=5)
     )
     assert await local_cache.async_get_cache(key=counter_key) is None
+
+
+class _YieldingIncrementInMemoryCache(InMemoryCache):
+    async def async_increment(self, key, value: float, **kwargs) -> float:
+        await asyncio.sleep(0)
+        return await super().async_increment(key, value, **kwargs)
+
+
+async def _admit_responses_websocket(
+    handler: PROXY_MaxParallelRequestsHandler_v3, cache: DualCache, auth: UserAPIKeyAuth, call_id: str
+) -> None:
+    _request_stash.set(None)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": "gpt-4o-mini", "litellm_call_id": call_id},
+        call_type=CallTypes.aresponses_websocket.value,
+    )
+
+
+def _responses_websocket_limiter(cache: DualCache) -> tuple[PROXY_MaxParallelRequestsHandler_v3, ProxyLogging]:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    return handler, proxy_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_a_closed_responses_websocket_gives_back_its_slot_and_tpm_reservation_to_the_next_socket() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-close")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key,
+        tpm_limit=100,
+        max_parallel_requests=1,
+        metadata={"default_estimated_output_tokens": 60},
+    )
+    tokens_key: Final = handler.create_rate_limit_keys("api_key", api_key, "tokens")
+    parallel_key: Final = handler.create_rate_limit_keys("api_key", api_key, "max_parallel_requests")
+
+    await _admit_responses_websocket(handler, cache, auth, "first-socket")
+    reserved: Final = int(await cache.async_get_cache(key=tokens_key) or 0)
+    assert 2 * reserved > 100
+    assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=parallel_key)) == 1
+
+    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+
+    assert int(await cache.async_get_cache(key=tokens_key) or 0) == 0
+    assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=parallel_key)) == 0
+    await _admit_responses_websocket(handler, cache, auth, "second-socket")
+    assert int(await cache.async_get_cache(key=tokens_key) or 0) == reserved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "settles", ["close_twice", "close_then_failure_row", "failure_row_then_close", "failure_row_while_closing"]
+)
+async def test_a_responses_websocket_admission_reservation_is_refunded_exactly_once(settles: str) -> None:
+    cache: Final = DualCache(in_memory_cache=_YieldingIncrementInMemoryCache())
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-refund-once")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=1_000, metadata={"default_estimated_output_tokens": 60})
+    tokens_key: Final = handler.create_rate_limit_keys("api_key", api_key, "tokens")
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+    assert int(await cache.async_get_cache(key=tokens_key) or 0) > 0
+
+    def close() -> Awaitable[None]:
+        return proxy_logging_obj.arelease_responses_websocket_admission(auth)
+
+    def failure_row() -> Awaitable[None]:
+        return handler.async_post_call_failure_hook(
+            request_data={"model": "gpt-4o-mini", "litellm_call_id": "socket"},
+            original_exception=RuntimeError("relay crashed"),
+            user_api_key_dict=auth,
+        )
+
+    match settles:
+        case "close_twice":
+            await close()
+            await close()
+        case "close_then_failure_row":
+            await close()
+            await failure_row()
+        case "failure_row_then_close":
+            await failure_row()
+            await close()
+        case _:
+            await asyncio.gather(close(), failure_row())
+
+    assert int(await cache.async_get_cache(key=tokens_key) or 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_closed_responses_websocket_gives_back_its_project_token_reservations() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-responses-websocket-project"),
+        project_id="proj-socket",
+        project_metadata={"model_itpm_limit": {"gpt-4o-mini": 10_000}, "model_otpm_limit": {"gpt-4o-mini": 10_000}},
+        metadata={"default_estimated_output_tokens": 60},
+    )
+    project_keys: Final = tuple(
+        handler.create_rate_limit_keys(key=scope, value="proj-socket:gpt-4o-mini", rate_limit_type="tokens")
+        for scope in ("model_per_project_itpm", "model_per_project_otpm")
+    )
+    await _admit_responses_websocket(handler, cache, auth, "project-socket")
+    assert int(await cache.async_get_cache(key=project_keys[1]) or 0) > 0
+
+    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+
+    assert [int(await cache.async_get_cache(key=key) or 0) for key in project_keys] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_a_closed_responses_websocket_refunds_a_project_reservation_stashed_without_its_window() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    scope: Final = ("model_per_project_itpm", "proj-windowless:gpt-4o-mini")
+    counter_key: Final = handler.create_rate_limit_keys(*scope, rate_limit_type="tokens")
+    _request_stash.set(None)
+    await cache.async_increment_cache(key=counter_key, value=100)
+    stash: Final = get_or_create_request_stash()
+    stash.itpm_reserved_tokens = 100
+    stash.itpm_reserved_scopes = frozenset({scope})
+
+    await proxy_logging_obj.arelease_responses_websocket_admission(
+        UserAPIKeyAuth(api_key=hash_token("sk-responses-websocket-windowless"))
+    )
+
+    assert int(await cache.async_get_cache(key=counter_key) or 0) == 0
+
+
+class _UnreachableIncrementDualCache(DualCache):
+    async def async_increment_cache(self, *args: object, **kwargs: object) -> float:
+        raise ConnectionError("rate limit cache is unreachable")
+
+    async def async_increment_cache_pipeline(self, *args: object, **kwargs: object) -> None:
+        raise ConnectionError("rate limit cache is unreachable")
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_close_that_cannot_reach_the_cache_leaves_the_refund_owed() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    _, unreachable_proxy_logging_obj = _responses_websocket_limiter(_UnreachableIncrementDualCache())
+    api_key: Final = hash_token("sk-responses-websocket-unreachable")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=1_000, metadata={"default_estimated_output_tokens": 60})
+    tokens_key: Final = handler.create_rate_limit_keys("api_key", api_key, "tokens")
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+
+    await unreachable_proxy_logging_obj.arelease_responses_websocket_admission(auth)
+    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+
+    assert int(await cache.async_get_cache(key=tokens_key) or 0) == 0
 
 
 @pytest.mark.parametrize("disconnect", ["cancel", "aclose"])
