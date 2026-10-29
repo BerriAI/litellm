@@ -13,20 +13,25 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.types import Message
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import check_model_access_helper
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import (
+    CodexCatalogRow,
     bundled_codex_models,
+    codex_catalog_etag,
     codex_entry_names_default_reasoning_level,
     merged_codex_catalog,
     upstream_codex_slugs,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
+    get_client_requested_model,
     read_request_body,  # pyright: ignore[reportUnknownVariableType]  # returns a bare dict, validated at the call
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
@@ -42,19 +47,26 @@ router: Final = APIRouter()
 _CHATGPT_PROVIDER: Final = "chatgpt"
 _CHATGPT_CREDENTIAL_HEADERS: Final = frozenset({b"authorization", b"chatgpt-account-id"})
 _MERGED_CATALOG_DROPPED_HEADERS: Final = frozenset({"etag", "content-length", "content-type"})
+_ETAG_HEADER: Final = "etag"
 _MODELS_ETAG_HEADER: Final = "x-models-etag"
+_ENCRYPTED_CONTENT_AFFINITY_FLAG: Final = "encrypted_content_affinity_enabled"
 _LITELLM_RESPONSES_PATH: Final = "/v1/responses"
 _CODEX_NO_DEFAULT_EFFORT: Final = "none"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 _CACHED_SLUGS: Final = TypeAdapter(frozenset[str])
+_CACHED_MODELS_ETAG: Final = TypeAdapter(dict[Literal["etag"], str])
+_MODEL_NAMES: Final = TypeAdapter(list[str])
 _HEADER_DERIVED_STATE: Final = frozenset({"_cached_headers"})
 _ACCOUNT_CATALOG_HEADERS: Final = frozenset({"authorization", "chatgpt-account-id", "originator", "user-agent"})
-_CODEX_USER_AGENT_PRODUCT: Final = re.compile(r"[^/]+/(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)")
+_CODEX_USER_AGENT_PRODUCT: Final = re.compile(r"([^/]+)/(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)")
 _ACCOUNT_CATALOG_TIMEOUT_SECONDS: Final = 5.0
 _SHARED_CACHE_TTL_SECONDS: Final = 3600
+_ACCOUNT_SLUGS_UNAVAILABLE: Final = "unavailable"
+_ACCOUNT_SLUGS_UNAVAILABLE_TTL_SECONDS: Final = 60
 _ACCOUNT_SLUGS_CACHE_PREFIX: Final = "codex_account_slugs:"
-_MERGED_CATALOG_CACHE_PREFIX: Final = "codex_catalog_added_litellm_rows:"
+_MODELS_ETAG_CACHE_PREFIX: Final = "codex_models_etag:"
+_MODELS_ETAG_TTL_SECONDS: Final = 300
 _HEADERS: Final = frozenset(
     {
         "authorization",
@@ -87,6 +99,13 @@ def _serves_by_name(deployment: Deployment, names: frozenset[str]) -> bool:
     )
 
 
+def _candidate_deployments(model: str, llm_router: "Router", team_id: str | None) -> tuple[Deployment, ...]:
+    candidates: Final = tuple(
+        llm_router.get_deployment(model_id) for model_id in llm_router.get_candidate_model_ids_for_route(model, team_id)
+    )
+    return tuple(deployment for deployment in candidates if deployment is not None)
+
+
 def _routes_to_litellm(model: object, llm_router: "Router | None", team_id: str | None) -> bool:
     if (
         not isinstance(model, str)
@@ -95,12 +114,30 @@ def _routes_to_litellm(model: object, llm_router: "Router | None", team_id: str 
         or f"{_CHATGPT_PROVIDER}/{model}" in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
     ):
         return False
-    candidates: Final = tuple(
-        llm_router.get_deployment(model_id) for model_id in llm_router.get_candidate_model_ids_for_route(model, team_id)
-    )
-    deployments: Final = tuple(deployment for deployment in candidates if deployment is not None)
+    deployments: Final = _candidate_deployments(model, llm_router, team_id)
     names: Final = frozenset({model, llm_router.get_model_from_alias(model=model) or model})
     return bool(deployments) and all(_serves_by_name(deployment, names) for deployment in deployments)
+
+
+def _key_and_team_allow(model: str, llm_router: "Router", user_api_key_dict: UserAPIKeyAuth) -> bool:
+    allowed_lists: Final = (
+        _MODEL_NAMES.validate_python(user_api_key_dict.models),
+        _MODEL_NAMES.validate_python(user_api_key_dict.team_models),
+    )
+    return all(
+        check_model_access_helper(model, llm_router, allowed, team_id=user_api_key_dict.team_id)
+        for allowed in allowed_lists
+    )
+
+
+def native_chatgpt_model(model: str, llm_router: "Router", user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    if model.startswith(f"{_CHATGPT_PROVIDER}/") or _key_and_team_allow(model, llm_router, user_api_key_dict):
+        return None
+    chatgpt_model: Final = f"{_CHATGPT_PROVIDER}/{model}"
+    deployments: Final = _candidate_deployments(chatgpt_model, llm_router, user_api_key_dict.team_id)
+    if not deployments or not all(_is_chatgpt(deployment) for deployment in deployments):
+        return None
+    return chatgpt_model if _key_and_team_allow(chatgpt_model, llm_router, user_api_key_dict) else None
 
 
 class _SharedCache(Protocol):
@@ -136,21 +173,27 @@ def _cached_slugs(cached: object) -> frozenset[str] | None:
         return None
 
 
-async def _remember_account_slugs(account_id: str, slugs: frozenset[str], cache: _SharedCache) -> None:
+async def _remember_account_slugs(account_id: str, slugs: frozenset[str] | None, cache: _SharedCache) -> None:
+    if slugs is None:
+        await cache.async_set_cache(
+            _account_slugs_cache_key(account_id),
+            _ACCOUNT_SLUGS_UNAVAILABLE,
+            ttl=_ACCOUNT_SLUGS_UNAVAILABLE_TTL_SECONDS,
+        )
+        return
     await cache.async_set_cache(
         _account_slugs_cache_key(account_id), tuple(sorted(slugs)), ttl=_SHARED_CACHE_TTL_SECONDS
     )
 
 
-def _codex_client_version(user_agent: str) -> str | None:
-    product: Final = _CODEX_USER_AGENT_PRODUCT.fullmatch(user_agent.partition(" ")[0])
-    return product.group(1) if product is not None else None
-
-
-async def _fetched_account_slugs(headers: Mapping[str, str]) -> frozenset[str] | None:
-    client_version: Final = _codex_client_version(headers.get("user-agent", ""))
-    if client_version is None:
+def _codex_client_version(headers: Mapping[str, str]) -> str | None:
+    product: Final = _CODEX_USER_AGENT_PRODUCT.fullmatch(headers.get("user-agent", "").partition(" ")[0])
+    if product is None or product.group(1) != headers.get("originator"):
         return None
+    return product.group(2)
+
+
+async def _fetched_account_slugs(headers: Mapping[str, str], client_version: str) -> frozenset[str] | None:
     client: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.PassThroughEndpoint,
         params={"timeout": _ACCOUNT_CATALOG_TIMEOUT_SECONDS},
@@ -170,12 +213,17 @@ async def _account_slugs(headers: Mapping[str, str], cache: _SharedCache) -> fro
     account_id: Final = headers.get("chatgpt-account-id")
     if not account_id:
         return None
-    cached: Final = _cached_slugs(await cache.async_get_cache(_account_slugs_cache_key(account_id)))
+    cached_value: Final = await cache.async_get_cache(_account_slugs_cache_key(account_id))
+    if cached_value == _ACCOUNT_SLUGS_UNAVAILABLE:
+        return None
+    cached: Final = _cached_slugs(cached_value)
     if cached is not None:
         return cached
-    fetched: Final = await _fetched_account_slugs(headers)
-    if fetched is not None:
-        await _remember_account_slugs(account_id, fetched, cache)
+    client_version: Final = _codex_client_version(headers)
+    if client_version is None:
+        return None
+    fetched: Final = await _fetched_account_slugs(headers, client_version)
+    await _remember_account_slugs(account_id, fetched, cache)
     return fetched
 
 
@@ -191,40 +239,18 @@ async def _serves_through_litellm(
     ):
         return False
     account_slugs: Final = await _account_slugs(headers, cache)
-    return account_slugs is None or model not in account_slugs
+    return account_slugs is not None and model not in account_slugs
 
 
-def _merged_catalog_cache_key(token: str) -> str:
-    return f"{_MERGED_CATALOG_CACHE_PREFIX}{token}"
-
-
-async def _remember_catalog(
-    headers: Mapping[str, str],
-    slugs: frozenset[str],
-    user_api_key_dict: UserAPIKeyAuth,
-    added_litellm_rows: bool,
-    cache: _SharedCache,
-) -> None:
-    account_id: Final = headers.get("chatgpt-account-id")
-    if account_id:
-        await _remember_account_slugs(account_id, slugs, cache)
-    if user_api_key_dict.token is not None:
-        await cache.async_set_cache(
-            _merged_catalog_cache_key(user_api_key_dict.token), added_litellm_rows, ttl=_SHARED_CACHE_TTL_SECONDS
-        )
-
-
-async def _catalog_may_have_litellm_rows(user_api_key_dict: UserAPIKeyAuth, cache: _SharedCache) -> bool:
-    if user_api_key_dict.token is None:
-        return True
-    return await cache.async_get_cache(_merged_catalog_cache_key(user_api_key_dict.token)) is not False
+def _json_object(value: object) -> Mapping[str, object]:
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
 
 
 def _scope_state(request: Request) -> Mapping[str, object]:
-    try:
-        return _JSON_OBJECT.validate_python(request.scope.get("state"))
-    except ValidationError:
-        return MappingProxyType({})
+    return _json_object(request.scope.get("state"))
 
 
 def _as_litellm_responses_request(request: Request, body: bytes, parsed_body: Mapping[str, object]) -> Request:
@@ -250,6 +276,14 @@ def _as_litellm_responses_request(request: Request, body: bytes, parsed_body: Ma
     )
 
 
+def _drops_params(body: Mapping[str, object], model: str, llm_router: "Router", team_id: str | None) -> bool:
+    deployments: Final = _candidate_deployments(model, llm_router, team_id)
+    return drops_unsupported_params(body.get("drop_params")) or (
+        bool(deployments)
+        and all(normalize_drop_params(deployment.litellm_params.drop_params) is True for deployment in deployments)
+    )
+
+
 def _with_provider_default_reasoning(
     body: Mapping[str, object], llm_router: "Router | None", team_id: str | None
 ) -> Mapping[str, object]:
@@ -262,10 +296,18 @@ def _with_provider_default_reasoning(
         reasoning.get("effort") != _CODEX_NO_DEFAULT_EFFORT
         or not isinstance(model, str)
         or llm_router is None
+        or not _drops_params(body, model, llm_router, team_id)
         or codex_entry_names_default_reasoning_level(model, llm_router, team_id)
     ):
         return body
     return {**body, "reasoning": {key: value for key, value in reasoning.items() if key != "effort"}}
+
+
+def _with_wrapped_reasoning(body: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **body,
+        "litellm_metadata": {**_json_object(body.get("litellm_metadata")), _ENCRYPTED_CONTENT_AFFINITY_FLAG: True},
+    }
 
 
 def _is_unpersisted_reasoning_reference(item: object) -> bool:
@@ -297,17 +339,76 @@ def _input_chatgpt_accepts(body: Mapping[str, object]) -> tuple[object, ...] | N
     return kept if len(kept) < len(items) else None
 
 
-async def _merged_catalog(
-    upstream_body: bytes, user_api_key_dict: UserAPIKeyAuth, llm_router: "Router | None"
-) -> str | None:
+def _chatgpt_body(body: Mapping[str, object], client_model: str | None) -> Mapping[str, object] | None:
+    kept_input: Final = _input_chatgpt_accepts(body)
+    restored_model: Final = client_model is not None and body.get("model") == f"{_CHATGPT_PROVIDER}/{client_model}"
+    if kept_input is None and not restored_model:
+        return None
+    return {
+        **body,
+        **({"input": list(kept_input)} if kept_input is not None else {}),
+        **({"model": client_model} if restored_model else {}),
+    }
+
+
+async def _litellm_catalog_rows(
+    user_api_key_dict: UserAPIKeyAuth, llm_router: "Router | None"
+) -> tuple[CodexCatalogRow, ...]:
     from litellm.proxy.proxy_server import codex_catalog_rows_for_key
 
     if llm_router is None or not _may_call_litellm_responses(user_api_key_dict):
-        return None
+        return ()
     rows: Final = await codex_catalog_rows_for_key(user_api_key_dict)
-    return merged_codex_catalog(
-        upstream_body,
-        tuple(row for row in rows if _routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id)),
+    return tuple(row for row in rows if _routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id))
+
+
+def _models_etag_cache_key(token: str, upstream_etag: str) -> str:
+    return f"{_MODELS_ETAG_CACHE_PREFIX}{hashlib.sha256(json.dumps([token, upstream_etag]).encode()).hexdigest()}"
+
+
+async def _remembered_models_etag(
+    user_api_key_dict: UserAPIKeyAuth, upstream_etag: str, rows: tuple[CodexCatalogRow, ...], cache: _SharedCache
+) -> str:
+    etag: Final = codex_catalog_etag(upstream_etag, rows) if rows else upstream_etag
+    if user_api_key_dict.token is not None:
+        await cache.async_set_cache(
+            _models_etag_cache_key(user_api_key_dict.token, upstream_etag),
+            {"etag": etag},
+            ttl=_MODELS_ETAG_TTL_SECONDS,
+        )
+    return etag
+
+
+async def _cached_models_etag(token: str | None, upstream_etag: str, cache: _SharedCache) -> str | None:
+    if token is None:
+        return None
+    try:
+        return _CACHED_MODELS_ETAG.validate_python(
+            await cache.async_get_cache(_models_etag_cache_key(token, upstream_etag))
+        )["etag"]
+    except ValidationError:
+        return None
+
+
+async def _key_models_etag(
+    upstream_etag: str, user_api_key_dict: UserAPIKeyAuth, llm_router: "Router | None", cache: _SharedCache
+) -> str:
+    cached: Final = await _cached_models_etag(user_api_key_dict.token, upstream_etag, cache)
+    if cached is not None:
+        return cached
+    rows: Final = await _litellm_catalog_rows(user_api_key_dict, llm_router)
+    return await _remembered_models_etag(user_api_key_dict, upstream_etag, rows, cache)
+
+
+def _with_etag(response: Response, content: bytes | str, etag: str | None) -> Response:
+    kept_headers: Final = {
+        name: value for name, value in response.headers.items() if name not in _MERGED_CATALOG_DROPPED_HEADERS
+    }
+    return Response(
+        content=content,
+        status_code=response.status_code,
+        headers={**kept_headers, **({_ETAG_HEADER: etag} if etag is not None else {})},
+        media_type="application/json",
     )
 
 
@@ -330,18 +431,18 @@ async def _catalog(
     slugs: Final = upstream_codex_slugs(upstream_body)
     if slugs is None:
         return upstream
-    merged: Final = await _merged_catalog(upstream_body, user_api_key_dict, llm_router)
-    await _remember_catalog(headers, slugs, user_api_key_dict, merged is not None, cache)
-    if merged is None:
-        return upstream
-    return Response(
-        content=merged,
-        status_code=upstream.status_code,
-        headers={
-            name: value for name, value in upstream.headers.items() if name not in _MERGED_CATALOG_DROPPED_HEADERS
-        },
-        media_type="application/json",
+    account_id: Final = headers.get("chatgpt-account-id")
+    if account_id:
+        await _remember_account_slugs(account_id, slugs, cache)
+    rows: Final = await _litellm_catalog_rows(user_api_key_dict, llm_router)
+    upstream_etag: Final = upstream.headers.get(_ETAG_HEADER)
+    etag: Final = (
+        None if upstream_etag is None else await _remembered_models_etag(user_api_key_dict, upstream_etag, rows, cache)
     )
+    if not rows:
+        return upstream
+    merged: Final = merged_codex_catalog(upstream_body, rows)
+    return _with_etag(upstream, merged if merged is not None else upstream_body, etag)
 
 
 async def _responses(
@@ -355,25 +456,29 @@ async def _responses(
 
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
     if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, headers, cache):
-        litellm_body: Final = _with_provider_default_reasoning(body, llm_router, user_api_key_dict.team_id)
-        raw_body: Final = await request.body() if litellm_body is body else json.dumps(litellm_body).encode()
+        litellm_body: Final = _with_wrapped_reasoning(
+            _with_provider_default_reasoning(body, llm_router, user_api_key_dict.team_id)
+        )
         return await responses_api(
-            _as_litellm_responses_request(request, raw_body, litellm_body),
+            _as_litellm_responses_request(request, json.dumps(litellm_body).encode(), litellm_body),
             fastapi_response,
             user_api_key_dict.model_copy(update={"request_route": _LITELLM_RESPONSES_PATH}),
         )
-    kept_input: Final = _input_chatgpt_accepts(body)
+    chatgpt_body: Final = _chatgpt_body(body, get_client_requested_model(request))
     upstream: Final = await pass_through_request(
         request=request,
         target=f"{CHATGPT_API_BASE}/responses",
         custom_headers=dict(headers),
         user_api_key_dict=user_api_key_dict,
-        custom_body={**body, "input": list(kept_input)} if kept_input is not None else None,
+        custom_body=dict(chatgpt_body) if chatgpt_body is not None else None,
         custom_llm_provider=_CHATGPT_PROVIDER,
         upstream_headers_filter=lambda _: headers,
     )
-    if await _catalog_may_have_litellm_rows(user_api_key_dict, cache):
-        del upstream.headers[_MODELS_ETAG_HEADER]
+    upstream_models_etag: Final = upstream.headers.get(_MODELS_ETAG_HEADER)
+    if upstream_models_etag is not None:
+        upstream.headers[_MODELS_ETAG_HEADER] = await _key_models_etag(
+            upstream_models_etag, user_api_key_dict, llm_router, cache
+        )
     return upstream
 
 

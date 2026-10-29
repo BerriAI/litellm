@@ -50,35 +50,39 @@ For a native Codex model catalog and request format, change Codex's `base_url` t
 
 ### Mix ChatGPT and LiteLLM models
 
-On the native route, Codex's model picker shows OpenAI's catalog first and then the other chat and responses models the virtual key can use. Pick one of those and Codex's requests go through LiteLLM's `/v1/responses` with the key's usual routing, budgets, guardrails, and logging. The proxy removes the ChatGPT bearer and account header from that request, so the other provider and your callbacks never receive them. Only a model listed under its exact `model_name` on another provider is routed this way. A ChatGPT model, a name OpenAI's catalog lists for the caller's ChatGPT account, or a name that only a wildcard deployment matches keeps the passthrough, so a model OpenAI adds later still uses the subscription even when a deployment of another provider has the same name. When the key can use many models, the picker lists the ones that fit in Codex's catalog size limit.
+On the native route, Codex's model picker shows OpenAI's catalog first and then the other chat and responses models the virtual key can use. Pick one of those and Codex's requests go through LiteLLM's `/v1/responses` with the key's usual routing, budgets, guardrails, and logging. The proxy removes the ChatGPT bearer and account header from that request, so the other provider and your callbacks never receive them. A name is routed this way when another provider serves it as an exact `model_name`, through a router `model_group_alias`, or as a team's public model name. A ChatGPT model, a name that only a wildcard deployment matches, or a name OpenAI's catalog lists for the caller's ChatGPT account keeps the passthrough, so a model OpenAI adds later still uses the subscription even when a deployment of another provider has the same name. The proxy learns the account's list from the catalog Codex fetches, or asks OpenAI with the caller's login. When it cannot get the list, for example because OpenAI is down, the request times out, or the client is not Codex, every request keeps the passthrough for the next minute, as it did before LiteLLM models were added to the picker. When the key can use many models, the picker lists the ones that fit in Codex's catalog size limit, and the proxy logs a warning with how many it left out.
+
+Codex's picker sends a `none` reasoning effort for a LiteLLM model whose catalog entry lists no effort levels. With `litellm_settings: drop_params: true`, the proxy drops it and the provider applies its own default. Without `drop_params`, the effort reaches the provider unchanged.
+
+Codex also sends its ChatGPT app tools with every turn, which on a LiteLLM model adds a few hundred thousand prompt tokens to each turn. Set `apps = false` under `[features]` in Codex's `config.toml` to turn them off.
 
 Only a key that may call `/v1/responses` gets these models. A key whose `allowed_routes` covers only the native routes sees OpenAI's catalog unchanged, and every request it sends uses the subscription.
 
-Codex sends earlier reasoning items back with each turn. When a session switches from another provider's model to a ChatGPT model, the proxy drops the reasoning items that other provider produced before forwarding the request to OpenAI, which would reject them. Messages, tool calls, and ChatGPT's own reasoning are kept.
+Codex sends earlier reasoning items back with each turn. The proxy tags the reasoning that a LiteLLM model returns on this route, OpenAI and Azure deployments included. When a session switches to a ChatGPT model, the proxy drops those items before forwarding the request to OpenAI, which would reject them. Messages, tool calls, and ChatGPT's own reasoning are kept, and a LiteLLM model still gets its own reasoning back.
 
-When the catalog adds LiteLLM models for a key, it carries no ETag, and that key's responses drop OpenAI's `X-Models-Etag` header, so Codex picks up a newly allowed model on its next regular catalog refresh. A key whose catalog adds no LiteLLM models keeps OpenAI's ETags.
+When the catalog adds LiteLLM models for a key, its `ETag` is a digest of OpenAI's ETag and those models, and that key's responses carry the same value in `X-Models-Etag`. Codex keeps its cached catalog while the two match and fetches it again when OpenAI's catalog or the key's models change. A key whose catalog adds no LiteLLM models keeps OpenAI's ETags.
 
 ### Restrict native models with an access group
 
-A key with a model allowlist needs a rule for ChatGPT names that OpenAI adds over time. Put the subscription wildcards in an access group:
+A key with a model allowlist needs a rule for ChatGPT names that OpenAI adds over time. Put the subscription wildcards in an access group under `chatgpt/` names:
 
 ```yaml
 model_list:
-  - model_name: gpt-*
+  - model_name: chatgpt/gpt-*
     litellm_params:
       model: chatgpt/gpt-*
     model_info:
       access_groups: ["chatgpt-native"]
-  - model_name: codex-*
+  - model_name: chatgpt/codex-*
     litellm_params:
       model: chatgpt/codex-*
     model_info:
       access_groups: ["chatgpt-native"]
 ```
 
-Then add `chatgpt-native` to the key's models, next to any other model names it should reach. The key can call every ChatGPT model that matches the wildcards, including ones the proxy configuration does not name. These wildcards are also served on `/v1`, where a request without a ChatGPT login falls back to the proxy's own saved login if it has one, so keep that login unset as described above.
+Then add `chatgpt-native` to the key's models, next to any other model names it should reach. On the native route, a key that holds only the `chatgpt/` form of a name is checked as that form, so a request for `gpt-5.6-sol` is allowed when the key may call `chatgpt/gpt-5.6-sol`. The key can call every ChatGPT model that matches the wildcards, including ones the proxy configuration does not name.
 
-On `/v1` the router picks the longest matching pattern, so for every caller these wildcards win over a `*` catch-all deployment, and a request for any `gpt-` or `codex-` name goes to ChatGPT instead of the catch-all's provider. Give a model an exact deployment if `/v1` users should reach it on another provider.
+On `/v1` these wildcards match only a request that asks for a `chatgpt/` name, so a request for a plain `gpt-` or `codex-` name still goes where it went before, such as a `*` catch-all deployment. A `/v1` request for a `chatgpt/` name without a ChatGPT login falls back to the proxy's own saved login if it has one, so keep that login unset as described above.
 
 ### Configure Pi
 

@@ -18,9 +18,10 @@ a newer tag.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import cache
 from itertools import accumulate, pairwise
 from pathlib import Path
@@ -422,9 +423,22 @@ def merged_codex_catalog(
     serialized: Final = tuple(_compact_json(model) for model in added_models)
     budget: Final = byte_limit - len(_compact_json({**top, "models": upstream}))
     kept: Final = tuple(sorted(_kept_positions(entries, serialized, budget)))
+    if len(kept) < len(entries):
+        verbose_proxy_logger.warning(
+            "Codex native model catalog left out %d of %d LiteLLM models to stay within Codex's %d byte limit",
+            len(entries) - len(kept),
+            len(entries),
+            byte_limit,
+        )
     if not kept:
         return None
     return _compact_json({**top, "models": [*upstream, *(added_models[position] for position in kept)]})
+
+
+def codex_catalog_etag(upstream_etag: str, rows: Sequence[CodexCatalogRow]) -> str:
+    canonical: Final = json.dumps([asdict(row) for row in rows], sort_keys=True, separators=(",", ":"), default=repr)
+    digest: Final = hashlib.sha256(json.dumps([upstream_etag, canonical]).encode()).hexdigest()
+    return f'"{digest}"'
 
 
 def upstream_codex_slugs(upstream_body: bytes) -> frozenset[str] | None:

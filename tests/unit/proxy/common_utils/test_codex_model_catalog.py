@@ -1,9 +1,11 @@
 import json
+import logging
 from types import MappingProxyType
 
 import pytest
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
@@ -382,6 +384,21 @@ def test_merged_catalog_keeps_upstream_whole_and_adds_only_the_entries_that_fit_
     assert merged(*rows, byte_limit=upstream_only) is None
 
 
+def test_merged_catalog_warns_once_with_how_many_models_the_byte_limit_left_out(caplog, monkeypatch):
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = tuple(_row(f"model-{index}") for index in range(4))
+    limit = len(merged_codex_catalog(upstream, rows[:1], stock=_STOCK, instructions=_PROMPT, byte_limit=10**6).encode())
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        merged_codex_catalog(upstream, rows, stock=_STOCK, instructions=_PROMPT, byte_limit=limit)
+        merged_codex_catalog(upstream, rows[:1], stock=_STOCK, instructions=_PROMPT, byte_limit=limit)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        f"Codex native model catalog left out 3 of 4 LiteLLM models to stay within Codex's {limit} byte limit"
+    ]
+
+
 def test_unlimited_body_keeps_every_entry():
     rows = tuple(_row(f"model-{index}") for index in range(3))
 
@@ -565,7 +582,9 @@ def test_entry_names_a_default_reasoning_level_exactly_when_the_served_entry_car
         ]
     )
     names = ("open-weights", "coding-model")
-    listing = tuple({"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names)
+    listing = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
+    )
     served = json.loads(codex_model_list_body(listing, tuple((name, name) for name in names), router))["models"]
 
     assert [codex_entry_names_default_reasoning_level(entry["slug"], router, None) for entry in served] == [
