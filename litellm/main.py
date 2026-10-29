@@ -6984,13 +6984,13 @@ def embedding(
             custom_llm_provider == "openai_like"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
-            or JSONProviderRegistry.supports_embeddings(custom_llm_provider)  # JSON-configured providers
+            or JSONProviderRegistry.supports_embeddings(custom_llm_provider)
         ):
             api_base = api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
 
             # set API KEY
-            if api_key is None:
-                api_key = api_key or litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
+            if api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider):
+                api_key = litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
 
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers

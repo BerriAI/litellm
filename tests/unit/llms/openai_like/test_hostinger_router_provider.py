@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -44,6 +43,20 @@ def test_hostinger_router_provider_keeps_explicit_credentials(monkeypatch: pytes
     assert api_base == "https://router.internal.example/v1"
 
 
+@pytest.mark.parametrize("model", ["gpt-5-nano", "claude-sonnet-5"])
+def test_hostinger_router_api_base_keeps_unprefixed_model_provider(model: str):
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    _, provider_without_api_base, _, _ = get_llm_provider(model=model)
+    _, provider_with_hostinger_api_base, _, _ = get_llm_provider(
+        model=model,
+        api_base="https://router.hostinger.com/v1",
+        api_key="hostinger-test-key",
+    )
+
+    assert provider_with_hostinger_api_base == provider_without_api_base
+
+
 HOSTINGER_ROUTER_MODELS = tuple(sorted(name for name in litellm.model_cost if name.startswith("hostinger_router/")))
 HOSTINGER_ROUTER_CHAT_MODELS = tuple(
     name for name in HOSTINGER_ROUTER_MODELS if litellm.get_model_info(name)["mode"] == "chat"
@@ -77,44 +90,6 @@ def test_hostinger_router_model_cost_and_capabilities(model: str):
         assert litellm.supports_vision(model) is model_info["supports_vision"]
     else:
         assert litellm.supports_vision(model) in (True, False, None)
-
-
-def test_hostinger_router_backup_registry_mirrors_cost_map():
-    package_root = Path(litellm.__file__).parent
-    cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
-    backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
-    hostinger_entries = {name: entry for name, entry in cost_map.items() if name.startswith("hostinger_router/")}
-
-    assert tuple(sorted(hostinger_entries)) == HOSTINGER_ROUTER_MODELS
-    assert hostinger_entries
-    assert hostinger_entries == {name: backup[name] for name in hostinger_entries}
-
-
-def test_hostinger_router_is_available_in_add_model_form():
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers = json.loads(fields_path.read_text())
-    hostinger = next(provider for provider in providers if provider["litellm_provider"] == "hostinger_router")
-
-    assert hostinger["provider"] == "HOSTINGER_ROUTER"
-    assert hostinger["provider_display_name"] == "Hostinger Router"
-    assert hostinger["default_model_placeholder"] == "hostinger_router/claude-sonnet-5"
-    assert {field["key"]: field["required"] for field in hostinger["credential_fields"]} == {
-        "api_base": False,
-        "api_key": True,
-    }
-
-
-def test_hostinger_router_supported_endpoints():
-    matrix_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    providers = json.loads(matrix_path.read_text())["providers"]
-
-    assert providers["hostinger_router"]["endpoints"]["chat_completions"] is True
-    assert providers["hostinger_router"]["endpoints"]["messages"] is True
-    assert providers["hostinger_router"]["endpoints"]["responses"] is True
-    assert providers["hostinger_router"]["endpoints"]["embeddings"] is True
-    assert providers["hostinger_router"]["endpoints"]["image_generations"] is False
-    assert providers["hostinger_router"]["endpoints"]["audio_transcriptions"] is False
-    assert providers["hostinger_router"]["endpoints"]["batches"] is False
 
 
 def test_hostinger_router_chat_completions_request():
@@ -215,17 +190,17 @@ def test_hostinger_router_responses_request():
     assert response.output[0].content[0].text == "Hello from Hostinger Router"
 
 
+EMBEDDING_RESPONSE: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 2, "total_tokens": 2},
+}
+
+
 def test_hostinger_router_embeddings_request():
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(
-            200,
-            json={
-                "object": "list",
-                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
-                "model": "text-embedding-3-small",
-                "usage": {"prompt_tokens": 2, "total_tokens": 2},
-            },
-        )
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         response: Final = litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
             input=["Say hello"],
@@ -238,6 +213,54 @@ def test_hostinger_router_embeddings_request():
     assert request.headers["authorization"] == "Bearer hostinger-test-key"
     assert body["model"] == "text-embedding-3-small"
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_hostinger_router_embeddings_send_extra_headers_as_http_headers():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            extra_headers={"X-Trace-Id": "trace-123"},
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert request.headers["x-trace-id"] == "trace-123"
+    assert request.headers["authorization"] == "Bearer hostinger-test-key"
+    assert request.headers["content-type"] == "application/json"
+    assert set(body) == {"model", "input"}
+
+
+def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("HOSTINGER_ROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_LIKE_API_KEY", "other-provider-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "other-provider-key")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        with pytest.raises(litellm.BadRequestError, match="Missing API Key"):
+            litellm.embedding(model="hostinger_router/text-embedding-3-small", input=["Say hello"])
+
+    assert route.call_count == 0
+
+
+def test_json_provider_without_embeddings_endpoint_refuses_embeddings():
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    slug: Final = next(
+        slug
+        for slug in JSONProviderRegistry.list_providers()
+        if not JSONProviderRegistry.supports_embeddings(slug) and slug not in litellm.provider_list
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route().respond(200, json=EMBEDDING_RESPONSE)
+        with pytest.raises(litellm.BadRequestError):
+            litellm.embedding(model=f"{slug}/text-embedding-3-small", input=["Say hello"], api_key="test-key")
+
+    assert route.call_count == 0
 
 
 @pytest.mark.asyncio

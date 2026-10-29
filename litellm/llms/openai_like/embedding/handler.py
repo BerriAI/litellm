@@ -103,8 +103,12 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             custom_endpoint=custom_endpoint,
         )
         model = model
-        filtered_optional_params: Final = {k: v for k, v in optional_params.items() if v not in (None, "")}
-        data: Final = {"model": model, "input": input, **filtered_optional_params}
+        data: Final = {
+            "model": model,
+            "input": input,
+            **{k: v for k, v in optional_params.items() if k != "extra_headers" and v not in (None, "")},
+        }
+        request_headers: Final = {**(optional_params.get("extra_headers") or {}), **headers}
 
         ## LOGGING
         logging_obj.pre_call(
@@ -123,7 +127,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                 api_key=api_key,
                 timeout=timeout,
                 client=client,
-                headers=headers,
+                headers=request_headers,
             )
         if client is None or isinstance(client, AsyncHTTPHandler):
             self.client = HTTPHandler(timeout=timeout)
@@ -134,7 +138,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         try:
             response: Final = self.client.post(
                 api_base,
-                headers=headers,
+                headers=request_headers,
                 data=json.dumps(data),
             )
 

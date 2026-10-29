@@ -89,7 +89,6 @@ class JSONProviderRegistry:
 
     @classmethod
     def supports_embeddings(cls, slug: str) -> bool:
-        """Check if a JSON provider supports the Embeddings API"""
         provider: Final = cls._providers.get(slug)
         if provider is None:
             return False
