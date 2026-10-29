@@ -12,7 +12,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import itertools
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from itertools import accumulate, chain, islice, product
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -60,7 +60,7 @@ def _chunk(content: str, finish_reason: str | None = None) -> ModelResponseStrea
 
 
 class _FakeStreamWrapper:
-    def __init__(self, chunks):
+    def __init__(self, chunks: Iterable[ModelResponseStream]) -> None:
         self._chunks = list(chunks)
         self.logging_obj = MagicMock()
 
@@ -706,7 +706,7 @@ async def test_streaming_events_share_the_chat_completion_response_id():
 
 
 class _ClosableStreamWrapper(_FakeStreamWrapper):
-    def __init__(self, chunks):
+    def __init__(self, chunks: Iterable[ModelResponseStream]) -> None:
         super().__init__(chunks)
         self.closed = False
 
