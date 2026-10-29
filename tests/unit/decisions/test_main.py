@@ -3642,28 +3642,44 @@ async def test_a_deployment_that_advertises_box_questions_gets_box_answers_from_
 
 
 @pytest.mark.asyncio
-async def test_openrouter_jev_1_14_gets_box_answers_while_jev_1_13_is_still_refused(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("model", ("openrouter/typesafe/jev-1.14", "openrouter/~typesafe/jev-latest"))
+async def test_openrouter_jev_sends_box_questions_and_returns_box_answers(
+    model: str, respx_mock: respx.MockRouter
 ) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    box_answer: Final = {key: value for key, value in _CRACK_BOX_ANSWER.items() if key != "name"}
     route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(
-        json={"model": "typesafe/jev-1.14", "answers": {"crack": box_answer}}
+        json={**_RESPONSE, "answers": {"crack": {k: v for k, v in _CRACK_BOX_ANSWER.items() if k != "name"}}}
     )
 
     response: Final = await litellm.adecisions(
-        model="openrouter/typesafe/jev-1.14", input="review", questions=[_CRACK_BOX_QUESTION], api_key="caller-key"
+        model=model,
+        input=[
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}],
+            }
+        ],
+        questions=[_CRACK_BOX_QUESTION],
+        api_key="caller-key",
     )
 
     assert json.loads(route.calls.last.request.content)["questions"] == {
         "crack": {"type": "box", "instructions": "the crack on the screen"}
     }
     assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+def test_openrouter_jev_1_13_still_refuses_box_questions(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
     with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
-        await litellm.adecisions(
-            model="openrouter/typesafe/jev-1.13", input="review", questions=[_CRACK_BOX_QUESTION], api_key="caller-key"
+        litellm.decisions(
+            model="openrouter/typesafe/jev-1.13", input="review", questions=[_CRACK_BOX_QUESTION], api_key="k"
         )
-    assert route.call_count == 1
+
+    assert not route.called
 
 
 @pytest.mark.asyncio

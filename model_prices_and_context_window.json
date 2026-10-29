@@ -44596,6 +44596,18 @@
         "supports_system_messages": true,
         "supports_vision": false
     },
+    "openrouter/typesafe/jev-1.14": {
+        "litellm_provider": "openrouter",
+        "mode": "evaluation",
+        "source": "https://openrouter.ai/docs/guides/community/jev",
+        "supports_box_questions": true
+    },
+    "openrouter/~typesafe/jev-latest": {
+        "litellm_provider": "openrouter",
+        "mode": "evaluation",
+        "source": "https://openrouter.ai/docs/guides/community/jev",
+        "supports_box_questions": true
+    },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
         "input_cost_per_token": 6.7e-07,
         "litellm_provider": "ovhcloud",
@@ -70173,14 +70185,6 @@
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models",
-        "supports_box_questions": true
-    },
-    "openrouter/typesafe/jev-1.14": {
-        "input_cost_per_token": 4.2e-08,
-        "litellm_provider": "openrouter",
-        "mode": "evaluation",
-        "output_cost_per_token": 0.0,
-        "source": "https://openrouter.ai/typesafe/jev-1.14",
         "supports_box_questions": true
     },
     "wandb/deepseek-ai/DeepSeek-V4.1-Flash": {
