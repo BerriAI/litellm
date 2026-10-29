@@ -612,7 +612,7 @@ def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bo
 
 
 def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
-    media_types: Final = call.provider_config.image_media_types
+    media_types: Final = call.provider_config.image_media_types_for(call.model)
     if media_types is None:
         return call
     found: Final = (image_media_type(image) for image in input_images(call.ir_request.input))

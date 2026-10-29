@@ -4065,7 +4065,7 @@ async def test_hosted_vllm_decisions_sends_input_images_to_systemone(
 
 
 _STATE_IMAGE_PROVIDERS: Final = (
-    ("openrouter/typesafe/jev-1.14", "https://openrouter.ai/api/alpha/decisions", "typesafe/jev-1.14"),
+    ("openrouter/cloudflare/clef", "https://openrouter.ai/api/alpha/decisions", "cloudflare/clef"),
     ("perplexity/pplx-decider-v1.2", "https://api.perplexity.ai/v1/decisions", "pplx-decider-v1.2"),
 )
 _STATE_IMAGE_PROVIDER_IDS: Final = ("openrouter", "perplexity")
@@ -4155,6 +4155,43 @@ def test_a_gif_to_a_state_image_provider_is_rejected_before_http(
 
     assert caught.value.status_code == 400
     assert not route.called
+
+
+@pytest.mark.parametrize("model", ("openrouter/typesafe/jev-1.14", "openrouter/~typesafe/jev-latest"))
+def test_openrouter_jev_rejects_webp_before_http(
+    model: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("got image/webp")):
+        litellm.systemone(
+            model=model,
+            state=_SCREEN_TEXT,
+            questions=_SYSTEMONE_PREDICATE,
+            images=["data:image/webp;base64,BB=="],
+            api_key="k",
+        )
+
+    assert not route.called
+
+
+def test_openrouter_jev_drops_webp_and_keeps_png_under_drop_params(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model="openrouter/typesafe/jev-1.14",
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=["data:image/webp;base64,BB==", "data:image/png;base64,AA=="],
+        api_key="k",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content)["state"] == [
+        _SCREEN_TEXT,
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+    ]
 
 
 def test_hosted_vllm_systemone_forwards_images(

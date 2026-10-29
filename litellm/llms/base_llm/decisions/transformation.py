@@ -649,6 +649,9 @@ class BaseDecisionsConfig(ABC):
     ) -> bool:
         return self.supports_images
 
+    def image_media_types_for(self, model: str) -> frozenset[str] | None:
+        return self.image_media_types
+
     def supports_assets(self, headers: Mapping[str, str]) -> bool:
         return False
 
