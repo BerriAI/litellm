@@ -129,6 +129,7 @@ MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
 S3_PARTITION_GRANULARITY_ENV_VAR: Final = "S3_PARTITION_GRANULARITY"
 MAX_FILE_LIST_LIMIT: Final = 10000
+ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
@@ -763,7 +764,6 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
 # Used for web search interception across providers
 LITELLM_WEB_SEARCH_TOOL_NAME: Final = "litellm_web_search"
 
-DEFAULT_IMAGE_ENDPOINT_MODEL: Final = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL: Final = "sora-2"
 
 DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS: Final = get_env_int("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8)
@@ -1064,6 +1064,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
+    "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
 ]
 
 
@@ -1096,6 +1097,7 @@ openai_compatible_providers: Final[list[str]] = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "zerogpu",
     "github_copilot",  # GitHub Copilot Chat API
     "chatgpt",  # ChatGPT subscription API
     "novita",
@@ -1145,6 +1147,7 @@ openai_compatible_providers: Final[list[str]] = [
     "prism",
     "sail",
     "reka",
+    "streamlake",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1738,6 +1741,7 @@ PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 TYPESAFE_DANGER_ZONE_HEADER_PREFIX: Final = "typesafe-danger-zone-"
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
 CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
+SESSION_ID_FROM_TRACE_ID_PARAM_KEY: Final = f"{INTERNAL_KWARG_PREFIX}session_id_from_trace_id"
 
 AZURE_SPEECH_CUSTOM_LLM_PROVIDER: Final = "azure_speech"
 AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
