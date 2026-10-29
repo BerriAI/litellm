@@ -308,7 +308,9 @@ def _reservation_channels(kwargs: Mapping[str, object] | None) -> tuple[object, 
         return ()
     top_level: Final = (kwargs.get("metadata"), kwargs.get("litellm_metadata"))
     litellm_params: Final = _as_mutable_mapping(kwargs.get("litellm_params"))
-    from_params: Final = () if litellm_params is None else (litellm_params.get("metadata"),)
+    from_params: Final = (
+        () if litellm_params is None else (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
+    )
     standard_logging_object: Final = _as_mutable_mapping(kwargs.get("standard_logging_object"))
     from_logging_object: Final = () if standard_logging_object is None else (standard_logging_object.get("metadata"),)
     return top_level + from_params + from_logging_object

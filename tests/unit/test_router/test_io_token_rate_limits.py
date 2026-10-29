@@ -3,6 +3,8 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Final
 
 import pytest
 
@@ -10,6 +12,7 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
@@ -30,7 +33,9 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
+from litellm.types.router import RouterCacheEnum
 from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import get_utc_datetime
 
 MANTLE_OPUS = "bedrock_mantle/anthropic.claude-opus-4-7"
 MANTLE_OPUS_MAX_OUTPUT = litellm.get_model_info(model=MANTLE_OPUS)["max_output_tokens"]
@@ -558,9 +563,9 @@ class TestModelRateLimitingCheckIOTokens:
             "standard_logging_object": {
                 "model_id": "io-sync-id",
                 "hidden_params": {"litellm_model_name": "bedrock_mantle/anthropic.claude-opus-4-7"},
-                "metadata": dict(request_kwargs["metadata"]),
+                "metadata": {},
             },
-            "metadata": request_kwargs["metadata"],
+            "litellm_params": {"metadata": request_kwargs["metadata"]},
         }
         response = ModelResponse(
             choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
@@ -1101,7 +1106,130 @@ class TestModelRateLimitingCheckIOTokens:
         assert current == 0
 
 
+ROUTER_IO_MODEL: Final = "anthropic/claude-haiku-5-5"
+RouterCall = Callable[[Router, str | Exception], Awaitable[tuple[int, int]]]
+
+
+def _router_with_io_limits() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "limited",
+                "litellm_params": {"model": ROUTER_IO_MODEL, "api_key": "sk-test", "itpm": 50000, "otpm": 50000},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=1,
+    )
+
+
+def _current_minute() -> str:
+    return get_utc_datetime().strftime("%H-%M")
+
+
+def _counter(router: Router, template: RouterCacheEnum, minutes: frozenset[str]) -> int:
+    deployment: Final = router.model_list[0]
+    return sum(
+        router.cache.get_cache(
+            key=template.value.format(
+                id=deployment["model_info"]["id"],
+                model=deployment["litellm_params"]["model"],
+                current_minute=minute,
+            )
+        )
+        or 0
+        for minute in minutes
+    )
+
+
+async def _io_counters_since(router: Router, first_minute: str) -> tuple[int, int]:
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    minutes: Final = frozenset({first_minute, _current_minute()})
+    return _counter(router, RouterCacheEnum.ITPM, minutes), _counter(router, RouterCacheEnum.OTPM, minutes)
+
+
+async def _sdk_chat(router: Router, mock_response: str | Exception) -> tuple[int, int]:
+    response: Final = await router.acompletion(
+        model="limited",
+        messages=[{"role": "user", "content": "hello there"}],
+        max_tokens=100,
+        mock_response=mock_response,
+    )
+    return response.usage.prompt_tokens, response.usage.completion_tokens
+
+
+async def _proxy_chat(router: Router, mock_response: str | Exception) -> tuple[int, int]:
+    response: Final = await router.acompletion(
+        model="limited",
+        messages=[{"role": "user", "content": "hello there"}],
+        max_tokens=100,
+        metadata={"user_api_key_hash": "hashed-key"},
+        mock_response=mock_response,
+    )
+    return response.usage.prompt_tokens, response.usage.completion_tokens
+
+
+async def _proxy_responses(router: Router, mock_response: str | Exception) -> tuple[int, int]:
+    response: Final = await router.aresponses(
+        model="limited",
+        input="hello there",
+        max_output_tokens=100,
+        litellm_metadata={"user_api_key_hash": "hashed-key"},
+        mock_response=mock_response,
+    )
+    return response.usage.input_tokens, response.usage.output_tokens
+
+
+async def _proxy_messages(router: Router, mock_response: str | Exception) -> tuple[int, int]:
+    response: Final = await router.aanthropic_messages(
+        model="limited",
+        messages=[{"role": "user", "content": "hello there"}],
+        max_tokens=100,
+        litellm_metadata={"user_api_key_hash": "hashed-key"},
+        mock_response=mock_response,
+    )
+    return response["usage"]["input_tokens"], response["usage"]["output_tokens"]
+
+
 class TestRouterIOTokenIntegration:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call",
+        [_sdk_chat, _proxy_chat, _proxy_responses, _proxy_messages],
+        ids=["sdk_chat", "proxy_chat_metadata", "proxy_responses_litellm_metadata", "proxy_messages_litellm_metadata"],
+    )
+    async def test_success_reconciles_io_counters_to_real_usage(self, call: RouterCall):
+        router: Final = _router_with_io_limits()
+        first_minute: Final = _current_minute()
+
+        usage: Final = await call(router, "hi")
+
+        assert await _io_counters_since(router, first_minute) == usage
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call", "mock_error"),
+        [
+            (
+                _proxy_responses,
+                litellm.InternalServerError(message="mock 500", llm_provider="anthropic", model=ROUTER_IO_MODEL),
+            ),
+            (_proxy_messages, "litellm.InternalServerError"),
+        ],
+        ids=["proxy_responses_litellm_metadata", "proxy_messages_litellm_metadata"],
+    )
+    async def test_retried_failure_refunds_each_io_reservation_once(
+        self, call: RouterCall, mock_error: str | Exception
+    ):
+        router: Final = _router_with_io_limits()
+        first_minute: Final = _current_minute()
+
+        with pytest.raises(litellm.InternalServerError):
+            await call(router, mock_error)
+
+        assert await _io_counters_since(router, first_minute) == (0, 0)
+
     @pytest.mark.asyncio
     async def test_model_group_info_aggregates_io_limits(self):
         router = Router(
