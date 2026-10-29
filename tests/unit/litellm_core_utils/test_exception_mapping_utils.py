@@ -24,6 +24,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.proxy.common_utils.openai_error_payload import openai_error_type
 from litellm.types.utils import LlmProviders
 
 
@@ -1013,6 +1014,138 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
 
     assert excinfo.value.status_code == 404
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize(
+    "status_code, message, expected_exception",
+    [
+        (400, "Invalid 'temperature'", litellm.BadRequestError),
+        (401, "Invalid API key", litellm.AuthenticationError),
+        (404, "The model does not exist", litellm.NotFoundError),
+    ],
+)
+def test_openai_invalid_request_error_respects_status_code(
+    provider: str, status_code: int, message: str, expected_exception: type[openai.APIStatusError]
+) -> None:
+    error_message: Final = json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    original_exception: Final = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is expected_exception
+    assert excinfo.value.status_code == status_code
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(provider: str) -> None:
+    message: Final = "Missing required parameter: 'input'."
+    original_exception: Final = Exception(json.dumps({"error": {"message": message, "type": "invalid_request_error"}}))
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+    provider: str, status_code: int
+) -> None:
+    message: Final = "Cannot cancel a batch that is already completed."
+    error_message: Final = json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    original_exception: Final = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert message in excinfo.value.message
+
+
+def _openai_sdk_error(
+    sdk_error: type[openai.APIStatusError], status_code: int, provider_error: dict[str, str | None]
+) -> openai.APIStatusError:
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return sdk_error(
+        f"Error code: {status_code} - {{'error': {provider_error}}}",
+        response=httpx.Response(status_code, request=request),
+        body=provider_error,
+    )
+
+
+@pytest.mark.parametrize(
+    "sdk_error, status_code, expected_exception, param, code",
+    [
+        (openai.AuthenticationError, 401, litellm.AuthenticationError, "organization", "mismatched_organization"),
+        (openai.NotFoundError, 404, litellm.NotFoundError, "id", None),
+    ],
+)
+def test_openai_invalid_request_error_401_and_404_keep_the_provider_error_fields(
+    sdk_error: type[openai.APIStatusError],
+    status_code: int,
+    expected_exception: type[openai.APIStatusError],
+    param: str,
+    code: str | None,
+) -> None:
+    provider_error: Final = {
+        "message": "The request was rejected.",
+        "type": "invalid_request_error",
+        "param": param,
+        "code": code,
+    }
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="gpt-5-mini",
+            original_exception=_openai_sdk_error(sdk_error, status_code, provider_error),
+            custom_llm_provider="openai",
+        )
+
+    assert type(excinfo.value) is expected_exception
+    assert (excinfo.value.status_code, excinfo.value.type, excinfo.value.param, excinfo.value.code) == (
+        status_code,
+        "invalid_request_error",
+        param,
+        code,
+    )
+    assert excinfo.value.body == provider_error
+    assert openai_error_type(excinfo.value, status_code) == "invalid_request_error"
+    assert excinfo.value.message.count(expected_exception.__name__) == 1
+
+
+def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() -> None:
+    provider_error: Final = {
+        "message": "Incorrect API key provided: sk-litellmqa.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "invalid_api_key",
+    }
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="gpt-5-mini",
+            original_exception=_openai_sdk_error(openai.AuthenticationError, 401, provider_error),
+            custom_llm_provider="openai",
+        )
+
+    assert openai_error_type(excinfo.value, 401) == "authentication_error"
 
 
 class _UpstreamHTTPError(Exception):

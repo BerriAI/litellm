@@ -21632,7 +21632,7 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
     "error_body,error_type",
     [
         ({"message": "model is down", "type": "server_error"}, litellm.NotFoundError),
-        ({"message": "Response with id 'resp_x' not found.", "type": "invalid_request_error"}, litellm.BadRequestError),
+        ({"message": "Response with id 'resp_x' not found.", "type": "invalid_request_error"}, litellm.NotFoundError),
     ],
 )
 @pytest.mark.parametrize(
