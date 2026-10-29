@@ -151,9 +151,11 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
 
 
-def azure_ai_serves_openai_chat_model(model: str) -> bool:
+def azure_ai_serves_openai_chat_model(model: str, base_model: str | None) -> bool:
+    served_model: Final = (base_model or model).rsplit("/", 1)[-1]
     return (
-        AzureFoundryModelInfo.get_azure_ai_route(model) == "default" and model in litellm.open_ai_chat_completion_models
+        AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
+        and served_model in litellm.open_ai_chat_completion_models
     )
 
 

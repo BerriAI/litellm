@@ -5541,6 +5541,10 @@ def _mock_chat_completion(respx_mock: respx.MockRouter) -> respx.Route:
         ("openai/gpt-4.1-mini", {"api_base": "http://localhost:12346/v1"}),
         ("litellm_proxy/gpt-4.1-mini", {"api_base": "http://localhost:12346/v1"}),
         ("azure_ai/gpt-4.1-mini", {"api_base": "http://localhost:12346/models"}),
+        (
+            "azure_ai/my-luna-deployment",
+            {"api_base": "http://localhost:12346/models", "base_model": "azure_ai/gpt-4.1-mini"},
+        ),
         ("azure/gpt-4.1-mini", {"api_base": "http://localhost:12346", "api_version": "2025-04-01-preview"}),
     ],
 )

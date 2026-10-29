@@ -5711,7 +5711,7 @@ def completion(
             ),
         )
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
-        drops_unsupported_params: Final = (
+        drop_unsupported_reasoning: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
         drops_tool_choice: Final = drop_policy(routing_kwargs).drops("tool_choice")
@@ -5727,7 +5727,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),
             model_group=reasoning_model_group,
-            drop_params=drops_unsupported_params,
+            drop_params=drop_unsupported_reasoning,
         )
         resolved_reasoning_effort: Final = chat_reasoning.effort.value
         resolved_output_config: Final = chat_reasoning.output_config
@@ -5867,6 +5867,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 model=model,
                 drop_params=drops_tool_choice,
+                base_model=base_model if isinstance(base_model, str) else None,
             ),
             "max_retries": max_retries,
             "logprobs": logprobs,
