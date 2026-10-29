@@ -14,6 +14,7 @@ from litellm.proxy.spend_tracking.savings import (
     prompt_caching_savings_for_request,
 )
 from litellm.router import Router
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import Usage
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
@@ -1068,6 +1069,31 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         llm_router=lambda: router,
     )
     assert with_deployment_rate.autorouter > at_public_rate.autorouter
+
+
+def test_savings_follow_a_deployments_updated_price() -> None:
+    def deployment(input_cost_per_token: float) -> Deployment:
+        return Deployment(
+            model_name="negotiated",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-sonnet-5", input_cost_per_token=input_cost_per_token
+            ),
+            model_info={"id": "repriced"},
+        )
+
+    router: Final = Router(model_list=[deployment(1e-6).model_dump(exclude_none=True)])
+
+    def compression_savings() -> float:
+        return compute_savings_spend(
+            "claude-sonnet-5", "anthropic", 1000, False, model_id="repriced", llm_router=lambda: router
+        ).compression
+
+    assert compression_savings() == pytest.approx(1000 * 1e-6)
+    assert compression_savings() == pytest.approx(1000 * 1e-6)
+
+    router.upsert_deployment(deployment(3e-6))
+
+    assert compression_savings() == pytest.approx(1000 * 3e-6)
 
 
 def _routed_decision() -> dict:

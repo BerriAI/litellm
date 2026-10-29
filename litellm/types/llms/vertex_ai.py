@@ -239,8 +239,18 @@ class VoiceConfig(TypedDict):
     prebuiltVoiceConfig: PrebuiltVoiceConfig
 
 
+class SpeakerVoiceConfig(TypedDict):
+    speaker: ReadOnly[str]
+    voiceConfig: ReadOnly[VoiceConfig]
+
+
+class MultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: ReadOnly[Sequence[SpeakerVoiceConfig]]
+
+
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    multiSpeakerVoiceConfig: ReadOnly[MultiSpeakerVoiceConfig]
     languageCode: str
 
 
@@ -366,7 +376,7 @@ class RequestBody(TypedDict, total=False):
 class CachedContentRequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
-    tools: Tools
+    tools: Tools | None
     toolConfig: ToolConfig
     model: Required[str]  # Format: models/{model}
     ttl: str  # ending in 's' - Example: "3.5s".

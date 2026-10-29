@@ -14,7 +14,7 @@ import { hasCapability, type Capability } from "@/utils/capabilities";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Bot, Boxes, ChevronDown, ChevronRight, ExternalLink, Info, KeyRound, Layers, Server } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Alert, AlertDescription } from "@/components/shared/Alert";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -22,6 +22,7 @@ import { cn } from "@/lib/cva.config";
 import React, { type ReactNode, useCallback, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
+import CustomerMultiSelect from "@/components/common_components/CustomerMultiSelect";
 import UserRecordLink from "../UserRecordLink";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
@@ -189,6 +190,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     data: spendDataRaw,
     loading,
     failed,
+    errorMessage,
+    reload,
   } = useAggregatedDailyActivity({
     fetch: () => api.aggregated(request as DailyActivityRequest),
     enabled: enabled && request !== null,
@@ -208,6 +211,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     data: agentSpendDataRaw,
     loading: agentLoading,
     failed: agentFailed,
+    errorMessage: agentErrorMessage,
+    reload: reloadAgent,
   } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.agent.aggregated(agentRequest as DailyActivityRequest),
     enabled: enabled && showAgentBreakdown && agentRequest !== null,
@@ -263,6 +268,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       if (entityItem) {
         return entityItem.label;
       }
+    }
+    if (entityType === "customer" && metadata?.alias) {
+      return metadata.alias;
     }
     // Fallback to team_alias for backward compatibility
     if (metadata?.team_alias) {
@@ -342,6 +350,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
     team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
+    customer: <CustomerMultiSelect value={selectedTags} onChange={setSelectedTags} />,
     user: (
       <div className="flex items-center gap-3">
         <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
@@ -663,21 +672,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   return (
     <div className="relative grid w-full gap-3">
-      {failed && (
-        <Alert variant="error">
-          <AlertDescription className="text-inherit">
-            Fetching spend data failed, so the totals below may be empty rather than final. Reload the page to try
-            again.
-          </AlertDescription>
-        </Alert>
-      )}
+      {failed && <ErrorState title="Failed to load spend data" message={errorMessage} onRetry={reload} />}
       {showAgentBreakdown && agentFailed && (
-        <Alert variant="error">
-          <AlertDescription className="text-inherit">
-            Fetching agent data failed, so the totals below may be empty rather than final. Reload the page to try
-            again.
-          </AlertDescription>
-        </Alert>
+        <ErrorState title="Failed to load agent data" message={agentErrorMessage} onRetry={reloadAgent} />
       )}
       <div className="max-w-full [&>div:first-child]:mb-0 [&>div:first-child_label]:sr-only">
         <UsageExportHeader

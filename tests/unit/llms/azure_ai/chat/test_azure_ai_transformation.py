@@ -1,5 +1,6 @@
 import json
 import traceback
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -306,15 +307,28 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
 
 
-def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
+def test_foundry_gpt_6_sol_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
+    """gpt-6-sol's Foundry row still says none, so the sampling params that ride on it stay. gpt-6-astra
+    used to be the model here until its row turned none off (a live Foundry deployment answered none
+    with a 400 naming low through xhigh on 2026-10-01); the test below pins that flip."""
     optional_params = AzureAIStudioConfig().map_openai_params(
         non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
         optional_params={},
-        model="gpt-6-astra",
+        model="gpt-6-sol",
         drop_params=False,
     )
 
     assert optional_params == {"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9}
+
+
+def test_foundry_gpt_6_astra_refuses_reasoning_effort_none_before_the_call(_local_model_cost_map):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="gpt-6-astra",
+            drop_params=False,
+        )
 
 
 
@@ -866,6 +880,32 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
     }
 
 
+def test_azure_ai_reference_only_tool_result_is_sent_as_empty_text():
+    messages: Final = [
+        {"role": "user", "content": "load the WebFetch tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "tool_reference", "tool_name": "WebFetch"}],
+        },
+    ]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][2] == {"role": "tool", "tool_call_id": "call_1", "content": ""}
+
+
 @pytest.mark.parametrize(
     "api_base, expected_url",
     [
@@ -1059,3 +1099,25 @@ def test_map_azure_model_group(model_group_header, expected_model):
 
     config = AzureAICohereConfig()
     assert config._map_azure_model_group(model_group_header) == expected_model
+
+
+def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_that_rejects_it(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
+    declare_mid_conversation_system("azure_ai/system-first-model", False)
+    messages: Final = AzureAIStudioConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="system-first-model",
+        custom_llm_provider="azure_ai",
+        api_base="https://example.services.ai.azure.com/models",
+        model_info=None,
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
+    assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."

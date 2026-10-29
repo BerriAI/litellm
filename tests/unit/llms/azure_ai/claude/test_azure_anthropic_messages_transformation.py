@@ -7,6 +7,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import patch
 
@@ -196,6 +197,17 @@ class TestAzureAnthropicMessagesConfig:
         )
 
         assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
+
+    def test_get_complete_url_adds_the_anthropic_path_for_a_host_named_anthropic(self):
+        url: Final = AzureAnthropicMessagesConfig().get_complete_url(
+            api_base="https://anthropic-res.services.ai.azure.com",
+            api_key="test-api-key",
+            model="claude-sonnet-4-5",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://anthropic-res.services.ai.azure.com/anthropic/v1/messages"
 
     def test_get_complete_url_raises_error_when_api_base_missing(self):
         """Test get_complete_url raises error when api_base is None"""
@@ -551,3 +563,47 @@ async def test_outgoing_azure_request_sends_safeguards_with_the_dangerous_tool_u
     sent: Final = received[0]
     assert "dangerous-tool-use-2026-09-03" in sent.headers["anthropic-beta"].split(","), dict(sent.headers)
     assert json.loads(sent.content)["safeguards"] == list(AUTO_MODE_SAFEGUARDS)
+
+
+async def _azure_request_body_for_output_format(output_format: object, drop_params: bool) -> Mapping[str, object]:
+    received: Final[list[httpx.Request]] = []
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _foundry_answer(request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=[{"role": "user", "content": "What is 6 times 7?"}],
+            model="azure_ai/claude-sonnet-4-6",
+            api_key="test-api-key",
+            api_base="https://test-resource.services.ai.azure.com",
+            output_format=output_format,
+            drop_params=drop_params,
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1, received
+    return json.loads(received[0].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_outgoing_azure_request_drops_a_malformed_output_format_under_drop_params() -> None:
+    body: Final = await _azure_request_body_for_output_format("json", drop_params=True)
+
+    assert "output_format" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_outgoing_azure_request_keeps_an_object_output_format_under_drop_params() -> None:
+    output_format: Final = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
+
+    body: Final = await _azure_request_body_for_output_format(output_format, drop_params=True)
+
+    assert body["output_format"] == output_format

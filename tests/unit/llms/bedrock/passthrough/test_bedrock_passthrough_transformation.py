@@ -5,8 +5,9 @@ import struct
 import sys
 import types
 from binascii import crc32
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
@@ -922,7 +923,11 @@ INVOKE_BODY = {
 
 
 async def _sent_passthrough_request(
-    action: str, body: dict[str, object], identity: dict[str, object], **kwargs: object
+    action: str,
+    body: dict[str, object],
+    identity: dict[str, object],
+    deployment_params: Mapping[str, object] = MappingProxyType({}),
+    **kwargs: object,
 ) -> httpx.Request:
     requests: Final[list[httpx.Request]] = []
 
@@ -939,6 +944,7 @@ async def _sent_passthrough_request(
                     "aws_access_key_id": "AKIAROUTERKEY",
                     "aws_secret_access_key": "router-secret",
                     "aws_region_name": "us-west-2",
+                    **deployment_params,
                 },
             }
         ]
@@ -1189,3 +1195,176 @@ async def test_passthrough_body_is_sent_as_is_when_params_are_dropped_and_forwar
 
     assert json.loads(sent.content) == caller_body
     assert REQUEST_METADATA_HEADER not in sent.headers
+
+
+DEPLOYMENT_GUARDRAIL: Final[Mapping[str, str]] = {
+    "guardrailIdentifier": "deployment-guardrail",
+    "guardrailVersion": "3",
+    "trace": "enabled",
+    "streamProcessingMode": "sync",
+}
+DEPLOYMENT_INVOKE_GUARDRAIL_HEADERS: Final[Mapping[str, str]] = {
+    "x-amzn-bedrock-guardrailidentifier": "deployment-guardrail",
+    "x-amzn-bedrock-guardrailversion": "3",
+    "x-amzn-bedrock-trace": "ENABLED",
+}
+CALLER_GUARDRAIL: Final[Mapping[str, str]] = {
+    "guardrailIdentifier": "caller-guardrail",
+    "guardrailVersion": "9",
+    "trace": "disabled",
+}
+CALLER_INVOKE_GUARDRAIL_HEADERS: Final[Mapping[str, str]] = {
+    "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+    "x-pass-X-Amzn-Bedrock-GuardrailVersion": "9",
+    "x-pass-X-Amzn-Bedrock-Trace": "DISABLED",
+}
+
+
+def _invoke_guardrail_headers(request: httpx.Request) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower().startswith("x-amzn-bedrock-guardrail") or name.lower() == "x-amzn-bedrock-trace"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "sent_guardrail"),
+    [
+        ("converse", {"guardrailIdentifier": "deployment-guardrail", "guardrailVersion": "3", "trace": "enabled"}),
+        ("converse-stream", DEPLOYMENT_GUARDRAIL),
+    ],
+)
+async def test_converse_passthrough_sends_the_deployment_guardrail_in_the_body(
+    action: str, sent_guardrail: Mapping[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        action, CONVERSE_BODY, {}, deployment_params={"guardrailConfig": DEPLOYMENT_GUARDRAIL}
+    )
+
+    assert json.loads(request.content) == {**CONVERSE_BODY, "guardrailConfig": sent_guardrail}
+    assert _invoke_guardrail_headers(request) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_passthrough_sends_the_deployment_guardrail_as_signed_headers(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    request: Final = await _sent_passthrough_request(
+        action, INVOKE_BODY, PROXY_IDENTITY, deployment_params={"guardrailConfig": DEPLOYMENT_GUARDRAIL}
+    )
+
+    assert _invoke_guardrail_headers(request) == DEPLOYMENT_INVOKE_GUARDRAIL_HEADERS
+    assert {*DEPLOYMENT_INVOKE_GUARDRAIL_HEADERS, REQUEST_METADATA_HEADER} <= _signed_header_names(request)
+    assert json.loads(request.headers[REQUEST_METADATA_HEADER]) == EXPECTED_REQUEST_METADATA
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "caller_guardrail"),
+    [("converse", CALLER_GUARDRAIL), ("converse-stream", {**CALLER_GUARDRAIL, "streamProcessingMode": "async"})],
+)
+async def test_deployment_guardrail_replaces_the_caller_converse_guardrail(
+    action: str, caller_guardrail: Mapping[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        {**CONVERSE_BODY, "guardrailConfig": caller_guardrail},
+        {},
+        deployment_params={"guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"}},
+    )
+
+    assert json.loads(request.content) == {
+        **CONVERSE_BODY,
+        "guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_deployment_guardrail_replaces_every_invoke_guardrail_header_the_caller_sent(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        INVOKE_BODY,
+        {},
+        deployment_params={"guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"}},
+        request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS,
+    )
+
+    assert _invoke_guardrail_headers(request) == {"x-amzn-bedrock-guardrailidentifier": "deployment-guardrail"}
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+async def test_passthrough_without_a_deployment_guardrail_sends_the_caller_guardrail_as_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    caller_body: Final = {**CONVERSE_BODY, "guardrailConfig": CALLER_GUARDRAIL}
+
+    converse: Final = await _sent_passthrough_request("converse", caller_body, {})
+    invoke: Final = await _sent_passthrough_request(
+        "invoke", INVOKE_BODY, {}, request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS
+    )
+
+    assert json.loads(converse.content) == caller_body
+    assert _invoke_guardrail_headers(invoke) == {
+        "x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
+        "x-amzn-bedrock-guardrailversion": "9",
+        "x-amzn-bedrock-trace": "DISABLED",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+@pytest.mark.parametrize("guardrail_config", ["deployment-guardrail", {"guardrailVersion": "3"}])
+async def test_invoke_passthrough_refuses_a_deployment_guardrail_it_cannot_send(
+    action: str, guardrail_config: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    with pytest.raises(BedrockError, match="guardrailConfig") as rejected:
+        await _sent_passthrough_request(
+            action, INVOKE_BODY, {}, deployment_params={"guardrailConfig": guardrail_config}
+        )
+
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_converse_passthrough_forwards_a_non_object_deployment_guardrail_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+
+    request: Final = await _sent_passthrough_request(
+        "converse", CONVERSE_BODY, {}, deployment_params={"guardrailConfig": "deployment-guardrail"}
+    )
+
+    assert json.loads(request.content) == {**CONVERSE_BODY, "guardrailConfig": "deployment-guardrail"}
+
+
+@pytest.mark.asyncio
+async def test_passthrough_leaves_actions_without_a_guardrail_field_as_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    count_tokens_body: Final = {"input": {"converse": CONVERSE_BODY}}
+
+    request: Final = await _sent_passthrough_request(
+        "count-tokens", count_tokens_body, {}, deployment_params={"guardrailConfig": DEPLOYMENT_GUARDRAIL}
+    )
+
+    assert json.loads(request.content) == count_tokens_body
+    assert _invoke_guardrail_headers(request) == {}

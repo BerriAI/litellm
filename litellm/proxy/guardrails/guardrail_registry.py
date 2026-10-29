@@ -102,6 +102,16 @@ def _as_json_array(value: object) -> list[object] | None:
     return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
 
 
+def _extra_param_items(litellm_params: LitellmParams) -> Iterable[tuple[str, object]]:
+    return (
+        litellm_params.model_dump(exclude_none=True).items()
+        if hasattr(litellm_params, "model_dump")
+        else iter(litellm_params)
+        if litellm_params
+        else ()
+    )
+
+
 def contains_encrypted_marker(value: object, depth: int = 0) -> bool:
     """True if any string in value, at any JSON depth, starts with the encrypted-value prefix."""
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
@@ -904,13 +914,7 @@ class InMemoryGuardrailHandler:
         # This matches the behavior of other guardrail initializers (e.g., initialize_lakera)
         # and aligns with the documented behavior for custom guardrails
         excluded_extra_param_keys: Final = frozenset(("guardrail", "mode", "default_on", "stream_scope"))
-        extra_params_items: Final = (
-            litellm_params.model_dump(exclude_none=True).items()
-            if hasattr(litellm_params, "model_dump")
-            else iter(litellm_params)
-            if litellm_params
-            else ()
-        )
+        extra_params_items: Final = _extra_param_items(litellm_params)
         extra_params: Final = MappingProxyType(
             {key: value for key, value in extra_params_items if key not in excluded_extra_param_keys}
         )

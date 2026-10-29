@@ -1,6 +1,7 @@
 import base64
 import copy
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -896,6 +897,16 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
         ("us.xai.grok-4.6", "max_tokens", 1, 16),
         ("global.xai.grok-4.6", "max_completion_tokens", 1, 16),
         ("us.xai.grok-4.6", "max_tokens", 32, 32),
+        ("us.moonshotai.kimi-k3", "max_tokens", 1, 16),
+        ("global.moonshotai.kimi-k3", "max_completion_tokens", 1, 16),
+        ("moonshotai.kimi-k3", "max_tokens", 64, 64),
+        (
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.moonshotai.kimi-k3",
+            "max_tokens",
+            1,
+            16,
+        ),
+        ("moonshotai.kimi-k2.5", "max_tokens", 1, 1),
         ("anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens", 1, 1),
         ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.openai.gpt-6-astra", "max_tokens", 1, 16),
         ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.xai.grok-4.6", "max_tokens", 1, 16),
@@ -956,7 +967,9 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
         "us.openai.gpt-6-astra",
     ],
 )
-def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, local_model_cost_map):
+def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(
+    model: str, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+) -> None:
     config = AmazonConverseConfig()
     assert litellm.utils.is_explicitly_disabled_factory(
         model=model, custom_llm_provider="bedrock_converse", key="supports_minimal_reasoning_effort"
@@ -970,15 +983,19 @@ def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, 
             drop_params=False,
         )
 
-    optional_params = config.map_openai_params(
-        non_default_params={"reasoning_effort": "minimal"},
-        optional_params={},
-        model=model,
-        drop_params=True,
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
     _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
     assert "reasoning" not in additional_request_params
     assert "thinking" not in additional_request_params
+    dropped: Final = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort='minimal'" in r.getMessage()]
+    assert len(dropped) == 1 and model in dropped[0]
+    assert "model_info" not in dropped[0]
 
 
 @pytest.mark.parametrize(
@@ -10729,3 +10746,53 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
     assert route.call_count == expected_calls
     assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
     assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])
+
+
+CONTROL_PLANE_ENDPOINT: Final = "https://bedrock-fips.us-east-1.amazonaws.com"
+
+
+def _bedrock_chat_answer(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/invoke"):
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_control_plane",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    return httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        },
+    )
+
+
+@pytest.mark.parametrize("route_prefix", ["bedrock/", "bedrock/converse/", "bedrock/invoke/"])
+@pytest.mark.respx(assert_all_called=True)
+def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_requests(
+    respx_mock: respx.Router, route_prefix: str
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.+/(converse|invoke)$"
+    ).mock(side_effect=_bedrock_chat_answer)
+
+    response: Final = litellm.completion(
+        model=f"{route_prefix}us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        aws_access_key_id="AKIACONTROLPLANE",
+        aws_secret_access_key="control-plane-secret",
+        aws_region_name="us-east-1",
+        aws_bedrock_control_plane_endpoint=CONTROL_PLANE_ENDPOINT,
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()

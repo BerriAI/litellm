@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GRAYSWAN_BLOCK_ERROR_MSG: Final = "Blocked by Gray Swan Guardrail"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _GraySwanMonitorResponse(TypedDict):
@@ -705,7 +706,9 @@ class GraySwanGuardrail(CustomGuardrail):
                 {**existing_headers, **inbound_headers} if isinstance(existing_headers, dict) else inbound_headers
             )
         if cleaned_litellm_metadata:
-            sanitized: Final[object] = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
+            sanitized: Final = _DECODED_JSON.validate_python(
+                safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
+            )
             if isinstance(sanitized, dict) and sanitized:
                 payload["litellm_metadata"] = sanitized
 
