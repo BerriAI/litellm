@@ -716,6 +716,37 @@ async def test_responses_websocket_turns_do_not_reserve_deployment_otpm():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+async def test_responses_websocket_turn_is_refused_once_the_minutes_tokens_reach_deployment_io_limit(kind: str):
+    from datetime import timedelta
+
+    from litellm.utils import get_utc_datetime
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-io",
+                "litellm_params": {"model": "openai/ws-io-unpriced", "api_key": "sk-fake", kind: 10_000},
+                "model_info": {"id": "ws-io-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-io", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+    now: Final = get_utc_datetime()
+    for minute in (now, now + timedelta(minutes=1)):
+        await router.cache.async_increment_cache(
+            key=f"global_router:ws-io-dep:openai/ws-io-unpriced:{kind}:{minute.strftime('%H-%M')}",
+            value=10_000,
+            ttl=120,
+        )
+
+    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=10000, current usage="):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
 async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
     """
     An IO-limited deployment (itpm/otpm, no tpm/rpm) must still record TPM usage

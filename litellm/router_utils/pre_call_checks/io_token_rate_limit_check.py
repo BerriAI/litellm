@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -22,6 +23,7 @@ from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.litellm_core_utils.token_counter import deployment_openai_model, offload_token_count
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
@@ -554,6 +556,54 @@ async def async_io_token_pre_call_check(
         otpm_cache_key=otpm_key if otpm_limit is not None else None,
     )
     return deployment
+
+
+@with_service_target(ROUTER_USAGE_TARGET)
+async def async_current_usage(
+    dual_cache: DualCache, key: str, limit: int, parent_otel_span: Span | None = None
+) -> int | None:
+    local_usage: Final = await dual_cache.async_get_cache(key=key, local_only=True)
+    redis_cache: Final = dual_cache.redis_cache
+    if redis_cache is None or (local_usage is not None and local_usage >= limit):
+        return local_usage
+    try:
+        return await redis_cache.async_get_cache(key=key, parent_otel_span=parent_otel_span)
+    except RedisCircuitBreakerOpenError:
+        return local_usage
+
+
+async def _raise_if_at_limit(
+    dual_cache: DualCache, key: str, limit: int | None, limit_label: str, parent_otel_span: Span | None
+) -> None:
+    if limit is None:
+        return
+    usage: Final = await async_current_usage(dual_cache, key, limit, parent_otel_span)
+    if usage is not None and usage >= limit:
+        raise _rate_limit_error(limit_label, limit, usage)
+
+
+@with_service_target(ROUTER_USAGE_TARGET)
+async def async_admit_io_token_turn(
+    dual_cache: DualCache, deployment: Mapping[str, object], parent_otel_span: Span | None = None
+) -> Mapping[str, object]:
+    configured: Final = dict(deployment)
+    itpm_limit, otpm_limit = get_deployment_io_token_limits(configured)
+    if itpm_limit is None and otpm_limit is None:
+        return MappingProxyType({})
+    cache_keys: Final = _get_cache_keys(configured, get_utc_datetime().strftime("%H-%M"))
+    if cache_keys is None:
+        return MappingProxyType({})
+    itpm_key, otpm_key = cache_keys
+    await _raise_if_at_limit(dual_cache, itpm_key, itpm_limit, "ITPM", parent_otel_span)
+    await _raise_if_at_limit(dual_cache, otpm_key, otpm_limit, "OTPM", parent_otel_span)
+    return MappingProxyType(
+        {
+            ITPM_RESERVED_KEY: 0,
+            OTPM_RESERVED_KEY: 0,
+            ITPM_CACHE_KEY: itpm_key if itpm_limit is not None else None,
+            OTPM_CACHE_KEY: otpm_key if otpm_limit is not None else None,
+        }
+    )
 
 
 @with_service_target(ROUTER_USAGE_TARGET)

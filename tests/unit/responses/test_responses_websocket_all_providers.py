@@ -1591,7 +1591,7 @@ def _admission_refusing_the_next_turn():
 
     from litellm.exceptions import RateLimitError
 
-    return AsyncMock(side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), None])
+    return AsyncMock(side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), {}])
 
 
 class _ClientSocket:
@@ -1630,7 +1630,7 @@ class _StalledClientSocket(_ClientSocket):
 def _admission_crashing_the_next_turn():
     from unittest.mock import AsyncMock
 
-    return AsyncMock(side_effect=[ValueError("custom check failed"), None])
+    return AsyncMock(side_effect=[ValueError("custom check failed"), {}])
 
 
 def _guard_blocking(word: str):
@@ -1653,6 +1653,21 @@ def _guard_recording(bill_refusal: MagicMock):
         )
 
     return guard
+
+
+_OPENED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:otpm:12-34"
+_TURNED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:otpm:12-35"
+
+
+def _otpm_reservation(reserved: int, cache_key: str) -> Mapping[str, object]:
+    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+        ITPM_CACHE_KEY,
+        ITPM_RESERVED_KEY,
+        OTPM_CACHE_KEY,
+        OTPM_RESERVED_KEY,
+    )
+
+    return {ITPM_RESERVED_KEY: 0, OTPM_RESERVED_KEY: reserved, ITPM_CACHE_KEY: None, OTPM_CACHE_KEY: cache_key}
 
 
 def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
@@ -1721,6 +1736,108 @@ class TestWebSocketTurnAdmission:
 
         assert isinstance(failure, RateLimitError)
         assert "crossed budget" in str(failure)
+
+    @pytest.mark.asyncio
+    async def test_native_relay_settles_the_open_reservation_once_and_a_later_turn_on_its_own_counter(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.caching.dual_cache import DualCache
+        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_reconcile_success
+        from litellm.types.utils import ModelResponse, Usage
+
+        dual_cache: Final = DualCache()
+        await dual_cache.async_increment_cache(key=_OPENED_ON, value=4096, ttl=60)
+
+        def connection_logging():
+            logging_obj = MagicMock()
+            logging_obj.litellm_params = {
+                "metadata": dict(_otpm_reservation(4096, _OPENED_ON)),
+                "litellm_metadata": dict(_otpm_reservation(4096, _OPENED_ON)),
+            }
+            logging_obj.model_call_details = {}
+            logging_obj.copy_for_new_call.side_effect = lambda **_: connection_logging()
+            return logging_obj
+
+        first, second, _ = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(second),
+            backend_ws=backend_ws,
+            request_data={},
+            logging_obj=connection_logging(),
+            first_message=first,
+            turn_admission=AsyncMock(return_value=_otpm_reservation(0, _TURNED_ON)),
+        )
+
+        await handler.client_to_backend()
+        for turn in handler._open_turns:
+            await async_io_token_reconcile_success(
+                dual_cache,
+                {"litellm_params": turn.logging_obj.litellm_params},
+                ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7)),
+            )
+
+        assert len(handler._open_turns) == 2
+        assert await dual_cache.async_get_cache(key=_OPENED_ON) == 2
+        assert await dual_cache.async_get_cache(key=_TURNED_ON) == 2
+
+    @pytest.mark.asyncio
+    async def test_managed_relay_settles_the_open_reservation_once_and_a_later_turn_on_its_own_counter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.caching.dual_cache import DualCache
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_reconcile_success
+        from litellm.types.utils import ModelResponse, Usage
+
+        dual_cache: Final = DualCache()
+        await dual_cache.async_increment_cache(key=_OPENED_ON, value=4096, ttl=60)
+        turn_metadata: Final[list[dict[str, object]]] = []
+
+        async def fake_aresponses(*args: object, **kwargs: object):
+            turn_metadata.append(dict(kwargs["litellm_metadata"]))
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        first, second, _ = _turn_frames()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=_ClientSocket(second),
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={"user_api_key_hash": "k1", **_otpm_reservation(4096, _OPENED_ON)},
+            first_message=first,
+            turn_admission=AsyncMock(return_value=_otpm_reservation(0, _TURNED_ON)),
+        )
+
+        await handler.run()
+        for metadata in turn_metadata:
+            await async_io_token_reconcile_success(
+                dual_cache,
+                {"litellm_params": {"metadata": metadata}},
+                ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7)),
+            )
+
+        assert [metadata["user_api_key_hash"] for metadata in turn_metadata] == ["k1", "k1"]
+        assert await dual_cache.async_get_cache(key=_OPENED_ON) == 2
+        assert await dual_cache.async_get_cache(key=_TURNED_ON) == 2
 
     @pytest.mark.asyncio
     async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch: pytest.MonkeyPatch):
@@ -1875,7 +1992,7 @@ class TestWebSocketTurnAdmission:
             request_data={},
             first_message=first,
             frame_guard=_guard_recording(bill_refusal),
-            turn_admission=AsyncMock(side_effect=[refusal, None]),
+            turn_admission=AsyncMock(side_effect=[refusal, {}]),
         )
 
         close_time_failure: Final = await handler.bidirectional_forward()
@@ -1904,7 +2021,7 @@ class TestWebSocketTurnAdmission:
             request_data={},
             first_message=first,
             frame_guard=_guard_recording(bill_refusal),
-            turn_admission=AsyncMock(side_effect=[refusal, None]),
+            turn_admission=AsyncMock(side_effect=[refusal, {}]),
         )
         relay: Final = asyncio.ensure_future(handler.bidirectional_forward())
         await asyncio.wait_for(client.send_started.wait(), timeout=1)
@@ -1955,7 +2072,7 @@ class TestWebSocketTurnAdmission:
             ),
             first_message=first,
             frame_guard=_guard_recording(bill_refusal),
-            turn_admission=AsyncMock(side_effect=[refusal, None]),
+            turn_admission=AsyncMock(side_effect=[refusal, {}]),
         )
 
         close_time_failure: Final = await handler.run()

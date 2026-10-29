@@ -3,6 +3,8 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
+from collections.abc import Mapping
+from datetime import timedelta
 from typing import Final
 
 import pytest
@@ -17,6 +19,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     OTPM_RESERVED_KEY,
     _reservation_value,
     _resolve_max_tokens,
+    async_admit_io_token_turn,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     build_io_token_rate_limit_headers,
@@ -31,6 +34,7 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
 from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import get_utc_datetime
 
 
 class TestIOTokenRateLimitHelpers:
@@ -1071,3 +1075,114 @@ async def test_custom_azure_deployment_name_reserves_itpm_on_its_base_models_tok
     )
 
     assert named == served
+
+
+def _reply_using(prompt_tokens: int, completion_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+
+def _proxy_success_kwargs(reservation: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "litellm_params": {"metadata": {**reservation, "user_api_key_hash": "hashed-key"}},
+        "standard_logging_object": {
+            "hidden_params": {"litellm_model_name": "openai/gpt-5-mini"},
+            "metadata": {"user_api_key_hash": "hashed-key"},
+        },
+    }
+
+
+async def _deliver_success(check: ModelRateLimitingCheck, delivery: str, kwargs: dict[str, object], reply: object):
+    if delivery == "async":
+        await check.async_log_success_event(kwargs, reply, None, None)
+        return
+    check.log_success_event(kwargs, reply, None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deliveries",
+    [("async",), ("sync",), ("async", "async"), ("async", "sync"), ("sync", "async"), ("sync", "sync")],
+)
+async def test_success_settles_a_reservation_held_only_in_litellm_params_metadata_exactly_once(
+    deliveries: tuple[str, ...],
+) -> None:
+    dual_cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(dual_cache=dual_cache)
+    itpm_key: Final = "global_router:proxy-shape:openai/gpt-5-mini:itpm:12-34"
+    otpm_key: Final = "global_router:proxy-shape:openai/gpt-5-mini:otpm:12-34"
+    await dual_cache.async_increment_cache(key=itpm_key, value=40, ttl=60)
+    await dual_cache.async_increment_cache(key=otpm_key, value=4096, ttl=60)
+    kwargs: Final = _proxy_success_kwargs(
+        {ITPM_RESERVED_KEY: 40, OTPM_RESERVED_KEY: 4096, ITPM_CACHE_KEY: itpm_key, OTPM_CACHE_KEY: otpm_key}
+    )
+
+    for delivery in deliveries:
+        await _deliver_success(check, delivery, kwargs, _reply_using(prompt_tokens=7, completion_tokens=3))
+
+    assert await dual_cache.async_get_cache(key=itpm_key) == 7
+    assert await dual_cache.async_get_cache(key=otpm_key) == 3
+
+
+def _turn_deployment(kind: str) -> dict[str, object]:
+    return {"litellm_params": {"model": "openai/gpt-5-mini", kind: 100}, "model_info": {"id": f"ws-turn-{kind}"}}
+
+
+async def _use_tokens_this_and_next_minute(dual_cache: DualCache, kind: str, tokens: int) -> None:
+    now: Final = get_utc_datetime()
+    for minute in (now, now + timedelta(minutes=1)):
+        await dual_cache.async_increment_cache(
+            key=f"global_router:ws-turn-{kind}:openai/gpt-5-mini:{kind}:{minute.strftime('%H-%M')}",
+            value=tokens,
+            ttl=120,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+@pytest.mark.parametrize("used", [100, 101, 250])
+async def test_turn_admission_refuses_once_the_minutes_tokens_reach_the_limit(kind: str, used: int) -> None:
+    dual_cache: Final = DualCache()
+    await _use_tokens_this_and_next_minute(dual_cache, kind, used)
+
+    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage={used}"):
+        await async_admit_io_token_turn(dual_cache, _turn_deployment(kind))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+@pytest.mark.parametrize("used", [0, 1, 99])
+async def test_an_admitted_turn_reserves_nothing_and_counts_its_actual_tokens(kind: str, used: int) -> None:
+    dual_cache: Final = DualCache()
+    await _use_tokens_this_and_next_minute(dual_cache, kind, used)
+    actual: Final = {"itpm": 5, "otpm": 2}
+
+    reservation: Final = await async_admit_io_token_turn(dual_cache, _turn_deployment(kind))
+    counter_key: Final = reservation[ITPM_CACHE_KEY if kind == "itpm" else OTPM_CACHE_KEY]
+    assert isinstance(counter_key, str)
+    assert await dual_cache.async_get_cache(key=counter_key) == used
+    await async_io_token_reconcile_success(
+        dual_cache, _proxy_success_kwargs(reservation), _reply_using(actual["itpm"], actual["otpm"])
+    )
+
+    assert await dual_cache.async_get_cache(key=counter_key) == used + actual[kind]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    [
+        {"litellm_params": {"model": "openai/gpt-5-mini", "tpm": 1}, "model_info": {"id": "ws-turn-unlimited"}},
+        {"litellm_params": {"model": "openai/gpt-5-mini", "otpm": 1}},
+    ],
+)
+async def test_a_turn_without_io_token_counters_is_admitted_with_nothing_to_settle(
+    deployment: dict[str, object],
+) -> None:
+    assert await async_admit_io_token_turn(DualCache(), deployment) == {}

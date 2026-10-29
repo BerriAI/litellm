@@ -357,6 +357,7 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
     EncryptedContentAffinityCheck,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_admit_io_token_turn,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
     refund_stale_reservation_before_retry,
@@ -10243,7 +10244,7 @@ class Router:
 
     async def async_admit_deployment_turn(
         self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
-    ) -> None:
+    ) -> Mapping[str, object]:
         deployment: Final = self._deployment_as_configured_now(opened_on)
         budget_limiter: Final = self.get_router_deployment_budget_limiter()
         if budget_limiter is not None:
@@ -10265,6 +10266,12 @@ class Router:
         await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
             deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
         )
+        rate_limit_check: Final = next(
+            (callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck)), None
+        )
+        if rate_limit_check is None:
+            return MappingProxyType({})
+        return await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment)
 
     async def _admit_turn_through_routing_strategy(
         self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]
