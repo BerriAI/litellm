@@ -3,6 +3,7 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
@@ -136,6 +137,18 @@ class CliAuthResult(TypedDict):
     user_id: str | None
     teams: list[str]
     team_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CliLoginFailure:
+    reason: str
+
+
+LOGIN_TIMED_OUT_MESSAGE: Final = (
+    "Authentication timed out. The proxy never reported the browser sign-in as finished. "
+    "Sign in on the page lite opened and enter the verification code it asks for, then run 'lite login' again. "
+    "If that page showed an error, fix what it names and check the proxy logs for details."
+)
 
 
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
@@ -643,13 +656,8 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> CliAuthResult | None:
-    """
-    Poll the server for authentication completion and handle team selection.
-
-    Returns:
-        Dictionary with authentication data if successful, None otherwise
-    """
+def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> CliAuthResult | CliLoginFailure:
+    """Poll the server for authentication completion and handle team selection."""
     poll_url: Final = f"{base_url}/sso/cli/poll/{key_id}"
     data: Final = _poll_for_ready_data(
         poll_url,
@@ -657,72 +665,48 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Cl
         pending_message="Still waiting for authentication...",
     )
     if not data:
-        return None
+        return CliLoginFailure(LOGIN_TIMED_OUT_MESSAGE)
+    user_id: Final = data.get("user_id")
+    teams: Final = data.get("teams", [])
     if data.get("requires_team_selection"):
-        teams = data.get("teams", [])
-        team_details: Final = data.get("team_details")
-        user_id = data.get("user_id")
-        normalized_teams: Final[list[CliTeam]] = _normalize_teams(teams, team_details)
+        normalized_teams: Final[list[CliTeam]] = _normalize_teams(teams, data.get("team_details"))
         if not normalized_teams:
-            click.echo("Warning: No teams available for selection.")
-            return None
-
-        # User has multiple teams - let them select
+            return CliLoginFailure("The proxy asked you to pick a team but sent no teams to pick from.")
         jwt_with_team: Final = _handle_team_selection_during_polling(
             base_url=base_url,
             key_id=key_id,
             poll_secret=poll_secret,
             teams=normalized_teams,
         )
-
-        # Use the team-specific JWT if selection succeeded
-        if jwt_with_team:
-            return {
-                "api_key": jwt_with_team,
-                "user_id": user_id,
-                "teams": teams,
-                "team_id": None,  # Set by server in JWT
-            }
-
-        click.echo("Team selection cancelled or JWT generation failed.")
-        return None
-
-    # JWT is ready (single team or team already selected)
-    api_key: Final = data.get("key")
-    user_id = data.get("user_id")
-    teams = data.get("teams", [])
-    team_id: Final = data.get("team_id")
-
-    # Show which team was assigned
-    if team_id and len(teams) == 1:
-        click.echo(f"\nAutomatically assigned to team: {team_id}")
-
-    if api_key:
+        if isinstance(jwt_with_team, CliLoginFailure):
+            return jwt_with_team
         return {
-            "api_key": api_key,
+            "api_key": jwt_with_team,
             "user_id": user_id,
             "teams": teams,
-            "team_id": team_id,
+            "team_id": None,
         }
 
-    return None
+    api_key: Final = data.get("key")
+    team_id: Final = data.get("team_id")
+    if team_id and len(teams) == 1:
+        click.echo(f"\nAutomatically assigned to team: {team_id}")
+    if not api_key:
+        return CliLoginFailure("The proxy reported the sign-in as finished but sent no key.")
+    return {
+        "api_key": api_key,
+        "user_id": user_id,
+        "teams": teams,
+        "team_id": team_id,
+    }
 
 
 def _handle_team_selection_during_polling(
     base_url: str, key_id: str, poll_secret: str, teams: list[CliTeam]
-) -> str | None:
-    """
-    Handle team selection and re-poll with selected team_id.
-
-    Args:
-        teams: List of team IDs (strings)
-
-    Returns:
-        The JWT token with the selected team, or None if selection was skipped
-    """
+) -> str | CliLoginFailure:
+    """Let the user pick one of their teams, then poll for the key the proxy mints for that team."""
     if not teams:
-        click.echo("No teams found. You can create or join teams using the web interface.")
-        return None
+        return CliLoginFailure("No teams found. You can create or join teams using the web interface.")
 
     click.echo("\n" + "=" * 60)
     click.echo("Select a team for your CLI session...")
@@ -730,8 +714,7 @@ def _handle_team_selection_during_polling(
     team_id: Final = _render_and_prompt_for_team_selection(teams)
 
     if not team_id:
-        click.echo("No team selected.")
-        return None
+        return CliLoginFailure("No team selected.")
 
     click.echo(f"\nGenerating JWT for team: {team_id}")
 
@@ -744,13 +727,12 @@ def _handle_team_selection_during_polling(
         http_error_log_every=10,
     )
     if not data:
-        return None
+        return CliLoginFailure(f"Timed out waiting for the proxy to issue a key for team {team_id}.")
     jwt_token: Final = data.get("key")
-    if jwt_token:
-        click.echo(f"Successfully generated JWT for team: {team_id}")
-        return jwt_token
-
-    return None
+    if not jwt_token:
+        return CliLoginFailure(f"The proxy sent no key for team {team_id}.")
+    click.echo(f"Successfully generated JWT for team: {team_id}")
+    return jwt_token
 
 
 def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
@@ -870,8 +852,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     http: Final = requests.Session()
     credential: Final = run_pkce_login(base_url, http, echo=click.echo)
     if isinstance(credential, PkceFailure):
-        click.echo(f"Authentication failed: {credential.reason}")
-        return
+        raise click.ClickException(f"Authentication failed: {credential.reason}")
     stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
     _finish_login(base_url, credential.access_token, config_claude, stored)
 
@@ -897,7 +878,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
 )
 @click.pass_context
 def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
-    """Login to LiteLLM proxy using SSO authentication"""
+    """Log in to the LiteLLM proxy through a browser sign-in"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
     ctx_obj: Final = cli_context_obj(ctx)
@@ -928,7 +909,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
         )
 
         click.echo(f"Opening browser to: {sso_url}")
-        click.echo("Please complete the SSO authentication in your browser...")
+        click.echo("Sign in to the proxy in your browser, then enter the verification code it asks for...")
         click.echo(
             f"Verification code: {user_code} (pre-filled in the browser, check it matches)"
             if browser_prefills_code
@@ -936,55 +917,38 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
         )
         click.echo(f"Session ID: {key_id}")
 
-        # Open browser
         webbrowser.open(sso_url)
 
-        # Poll for authentication completion
         click.echo("Waiting for authentication...")
 
         auth_result: Final = _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret)
+        if isinstance(auth_result, CliLoginFailure):
+            raise click.ClickException(auth_result.reason)
 
-        if auth_result:
-            api_key: Final = auth_result["api_key"]
-            user_id: Final = auth_result["user_id"]
-
-            # Save token data. base_url is stored so we can verify origin
-            # before reusing the key on a subsequent CLI invocation.
-            stored: Final = _replace_stored_token(
-                {
-                    "base_url": base_url.rstrip("/"),
-                    "key": api_key,
-                    "user_id": user_id or "cli-user",
-                    "user_email": "unknown",
-                    "user_role": "cli",
-                    "auth_header_name": "Authorization",
-                    "jwt_token": "",
-                    "timestamp": time.time(),
-                },
-                requests.Session(),
-                context_secret_vault(ctx),
-            )
-
-            _finish_login(base_url, api_key, config_claude, stored)
-            return
-        else:
-            click.echo("Authentication timed out. Please try again.")
-            click.echo(
-                "The proxy never reported the browser sign-in as finished. If you did complete it, "
-                "check the proxy logs for /sso/callback errors and confirm SSO is configured on the proxy."
-            )
-            return
+        api_key: Final = auth_result["api_key"]
+        stored: Final = _replace_stored_token(
+            {
+                "base_url": base_url.rstrip("/"),
+                "key": api_key,
+                "user_id": auth_result["user_id"] or "cli-user",
+                "user_email": "unknown",
+                "user_role": "cli",
+                "auth_header_name": "Authorization",
+                "jwt_token": "",
+                "timestamp": time.time(),
+            },
+            requests.Session(),
+            context_secret_vault(ctx),
+        )
+        _finish_login(base_url, api_key, config_claude, stored)
 
     except KeyboardInterrupt:
-        click.echo("\nAuthentication cancelled by user.")
-        return
-    except click.ClickException:
-        # Login itself already succeeded; only the post-login step failed, so this
-        # must not be relabelled as an authentication failure by the handler below.
+        click.echo("\nAuthentication cancelled by user.", err=True)
+        raise click.exceptions.Exit(130)
+    except (click.ClickException, click.Abort):
         raise
     except Exception as e:
-        click.echo(f"Authentication failed: {e}")
-        return
+        raise click.ClickException(f"Authentication failed: {e}") from e
 
 
 @click.command(name="logout")

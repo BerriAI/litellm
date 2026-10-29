@@ -176,6 +176,11 @@ async def _session_key_is_live(session_key: str | None) -> bool:
 
 
 async def get_authenticated_browser_user_id(request: Request) -> str | None:
+    session: Final = await get_authenticated_browser_session(request)
+    return None if session is None else session.user_id
+
+
+async def get_authenticated_browser_session(request: Request) -> UserAPIKeyAuth | None:
     from datetime import datetime, timezone
 
     from pydantic import TypeAdapter, ValidationError
@@ -208,7 +213,7 @@ async def get_authenticated_browser_user_id(request: Request) -> str | None:
     except ValidationError:
         return None
     expires: Final = expiration.replace(tzinfo=timezone.utc) if expiration.tzinfo is None else expiration
-    return user_id if expires > datetime.now(timezone.utc) else None
+    return auth if expires > datetime.now(timezone.utc) else None
 
 
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:

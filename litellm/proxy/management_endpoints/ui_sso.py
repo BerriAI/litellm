@@ -132,6 +132,9 @@ from litellm.proxy.management_endpoints.types import (
     get_litellm_user_role,
     is_valid_litellm_user_role,
 )
+from litellm.proxy.mcp_server.bridge_token_flow import load_active_user_by_id
+from litellm.proxy.mcp_server.byok_oauth_endpoints import get_authenticated_browser_session
+from litellm.proxy.mcp_server.gateway_dcr_flow import relative_request_url
 from litellm.proxy.mcp_server.outbound_credentials.login_assertion_exchange import (
     exchange_login_assertion_if_configured,
 )
@@ -392,7 +395,7 @@ def _read_cli_sso_flow(cache: DualCache, cache_key: str) -> object:
         return None
 
 
-def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
+def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict[str, object]:
     if isinstance(login_id, str) and login_id.startswith("sk-"):
         raise HTTPException(
             status_code=400,
@@ -1105,7 +1108,6 @@ async def google_login(
     """
     from litellm.proxy.proxy_server import (
         cli_sso_session_cache,
-        general_settings,
         saml_sso_cache,
         user_custom_ui_sso_sign_in_handler,
     )
@@ -1131,14 +1133,18 @@ async def google_login(
         sso_callback_route="sso/callback",
     )
 
-    if is_cli_sso_login:
-        _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
+    cli_flow: Final = (
+        _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache) if is_cli_sso_login else None
+    )
+    cli_prefill_user_code: Final = (
+        user_code if _cli_sso_verification_uri_complete_enabled() and _is_valid_cli_sso_user_code(user_code) else None
+    )
 
     # Store CLI login handle in state for OAuth flow
     cli_state: Final[str | None] = SSOAuthenticationHandler.get_cli_state(
         source=source,
         key=key,
-        user_code=(user_code if _cli_sso_verification_uri_complete_enabled() else None),
+        user_code=cli_prefill_user_code,
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
@@ -1194,22 +1200,93 @@ async def google_login(
     if admin_ui_is_disabled:
         return admin_ui_disabled()
 
+    if cli_flow is not None and key is not None:
+        return await _complete_cli_login_from_ui_session(
+            request=request,
+            key=key,
+            flow=cli_flow,
+            cli_sso_session_cache=cli_sso_session_cache,
+            prefill_user_code=cli_prefill_user_code,
+        )
+
+    return _ui_login_form_response(request, return_to)
+
+
+def _ui_login_form_response(request: Request, return_to: str | None) -> Response:
     from fastapi.responses import HTMLResponse
 
-    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
+    from litellm.proxy.proxy_server import general_settings_view
+
     form_response: Final = HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=True,
-            hide_default_credentials_hint=hide_default_credentials_hint,
+            hide_default_credentials_hint=should_hide_default_credentials_hint(general_settings_view()),
         ),
         status_code=200,
     )
-    # Preserve return_to across the username/password sign-in too, via the SAME shared, never-raising
-    # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
-    # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
-    # renders, since the helper never raises on a bad return_to).
     _persist_return_to_cookie(form_response, return_to, request)
     return form_response
+
+
+def _cli_login_user_failure(failure: str) -> HTTPException:
+    match failure:
+        case "no_active_key":
+            return HTTPException(
+                status_code=403,
+                detail=(
+                    "Your user account was not found or is deactivated, so it cannot sign in to the CLI. "
+                    "Ask a proxy admin to check it, then run `lite login` again."
+                ),
+            )
+        case "unavailable":
+            return HTTPException(
+                status_code=503,
+                detail="The proxy database is unavailable right now. Reload this page to try again.",
+            )
+        case _:
+            return HTTPException(
+                status_code=500,
+                detail="The proxy could not load your user account. Check the proxy logs for details.",
+            )
+
+
+async def _complete_cli_login_from_ui_session(
+    *,
+    request: Request,
+    key: str,
+    flow: Mapping[str, object],
+    cli_sso_session_cache: DualCache,
+    prefill_user_code: str | None,
+) -> Response:
+    """A browser already signed in to the UI completes the CLI login as the SSO callback does. Any other
+    browser gets the sign-in form, which returns it here once the sign-in succeeds."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    session: Final = await get_authenticated_browser_session(request)
+    if session is None or session.user_id is None:
+        return _ui_login_form_response(request, relative_request_url(request))
+    if session.metadata.get("password_reset_required") is True:
+        raise HTTPException(
+            status_code=403,
+            detail="This account's password must be changed before it can sign in to the CLI. "
+            "Change it in the Admin UI, then run `lite login` again.",
+        )
+    user: Final = await load_active_user_by_id(session.user_id, source="database")
+    if not isinstance(user, LiteLLM_UserTable):
+        raise _cli_login_user_failure(user)
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    team_details: Final = await _cli_sso_team_details_or_raise(prisma_client=prisma_client, teams=user.teams)
+    return _store_cli_sso_browser_session(
+        request=request,
+        key=key,
+        flow=flow,
+        cli_sso_session_cache=cli_sso_session_cache,
+        identity=user.model_dump(include={"user_id", "user_role", "models", "user_email"}),
+        team_details=team_details,
+        attribution_metadata={},
+        prefill_user_code=prefill_user_code,
+    )
 
 
 def generic_response_convertor(
@@ -2432,7 +2509,7 @@ async def _complete_cli_sso_callback_session(
     *,
     request: Request,
     key: str,
-    flow: dict,
+    flow: Mapping[str, object],
     result: OpenID | dict,
     parsed_openid_result: ParsedOpenIDResult,
     user_defined_values: SSOUserDefinedValues | None,
@@ -2443,8 +2520,6 @@ async def _complete_cli_sso_callback_session(
     prefill_user_code: str | None = None,
     sso_assertion: SSOIdentityAssertion | None = None,
 ):
-    from fastapi.responses import HTMLResponse
-
     user_id: Final = parsed_openid_result.get("user_id")
     if _configured_custom_sso() is None:
         _require_sso_user_id(user_id)
@@ -2472,18 +2547,12 @@ async def _complete_cli_sso_callback_session(
     if hasattr(user_info, "teams") and user_info.teams:
         teams = user_info.teams if isinstance(user_info.teams, list) else []
 
-    team_details: Final = await fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
-    if team_details is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Could not resolve team model grants for this login. Please try again",
-        )
+    team_details: Final = await _cli_sso_team_details_or_raise(prisma_client=prisma_client, teams=teams)
     from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
 
     await enroll_microsoft_subject(
         request.scope.get("litellm_microsoft_interactive_subject"), resolved_user_id, prisma_client
     )
-    resolved_teams: Final = _cli_sso_session_teams(team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
         await _persist_cli_sso_user_metadata(
@@ -2492,23 +2561,71 @@ async def _complete_cli_sso_callback_session(
             attribution_metadata=attribution_metadata,
         )
 
-    flow["session_data"] = {
-        "user_id": resolved_user_id,
-        "user_role": user_info.user_role,
-        "models": user_info.models if hasattr(user_info, "models") else [],
-        "user_email": user_email,
-        "teams": resolved_teams,
-        "team_details": [detail.model_dump() for detail in team_details],
-        "attribution_metadata": attribution_metadata,
-    }
-    flow["sso_complete"] = True
+    return _store_cli_sso_browser_session(
+        request=request,
+        key=key,
+        flow=flow,
+        cli_sso_session_cache=cli_sso_session_cache,
+        identity={
+            "user_id": resolved_user_id,
+            "user_role": user_info.user_role,
+            "models": user_info.models if hasattr(user_info, "models") else [],
+            "user_email": user_email,
+        },
+        team_details=team_details,
+        attribution_metadata=attribution_metadata,
+        prefill_user_code=prefill_user_code,
+    )
+
+
+async def _cli_sso_team_details_or_raise(
+    prisma_client: PrismaClient,
+    teams: Sequence[str],
+) -> tuple[CliSsoTeamDetail, ...]:
+    team_details: Final = await fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
+    if team_details is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not resolve team model grants for this login. Please try again",
+        )
+    return team_details
+
+
+def _store_cli_sso_browser_session(
+    *,
+    request: Request,
+    key: str,
+    flow: Mapping[str, object],
+    cli_sso_session_cache: DualCache,
+    identity: Mapping[str, object],
+    team_details: Sequence[CliSsoTeamDetail],
+    attribution_metadata: Mapping[str, object],
+    prefill_user_code: str | None,
+) -> Response:
+    from fastapi.responses import HTMLResponse
+
+    resolved_teams: Final = _cli_sso_session_teams(team_details)
     browser_complete_token: Final = secrets.token_urlsafe(32)
-    flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
-    _set_cli_sso_flow(login_id=key, cache=cli_sso_session_cache, flow=flow)
+    _set_cli_sso_flow(
+        login_id=key,
+        cache=cli_sso_session_cache,
+        flow={
+            **flow,
+            "session_data": {
+                **identity,
+                "teams": resolved_teams,
+                "team_details": [detail.model_dump() for detail in team_details],
+                "attribution_metadata": dict(attribution_metadata),
+            },
+            "sso_complete": True,
+            "user_code_verified": False,
+            "browser_complete_token_hash": _hash_cli_sso_secret(browser_complete_token),
+        },
+    )
 
     verbose_proxy_logger.info(
         "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s",
-        resolved_user_id,
+        identity.get("user_id"),
         resolved_teams,
         len(resolved_teams),
     )

@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
 from litellm.proxy.client.cli.commands.auth import (
+    LOGIN_TIMED_OUT_MESSAGE,
     get_stored_api_key,
     login,
     logout,
@@ -130,9 +131,9 @@ class TestPollingErrorSurfacing:
         ):
             result = CliRunner().invoke(login, obj=mock_context.obj)
 
-        assert result.exit_code == 0
-        assert "Authentication failed:" in result.output
-        assert "CLI login session not found or expired." in result.output
+        assert result.exit_code == 1
+        assert "Authentication failed:" in result.stderr
+        assert "CLI login session not found or expired." in result.stderr
         assert "Authentication timed out" not in result.output
 
     def test_server_error_without_json_body_retries_until_timeout(self, capsys):
@@ -454,11 +455,11 @@ class TestLoginCommand:
             patch("requests.get", return_value=mock_response),
             patch("time.sleep"),
         ):
-            # Mock time.sleep to avoid actual delays in tests
             result = self.runner.invoke(login, obj=mock_context.obj)
 
-            assert result.exit_code == 0
-            assert "Authentication timed out" in result.output
+            assert result.exit_code == 1
+            assert result.stderr == f"Error: {LOGIN_TIMED_OUT_MESSAGE}\n"
+            assert "/sso/callback" not in result.output
 
     def test_login_http_error(self):
         """Test login with HTTP error"""
@@ -477,8 +478,8 @@ class TestLoginCommand:
         ):
             result = self.runner.invoke(login, obj=mock_context.obj)
 
-            assert result.exit_code == 0
-            assert "Authentication timed out" in result.output
+            assert result.exit_code == 1
+            assert result.stderr == f"Error: {LOGIN_TIMED_OUT_MESSAGE}\n"
 
     def test_login_request_exception(self):
         """Test login with request exception"""
@@ -498,8 +499,8 @@ class TestLoginCommand:
         ):
             result = self.runner.invoke(login, obj=mock_context.obj)
 
-            assert result.exit_code == 0
-            assert "Authentication timed out" in result.output
+            assert result.exit_code == 1
+            assert result.stderr == f"Error: {LOGIN_TIMED_OUT_MESSAGE}\n"
 
     def test_login_keyboard_interrupt(self):
         """Test login cancelled by user"""
@@ -513,8 +514,8 @@ class TestLoginCommand:
         ):
             result = self.runner.invoke(login, obj=mock_context.obj)
 
-            assert result.exit_code == 0
-            assert "Authentication cancelled by user" in result.output
+            assert result.exit_code == 130
+            assert result.stderr == "\nAuthentication cancelled by user.\n"
 
     def test_login_no_api_key_in_response(self):
         """Test login when response doesn't contain API key"""
@@ -524,10 +525,7 @@ class TestLoginCommand:
         # Mock response without API key
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "status": "ready"
-            # Missing 'key' field
-        }
+        mock_response.json.return_value = {"status": "ready"}
 
         with (
             patch("webbrowser.open"),
@@ -537,8 +535,8 @@ class TestLoginCommand:
         ):
             result = self.runner.invoke(login, obj=mock_context.obj)
 
-            assert result.exit_code == 0
-            assert "Authentication timed out" in result.output
+            assert result.exit_code == 1
+            assert result.stderr == "Error: The proxy reported the sign-in as finished but sent no key.\n"
 
     def test_login_general_exception(self):
         """Test login with general exception (not requests exception)"""
@@ -552,8 +550,31 @@ class TestLoginCommand:
         ):
             result = self.runner.invoke(login, obj=mock_context.obj)
 
-            assert result.exit_code == 0
-            assert "Authentication failed: Invalid value" in result.output
+            assert result.exit_code == 1
+            assert result.stderr == "Error: Authentication failed: Invalid value\n"
+
+    def test_login_aborted_at_the_team_prompt_exits_non_zero_without_saving(self):
+        team_selection_response: Final = Mock()
+        team_selection_response.status_code = 200
+        team_selection_response.json.return_value = {
+            "status": "ready",
+            "requires_team_selection": True,
+            "user_id": "test-user-456",
+            "teams": ["team-alpha", "team-beta"],
+        }
+
+        with (
+            patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
+            patch("requests.get", return_value=team_selection_response),
+            patch("litellm.proxy.client.cli.commands.auth.save_cli_token") as save,
+        ):
+            result: Final = self.runner.invoke(login, obj={"base_url": "https://test.example.com"}, input="")
+
+        assert result.exit_code == 1
+        assert result.stderr.endswith("Aborted!\n")
+        assert "Authentication failed" not in result.output
+        save.assert_not_called()
 
 
 class TestLogoutCommand:
@@ -1851,8 +1872,8 @@ class TestPkceLoginCommand:
         ):
             result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL})
 
-        assert result.exit_code == 0
-        assert "Authentication failed: sign-in was not approved (access_denied): no details" in result.output
+        assert result.exit_code == 1
+        assert result.stderr == "Error: Authentication failed: sign-in was not approved (access_denied): no details\n"
         save.assert_not_called()
 
     def test_login_without_the_flag_never_touches_the_pkce_flow(self):
@@ -2178,9 +2199,10 @@ def test_login_shows_the_error_detail_only_when_the_proxy_answers_with_a_json_ob
 
     result = CliRunner().invoke(login, obj={"base_url": "https://test.example.com"})
 
-    assert result.exit_code == 0
-    assert result.output == (
-        "Authentication failed: Starting CLI login failed: HTTP 429 from https://test.example.com/sso/cli/start"
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "Error: Authentication failed: Starting CLI login failed: HTTP 429 from https://test.example.com/sso/cli/start"
         f"{expected_detail}\n"
     )
 

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
@@ -10238,9 +10239,13 @@ def _cli_callback_kwargs(flow):
         "user_defined_values": None,
         "prisma_client": MagicMock(),
         "user_api_key_cache": MagicMock(),
-        "cli_sso_session_cache": MagicMock(),
+        "cli_sso_session_cache": MagicMock(redis_cache=None),
         "proxy_logging_obj": MagicMock(),
     }
+
+
+def _stored_cli_flow(kwargs: dict) -> dict:
+    return kwargs["cli_sso_session_cache"].set_cache.call_args.kwargs["value"]
 
 
 def _cli_callback_request():
@@ -10276,7 +10281,7 @@ async def test_cli_completion_drops_teams_whose_rows_no_longer_exist():
     live_detail = CliSsoTeamDetail(
         team_id="team-live", team_alias="Live", team_models=("gpt-4.1",)
     )
-    flow = {}
+    kwargs: Final = _cli_callback_kwargs({})
     with (
         patch(
             "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
@@ -10295,11 +10300,12 @@ async def test_cli_completion_drops_teams_whose_rows_no_longer_exist():
             AsyncMock(),
         ),
     ):
-        response = await _complete_cli_sso_callback_session(**_cli_callback_kwargs(flow))
+        response = await _complete_cli_sso_callback_session(**kwargs)
 
     assert response.status_code == 200
-    assert flow["session_data"]["teams"] == ["team-live"]
-    assert [d["team_id"] for d in flow["session_data"]["team_details"]] == ["team-live"]
+    session_data: Final = _stored_cli_flow(kwargs)["session_data"]
+    assert session_data["teams"] == ["team-live"]
+    assert [d["team_id"] for d in session_data["team_details"]] == ["team-live"]
 
 
 @pytest.mark.asyncio
@@ -10314,7 +10320,7 @@ async def test_cli_completion_fails_the_login_when_team_lookup_fails():
         _complete_cli_sso_callback_session,
     )
 
-    flow = {}
+    kwargs: Final = _cli_callback_kwargs({})
     with (
         patch(
             "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
@@ -10330,10 +10336,10 @@ async def test_cli_completion_fails_the_login_when_team_lookup_fails():
         ),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await _complete_cli_sso_callback_session(**_cli_callback_kwargs(flow))
+            await _complete_cli_sso_callback_session(**kwargs)
 
     assert exc_info.value.status_code == 500
-    assert "session_data" not in flow
+    kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -10355,7 +10361,7 @@ async def test_cli_completion_rejects_a_blank_provider_identity_before_db(parsed
 
     assert exc_info.value.status_code == 401
     get_user_info_mock.assert_not_awaited()
-    assert "session_data" not in flow
+    kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -10388,7 +10394,7 @@ async def test_cli_completion_signs_a_custom_sso_user_in_as_the_matched_account(
 
     assert response.status_code == 200
     get_user_info_mock.assert_awaited_once()
-    assert flow["session_data"]["user_id"] == "cli-user-id"
+    assert _stored_cli_flow(kwargs)["session_data"]["user_id"] == "cli-user-id"
 
 
 def _cli_custom_sso_kwargs(flow: dict, custom_user_id: object) -> dict:
@@ -10424,7 +10430,6 @@ async def test_cli_completion_rejects_a_custom_sso_user_id_that_resolves_no_acco
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "SSO login failed: this sign-in did not resolve to a user id"
     get_user_info_mock.assert_awaited_once()
-    assert "session_data" not in flow
     kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
 
 
@@ -10442,7 +10447,7 @@ async def test_cli_completion_keeps_the_lookup_failure_for_a_custom_sso_user_id(
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.detail == "Failed to retrieve user information from SSO"
-    assert "session_data" not in flow
+    kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -10459,7 +10464,6 @@ async def test_cli_completion_rejects_blank_database_identity_before_session(use
         await _complete_cli_sso_callback_session(**kwargs)
 
     assert exc_info.value.status_code == 401
-    assert "session_data" not in flow
     kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
 
 
@@ -10806,11 +10810,11 @@ async def test_cli_sign_in_enrolls_only_verified_subjects_before_completing(
         with pytest.raises(HTTPException) as error:
             await ui_sso._complete_cli_sso_callback_session(**kwargs)
         assert error.value.status_code == 503
-        assert "sso_complete" not in flow
+        kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
         return
     response: Final = await ui_sso._complete_cli_sso_callback_session(**kwargs)
     assert response.status_code == 200
-    assert flow["session_data"]["user_id"] == "cli-user-id"
+    assert _stored_cli_flow(kwargs)["session_data"]["user_id"] == "cli-user-id"
     if trusted:
         table.upsert.assert_awaited_once_with(
             where={"issuer_tenant_id_oid": {"issuer": "issuer", "tenant_id": "tenant", "oid": "subject"}},
@@ -10930,3 +10934,202 @@ async def test_cli_sso_login_never_serves_the_admin_login_form_on_a_ui_disabled_
     body = response.body.decode()
     assert "Admin UI is Disabled" in body
     assert 'name="username"' not in body
+
+
+_CLI_UI_SESSION_COOKIE: Final = "signed-in-ui-session"
+_CLI_UI_USER: Final = LiteLLM_UserTable(
+    user_id="cli-ui-user",
+    user_role="internal_user",
+    teams=["team-a"],
+    models=["gpt-x"],
+    user_email="dev@example.invalid",
+)
+
+
+def _no_sso_cli_login_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    user: LiteLLM_UserTable | str = _CLI_UI_USER,
+    session_metadata: Mapping[str, object] | None = None,
+    prefill_enabled: bool = False,
+):
+    """A proxy with no SSO provider whose only signed-in browser carries the `token` cookie
+    `_CLI_UI_SESSION_COOKIE`, serving the real CLI login routes from an in-memory session cache."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import ui_sso
+
+    async def session_from_cookie(request: Request) -> UserAPIKeyAuth | None:
+        if request.cookies.get("token") != _CLI_UI_SESSION_COOKIE:
+            return None
+        return UserAPIKeyAuth(user_id="cli-ui-user", metadata=dict(session_metadata or {}))
+
+    for name in _SSO_PROVIDER_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.cli_sso_session_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", MASTER_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_cli_sso_verification_uri_complete": prefill_enabled},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None)
+    monkeypatch.setattr(ui_sso, "get_authenticated_browser_session", session_from_cookie)
+    monkeypatch.setattr(ui_sso, "load_active_user_by_id", AsyncMock(return_value=user))
+    monkeypatch.setattr(
+        ui_sso,
+        "fetch_cli_sso_team_details",
+        AsyncMock(
+            return_value=(ui_sso.CliSsoTeamDetail(team_id="team-a", team_alias="Team A", team_models=("gpt-x",)),)
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(ui_sso.router)
+    return TestClient(app)
+
+
+def _cli_login_path(login_id: str) -> str:
+    return f"/sso/key/generate?source=litellm-cli&key={login_id}"
+
+
+def _cli_poll(client, started: Mapping[str, str]) -> dict:
+    return client.get(
+        f"/sso/cli/poll/{started['login_id']}",
+        headers={"x-litellm-cli-poll-secret": started["poll_secret"]},
+    ).json()
+
+
+def test_cli_login_without_sso_finishes_through_the_ui_sign_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: with no SSO provider the CLI link rendered the sign-in form with no trace of the CLI
+    login, so the password sign-in landed on the dashboard and `lite login` polled until it timed out."""
+    from litellm.proxy.management_endpoints.ui_sso import read_return_to_cookie
+
+    client: Final = _no_sso_cli_login_client(monkeypatch)
+    started: Final = client.post("/sso/cli/start").json()
+    login_path: Final = _cli_login_path(started["login_id"])
+    complete_path: Final = f"/sso/cli/complete/{started['login_id']}"
+
+    signed_out: Final = client.get(login_path)
+    assert signed_out.status_code == 200
+    assert 'name="username"' in signed_out.text
+    returning_browser: Final = _make_https_request()
+    returning_browser.cookies = {"litellm_cp_return_to": signed_out.cookies["litellm_cp_return_to"]}
+    assert read_return_to_cookie(returning_browser) == login_path
+
+    client.cookies.set("token", _CLI_UI_SESSION_COOKIE)
+    verification: Final = client.get(login_path)
+    assert verification.status_code == 200
+    assert 'name="username"' not in verification.text
+    token_match: Final = re.search(r'name="browser_complete_token" value="([^"]+)"', verification.text)
+    assert token_match is not None
+    browser_complete_token: Final = token_match.group(1)
+    assert _cli_poll(client, started) == {"status": "pending"}
+
+    wrong_code: Final = client.post(
+        complete_path, data={"user_code": "0000-0000", "browser_complete_token": browser_complete_token}
+    )
+    forged_token: Final = client.post(
+        complete_path, data={"user_code": started["user_code"], "browser_complete_token": "forged"}
+    )
+    assert (wrong_code.status_code, forged_token.status_code) == (400, 400)
+    assert _cli_poll(client, started) == {"status": "pending"}
+
+    completed: Final = client.post(
+        complete_path, data={"user_code": started["user_code"], "browser_complete_token": browser_complete_token}
+    )
+    assert completed.status_code == 200
+    polled: Final = _cli_poll(client, started)
+    assert polled["status"] == "ready"
+    assert polled["user_id"] == _CLI_UI_USER.user_id
+    assert polled["team_id"] == "team-a"
+    assert polled["key"]
+
+
+@pytest.mark.parametrize("prefill_enabled", [False, True])
+def test_cli_login_without_sso_prefills_the_code_only_when_the_operator_allows_it(
+    monkeypatch: pytest.MonkeyPatch, prefill_enabled: bool
+) -> None:
+    client: Final = _no_sso_cli_login_client(monkeypatch, prefill_enabled=prefill_enabled)
+    started: Final = client.post("/sso/cli/start").json()
+    client.cookies.set("token", _CLI_UI_SESSION_COOKIE)
+
+    verification: Final = client.get(f"{_cli_login_path(started['login_id'])}&user_code={started['user_code']}")
+
+    assert 'name="browser_complete_token"' in verification.text
+    assert (f'value="{started["user_code"]}"' in verification.text) is prefill_enabled
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code"),
+    [("no_active_key", 403), ("unavailable", 503), ("faulted", 500), ("unresolvable", 500)],
+)
+def test_cli_login_without_sso_refuses_a_ui_user_it_cannot_load(
+    monkeypatch: pytest.MonkeyPatch, failure: str, status_code: int
+) -> None:
+    client: Final = _no_sso_cli_login_client(monkeypatch, user=failure)
+    started: Final = client.post("/sso/cli/start").json()
+    client.cookies.set("token", _CLI_UI_SESSION_COOKIE)
+
+    response: Final = client.get(_cli_login_path(started["login_id"]))
+
+    assert response.status_code == status_code
+    assert "browser_complete_token" not in response.text
+    assert _cli_poll(client, started) == {"status": "pending"}
+
+
+def test_cli_login_without_sso_refuses_a_session_that_must_change_its_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client: Final = _no_sso_cli_login_client(monkeypatch, session_metadata={"password_reset_required": True})
+    started: Final = client.post("/sso/cli/start").json()
+    client.cookies.set("token", _CLI_UI_SESSION_COOKIE)
+
+    response: Final = client.get(_cli_login_path(started["login_id"]))
+
+    assert response.status_code == 403
+    assert "password must be changed" in response.json()["detail"]
+    assert _cli_poll(client, started) == {"status": "pending"}
+
+
+def test_signed_in_ui_login_without_a_cli_source_still_renders_the_sign_in_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints import ui_sso
+
+    client: Final = _no_sso_cli_login_client(monkeypatch)
+    client.cookies.set("token", _CLI_UI_SESSION_COOKIE)
+
+    response: Final = client.get("/sso/key/generate")
+
+    assert response.status_code == 200
+    assert 'name="username"' in response.text
+    assert "litellm_cp_return_to" not in response.headers.get("set-cookie", "")
+    ui_sso.load_active_user_by_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cli_login_from_a_ui_session_refuses_to_finish_without_a_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import _complete_cli_login_from_ui_session
+
+    _no_sso_cli_login_client(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    cache: Final = MagicMock(redis_cache=None)
+    request: Final = _make_https_request()
+    request.cookies = {"token": _CLI_UI_SESSION_COOKIE}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _complete_cli_login_from_ui_session(
+            request=request,
+            key="cli-login-id",
+            flow={"poll_secret_hash": "hash"},
+            cli_sso_session_cache=cache,
+            prefill_user_code=None,
+        )
+
+    assert exc_info.value.status_code == 500
+    cache.set_cache.assert_not_called()

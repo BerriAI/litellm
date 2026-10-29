@@ -8,6 +8,9 @@ import pytest
 import requests
 from unittest.mock import patch, Mock, call
 from litellm.proxy.client.cli.commands.auth import (
+    LOGIN_TIMED_OUT_MESSAGE,
+    CliLoginFailure,
+    _handle_team_selection_during_polling,
     _normalize_teams,
     _poll_for_ready_data,
     _poll_for_authentication,
@@ -207,7 +210,7 @@ async def test_poll_for_ready_connection_failure(sleep_mock, click_mock, request
 async def test_poll_for_authentication_no_data(click_mock, poll_mock, handle_mock):
     """Test poll_for_authentication function"""
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
-    assert actual is None
+    assert actual == CliLoginFailure(LOGIN_TIMED_OUT_MESSAGE)
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
         headers={"x-litellm-cli-poll-secret": "poll-secret"},
@@ -227,15 +230,14 @@ async def test_poll_for_authentication_no_data(click_mock, poll_mock, handle_moc
 async def test_poll_for_authentication_no_teams(click_mock, poll_mock, handle_mock):
     """Test poll_for_authentication function"""
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
-    assert actual is None
+    assert actual == CliLoginFailure("The proxy asked you to pick a team but sent no teams to pick from.")
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
         headers={"x-litellm-cli-poll-secret": "poll-secret"},
         pending_message="Still waiting for authentication...",
     )
     handle_mock.assert_not_called()
-    click_mock.assert_called_once()
-    assert "No teams available for selection." in click_mock.call_args[0][0]
+    click_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -283,7 +285,7 @@ async def test_poll_for_authentication_team_selection_success(
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy.client.cli.commands.auth._handle_team_selection_during_polling",
-    return_value=None,
+    return_value=CliLoginFailure("No team selected."),
 )
 @patch(
     "litellm.proxy.client.cli.commands.auth._poll_for_ready_data",
@@ -299,7 +301,7 @@ async def test_poll_for_authentication_team_selection_cancelled(
 ):
     """Test poll_for_authentication function"""
     actual = _poll_for_authentication("https://litellm.com", "key-123", "poll-secret")
-    assert actual is None
+    assert actual == CliLoginFailure("No team selected.")
     poll_mock.assert_called_once_with(
         "https://litellm.com/sso/cli/poll/key-123",
         headers={"x-litellm-cli-poll-secret": "poll-secret"},
@@ -311,8 +313,7 @@ async def test_poll_for_authentication_team_selection_cancelled(
         poll_secret="poll-secret",
         teams=[{"team_id": "team-1", "team_alias": None}],
     )
-    click_mock.assert_called_once()
-    assert "Team selection cancelled" in click_mock.call_args[0][0]
+    click_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -346,3 +347,36 @@ async def test_poll_for_authentication_auto_assigned_team(
     handle_mock.assert_not_called()
     click_mock.assert_called_once()
     assert "Automatically assigned to team: team-1" in click_mock.call_args[0][0]
+
+
+@pytest.mark.parametrize(
+    ("teams", "selected_team", "team_poll", "reason"),
+    [
+        ([], None, None, "No teams found. You can create or join teams using the web interface."),
+        ([{"team_id": "team-1", "team_alias": None}], None, None, "No team selected."),
+        (
+            [{"team_id": "team-1", "team_alias": None}],
+            "team-1",
+            None,
+            "Timed out waiting for the proxy to issue a key for team team-1.",
+        ),
+        (
+            [{"team_id": "team-1", "team_alias": None}],
+            "team-1",
+            {"status": "ready"},
+            "The proxy sent no key for team team-1.",
+        ),
+    ],
+)
+def test_team_selection_reports_why_no_team_key_was_issued(teams, selected_team, team_poll, reason):
+    with (
+        patch(
+            "litellm.proxy.client.cli.commands.auth._render_and_prompt_for_team_selection",
+            return_value=selected_team,
+        ),
+        patch("litellm.proxy.client.cli.commands.auth._poll_for_ready_data", return_value=team_poll),
+        patch("litellm.proxy.client.cli.commands.auth.click.echo"),
+    ):
+        actual = _handle_team_selection_during_polling("https://litellm.com", "key-123", "poll-secret", teams)
+
+    assert actual == CliLoginFailure(reason)
