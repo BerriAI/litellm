@@ -30,7 +30,7 @@ impl TokenSource for GcpTokenSource {
             self.auth
                 .access_token(&self.config, &|name| std::env::var(name).ok())
                 .await
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })
     }
 }

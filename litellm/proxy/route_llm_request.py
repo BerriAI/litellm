@@ -256,7 +256,6 @@ REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = Ma
         "avideo_create_character": ("name", "video"),
         "acreate_container": ("name",),
         "aupload_container_file": ("file",),
-        "acreate_agent": ("name",),
         "acreate_interaction": ("input",),
         "acreate_eval": ("data_source_config", "testing_criteria"),
         "acreate_run": ("data_source",),
@@ -264,7 +263,7 @@ REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = Ma
 )
 
 REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
-    {"acreate_interaction": ("model", "agent")}
+    {"acreate_interaction": ("model", "agent"), "acreate_agent": ("id", "name")}
 )
 
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
@@ -429,6 +428,28 @@ def raise_if_required_body_param_missing(
     raise error_class(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
         param=missing_param.name,
+    )
+
+
+def endpoint_unsupported_by_model(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+    team_id: str | None,
+) -> bool:
+    model: Final = data.get("model")
+    if not isinstance(model, str) or llm_router is None:
+        return False
+    metadata: Final = data.get("metadata")
+    request_kwargs: Final = {
+        **data,
+        "metadata": {
+            **(metadata if isinstance(metadata, Mapping) else {}),
+            "user_api_key_team_id": team_id,
+        },
+    }
+    return bool(llm_router.get_routable_deployments(model, request_kwargs)) and not llm_router.get_routable_deployments(
+        model, request_kwargs, call_type=route_type
     )
 
 

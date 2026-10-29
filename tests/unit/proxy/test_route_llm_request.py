@@ -28,6 +28,7 @@ from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
     UserConfigRouters,
+    endpoint_unsupported_by_model,
     route_request,
     user_config_routers,
 )
@@ -1494,7 +1495,7 @@ async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_bo
         ("avideo_create_character", "name", "/videos/characters"),
         ("acreate_container", "name", "/containers"),
         ("aupload_container_file", "file", "/containers/{container_id}/files"),
-        ("acreate_agent", "name", "/v1beta/agents"),
+        ("acreate_agent", "id", "/v1beta/agents"),
         ("acreate_eval", "data_source_config", "/evals"),
         ("acreate_run", "data_source", "/evals/{eval_id}/runs"),
     ],
@@ -1699,7 +1700,7 @@ def test_required_present_body_param_with_none_router_wide_default_still_raises(
         ("asearch", {"model": "search-model"}, "query"),
         ("acreate_eval", {"model": "eval-model"}, "data_source_config"),
         ("acreate_run", {"model": "eval-model"}, "data_source"),
-        ("acreate_agent", {"model": "agent-model"}, "name"),
+        ("acreate_agent", {"model": "agent-model"}, "id"),
         ("avector_store_search", {}, "query"),
     ],
 )
@@ -1842,6 +1843,8 @@ def test_raise_if_required_body_param_missing_names_each_missing_param(route_typ
         ("acreate_eval", {"data_source_config": {"type": "custom"}, "testing_criteria": []}),
         ("acreate_interaction", {"model": "gemini-3-pro-preview", "input": "hi"}),
         ("acreate_interaction", {"agent": "deep-research", "input": "hi"}),
+        ("acreate_agent", {"id": "sentinel"}),
+        ("acreate_agent", {"name": "sentinel"}),
         ("aimage_generation", {"model": "gpt-image-1", "prompt": "a cat"}),
         ("aspeech", {"model": "gpt-4o-mini-tts", "input": "hi", "voice": "alloy"}),
         ("amoderation", {"model": "omni-moderation-latest", "input": ""}),
@@ -3025,3 +3028,27 @@ async def test_user_config_routers_discard_the_least_recently_used_router_past_c
     assert first_handler() is not None
     assert second_handler() is None
     routers.clear()
+
+
+def test_fallback_probe_skips_only_a_loaded_model_that_refuses_the_route() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-fallback",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "unit-provider-key"},
+            },
+            {
+                "model_name": "embed-only",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "unit-provider-key"},
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            },
+        ],
+        num_retries=0,
+    )
+
+    def skipped(model: str) -> bool:
+        return endpoint_unsupported_by_model("acompletion", {"model": model}, router, None)
+
+    assert skipped("embed-only") is True
+    assert skipped("chat-fallback") is False
+    assert skipped("added-on-another-worker") is False

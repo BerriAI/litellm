@@ -224,6 +224,20 @@ class TestRequestBody:
         )
         assert "stream" not in body
 
+    def test_body_hoists_wrapped_defer_loading_and_drops_custom(self):
+        schema: Final = {"type": "object", "properties": {}}
+        body = BedrockMantleAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "ping"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 8,
+                "tools": [{"name": "Read", "input_schema": schema, "custom": {"defer_loading": True}}],
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [{"name": "Read", "input_schema": schema, "defer_loading": True}]
+
 
 class TestAuth:
     def test_bearer_from_api_key_skips_aws_credentials(self):

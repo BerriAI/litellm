@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
 import { ArrowUpRight, Check, ExternalLink } from "lucide-react";
 import moyaiHead from "../../../public/assets/moyai/moyai-head.svg";
@@ -15,6 +16,7 @@ export default function MoyaiConnected({
   keyAlias?: string | null;
   models?: number | null;
 }) {
+  const term = useTerminology();
   const rows = [
     { label: "Workspace linked", value: moyaiUrl },
     { label: "Virtual key issued", value: keyAlias },
@@ -75,7 +77,7 @@ export default function MoyaiConnected({
             className="inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-5 py-3 text-sm font-medium text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)] backdrop-blur transition-colors hover:bg-white/[0.12]"
           >
             <ExternalLink className="size-4" />
-            Back to AI Gateway
+            {term("Back to AI Gateway")}
           </a>
         </div>
       </div>
