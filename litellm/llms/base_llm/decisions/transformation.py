@@ -256,16 +256,16 @@ def image_media_type(image: DecisionsImage) -> str | None:
 def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
     if isinstance(image, DecisionsBase64Image):
         return {"content_type": image_media_type(image), "base64": image.base64}
-    media_type: Final = image_media_type(image)
-    if media_type is None:
-        return image
-    return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
+    return _data_url(image)
 
 
 def _data_url(image: DecisionsImage) -> str:
+    media_type: Final = image_media_type(image)
     if isinstance(image, DecisionsBase64Image):
-        return f"{_DATA_URL_PREFIX}{image_media_type(image)};base64,{image.base64}"
-    return image
+        return f"{_DATA_URL_PREFIX}{media_type};base64,{image.base64}"
+    if media_type is None:
+        return image
+    return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
 
 
 def _image_item(image: DecisionsImage) -> _StateItem:

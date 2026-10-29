@@ -4124,7 +4124,7 @@ def test_systemone_moves_images_into_state(
         model=model,
         state={"ticket": 1234},
         questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
-        images=["data:image/jpeg;base64,AA==", {"content_type": "image/webp", "base64": "BB=="}],
+        images=["data:IMAGE/JPEG;name=shot.jpg;base64,AA==", {"content_type": "image/webp", "base64": "BB=="}],
         api_key="caller-key",
     )
 
