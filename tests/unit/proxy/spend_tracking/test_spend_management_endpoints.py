@@ -124,7 +124,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
         lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
         alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
-        code = re.search(r"error_code' = \$(\d+)", cond)
+        code = re.search(r"error_code'(?:, 128\))? = \$(\d+)", cond)
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
         credential = re.fullmatch(r"metadata->>'used_client_oauth_token' = \$(\d+)", cond)
         sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
@@ -4769,6 +4769,46 @@ async def test_ui_view_spend_logs_with_error_code(client):
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_a_long_error_code_returns_only_that_exact_code(client):
+    prefix = "E" * 128
+    mock_spend_logs = [
+        {
+            "id": f"log-{suffix}",
+            "request_id": f"req-{suffix}",
+            "api_key": "sk-test-key",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": json.dumps({"error_information": {"error_code": prefix + suffix}}),
+        }
+        for suffix in ("first", "second")
+    ]
+
+    def filter_by_exact_error_code(where):
+        wanted = str(where.get("metadata", {}).get("equals", "")).strip('"')
+        return [log for log in mock_spend_logs if json.loads(log["metadata"])["error_information"]["error_code"] == wanted]
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        with patch.object(
+            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_exact_error_code)
+        ):
+            start_date, end_date = _default_date_range()
+            response = client.get(
+                "/spend/logs/ui",
+                params={"error_code": prefix + "first", "start_date": start_date, "end_date": end_date},
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()["data"]] == ["log-first"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_error_message(client):

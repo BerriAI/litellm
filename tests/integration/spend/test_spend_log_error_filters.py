@@ -1,3 +1,4 @@
+import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -22,6 +23,10 @@ INDEXES_IN_PLACE: Final = "Request-log indexes are all in place"
 SUCCESS_ROWS: Final = 5000
 STATS_FLUSH_WINDOW_SECONDS: Final = 11.0
 
+LONG_CODE_PREFIX: Final = secrets.token_hex(64)
+LONG_CODE: Final = LONG_CODE_PREFIX + secrets.token_hex(1500)
+LONG_CODE_SIBLING: Final = LONG_CODE_PREFIX + secrets.token_hex(1500)
+
 
 @dataclass(frozen=True, slots=True)
 class ErrorRow:
@@ -41,11 +46,16 @@ ERROR_ROWS: Final = (
     ErrorRow("failed-500-timeout", "failure", "500", "upstream timed out"),
     ErrorRow("failed-429", "failure", "429", "rate limited by upstream"),
     ErrorRow("client-disconnected", "success", "499", "Client disconnected the request"),
+    ErrorRow("failed-long-code", "failure", LONG_CODE, "provider error with a long code"),
+    ErrorRow("failed-long-code-sibling", "failure", LONG_CODE_SIBLING, "provider error with a long code"),
 )
 ERROR_CODES: Final = MappingProxyType(
     {
         "500": frozenset({"failed-500-overloaded", "failed-500-timeout"}),
         "499": frozenset({"client-disconnected"}),
+        LONG_CODE: frozenset({"failed-long-code"}),
+        LONG_CODE_PREFIX: frozenset(),
+        LONG_CODE_PREFIX[:-1]: frozenset(),
     }
 )
 SESSION_VIEWS: Final = ("false", "true")

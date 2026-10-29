@@ -96,6 +96,9 @@ _SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
     f'call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC, request_id'
 )
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
+_ERROR_CODE_SQL: Final = "metadata->'error_information'->>'error_code'"
+_INDEXED_ERROR_CODE_PREFIX_LENGTH: Final = 128
+_INDEXED_ERROR_CODE_PREFIX_SQL: Final = f"left({_ERROR_CODE_SQL}, {_INDEXED_ERROR_CODE_PREFIX_LENGTH})"
 _SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "mcp": f"call_type IN {_MCP_CALL_TYPES_SQL}",
@@ -224,6 +227,15 @@ class _SessionSpendRow(TypedDict):
     session_total_completion_tokens: ReadOnly[int]
     session_total_tokens: ReadOnly[int]
     session_models: ReadOnly[Sequence[str]]
+
+
+def _error_code_condition(placeholder: str, error_code: str) -> str:
+    if len(error_code) < _INDEXED_ERROR_CODE_PREFIX_LENGTH:
+        return f"{_INDEXED_ERROR_CODE_PREFIX_SQL} = {placeholder}"
+    return (
+        f"{_INDEXED_ERROR_CODE_PREFIX_SQL} = left({placeholder}, {_INDEXED_ERROR_CODE_PREFIX_LENGTH}) "
+        f"AND {_ERROR_CODE_SQL} = {placeholder}"
+    )
 
 
 _SESSION_MODELS_LIMIT: Final = 10
@@ -2577,7 +2589,9 @@ async def ui_view_spend_logs(
     model_group: str | None = fastapi.Query(default=None, description="Filter logs by model group"),
     key_alias: str | None = fastapi.Query(default=None, description="Filter logs by key alias"),
     end_user: str | None = fastapi.Query(default=None, description="Filter logs by end user"),
-    error_code: str | None = fastapi.Query(default=None, description="Filter logs by error code (e.g., '404', '500')"),
+    error_code: Annotated[
+        str | None, fastapi.Query(description="Filter logs by error code (e.g., '404', '500')")
+    ] = None,
     error_message: str | None = fastapi.Query(
         default=None, description="Filter logs by error message (partial string match)"
     ),
@@ -2933,10 +2947,7 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{key_alias}%")
             p += 1
         if error_code is not None:
-            sql_conditions.append(
-                f"left(metadata->'error_information'->>'error_code', 128) = left(${p}, 128) "
-                f"AND metadata->'error_information'->>'error_code' = ${p}"
-            )
+            sql_conditions.append(_error_code_condition(f"${p}", error_code))
             sql_params.append(error_code)
             p += 1
         if error_message is not None:
