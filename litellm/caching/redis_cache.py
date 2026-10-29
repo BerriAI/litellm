@@ -781,7 +781,6 @@ class RedisCache(BaseCache):
     def init_async_client(
         self,
     ) -> async_redis_client | async_redis_cluster_client:
-        from redis.asyncio import RedisCluster
 
         from litellm import in_memory_llm_clients_cache
 
@@ -792,6 +791,8 @@ class RedisCache(BaseCache):
         if cached_client is not None:
             redis_async_client = cast(async_redis_client | async_redis_cluster_client, cached_client)
         else:
+            from redis.asyncio import RedisCluster
+
             # Create new connection pool and client for current event loop
             self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
             redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
@@ -2044,6 +2045,89 @@ class RedisCache(BaseCache):
         # only return float values
         verbose_logger.debug("Increment ASYNC Redis Cache PIPELINE: results: %s", results)
         return [r for r in results if isinstance(r, float)]
+
+    @_redis_circuit_breaker_guard_sync
+    def increment_pipeline(
+        self,
+        increment_list: Sequence[RedisPipelineIncrementOperation],
+        **kwargs: object,  # kwargs-ok: forward extra params
+    ) -> list[float] | None:  # mutable-ok: list return type
+        """
+        Use sync Redis Pipelines for bulk increment operations
+        Args:
+            increment_list: List of RedisPipelineIncrementOperation dicts containing:
+                - key: str
+                - increment_value: float
+                - ttl: int | None
+        """
+        if len(increment_list) == 0:
+            return None
+
+        start_time: Final = time.time()
+        print_verbose("Increment Sync Redis Cache Pipeline: increment list: %s", increment_list)
+
+        _sync_client: Final = self.redis_client  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # sync client access
+        if _sync_client is None:  # pyright: ignore[reportUnknownMemberType]  # sync client check
+            return None
+
+        try:
+            with _sync_client.pipeline(transaction=False) as pipe:  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # sync pipeline
+                incr_indices: Final[list[int]] = []  # mutable-ok: index collection
+                idx: int = 0  # rebind-ok: pipeline step counter
+                for increment_op in increment_list:
+                    cache_key = self.check_and_fix_namespace(key=increment_op["key"])
+                    pipe.incrbyfloat(cache_key, increment_op["increment_value"])  # pyright: ignore[reportUnknownMemberType]  # pipeline method
+                    incr_indices.append(idx)
+                    idx += 1
+                    ttl = increment_op.get("ttl")
+                    if ttl is not None:
+                        _td = timedelta(seconds=float(ttl))
+                        pipe.expire(cache_key, _td)  # pyright: ignore[reportUnknownMemberType]  # pipeline method
+                        idx += 1
+                results: Final = pipe.execute()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # pipeline execute
+
+            verbose_logger.debug("Increment SYNC Redis Cache PIPELINE: results: %s", results)  # pyright: ignore[reportUnknownArgumentType]  # logger call
+            parsed_results: Final[list[float]] = (  # mutable-ok: list parsed results
+                [float(results[i]) for i in incr_indices if not isinstance(results[i], bool)]  # pyright: ignore[reportUnknownArgumentType]  # float cast
+                if len(results) == idx  # pyright: ignore[reportUnknownArgumentType]  # sequence length
+                else [float(r) for r in results if isinstance(r, (float, int)) and not isinstance(r, bool)]  # pyright: ignore[reportUnknownArgumentType,reportUnknownVariableType]  # float cast
+            )
+
+            ## LOGGING ##
+            end_time: Final = time.time()
+            _duration: Final = end_time - start_time
+            self.service_logger_obj.service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                call_type="increment_pipeline",
+                caller=_get_call_stack_info(),
+                start_time=start_time,
+                end_time=end_time,
+                parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+            )
+        except Exception as e:
+            ## LOGGING ##
+            end_time_err: Final = time.time()
+            _duration_err: Final = end_time_err - start_time
+            self.service_logger_obj.service_failure_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration_err,
+                error=e,
+                call_type="increment_pipeline",
+                caller=_get_call_stack_info(),
+                start_time=start_time,
+                end_time=end_time_err,
+                parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+            )
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Redis Caching: sync increment_pipeline() - Got exception from REDIS",
+                e,
+            )
+            raise
+        else:
+            return parsed_results
 
     @_redis_circuit_breaker_guard
     async def async_increment_pipeline(

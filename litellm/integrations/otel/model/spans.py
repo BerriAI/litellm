@@ -213,6 +213,7 @@ _SERVICE_VERB_BY_CALL_TYPE: Final[dict[str, str]] = {
     "async_set_cache_sadd": "sadd",
     "increment_cache": "incr",
     "async_increment": "incr",
+    "increment_pipeline": "incr",
     "async_increment_pipeline": "incr",
     "async_increment_if_present": "incr",
     "delete_cache": "delete",
