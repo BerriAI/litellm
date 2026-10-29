@@ -44,6 +44,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from ...openai.common_utils import without_cache_control
 from ..common_utils import (
     FIREROUTER,
     FireworksAIException,
@@ -490,10 +491,6 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         """
         Strip fields not permitted by FireworksAI from messages.
         """
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            filter_value_from_dict,
-        )
-
         supports_vision_value: Final = self._get_model_cost_capability_exact(model=model, capability="supports_vision")
         for message in messages:
             if message["role"] == "user":
@@ -524,9 +521,11 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                                 model=model,
                                 llm_provider="fireworks_ai",
                             )
-            filter_value_from_dict(cast(dict, message), "cache_control")
 
-        return [strip_litellm_response_only_fields(message) for message in messages]
+        return [
+            strip_litellm_response_only_fields(cast(AllMessageValues, without_cache_control(message)))
+            for message in messages
+        ]
 
     # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
     # this index requires a full scan of model_cost (tens of thousands of

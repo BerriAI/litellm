@@ -51,8 +51,6 @@ def _is_list(value: object) -> bool:
 
 
 def _contains_cache_control(value: object) -> bool:
-    # Iterative rather than recursive: the code-quality gate bans unignored recursion here,
-    # and request payloads are attacker-shaped, so an explicit worklist has no stack depth to blow.
     pending: Final[list[object]] = [value]  # mutable-ok: a local worklist, never returned or stored
     while pending:
         node = pending.pop()

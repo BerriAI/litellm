@@ -535,6 +535,26 @@ def test_tool_search_reply_sent_to_fireworks_drops_litellm_response_fields():
     }
 
 
+def test_cache_control_is_stripped_from_the_request_but_kept_on_the_callers_messages():
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "system", "content": [{"type": "text", "text": "a long cached prompt", "cache_control": hint}]},
+        {"role": "user", "content": "hi", "cache_control": hint},
+    ]
+    caller_messages_before: Final = json.dumps(messages)
+
+    request: Final = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(request["messages"])
+    assert json.dumps(messages) == caller_messages_before
+
+
 # -----------------------------------------------------------------------------
 # Regression tests for legacy / OpenAPI $ref defs in tool parameters.
 #
