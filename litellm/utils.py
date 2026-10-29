@@ -2170,8 +2170,8 @@ def client(original_function):
             # traceback frames cannot pin this request's Logging object (and through
             # it the request payload) in a reference cycle only a GC pass can help.
             if logging_obj is not None:
-                logging_obj.model_call_details.pop("exception", None)
-            kwargs.pop("litellm_logging_obj", None)
+                logging_obj.model_call_details.pop("exception", None)  # pyright: ignore[reportUnknownMemberType]  # model_call_details is a partially-unknown union upstream of the Logging base
+            kwargs.pop("litellm_logging_obj", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is the untyped request **kwargs dict
             del logging_obj
             raise e
 
@@ -2324,7 +2324,7 @@ def client(original_function):
                     # The uncached-input dict is a wrapper-private copy of kwargs whose
                     # request never left this frame except as part of the failure
                     # traceback below, so its logging reference is released here.
-                    call_kwargs.pop("litellm_logging_obj", None)
+                    call_kwargs.pop("litellm_logging_obj", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is the untyped request **kwargs dict
                 raise
             end_time = datetime.datetime.now()
 
@@ -2505,8 +2505,8 @@ def client(original_function):
             # here because the finally block below still needs it to restore
             # correlation contextvars.
             if logging_obj is not None and not _is_litellm_internal_call:
-                logging_obj.model_call_details.pop("exception", None)
-            kwargs.pop("litellm_logging_obj", None)
+                logging_obj.model_call_details.pop("exception", None)  # pyright: ignore[reportUnknownMemberType]  # model_call_details is a partially-unknown union upstream of the Logging base
+            kwargs.pop("litellm_logging_obj", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is the untyped request **kwargs dict
             raise e
 
         finally:
