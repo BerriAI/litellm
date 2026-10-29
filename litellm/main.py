@@ -5759,7 +5759,7 @@ def completion(
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         raise_if_allowed_tools_tool_choice_unsupported(
-            tool_choice=cast(object, tool_choice), custom_llm_provider=custom_llm_provider, model=model
+            tool_choice=tool_choice, custom_llm_provider=custom_llm_provider, model=model
         )
 
         if provider_specific_header is not None:

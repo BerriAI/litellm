@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -48,7 +48,7 @@ class _ToolChoiceType(BaseModel):
 _TOOL_CHOICE_TYPE: Final = TypeAdapter(_ToolChoiceType)
 
 
-def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
+def is_allowed_tools_tool_choice(tool_choice: Any) -> bool:
     try:
         return _TOOL_CHOICE_TYPE.validate_python(tool_choice).type == "allowed_tools"
     except ValidationError:
@@ -56,7 +56,7 @@ def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
 
 
 def raise_if_allowed_tools_tool_choice_unsupported(
-    tool_choice: object,
+    tool_choice: Any,
     custom_llm_provider: str,
     model: str,
 ) -> None:
@@ -76,7 +76,7 @@ def raise_if_allowed_tools_tool_choice_unsupported(
     )
 
 
-def parse_chat_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsToolChoice | None:
+def parse_chat_allowed_tools_tool_choice(tool_choice: Any) -> ChatAllowedToolsToolChoice | None:
     try:
         return _CHAT_ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
     except ValidationError:
