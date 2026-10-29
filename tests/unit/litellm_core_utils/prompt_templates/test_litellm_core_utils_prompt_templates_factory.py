@@ -5231,8 +5231,12 @@ _LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b6
         ({"type": "image_url", "image_url": {"url": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
         ({"type": "file", "file": {"file_data": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
         ({"type": "file", "file": {"file_data": _LATIN1_TEXT_DATA_URI}}, "the secret code word is MANGÓ\n"),
+        (
+            {"type": "image_url", "image_url": {"url": "data:TEXT/PLAIN;base64," + _TEXT_B64}},
+            "the secret code word is MANGO\n",
+        ),
     ],
-    ids=["image_url", "file", "image_url_charset", "file_charset", "file_latin1"],
+    ids=["image_url", "file", "image_url_charset", "file_charset", "file_latin1", "image_url_uppercase"],
 )
 def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block, expected_text):
     messages = [{"role": "user", "content": [{"type": "text", "text": "What is the code word?"}, block]}]
@@ -9420,7 +9424,8 @@ def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_tool_messag
     ]
 
 
-def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monkeypatch):
+@pytest.mark.parametrize("pdf_format", (None, "Application/PDF"))
+def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monkeypatch, pdf_format):
     from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
 
     pdf_bytes = b"%PDF-1.4\n1 0 obj\n"
@@ -9430,7 +9435,9 @@ def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monke
     monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
     in_memory_cache.flush_cache()
 
-    block = create_anthropic_image_param("https://example.com/report.pdf", is_bedrock_invoke=True)
+    block = create_anthropic_image_param(
+        {"url": "https://example.com/report.pdf", "format": pdf_format}, is_bedrock_invoke=True
+    )
 
     assert block == {
         "type": "document",
@@ -9442,6 +9449,10 @@ def test_create_anthropic_image_param_links_an_https_pdf_as_a_document_only_when
     url = "https://example.com/report.pdf"
 
     assert create_anthropic_image_param({"url": url, "format": "application/pdf"}) == {
+        "type": "document",
+        "source": {"type": "url", "url": url},
+    }
+    assert create_anthropic_image_param({"url": url, "format": "Application/PDF"}) == {
         "type": "document",
         "source": {"type": "url", "url": url},
     }

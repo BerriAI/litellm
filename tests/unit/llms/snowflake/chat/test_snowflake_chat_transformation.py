@@ -760,6 +760,16 @@ class TestSnowflakeCortexClaudeFixes:
         assert exc_info.value.status_code == 400
         assert "input_audio" in str(exc_info.value)
 
+    @pytest.mark.parametrize(
+        ("part", "named"),
+        (("hello", "untyped str"), ({"type": "image_url", "image_url": {"detail": "low"}}, "url")),
+    )
+    def test_malformed_user_part_is_a_400_naming_it(self, part, named):
+        with pytest.raises(SnowflakeException) as exc_info:
+            self._transform([{"role": "user", "content": [part]}])
+        assert exc_info.value.status_code == 400
+        assert named in str(exc_info.value)
+
     def test_drop_params_drops_a_user_part_cortex_claude_cannot_take(self):
         body = SnowflakeConfig().transform_request(
             model="snowflake/claude-sonnet-4-6",

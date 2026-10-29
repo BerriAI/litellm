@@ -951,10 +951,10 @@ def create_anthropic_image_param(
         # as these providers don't support URL sources for images
         if is_bedrock_invoke or image_url.startswith("http://"):
             base64_url: Final = convert_url_to_base64(url=image_url)
-            return _anthropic_content_element_factory(
+            return anthropic_content_element_factory(
                 convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
             )
-        elif format is not None and format.partition(";")[0].strip() == "application/pdf":
+        elif format is not None and format.partition(";")[0].strip().lower() == "application/pdf":
             return AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSourceUrl(type="url", url=image_url),
@@ -1844,7 +1844,7 @@ def anthropic_document_media_type_for_data_uri(url: str, format_override: str | 
         return None
     if _data_uri_holds_a_pdf(url):
         return "application/pdf"
-    declared: Final = _declared_media_type_for_data_uri(url, format_override)
+    declared: Final = (_declared_media_type_for_data_uri(url, format_override) or "").lower()
     return declared if declared in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES else None
 
 
@@ -2335,16 +2335,16 @@ def _anthropic_native_tool_use_block(
     return tool_use_param
 
 
-def _anthropic_content_element_factory(
+def anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if image_chunk["media_type"] == "application/pdf":
+    if image_chunk["media_type"].partition(";")[0].strip().lower() == "application/pdf":
         _anthropic_content_element: AnthropicMessagesDocumentParam | AnthropicMessagesImageParam = (
             AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSource(
                     type="base64",
-                    media_type=image_chunk["media_type"],
+                    media_type="application/pdf",
                     data=image_chunk["data"],
                 ),
             )

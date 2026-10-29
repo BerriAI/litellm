@@ -91,6 +91,36 @@ def test_count_sends_a_pdf_image_url_as_the_document_the_chat_request_sends(
     assert counted["messages"][0]["content"][0]["type"] == "document"
 
 
+@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.parametrize(
+    "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
+)
+@pytest.mark.parametrize("pdf_format", (None, "application/pdf"))
+def test_count_sends_a_linked_pdf_as_a_document(
+    config_type: type[AnthropicCountTokensConfig],
+    pdf_format: str | None,
+) -> None:
+    pdf_bytes: Final = b"%PDF-1.4 linked count fixture"
+    pdf_url: Final = f"https://1.1.1.1/{config_type.__name__}-{pdf_format}.pdf"
+    image_url: Final[dict[str, JsonValue]] = {"url": pdf_url} if pdf_format is None else {
+        "url": pdf_url, "format": pdf_format
+    }
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": image_url}]}
+    ]
+
+    with respx.mock:
+        respx.get(pdf_url).mock(
+            return_value=httpx.Response(200, content=pdf_bytes, headers={"Content-Type": "application/pdf"})
+        )
+        counted: Final = config_type().transform_request_to_count_tokens(model="claude-opus-5-5", messages=messages)
+
+    assert counted["messages"][0]["content"][0] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": b64encode(pdf_bytes).decode()},
+    }
+
+
 @pytest.mark.parametrize(
     "config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig)
 )

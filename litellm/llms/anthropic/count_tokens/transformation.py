@@ -42,6 +42,7 @@ def _count_image(block: JsonValue) -> JsonValue:
     if not isinstance(block, dict) or block.get("type") != "image_url":
         return block
     from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_content_element_factory,
         anthropic_document_block_from_data_uri,
         anthropic_document_media_type_for_data_uri,
         convert_to_anthropic_image_obj,
@@ -57,8 +58,8 @@ def _count_image(block: JsonValue) -> JsonValue:
         document: Final = anthropic_document_block_from_data_uri(url, image_block, document_media_type)
         return {**other_fields, **_COUNT_REQUEST.validate_python(document)}
     source: Final = convert_to_anthropic_image_obj(openai_image_url=url, format=format_override)
-    image: Final = _COUNT_REQUEST.validate_python({"type": "image", "source": source})
-    return {**other_fields, **image}
+    media_block: Final = anthropic_content_element_factory(source)
+    return {**other_fields, **_COUNT_REQUEST.validate_python(media_block)}
 
 
 def _count_block(block: JsonValue) -> JsonValue:

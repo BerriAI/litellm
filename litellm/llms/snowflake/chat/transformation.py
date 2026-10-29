@@ -107,10 +107,13 @@ def _user_parts(message: AllMessageValues) -> tuple[object, ...]:
     return parts_of(message.get("content")) if message["role"] == "user" else ()
 
 
+def _part_type(part: object) -> str:
+    part_type: Final = message_field(part, "type")
+    return f"untyped {type(part).__name__}" if part_type is None else str(part_type)
+
+
 def _untranslatable_user_part_types(messages: Sequence[AllMessageValues]) -> frozenset[str]:
-    part_types: Final = frozenset(
-        str(message_field(part, "type")) for part in chain.from_iterable(map(_user_parts, messages))
-    )
+    part_types: Final = frozenset(map(_part_type, chain.from_iterable(map(_user_parts, messages))))
     return part_types - _CORTEX_CLAUDE_USER_PART_TYPES
 
 
@@ -243,7 +246,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 drop_params=drop_params,
                 force_base64=True,
             )
-        except (ValueError, BadRequestError) as e:
+        except (AttributeError, LookupError, TypeError, ValueError, BadRequestError) as e:
             raise SnowflakeException(status_code=400, message=str(e)) from e
         return (system or None), conversation
 
