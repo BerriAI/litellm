@@ -193,7 +193,7 @@ async def test_ui_offers_conduct_fields_without_the_package() -> None:
 
     assert fields["ui_friendly_name"] == "Conduct Guard"
     assert fields["api_key"]["required"] is True
-    assert fields["api_base"]["default_value"] == "https://api.conductai.ai"
+    assert fields["api_base"]["default_value"] == "https://gateway.conductai.ai"
     optional: Final = fields["optional_params"]["fields"]
     assert set(optional) == {"workspace_id", "tool_name", "timeout", "unreachable_fallback"}
     assert optional["unreachable_fallback"]["type"] == "select"
