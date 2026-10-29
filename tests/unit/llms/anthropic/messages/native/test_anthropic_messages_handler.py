@@ -1759,6 +1759,75 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     assert response["safeguard_results"] == safeguard_results
 
 
+_OPUS_4_8_ON_BEDROCK_INVOKE: Final = "bedrock/invoke/us.anthropic.claude-opus-4-8"
+
+
+def _bedrock_invoke_recording(bodies: list[dict[str, object]]) -> AsyncHTTPHandler:
+    def record_and_answer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_drop_top_k",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(record_and_answer))
+    return upstream
+
+
+async def _opus_4_8_messages_with_top_k(bodies: list[dict[str, object]], **deployment: object) -> object:
+    return await messages.acreate(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model=_OPUS_4_8_ON_BEDROCK_INVOKE,
+        top_k=5,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=_bedrock_invoke_recording(bodies),
+        **deployment,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_invoke_messages_drops_top_k_the_deployment_lists_on_a_model_without_sampling_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: list[dict[str, object]] = []
+
+    response = await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_k"])
+
+    assert response["content"] == [{"type": "text", "text": "ok"}]
+    (body,) = bodies
+    assert "top_k" not in body
+    assert body["max_tokens"] == 16
+
+
+@pytest.mark.asyncio
+async def test_bedrock_invoke_messages_still_rejects_top_k_the_deployment_does_not_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: list[dict[str, object]] = []
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="does not support top_k=5") as raised:
+        await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_p"])
+
+    assert raised.value.status_code == 400
+    assert bodies == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(

@@ -271,6 +271,7 @@ class AnthropicMessagesRequestUtils:
         model: str | None = None,
         drop_params: bool = False,
         custom_llm_provider: str | None = None,
+        additional_drop_params: Iterable[str] = (),
     ) -> AnthropicMessagesRequestOptionalParams:
         """
         Filter parameters to only include those defined in AnthropicMessagesRequestOptionalParams.
@@ -280,11 +281,13 @@ class AnthropicMessagesRequestUtils:
             model: Resolved model id; when set, unsupported params may be dropped
             drop_params: Per-request drop_params flag (also respects litellm.drop_params)
             custom_llm_provider: Routed provider; fast mode is gated to direct Anthropic
+            additional_drop_params: Paths the deployment drops. A listed top-level key is left out
+                before the unsupported-param checks run, so it never raises
 
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys: Final = anthropic_messages_optional_param_keys()
+        valid_keys: Final = anthropic_messages_optional_param_keys().difference(additional_drop_params)
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig

@@ -65,6 +65,7 @@ __all__ = ("anthropic_messages", "anthropic_messages_handler")
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_DROP_PATHS: Final = TypeAdapter(tuple[str, ...])
 
 
 def _bridges_to_responses_api(model: str, custom_llm_provider: str, deployment_model_info: object) -> bool:
@@ -767,6 +768,7 @@ def anthropic_messages_handler(
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
             custom_llm_provider=custom_llm_provider,
+            additional_drop_params=_DROP_PATHS.validate_python(request_kwargs.get("additional_drop_params") or ()),
         )
     )
     resolved_api_base: Final = (
