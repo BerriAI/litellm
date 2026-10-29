@@ -8,6 +8,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
+from litellm.integrations.otel.presets.utils import operator_exporters
 
 
 def levo_preset(
@@ -20,7 +21,7 @@ def levo_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
+                *operator_exporters(base.exporters),
                 ExporterSpec(
                     kind="otlp_http",
                     endpoint=cfg.endpoint,

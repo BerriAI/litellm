@@ -15,7 +15,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import ensure_mappers, operator_exporters
 
 
 class _PhoenixSettings(BaseSettings):
@@ -69,7 +69,7 @@ def phoenix_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
+                *operator_exporters(base.exporters),
                 ExporterSpec(
                     kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
                     endpoint=cfg.endpoint,

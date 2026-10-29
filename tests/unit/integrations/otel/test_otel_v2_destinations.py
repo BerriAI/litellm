@@ -3277,8 +3277,7 @@ ARIZE_DEST = OtelDestination(
 
 class _ExporterCapture:
     """Stands an in-memory exporter in for every exporter the provider builds, keyed
-    by the headers it would have sent (``None`` for the stdout placeholder), so a test
-    reads what each account received rather than which processors were wired."""
+    by the headers it would have sent, so tests read which destinations received spans."""
 
     def __init__(self) -> None:
         self.built: tuple[tuple[str | None, InMemorySpanExporter], ...] = ()
@@ -3348,8 +3347,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }
 
     def test_the_standard_otlp_headers_still_reach_the_operators_space(self, monkeypatch):
         credential_less_arize(monkeypatch)
@@ -3362,8 +3360,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }
 
     def test_a_credential_less_arize_still_delivers_a_team_destination(self, monkeypatch):
         from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out

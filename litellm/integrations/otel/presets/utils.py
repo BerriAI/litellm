@@ -19,6 +19,10 @@ def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
     return result
 
 
+def operator_exporters(exporters: Iterable[ExporterSpec]) -> tuple[ExporterSpec, ...]:
+    return tuple(spec for spec in exporters if not is_unconfigured_placeholder(spec))
+
+
 def credential_gated_exporters(
     exporters: "Iterable[ExporterSpec]", owner: "ExporterOwner"
 ) -> "tuple[ExporterSpec, ...]":
@@ -32,7 +36,7 @@ def credential_gated_exporters(
     override filter still recognises which backend this provider speaks for.
     """
     return (
-        *(spec for spec in exporters if not is_unconfigured_placeholder(spec)),
+        *operator_exporters(exporters),
         ExporterSpec(owner=owner, requires_headers=True),
     )
 

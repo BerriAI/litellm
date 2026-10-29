@@ -25,6 +25,7 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
+from litellm.integrations.otel.presets.utils import operator_exporters
 
 _AGENTOPS_ENDPOINT: Final = "https://otlp.agentops.ai/v1/traces"
 _AGENTOPS_AUTH_ENDPOINT: Final = "https://api.agentops.ai/v3/auth/token"
@@ -56,7 +57,7 @@ def agentops_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
+                *operator_exporters(base.exporters),
                 ExporterSpec(
                     kind=_AGENTOPS_EXPORTER_KIND,
                     endpoint=_AGENTOPS_ENDPOINT,

@@ -13,6 +13,7 @@ from litellm.integrations.otel.model.config import (
 from litellm.integrations.otel.presets.utils import (
     credential_gated_exporters,
     ensure_mappers,
+    operator_exporters,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -39,7 +40,7 @@ def langfuse_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
+                *operator_exporters(base.exporters),
                 ExporterSpec(
                     kind=kind,
                     endpoint=cfg.endpoint,

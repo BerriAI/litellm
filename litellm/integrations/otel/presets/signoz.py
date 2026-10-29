@@ -12,7 +12,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import ensure_mappers, operator_exporters
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -44,7 +44,7 @@ def signoz_preset(
     return base.model_copy(
         update=MappingProxyType(
             {
-                "exporters": (*base.exporters, spec),
+                "exporters": (*operator_exporters(base.exporters), spec),
                 "mapper_names": ensure_mappers(base.mapper_names, "genai"),
             }
         )
