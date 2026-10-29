@@ -10437,6 +10437,42 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
 
+
+def test_init_kwargs_client_metadata_cannot_mark_a_pass_through_call_as_a_silent_experiment(
+    mock_user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    started: Final = datetime(2026, 1, 15, 12, 0, 0)
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=Request({"type": "http", "method": "POST", "path": "/test", "headers": [], "query_string": b""}),
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://test.com", request_body={}),
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=started,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={
+            "litellm_metadata": {"is_silent_experiment": True, "client_key": "kept"},
+            "metadata": {"is_silent_experiment": True},
+        },
+    )
+
+    row: Final = get_logging_payload(
+        kwargs={"model": "test-model", "litellm_params": result["litellm_params"]},
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=started,
+        end_time=started,
+    )
+    assert "is_silent_experiment" not in json.loads(row["metadata"])
+    assert result["litellm_params"]["metadata"]["client_key"] == "kept"
+
 @pytest.mark.asyncio
 async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_body():
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body

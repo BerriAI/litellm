@@ -6830,7 +6830,7 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys()
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)

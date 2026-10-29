@@ -11939,7 +11939,7 @@ def test_get_additional_headers():
 
 
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
-    for field in StandardLoggingMetadata.__annotations__.keys():
+    for field in StandardLoggingMetadata.__required_keys__:
         assert field in standard_logging_metadata
 
 
@@ -11973,6 +11973,26 @@ def test_get_standard_logging_metadata(metadata_key, metadata_value):
 
     # Assert that the specific metadata field is set correctly
     assert standard_logging_metadata[metadata_key] == metadata_value
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_module_level_get_standard_logging_metadata_drops_only_a_caller_sent_silent_experiment_flag():
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_metadata
+
+    caller_metadata: Final = {
+        "is_silent_experiment": True,
+        "user_api_key_alias": "alias",
+        "usage_object": {"total_tokens": 3},
+        "used_client_oauth_token": True,
+        "kubernetes_pod_routing": {"pod": "a"},
+    }
+
+    result = get_standard_logging_metadata(caller_metadata)
+
+    assert "is_silent_experiment" not in result
+    assert {key: result[key] for key in caller_metadata.keys() - {"is_silent_experiment"}} == {
+        key: value for key, value in caller_metadata.items() if key != "is_silent_experiment"
+    }
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

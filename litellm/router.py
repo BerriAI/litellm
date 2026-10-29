@@ -75,7 +75,7 @@ from typing_extensions import assert_never, overload
 import litellm
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
-from litellm._internal_context import service_target, with_service_target
+from litellm._internal_context import in_mirrored_call, mirrored_call, service_target, with_service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -754,7 +754,7 @@ def _every_deployment_refused(
 
 
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
-    if silent_model is None:
+    if silent_model is None or in_mirrored_call():
         return ()
     try:
         targets: Final = _SILENT_MODEL_ADAPTER.validate_python(silent_model)
@@ -3372,16 +3372,17 @@ class Router:
         remaining_kwargs: Final = MappingProxyType(
             {key: value for key, value in silent_kwargs.items() if key != "stream"}
         )
-        response: Final = await self.acompletion(
-            model=silent_model,
-            messages=cast(list[AllMessageValues], messages),
-            stream=bool(silent_kwargs.get("stream", False)),
-            **remaining_kwargs,
-        )
-        if not isinstance(response, CustomStreamWrapper):
-            return
-        async for _ in response:
-            pass
+        with mirrored_call():
+            response: Final = await self.acompletion(
+                model=silent_model,
+                messages=cast(list[AllMessageValues], messages),
+                stream=bool(silent_kwargs.get("stream", False)),
+                **remaining_kwargs,
+            )
+            if not isinstance(response, CustomStreamWrapper):
+                return
+            async for _ in response:
+                pass
 
     def _silent_experiment_completion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
