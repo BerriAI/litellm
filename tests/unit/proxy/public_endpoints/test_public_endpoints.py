@@ -25,6 +25,26 @@ from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreate
 from litellm.types.utils import LlmProviders
 
 
+def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter() -> None:
+    from litellm.llms.bigmodel.common_utils import BIGMODEL_API_BASE
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = TypeAdapter(list[ProviderCreateInfo]).validate_python(response.json())
+    provider: Final = next(item for item in providers if item.litellm_provider == "bigmodel")
+    fields: Final = {field.key: field for field in provider.credential_fields}
+    assert provider.provider_display_name == "BigModel (Zhipu AI)"
+    assert fields["api_key"].required is True
+    assert fields["api_key"].field_type == "password"
+    assert fields["api_base"].required is False
+    assert fields["api_base"].default_value == BIGMODEL_API_BASE
+    assert fields["api_base"].placeholder == BIGMODEL_API_BASE
+    assert provider.default_model_placeholder is not None
+    assert provider.default_model_placeholder.startswith("bigmodel/")
+
+
 def test_fuse_presets_route_serves_the_shared_catalog_without_authentication() -> None:
     app: Final = FastAPI()
     app.include_router(router)
@@ -361,6 +381,26 @@ def test_cognition_provider_fields():
 
     assert fields_by_key["api_base"]["field_type"] == "text"
     assert fields_by_key["api_base"]["required"] is False
+
+
+def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    providers: Final = TestClient(app_instance).get("/public/providers/fields").json()
+
+    zerogpu: Final = next(p for p in providers if p["litellm_provider"] == "zerogpu")
+    fields_by_key: Final = {f["key"]: f for f in zerogpu["credential_fields"]}
+    placeholder: Final = zerogpu["default_model_placeholder"]
+    _, provider, _, api_base = get_llm_provider(model=placeholder)
+
+    assert provider == "zerogpu"
+    assert api_base == fields_by_key["api_base"]["placeholder"]
+    assert litellm.model_cost[placeholder]["litellm_provider"] == "zerogpu"
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
 
 
 def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
@@ -1121,6 +1161,25 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert len(chat["providers"]) > 0
 
 
+def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses(
+    reset_endpoints_cache: None,
+) -> None:
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+    client: Final[TestClient] = TestClient(app)
+    with client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    streamlake_endpoints: Final = {
+        endpoint["key"]
+        for endpoint in response.json()["endpoints"]
+        if any(provider["slug"] == "streamlake" for provider in endpoint["providers"])
+    }
+    assert {"chat_completions", "messages", "responses"} <= streamlake_endpoints
+    assert "embeddings" not in streamlake_endpoints
+
+
 def test_get_supported_endpoints_display_names_have_no_slug_suffix(
     reset_endpoints_cache,
 ):
@@ -1235,8 +1294,8 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
     expected_listed: bool,
     stored_public: bool | None,
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app: Final = FastAPI()
@@ -1275,7 +1334,7 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
         patch("litellm.public_mcp_servers", [server.server_id] if explicit else []),
         patch("litellm.public_mcp_hub_strict_whitelist", strict),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             manager,
         ),
     ):
@@ -1307,7 +1366,7 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
     with (
         patch("litellm.public_mcp_servers", None),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):
@@ -1345,7 +1404,7 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     with (
         patch("litellm.public_mcp_servers", ["listed"]),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):

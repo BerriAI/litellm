@@ -29,7 +29,7 @@ from litellm.constants import (
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import (
+from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     as_system_content_blocks,
 )
 from litellm.llms.bedrock.common_utils import (
@@ -4169,3 +4169,32 @@ async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_nati
 
     assert isinstance(raised, litellm.BadRequestError)
     assert len(bedrock.bodies) == 1
+
+
+@pytest.mark.parametrize("trace", ["enabled", "disabled"])
+def test_bedrock_messages_applies_the_deployment_guardrail_config_as_invoke_headers(trace: str) -> None:
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    headers, _ = AmazonAnthropicClaudeMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model="anthropic.claude-sonnet-5-v1:0",
+        messages=[],
+        optional_params={},
+        litellm_params={"guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "2", "trace": trace}},
+    )
+    assert headers["X-Amzn-Bedrock-GuardrailIdentifier"] == "gid"
+    assert headers["X-Amzn-Bedrock-GuardrailVersion"] == "2"
+    assert headers["X-Amzn-Bedrock-Trace"] == trace.upper()
+
+
+def test_bedrock_messages_without_guardrail_config_sends_no_guardrail_headers() -> None:
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    headers, _ = AmazonAnthropicClaudeMessagesConfig().validate_anthropic_messages_environment(
+        headers={}, model="anthropic.claude-sonnet-5-v1:0", messages=[], optional_params={}, litellm_params={}
+    )
+    assert not any(name.startswith("X-Amzn-Bedrock-Guardrail") for name in headers)

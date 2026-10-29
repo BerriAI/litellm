@@ -11,8 +11,8 @@ from typing_extensions import Unpack
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
-from litellm.proxy._experimental.mcp_server.utils import (
+from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
+from litellm.proxy.mcp_server.utils import (
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
     split_server_prefix_from_name,
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
+    from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy.utils import ProxyLogging
     from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -71,7 +71,7 @@ class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
 
 
 def _registered_mcp_servers() -> Collection[MCPServer]:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
@@ -89,7 +89,7 @@ def _registry_serves(name: str, servers: Collection[MCPServer]) -> bool:
 
 async def _toolset_exists(name: str) -> bool:
     try:
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy.proxy_server import prisma_client
@@ -193,7 +193,7 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
         try:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
@@ -253,10 +253,10 @@ class LiteLLM_Proxy_MCP_Handler:
             List of MCP tools
             List names of allowed MCP servers
         """
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             _get_allowed_mcp_servers_from_mcp_server_names,
             _get_tools_from_mcp_servers,
         )
@@ -282,11 +282,11 @@ class LiteLLM_Proxy_MCP_Handler:
                         toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
                         if toolset is not None:
                             if user_api_key_auth is not None:
-                                from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-                                    granted_toolset_ids,
-                                )
                                 from litellm.proxy.management_endpoints.common_utils import (
                                     user_api_key_has_admin_view,
+                                )
+                                from litellm.proxy.mcp_server.ui_session_utils import (
+                                    granted_toolset_ids,
                                 )
 
                                 if not user_api_key_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
@@ -527,7 +527,7 @@ class LiteLLM_Proxy_MCP_Handler:
         target_format: Literal["responses", "chat"] = "responses",
     ) -> Sequence[FunctionToolParam | ChatCompletionToolParam]:
         """Transform MCP tools to OpenAI-compatible format."""
-        from litellm.experimental_mcp_client.tools import (
+        from litellm.mcp_client.tools import (
             transform_mcp_tool_to_openai_responses_api_tool,
             transform_mcp_tool_to_openai_tool,
         )
@@ -720,10 +720,10 @@ class LiteLLM_Proxy_MCP_Handler:
 
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy._experimental.mcp_server.server import (
+        from litellm.proxy.mcp_server.server import (
             _resolve_display_name_to_original,
         )
         from litellm.proxy.proxy_server import proxy_logging_obj

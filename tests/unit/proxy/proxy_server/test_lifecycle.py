@@ -33,9 +33,9 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
-    initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
     cleanup_router_config_variables,
@@ -43,14 +43,13 @@ from litellm.proxy.proxy_server import (
     get_litellm_model_info,
     initialize,
     initialize_from_worker_config,
+    initialize_shared_aiohttp_session,
     load_from_azure_key_vault,
     proxy_shutdown_event,
     proxy_startup_event,
     run_ollama_serve,
     save_worker_config,
 )
-
-from litellm.proxy.management_helpers.audit_logs import track_audit_task
 
 from .conftest import normalize
 
@@ -1165,7 +1164,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
 
 @pytest.mark.asyncio
 async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
-    from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
+    from litellm.router_strategy.auto_router.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -1186,7 +1185,10 @@ async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
 
 @pytest.mark.asyncio
 async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_refreshed_on_restart():
-    from litellm.router_utils.auto_router_tuning_baseline import mutable_tuned_identities, snapshot_tuning_baselines
+    from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
+        mutable_tuned_identities,
+        snapshot_tuning_baselines,
+    )
 
     deployments = [
         {

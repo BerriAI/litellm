@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, sentinel
 
 import anyio.to_thread
@@ -37,11 +37,14 @@ from litellm.litellm_core_utils.token_counter import (
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
     calculate_img_tokens,
+    estimate_image_tokens,
     high_detail_image_token_upper_bound,
+    is_openai_model,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -656,6 +659,37 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     assert token_counter_new(
         model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected_tool_choice"),
+    [
+        pytest.param({"type": "auto"}, None, id="anthropic-auto"),
+        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "none"}, "none", id="anthropic-none"),
+        pytest.param(
+            {"type": "tool", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="anthropic-tool",
+        ),
+        pytest.param(
+            {"type": "function", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            id="responses-function",
+        ),
+    ],
+)
+def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
+    tool_choice: Mapping[str, object], expected_tool_choice: str | Mapping[str, object] | None
+) -> None:
+    messages: Final = cast(list[AllMessageValues], list(_USER_MESSAGES))
+    tools: Final = cast(list[ChatCompletionToolParam], [_openai_tool(_WEATHER_FUNCTION)])
+
+    assert token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(
+        model="gpt-4", messages=messages, tools=tools, tool_choice=expected_tool_choice
+    )
 
 
 @pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
@@ -1793,6 +1827,34 @@ def test_anthropic_image_block_with_empty_base64_data():
     assert tokens > 0
 
 
+def test_token_counter_counts_anthropic_search_result_text() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.invalid/notes",
+        "title": "Project notes",
+        "content": [{"type": "text", "text": "The code word is 7f3a."}],
+        "citations": {"enabled": True},
+    }
+
+    assert _count_content_list(len, [search_result], False, None) == len(
+        "https://example.invalid/notesProject notesThe code word is 7f3a."
+    )
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(nested: bool) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    unknown: Final = {"type": "future_block"}
+    content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [unknown]}] if nested else [unknown]
+
+    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+        _count_content_list(len, content, False, None)
+    assert _count_content_list(len, content, False, 7) == 7
+
+
 def test_anthropic_image_block_without_source_raises():
     """An `image` block with no `source` raises, matching the OpenAI `image_url`-without-`url` behavior."""
     from litellm.litellm_core_utils.token_counter import _count_content_list
@@ -2090,6 +2152,136 @@ def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int,
 def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
     assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
     assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()
+
+
+# Image sizing verified 2026-10-28: https://developers.openai.com/api/docs/guides/images-vision
+# and https://platform.claude.com/docs/en/build-with-claude/vision-coordinates
+@pytest.mark.parametrize(
+    ("model", "width", "height", "detail", "expected"),
+    [
+        ("gpt-4o-mini", 1024, 1024, "low", 2833),
+        ("gpt-4o-mini", 1024, 1024, "high", 25501),
+        ("gpt-5.1", 512, 512, "auto", 210),
+        ("gpt-6-astra", 2048, 2048, "high", 3000),
+        ("gpt-6-astra", 4096, 512, "high", 2458),
+        ("gpt-6-astra", 2048, 2048, "auto", 4916),
+        ("gpt-5.6-sol", 2048, 2048, "low", 308),
+        ("gpt-5.5", 6400, 6400, "original", 12000),
+        ("gpt-5.4-mini", 2048, 2048, "low", 4916),
+        ("gpt-5.4-nano", 2048, 2048, "auto", 3000),
+        ("gpt-5.2", 4096, 512, "auto", 615),
+        ("gpt-4.1-mini-2025-04-14", 1024, 1024, "low", 1659),
+        ("claude-haiku-5-5", 200, 200, "auto", 64),
+        ("anthropic/claude-haiku-5-5", 1024, 1024, "auto", 1369),
+        ("claude-haiku-5-5", 1920, 1080, "low", 2691),
+        ("claude-haiku-4-5", 1920, 1080, "auto", 1560),
+        ("claude-haiku-4-5", 1075, 1520, "auto", 1551),
+        ("claude-haiku-5-5", 3840, 2160, "auto", 4784),
+        ("claude-haiku-5-5", 8000, 100, "auto", 184),
+    ],
+)
+def test_image_estimate_uses_model_resolution_and_detail(
+    model: str, width: int, height: int, detail: str, expected: int
+) -> None:
+    assert estimate_image_tokens(model, _png_data_url(width, height), detail) == expected
+
+
+@pytest.mark.parametrize(
+    ("models", "fallback", "expected_model"),
+    [
+        (("azure/deployment-prod",), "gpt-4o", "gpt-4o"),
+        (("openai/gpt-4o",), "gpt-4o-mini", "gpt-4o"),
+        (("azure/deployment-prod", "openai/gpt-4o"), "gpt-4o-mini", "gpt-4o-mini"),
+        (("openai/gpt-4o", "openrouter/openai/gpt-4o-mini"), None, "gpt-4o-mini"),
+        (("azure_ai/openai/gpt-6-astra",), None, "gpt-6-astra"),
+        (("azure/gpt-41",), None, "gpt-4.1"),
+        (("azure/eu/gpt-4o-mini",), None, "gpt-4o-mini"),
+        (("unknown", "gpt-4o-mini"), None, "gpt-4o-mini"),
+        ((), "gpt-6-astra", "gpt-6-astra"),
+        (("other/gpt-4o-mini",), None, "unregistered-model"),
+        (("azure/opaque/gpt-4o-mini",), None, "unregistered-model"),
+        (("bedrock/anthropic.claude-haiku-5-5",), None, "claude-haiku-5-5"),
+        (("bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",), None, "claude-haiku-4-5"),
+        (("vertex_ai/claude-haiku-5-5@default",), None, "claude-haiku-5-5"),
+        (("azure_ai/claude-haiku-5-5",), None, "claude-haiku-5-5"),
+        (("anthropic/claude-haiku-5-5", "openai/gpt-4o"), "gpt-4o-mini", "claude-haiku-5-5"),
+        (("other/claude-haiku-5-5",), None, "unregistered-model"),
+    ],
+)
+def test_image_estimate_prefers_each_backend_policy_over_the_requested_model(
+    models: tuple[str, ...], fallback: str | None, expected_model: str
+) -> None:
+    data: Final = _png_data_url(1024, 1024)
+    assert estimate_image_tokens(models, data, "high", fallback_model=fallback) == estimate_image_tokens(
+        expected_model, data, "high"
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "detail"),
+    [
+        ("unknown", "high"),
+        ("claude-unregistered", "auto"),
+        ("gpt-4o", "original"),
+        ("gpt-5.2", "original"),
+        ("gpt-6-astra", "invalid"),
+    ],
+)
+def test_image_estimate_preserves_default_when_policy_is_unavailable(model: str, detail: str) -> None:
+    assert (
+        estimate_image_tokens(model, _png_data_url(1024, 1024), detail) == litellm.constants.DEFAULT_IMAGE_TOKEN_COUNT
+    )
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "https://image.invalid/photo.png",
+        "data:image/png;base64,invalid!",
+        "data:application/octet-stream;base64,bm90LWFuLWltYWdl",
+        "data:image/jpeg;base64,/9j/4AAQ",
+        "data:image/webp;base64,UklGRgAAAABXRUJQ",
+        _png_data_url(0, 1024),
+    ],
+)
+# Accepted patch limits verified 2026-10-28: https://developers.openai.com/api/docs/guides/images-vision
+# and https://platform.claude.com/docs/en/build-with-claude/vision
+@pytest.mark.parametrize(
+    ("model", "detail", "bound"),
+    [
+        ("gpt-4o", "high", high_detail_image_token_upper_bound()),
+        ("gpt-6-astra", "high", 3000),
+        ("gpt-6-astra", "auto", 36000),
+        ("claude-haiku-5-5", "auto", 4784),
+        ("claude-haiku-4-5", "auto", 1568),
+    ],
+)
+def test_image_estimate_uses_bounded_fallback_without_fetching_media(
+    data: str, model: str, detail: str, bound: int
+) -> None:
+    with patch("httpx.Client.send") as send:
+        estimate: Final = estimate_image_tokens(model, data, detail)
+    send.assert_not_called()
+    assert estimate == bound
+    assert estimate > estimate_image_tokens(model, _png_data_url(1024, 1024), detail)
+
+
+@pytest.mark.parametrize("container", ["PNG", "JPEG", "GIF", "WEBP"])
+def test_image_estimate_depends_on_dimensions_and_not_compressed_payload_size(container: str) -> None:
+    output: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(output, format=container)
+    data: Final = "data:application/octet-stream;base64," + base64.b64encode(output.getvalue()).decode()
+    assert estimate_image_tokens("gpt-6-astra", data) == estimate_image_tokens("gpt-6-astra", _png_data_url(1024, 1024))
+
+
+def test_image_estimate_bounds_header_decoding_for_large_inline_payloads() -> None:
+    header: Final = base64.b64decode(_png_data_url(1024, 1024).split(",", 1)[1])
+    data: Final = "data:image/png;base64," + base64.b64encode(header + b"\0" * 4_000_000).decode()
+    with patch("base64.b64decode", wraps=base64.b64decode) as decode_header:
+        estimate: Final = estimate_image_tokens("gpt-6-astra", data)
+    assert estimate == estimate_image_tokens("gpt-6-astra", _png_data_url(1024, 1024))
+    assert decode_header.call_count == 1
+    assert len(decode_header.call_args.args[0]) <= 65_536
 
 
 HUB_SETUP_SCRIPT: Final = """
@@ -2409,3 +2601,95 @@ def test_get_modified_max_tokens_leaves_a_gemini_4_long_decode_budget_alone(monk
         )
         == 200_000
     )
+
+
+_MULTILINGUAL_SAMPLE: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+        "azure/gpt-41",
+        "azure/gpt-5.1",
+        "openai/gpt-5.1",
+        "openai/gpt-4o",
+        "gpt-41",
+        "eu/gpt-6.1-sol",
+        "azure/eu/gpt-6.1-sol",
+        "azure/gpt-5.1-chat",
+        "azure/gpt-6.1-sol-2026-09-29",
+        "openai/gpt-6.1-sol-2026-09-29",
+        "azure_ai/gpt-6.1-sol",
+        "chatgpt/gpt-6.1-sol",
+        "perplexity/openai/gpt-5",
+    ],
+)
+def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200k(model: str):
+    expected: Final = len(tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE))
+
+    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE))
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == expected, (
+        f"{model} should count with o200k_base. OpenAI's /v1/responses/input_tokens gave gpt-5, gpt-5.1, gpt-6-sol, "
+        "gpt-6-luna, gpt-6-astra, gpt-6.1-sol and gpt-6.1-terra the same count on this sample, checked 2026-10-28"
+    )
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.9", "chatgpt/gpt-5.3-instant", "azure/gpt-5.9-mini"])
+def test_token_counter_counts_unlisted_openai_names_with_the_encoding_tiktoken_gives_them(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.encoding_for_model(model.rsplit("/", 1)[-1]).encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize("model", ["gpt-6.2", "openai/gpt-6.2", "azure/gpt-6.2-mini", "azure/eu/o9-mini", "gpt-10"])
+def test_token_counter_counts_unlisted_names_of_newer_openai_releases_with_o200k(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "groq/qwen3-32b",
+        "openai/my-llama",
+        "text-embedding-ada-002-v2",
+        "azure/gpt-4",
+        "azure/my-deployment",
+        "azure/ada",
+        "azure/mistral-large-latest",
+        "azure/command-r-plus",
+        "azure_ai/mistral-large-latest",
+    ],
+)
+def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k_models(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+def test_openai_model_check_holds_while_openai_models_are_registered_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "azure/azure-only-chat-model", {"litellm_provider": "azure", "mode": "chat"})
+    registered: Final = tuple(f"concurrently-registered-model-{index}" for index in range(200))
+    checked: Final = threading.Semaphore(0)
+
+    def register() -> None:
+        for name in registered:
+            if not checked.acquire(timeout=10):
+                return
+            litellm.open_ai_chat_completion_models.add(name)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            registering: Final = pool.submit(register)
+            while not registering.done():
+                assert not is_openai_model("azure-only-chat-model")
+                checked.release()
+            registering.result()
+    finally:
+        litellm.open_ai_chat_completion_models.difference_update(registered)

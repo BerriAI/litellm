@@ -21,7 +21,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import Link, SpanContext, Status, StatusCode
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -5374,3 +5374,129 @@ class TestArizeProjectRouting:
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
 
         assert self._forwarded_projects() == {"gateway-prod"}
+
+
+_LANGFUSE_REQUEST_METADATA_SPAN: Final = MappingProxyType(
+    {
+        "langfuse.observation.metadata": '{"requester_metadata": {"headers": {"x-tenant": "acme"}}}',
+        "langfuse.trace.metadata.user_api_key_alias": "prod-key",
+        "langfuse.trace.metadata.user_api_key_user_id": "user-1",
+        "langfuse.trace.metadata.team_id": "team-9",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "gpt-4o",
+    }
+)
+_WITHOUT_LANGFUSE_REQUEST_METADATA: Final = MappingProxyType(
+    {"langfuse.trace.metadata.team_id": "team-9", "gen_ai.operation.name": "chat", "gen_ai.request.model": "gpt-4o"}
+)
+
+
+class TestLangfuseRequestMetadataStaysWithLangfuse:
+    """The request metadata the Langfuse mapper writes reaches a Langfuse destination and no other."""
+
+    @staticmethod
+    def _emit(
+        provider: TracerProvider,
+        destinations: tuple[OtelDestination, ...] = (),
+        tracer_name: str = "litellm",
+        overflow: bool = False,
+    ) -> None:
+        def run() -> None:
+            set_request_destinations(destinations)
+            links: Final = (Link(SpanContext(trace_id=1, span_id=1, is_remote=True)),) if overflow else ()
+            with get_tracer(provider, tracer_name).start_as_current_span("chat gpt-4o", links=links) as span:
+                if overflow:
+                    span.set_attribute("app.evicted", "first")
+                    span.add_event("app.event")
+                span.set_attributes(_LANGFUSE_REQUEST_METADATA_SPAN)
+
+        in_fresh_context(run)
+
+    @staticmethod
+    def _provider(
+        monkeypatch: pytest.MonkeyPatch, *owners: ExporterOwner | None
+    ) -> tuple[TracerProvider, dict[ExporterOwner | None, InMemorySpanExporter]]:
+        exporters: dict[ExporterOwner | None, InMemorySpanExporter] = {}  # mutable-ok: filled as specs build
+        kind: Final = "lit8283_request_metadata"
+        monkeypatch.setitem(
+            otel_providers._EXPORTER_FACTORIES,
+            kind,
+            lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()),
+        )
+        config: Final = OpenTelemetryV2Config(
+            mapper_names=["genai", "langfuse"],
+            exporters=[ExporterSpec(kind=kind, owner=owner) for owner in owners],
+        )
+        return build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True), exporters
+
+    @staticmethod
+    def _fan_out() -> tuple[TracerProvider, InMemorySpanExporter, InMemorySpanExporter]:
+        langfuse_exporter, arize_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda destination: SimpleSpanProcessor(
+                    langfuse_exporter if destination.callback_name == "langfuse_otel" else arize_exporter
+                )
+            )
+        )
+        return provider, langfuse_exporter, arize_exporter
+
+    def test_a_collector_beside_the_langfuse_exporter_gets_no_langfuse_request_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider, exporters = self._provider(monkeypatch, None, ExporterOwner.LANGFUSE_OTEL)
+
+        self._emit(provider)
+
+        assert dict(by_name(exporters[ExporterOwner.LANGFUSE_OTEL])["chat gpt-4o"].attributes) == dict(
+            _LANGFUSE_REQUEST_METADATA_SPAN
+        )
+        assert dict(by_name(exporters[None])["chat gpt-4o"].attributes) == dict(_WITHOUT_LANGFUSE_REQUEST_METADATA)
+
+    def test_a_collector_with_the_langfuse_mapper_and_no_langfuse_exporter_gets_no_langfuse_request_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider, exporters = self._provider(monkeypatch, None)
+
+        self._emit(provider)
+
+        assert dict(by_name(exporters[None])["chat gpt-4o"].attributes) == dict(_WITHOUT_LANGFUSE_REQUEST_METADATA)
+
+    def test_the_fan_out_forwards_langfuse_request_metadata_to_langfuse_destinations_only(self) -> None:
+        provider, langfuse_exporter, arize_exporter = self._fan_out()
+
+        self._emit(provider, (LANGFUSE_DEST, INHERITING_DEST))
+
+        assert dict(by_name(langfuse_exporter)["chat gpt-4o"].attributes) == dict(_LANGFUSE_REQUEST_METADATA_SPAN)
+        assert dict(by_name(arize_exporter)["chat gpt-4o"].attributes) == dict(_WITHOUT_LANGFUSE_REQUEST_METADATA)
+
+    def test_a_span_another_tracer_wrote_keeps_the_langfuse_metadata_keys_it_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider, exporters = self._provider(monkeypatch, None, ExporterOwner.LANGFUSE_OTEL)
+        fanned, _langfuse_exporter, arize_exporter = self._fan_out()
+
+        self._emit(provider, tracer_name="app")
+        self._emit(fanned, (LANGFUSE_DEST, INHERITING_DEST), tracer_name="app")
+
+        assert dict(by_name(exporters[None])["chat gpt-4o"].attributes) == dict(_LANGFUSE_REQUEST_METADATA_SPAN)
+        assert dict(by_name(arize_exporter)["chat gpt-4o"].attributes) == dict(_LANGFUSE_REQUEST_METADATA_SPAN)
+
+    def test_a_span_without_the_langfuse_request_metadata_keeps_its_dropped_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(_LANGFUSE_REQUEST_METADATA_SPAN)))
+        monkeypatch.setenv("OTEL_SPAN_EVENT_COUNT_LIMIT", "0")
+        monkeypatch.setenv("OTEL_SPAN_LINK_COUNT_LIMIT", "0")
+        provider, exporters = self._provider(monkeypatch, None, ExporterOwner.LANGFUSE_OTEL)
+        fanned, _langfuse_exporter, arize_exporter = self._fan_out()
+
+        self._emit(provider, overflow=True)
+        self._emit(fanned, (LANGFUSE_DEST, INHERITING_DEST), overflow=True)
+
+        stripped: Final = (by_name(exporters[None])["chat gpt-4o"], by_name(arize_exporter)["chat gpt-4o"])
+        assert [dict(span.attributes or {}) for span in stripped] == [dict(_WITHOUT_LANGFUSE_REQUEST_METADATA)] * 2
+        assert [(span.dropped_attributes, span.dropped_events, span.dropped_links) for span in stripped] == [
+            (1, 1, 1)
+        ] * 2
