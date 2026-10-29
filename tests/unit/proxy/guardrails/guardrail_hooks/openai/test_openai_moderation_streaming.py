@@ -1,14 +1,26 @@
-import pytest
-from unittest.mock import MagicMock, patch
 import os
+import sys
+from collections.abc import AsyncIterator
+from typing import Final
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+import litellm.llms as llms_package
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
-from litellm.types.utils import ModelResponseStream, ModelResponse
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import (
+    CallTypes,
+    Delta,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 @pytest.mark.asyncio
@@ -519,3 +531,63 @@ async def test_openai_moderation_streaming_sampled_when_end_of_stream_only_disab
             f"because chunk 6 already scanned the full text), "
             f"got {patched_make_request.await_count}"
         )
+
+
+@pytest.fixture
+def reset_guardrail_translation_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(llms_package, "guardrail_translation_discovery", None)
+
+
+@pytest.mark.asyncio
+async def test_moderation_still_runs_after_a_failed_translation_discovery(
+    reset_guardrail_translation_discovery: None,
+) -> None:
+    long_before_any_clock_reading: Final = float("-inf")
+    with pytest.MonkeyPatch.context() as poison:
+        poison.setitem(sys.modules, "litellm.llms.openai.chat.guardrail_translation", None)
+        poisoned: Final = llms_package.load_guardrail_translation_mappings(now=lambda: long_before_any_clock_reading)
+    assert CallTypes.acompletion not in poisoned
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        openai_guardrail: Final = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        unified_guardrail: Final = UnifiedLLMGuardrails()
+
+        mock_mod_response: Final = MagicMock()
+        mock_mod_response.results = []
+
+        async def mock_stream() -> AsyncIterator[ModelResponseStream]:
+            chunks_data: Final = ("Hello", " ", "world", "!", " Goodbye")
+            for i, content in enumerate(chunks_data):
+                yield ModelResponseStream(
+                    model="gpt-4",
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(content=content, role="assistant"),
+                            finish_reason=("stop" if i == len(chunks_data) - 1 else None),
+                        )
+                    ],
+                )
+
+        with patch.object(openai_guardrail, "async_make_request", return_value=mock_mod_response) as patched_make_request:
+            chunks_received: Final = [
+                chunk
+                async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
+                    response=mock_stream(),
+                    request_data={
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "guardrail_to_apply": openai_guardrail,
+                        "metadata": {"guardrails": ["test-openai-moderation"]},
+                    },
+                )
+            ]
+
+    assert len(chunks_received) == 5
+    assert patched_make_request.await_count > 0, (
+        "Moderation never ran: the failed discovery was cached and the streaming hook "
+        "passed every chunk through unscanned"
+    )

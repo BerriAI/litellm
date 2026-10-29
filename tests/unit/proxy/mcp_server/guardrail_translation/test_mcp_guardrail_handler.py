@@ -133,8 +133,8 @@ def restore_callbacks(monkeypatch):
     monkeypatch.setattr(litellm, "callbacks", litellm.callbacks)
     monkeypatch.setattr(
         litellm_llms,
-        "endpoint_guardrail_translation_mappings",
-        litellm_llms.endpoint_guardrail_translation_mappings,
+        "guardrail_translation_discovery",
+        litellm_llms.guardrail_translation_discovery,
     )
     yield
     ProxyLogging._callback_capabilities_cache.clear()
