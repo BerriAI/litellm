@@ -33790,6 +33790,61 @@
                 "title": "Response Id",
                 "type": "string"
               }
+            },
+            {
+              "description": "An item ID to list items after, used in pagination",
+              "in": "query",
+              "name": "after",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "An item ID to list items before, used in pagination",
+              "in": "query",
+              "name": "before",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "Additional fields to include in the response, forwarded to the provider",
+              "in": "query",
+              "name": "include",
+              "required": false,
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            {
+              "description": "How many items to return, with the range enforced by the provider",
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            {
+              "description": "The order to return the input items in",
+              "in": "query",
+              "name": "order",
+              "required": false,
+              "schema": {
+                "default": "desc",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "type": "string"
+              }
             }
           ],
           "responses": {

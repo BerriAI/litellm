@@ -1501,6 +1501,114 @@ async def test_a_malformed_resume_query_through_the_proxy_is_a_400(
     assert upstream_requests == ()
 
 
+async def _list_items_through_proxy(
+    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], drop_params: bool = False
+) -> tuple[httpx.Response, tuple[httpx.Request, ...]]:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_base": _RESUMED_UPSTREAM,
+                    "api_key": "fixture-key",
+                    "drop_params": drop_params,
+                },
+                "model_info": {"id": "deployment-read"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock(assert_all_called=False) as transport:
+        route: Final = transport.get(_RESUMED_UPSTREAM + "/responses/resp_read/input_items").mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.get(
+                f"/v1/responses/{_proxy_issued_id('resp_read')}/input_items", params=list(query)
+            )
+        return result, tuple(call.request for call in route.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, forwarded",
+    [
+        (
+            (
+                ("limit", "2"),
+                ("order", "asc"),
+                ("after", "item_a"),
+                ("before", "item_b"),
+                ("include[]", "message.input_image.image_url"),
+                ("include[]", "file_search_call.results"),
+            ),
+            [
+                ("after", "item_a"),
+                ("before", "item_b"),
+                ("include[]", "file_search_call.results"),
+                ("include[]", "message.input_image.image_url"),
+                ("limit", "2"),
+                ("order", "asc"),
+            ],
+        ),
+        (
+            (("include", "message.input_image.image_url"),),
+            [("include[]", "message.input_image.image_url"), ("limit", "20"), ("order", "desc")],
+        ),
+        ((), [("limit", "20"), ("order", "desc")]),
+    ],
+)
+async def test_listing_input_items_through_the_proxy_forwards_the_client_list_params(
+    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], forwarded: list[tuple[str, str]]
+):
+    result, upstream_requests = await _list_items_through_proxy(monkeypatch, query)
+
+    assert result.status_code == 200, result.text
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [forwarded]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, bad_param",
+    [
+        ((("limit", "abc"),), "limit"),
+        ((("limit", "-1"),), "limit"),
+        ((("order", "sideways"),), "order"),
+        ((("after", "item_a"), ("after", "item_b")), "after"),
+        ((("before", "item_a"), ("before", "item_b")), "before"),
+    ],
+)
+async def test_a_malformed_input_items_query_through_the_proxy_is_a_400(
+    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], bad_param: str
+):
+    result, upstream_requests = await _list_items_through_proxy(monkeypatch, query)
+
+    assert result.status_code == 400, result.text
+    assert bad_param in result.json()["error"]["message"]
+    assert upstream_requests == ()
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_input_items_query_under_drop_params_is_dropped_and_the_rest_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (("limit", "abc"), ("order", "asc"), ("after", "item_a")), drop_params=True
+    )
+
+    assert result.status_code == 200, result.text
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [
+        [("after", "item_a"), ("limit", "20"), ("order", "asc")]
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_read_that_bills_a_response_before_its_stream_ends_leaves_the_stream_nothing_to_bill(
     monkeypatch: pytest.MonkeyPatch,

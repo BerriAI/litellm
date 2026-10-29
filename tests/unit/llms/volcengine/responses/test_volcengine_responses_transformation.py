@@ -383,7 +383,7 @@ class TestVolcengineResponsesAPITransformation:
         assert params == {
             "after": "item_a",
             "before": "item_b",
-            "include": "metadata,usage",
+            "include[]": ["metadata", "usage"],
             "limit": 5,
             "order": "asc",
         }

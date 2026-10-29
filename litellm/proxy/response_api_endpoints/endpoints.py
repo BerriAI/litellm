@@ -85,6 +85,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
+from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.retrieve_stream_query import RETRIEVE_INCLUDE_QUERY_KEYS, RETRIEVE_STREAM_QUERY_KEYS
@@ -109,6 +110,7 @@ _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdap
 _DECODED_JSON: Final = TypeAdapter(object)
 _PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _RETRIEVE_QUERY_PARAMS: Final = tuple(sorted(RETRIEVE_INCLUDE_QUERY_KEYS | RETRIEVE_STREAM_QUERY_KEYS))
+_INPUT_ITEMS_QUERY_PARAMS: Final = tuple(sorted(INPUT_ITEMS_QUERY_KEYS))
 _RETRIEVE_QUERY_OPENAPI: Final = {
     "parameters": [
         {
@@ -142,6 +144,46 @@ _RETRIEVE_QUERY_OPENAPI: Final = {
     ]
 }
 
+_INPUT_ITEMS_QUERY_OPENAPI: Final = {
+    "parameters": [
+        {
+            "name": "after",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "description": "An item ID to list items after, used in pagination",
+        },
+        {
+            "name": "before",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "description": "An item ID to list items before, used in pagination",
+        },
+        {
+            "name": "include",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "array", "items": {"type": "string"}},
+            "description": "Additional fields to include in the response, forwarded to the provider",
+        },
+        {
+            "name": "limit",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "integer", "minimum": 0, "default": 20},
+            "description": "How many items to return, with the range enforced by the provider",
+        },
+        {
+            "name": "order",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
+            "description": "The order to return the input items in",
+        },
+    ]
+}
+
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
 RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
@@ -165,6 +207,17 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _extra_query_with_query_params(
+    body_extra_query: object, request: Request, keys: Sequence[str]
+) -> Mapping[str, object] | None:
+    query: Final = {
+        key: values[0] if len(values) == 1 else values for key in keys if (values := request.query_params.getlist(key))
+    }
+    if not query:
+        return None
+    return {**(body_extra_query if isinstance(body_extra_query, dict) else {}), **query}
 
 
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
@@ -870,17 +923,14 @@ async def get_response(
         return state
 
     # Normal provider response flow
-    data: Final = await read_request_body(request=request)
+    data: Final[dict[str, object]] = await read_request_body(request=request)
     read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
-    retrieve_query: Final = {
-        key: values[0] if len(values) == 1 else values
-        for key in _RETRIEVE_QUERY_PARAMS
-        if (values := request.query_params.getlist(key))
-    }
-    if retrieve_query:
-        body_extra_query: Final[object] = data.get("extra_query")
-        data["extra_query"] = {**(body_extra_query if isinstance(body_extra_query, dict) else {}), **retrieve_query}
+    retrieve_extra_query: Final = _extra_query_with_query_params(
+        data.get("extra_query"), request, _RETRIEVE_QUERY_PARAMS
+    )
+    if retrieve_extra_query is not None:
+        data["extra_query"] = retrieve_extra_query
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response: Final[object] = await processor.base_process_llm_request(
@@ -1333,18 +1383,21 @@ async def delete_response(
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSE_ITEM_LIST_SCHEMAS,
+    openapi_extra=_INPUT_ITEMS_QUERY_OPENAPI,
 )
 @router.get(
     "/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSE_ITEM_LIST_SCHEMAS,
+    openapi_extra=_INPUT_ITEMS_QUERY_OPENAPI,
 )
 @router.get(
     "/openai/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSE_ITEM_LIST_SCHEMAS,
+    openapi_extra=_INPUT_ITEMS_QUERY_OPENAPI,
 )
 async def get_response_input_items(
     response_id: str,
@@ -1368,8 +1421,13 @@ async def get_response_input_items(
         version,
     )
 
-    data: Final = await read_request_body(request=request)
+    data: Final[dict[str, object]] = await read_request_body(request=request)
     data["response_id"] = response_id
+    input_items_extra_query: Final = _extra_query_with_query_params(
+        data.get("extra_query"), request, _INPUT_ITEMS_QUERY_PARAMS
+    )
+    if input_items_extra_query is not None:
+        data["extra_query"] = input_items_extra_query
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(

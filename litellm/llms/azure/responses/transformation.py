@@ -14,7 +14,7 @@ from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, list_input_items_query_params
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -362,19 +362,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         url: Final = self._construct_url_for_response_id_in_path(
             api_base=api_base, response_id=response_id, path_suffix="/input_items"
         )
-        params: Final[dict[str, str | int]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if include:
-            params["include"] = ",".join(include)
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
         verbose_logger.debug("list input items url=%s", url)
-        return url, params
+        return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
 
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########

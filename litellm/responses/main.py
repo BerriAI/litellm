@@ -106,6 +106,7 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
+from .input_items_query import InputItemsQuery, InvalidInputItemsQuery, parse_input_items_query
 from .retrieve_stream_query import (
     RETRIEVE_INCLUDE_QUERY_KEYS,
     InvalidRetrieveStreamQuery,
@@ -2278,6 +2279,23 @@ def get_responses(
         )
 
 
+def _requested_input_items_query(
+    defaults: InputItemsQuery,
+    extra_query: Mapping[str, object] | None,
+    custom_llm_provider: str,
+    drop_malformed: bool,
+) -> InputItemsQuery:
+    parsed: Final = parse_input_items_query(extra_query or {}, defaults, drop_malformed=drop_malformed)
+    if isinstance(parsed, InvalidInputItemsQuery):
+        raise litellm.BadRequestError(
+            message=parsed.message,
+            model=None,
+            llm_provider=custom_llm_provider,
+            body={"message": parsed.message, "type": "invalid_request_error", "param": parsed.param},
+        )
+    return parsed
+
+
 @client
 async def alist_input_items(
     response_id: str,
@@ -2287,6 +2305,7 @@ async def alist_input_items(
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
     extra_headers: dict[str, object] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -2310,6 +2329,7 @@ async def alist_input_items(
             limit=limit,
             order=order,
             extra_headers=extra_headers,
+            extra_query=extra_query,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
@@ -2343,6 +2363,7 @@ def list_input_items(
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
     extra_headers: dict[str, object] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -2374,6 +2395,15 @@ def list_input_items(
         if responses_api_provider_config is None:
             raise ValueError(f"list_input_items is not supported for {custom_llm_provider}")
 
+        query: Final = _requested_input_items_query(
+            defaults=InputItemsQuery(
+                after=after, before=before, include=tuple(include or ()), limit=limit, order=order
+            ),
+            extra_query=extra_query,
+            custom_llm_provider=custom_llm_provider,
+            drop_malformed=drops_unsupported_params(litellm_params.drop_params),
+        )
+
         local_vars.update(kwargs)
 
         litellm_logging_obj.update_from_kwargs(
@@ -2390,11 +2420,11 @@ def list_input_items(
             responses_api_provider_config=responses_api_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
-            after=after,
-            before=before,
-            include=include,
-            limit=limit,
-            order=order,
+            after=query.after,
+            before=query.before,
+            include=list(query.include),
+            limit=query.limit,
+            order=query.order,
             extra_headers=extra_headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
