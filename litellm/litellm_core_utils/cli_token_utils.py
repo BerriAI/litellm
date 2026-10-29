@@ -13,8 +13,10 @@ This module has no dependencies on proxy code and can be safely imported at the 
 """
 
 import math
+import os
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -42,6 +44,7 @@ from litellm.litellm_core_utils.private_json import (
     ensure_private_dir,
     overwrite_private_json,
     stage_private_json,
+    write_private_bytes,
     write_private_json,
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
@@ -220,25 +223,28 @@ def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -
 def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
     """Remove the credential from both stores. Reports whether the keychain is now free of it.
 
-    A logout the keychain never answered keeps the token file, with its secret taken out, because
-    that file is the only remaining record that something may still be in there to remove. It is
-    what lets a later run tell a machine with a credential it cannot reach apart from one that never
-    had a login at all, and taking it away would leave the next logout answering the warning this
-    one just issued with a false all-clear. The secret goes either way, and a file that will give up
-    neither its copy nor itself is removed rather than kept, with the note written again afterwards
-    so the warning still outlives this run.
+    The token file goes whatever the keychain answers, so nothing left on disk reads as a login. A
+    keychain that could not be checked may still hold an entry an earlier login put there, so a
+    logout that had something to end leaves a secret-free note beside the file, and the next logout
+    warns again instead of reading the missing file as a clean keychain. Only a keychain that
+    confirms the erase takes the note away. A file that will not go has its secret taken out where
+    it lies instead.
     """
     outcome: Final = vault.erase()
     record: Final = _read_token_file()
     settled: Final = _nothing_left_behind(outcome, record)
-    if not settled and _keep_the_unchecked_keychain_on_record(outcome, record):
-        return outcome
-    removal: Final = _remove_token_file()
-    if removal is not None and record is not None and not _scrub_file_secret(record):
-        return removal
-    if removal is None and record is not None and _the_keychain_went_unchecked(outcome):
-        _write_the_note_the_removal_took_with_it(record)
+    left_on_disk: Final = _end_the_local_login(record)
+    _note_what_the_keychain_answered(outcome, settled)
+    if left_on_disk is not None:
+        return left_on_disk
     return SecretErased() if settled else outcome
+
+
+def _end_the_local_login(record: CliTokenRecord | None) -> CredentialNotCleared | None:
+    removal: Final = _remove_token_file()
+    if removal is None or record is None or _scrub_file_secret(record):
+        return None
+    return removal
 
 
 def _remove_token_file() -> CredentialNotCleared | None:
@@ -249,54 +255,38 @@ def _remove_token_file() -> CredentialNotCleared | None:
     return None
 
 
-def _write_the_note_the_removal_took_with_it(record: CliTokenRecord) -> None:
-    """Put the secret-free note back after the file carrying it had to go to get the secret off disk.
+def _unchecked_keychain_note_path() -> Path:
+    return Path(get_cli_token_file_path()).with_name("keychain_unchecked")
 
-    Reaching here means neither rewrite would take, so the file went instead, and its absence is
-    what the next logout would read as a keychain already known to be clean. Removing it is also
-    what frees the room the rewrite was refused for, so the note usually lands on this second try.
-    When it does not, the warning this logout printed is the only one the user gets.
+
+def _note_what_the_keychain_answered(outcome: SecretErase, settled: bool) -> None:
+    """Keep the note that a logout left the keychain unchecked for exactly as long as that is true.
+
+    The secret is off disk by the time this runs, so a note that will not be written or removed is
+    no reason to fail the logout. The warning printed now is then the only one the user gets.
     """
-    staged: Final = _stage_scrubbed_file(record)
-    if staged is not None:
-        _commit_token_file(staged)
-
-
-def _keep_the_unchecked_keychain_on_record(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
-    """Whether the token file, stripped of its secret, is worth keeping as the note that says so.
-
-    Only a keychain that could not be reached leaves the question open. One that answered for itself
-    is remembered without any help from the file, and a file it can still pair a live entry with
-    would leave the machine signed in to the login that was just ended. A copy that will give up
-    its secret neither to a staged replacement nor to an overwrite is not kept either, because the
-    secret goes first.
-    """
-    if record is None or not _the_keychain_went_unchecked(outcome):
-        return False
-    return _scrub_file_secret(record)
-
-
-def _the_keychain_went_unchecked(outcome: SecretErase) -> bool:
-    """Whether the keychain neither confirmed the erase nor answered that it still holds the secret"""
-    match outcome:
-        case SecretErased() | SecretStranded():
-            return False
-        case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
-            return True
+    note: Final = _unchecked_keychain_note_path()
+    with suppress(OSError):
+        match outcome:
+            case SecretErased():
+                note.unlink(missing_ok=True)
+            case SecretStranded():
+                pass
+            case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
+                if not settled:
+                    ensure_private_dir(note.parent)
+                    write_private_bytes(str(note), b"")
 
 
 def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
     """Whether the keychain can be trusted to hold no credential of ours once the file is gone.
 
-    A machine with no token file has no stored login to end, and `clear_cli_token` keeps one behind
-    whenever the keychain is left unconfirmed, taking the secret out in place when it cannot stage a
-    replacement and writing the note again when the file holding it had to go, so a missing file is
-    real evidence rather than the absence of it. Past that, a
-    keychain that could not be reached is never trusted, whatever the file looks like. Even a file
-    holding its own secret says only that the login which wrote it had no keychain to write to, and
-    the login before it may well have had one: the entry that login left outlives both the
-    uninstalled package and the file that replaced it. `SecretStranded` is
-    the keychain answering for itself and outranks the file.
+    A keychain that could not be reached is trusted only on a machine with nothing to end: no token
+    file, and no note from an earlier logout that left the keychain unchecked. Even a file holding
+    its own secret says only that the login which wrote it had no keychain to write to, and the
+    login before it may well have had one: the entry that login left outlives both the uninstalled
+    package and the file that replaced it. `SecretStranded` is the keychain answering for itself and
+    outranks the file.
     """
     match outcome:
         case SecretErased():
@@ -304,7 +294,7 @@ def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) ->
         case SecretStranded():
             return False
         case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
-            return record is None
+            return record is None and not os.path.exists(_unchecked_keychain_note_path())
 
 
 def get_litellm_gateway_api_key(

@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     KeyringDisabled,
     KeyringNotInstalled,
+    KeyringUnreachable,
     SecretErased,
     SecretStored,
 )
@@ -1343,6 +1344,25 @@ class TestKeychainBackedCommands:
         assert result.exit_code == 0
         assert "could not be removed" in result.output
         assert not (isolated_home / ".litellm" / "token.json").exists()
+
+    @pytest.mark.parametrize("failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()])
+    def test_logout_without_a_usable_keychain_leaves_every_command_signed_out(
+        self, isolated_home, secret_vault_factory, failure
+    ):
+        """With no usable keychain, `lite login` keeps the credential in the token file. After `lite
+        logout`, `lite whoami` and `lite auth print-token` have to agree the machine is signed out,
+        rather than describing a login whose credential is stuck in a keychain that never held it."""
+        vault = secret_vault_factory(available=False, failure=failure)
+        self._login(vault)
+        obj = {"base_url": "https://test.example.com", "secret_vault": vault}
+        self.runner.invoke(logout, obj=obj)
+
+        whoami_result = self.runner.invoke(whoami, obj=obj)
+        print_result = self.runner.invoke(print_token, obj=obj)
+
+        assert whoami_result.output == "Not authenticated. Run 'lite login' to authenticate.\n"
+        assert print_result.exit_code == 1
+        assert print_result.output == "Not authenticated. Run 'lite login'.\n"
 
     def test_print_token_explains_a_locked_keychain_instead_of_printing_nothing(
         self, isolated_home, secret_vault_factory
