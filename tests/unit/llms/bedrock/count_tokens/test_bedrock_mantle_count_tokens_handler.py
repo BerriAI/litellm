@@ -75,7 +75,11 @@ async def test_counts_on_mantle_with_the_base_model_and_the_deployment_credentia
 
 
 @pytest.mark.asyncio
-async def test_counts_tools_the_way_mantle_messages_sends_them() -> None:
+@pytest.mark.parametrize(
+    "resolved_model",
+    ["anthropic.claude-opus-4-8", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"],
+)
+async def test_counts_tools_the_way_mantle_messages_sends_them(resolved_model: str) -> None:
     mantle: Final = _MantleEndpoint(200, {"input_tokens": 11})
     schema: Final = {"type": "object", "properties": {}}
 
@@ -88,7 +92,7 @@ async def test_counts_tools_the_way_mantle_messages_sends_them() -> None:
             ],
         },
         litellm_params=dict(LITELLM_PARAMS),
-        resolved_model="anthropic.claude-opus-4-8",
+        resolved_model=resolved_model,
         client=_client(mantle),
     )
 

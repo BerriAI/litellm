@@ -8,6 +8,7 @@ import pytest
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
     VertexAIPartnerModelsTokenCounter,
+    count_tokens_request_body,
 )
 
 
@@ -296,48 +297,19 @@ class TestCountTokensVersionSuffixStripping:
         assert captured_json["model"] == "claude-sonnet-4-6"
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [True, False])
-async def test_count_tokens_counts_tools_the_way_vertex_messages_sends_them(counter, monkeypatch, drop_params):
-    captured = {}
-
-    async def fake_ensure_access_token(self, credentials, project_id, custom_llm_provider):
-        return "fake-token", "fake-project"
-
-    monkeypatch.setattr(VertexAIPartnerModelsTokenCounter, "_ensure_access_token_async", fake_ensure_access_token)
-    monkeypatch.setattr(
-        VertexAIPartnerModelsTokenCounter,
-        "_build_count_tokens_endpoint",
-        lambda self, model, project_id, vertex_location, api_base=None: "https://fake-endpoint",
-    )
-
-    class FakeResponse:
-        status_code = 200
-
-        def json(self):
-            return {"input_tokens": 10}
-
-    class FakeClient:
-        async def post(self, url, headers=None, json=None, **kwargs):
-            captured["json"] = json
-            return FakeResponse()
-
-    import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
-
-    monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient())
+def test_count_tokens_counts_tools_the_way_vertex_messages_sends_them(drop_params):
     schema = {"type": "object", "properties": {}}
     eager_tool = {"name": "write", "input_schema": schema, "custom": {"eager_input_streaming": True}}
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"name": "read", "input_schema": schema, "custom": {"defer_loading": True}}, eager_tool],
+    }
 
-    await counter.handle_count_tokens_request(
-        model="claude-sonnet-4-6",
-        request_data={
-            "messages": [{"role": "user", "content": "hi"}],
-            "tools": [{"name": "read", "input_schema": schema, "custom": {"defer_loading": True}}, eager_tool],
-        },
-        litellm_params={"vertex_location": "us-east5", "drop_params": drop_params},
-    )
+    body = count_tokens_request_body(request_data, "claude-sonnet-4-6", drop_params)
 
-    assert captured["json"]["tools"] == [
+    assert body["messages"] == request_data["messages"]
+    assert body["tools"] == [
         {"name": "read", "input_schema": schema, "defer_loading": True},
         {"name": "write", "input_schema": schema} if drop_params else eager_tool,
     ]

@@ -6,6 +6,7 @@ Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
@@ -20,6 +21,22 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
     ("llama", "meta"),
     ("meta/", "meta"),
 )
+
+
+def count_tokens_request_body(
+    request_data: Mapping[str, object], model: str, drop_params: object
+) -> Mapping[str, object]:
+    tools: Final = request_data.get("tools")
+    if not isinstance(tools, list):
+        return request_data
+    return {
+        **request_data,
+        "tools": tools_without_custom_field(
+            OBJECT_LIST_ADAPTER.validate_python(tools),
+            hoist_defer_loading=is_claude_model_target("vertex_ai", model),
+            drop_custom=drops_unsupported_params(drop_params),
+        ),
+    }
 
 
 def count_tokens_publisher(model: str) -> str | None:
@@ -168,22 +185,10 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
 
         # Make the request
         # Note: Partner models (especially Claude) accept Anthropic Messages API format directly
-        tools: Final = request_data.get("tools")
         response: Final = await async_client.post(
             endpoint_url,
             headers=headers,
-            json=(
-                {
-                    **request_data,
-                    "tools": tools_without_custom_field(
-                        OBJECT_LIST_ADAPTER.validate_python(tools),
-                        hoist_defer_loading=is_claude_model_target("vertex_ai", model),
-                        drop_custom=drops_unsupported_params(litellm_params.get("drop_params")),
-                    ),
-                }
-                if isinstance(tools, list)
-                else request_data
-            ),
+            json=dict(count_tokens_request_body(request_data, model, litellm_params.get("drop_params"))),
             timeout=30.0,
         )
 
