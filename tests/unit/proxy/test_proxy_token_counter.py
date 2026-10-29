@@ -3469,3 +3469,189 @@ async def _count_the_paris_weather_turn(monkeypatch: pytest.MonkeyPatch, model: 
             model="billed", messages=[{"role": "user", "content": "What is the weather in Paris?"}]
         )
     )
+
+
+def _prompt_beside(text_block: Mapping[str, JsonValue]) -> list[dict[str, JsonValue]]:
+    return [{"role": "user", "content": [{"type": "text", "text": "run the build"}, dict(text_block)]}]
+
+
+_CLEAN_PROMPT: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
+]
+
+_BLANK_BEFORE_NULL_PROMPT: Final[list[dict[str, JsonValue]]] = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": None},
+            {"type": "text", "text": "run the build"},
+        ],
+    }
+]
+
+
+async def _count_through_the_anthropic_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    body: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object] = MappingProxyType({}),
+) -> tuple[object, respx.Route]:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "user-text-count",
+                "litellm_params": {"model": model, "api_key": "sk-test", **deployment_params},
+            }
+        ],
+        default_litellm_params=dict(router_defaults),
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        anthropic_endpoints, "read_request_body", AsyncMock(return_value={"model": "user-text-count", **body})
+    )
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    with respx.mock(assert_all_called=False) as upstream_mock:
+        upstream: Final = upstream_mock.route().mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7, "totalTokens": 7})
+        )
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+    return response, upstream
+
+
+async def _messages_sent_to_anthropic_count(
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object] = MappingProxyType({}),
+) -> JsonValue:
+    response, upstream = await _count_through_the_anthropic_endpoint(
+        monkeypatch, "anthropic/claude-sonnet-5-5", body, deployment_params, router_defaults
+    )
+
+    assert isinstance(response, dict)
+    assert response["input_tokens"] == 7
+    return json.loads(upstream.calls.last.request.content)["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text_block",
+    ({"type": "text", "text": ""}, {"type": "text", "text": " \n"}, {"type": "text"}),
+    ids=("empty", "blank", "missing"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_strips_empty_user_text_like_inference(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, JsonValue]
+) -> None:
+    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": _prompt_beside(text_block)}, {})
+
+    assert sent == _CLEAN_PROMPT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5), ids=("null", "number"))
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params", "router_defaults"),
+    (({"drop_params": True}, {}, {}), ({}, {"drop_params": True}, {}), ({}, {}, {"drop_params": True})),
+    ids=("body", "deployment", "router-defaults"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_user_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    text: JsonValue,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: Mapping[str, JsonValue],
+) -> None:
+    sent: Final = await _messages_sent_to_anthropic_count(
+        monkeypatch,
+        {"messages": _prompt_beside({"type": "text", "text": text}), **request_params},
+        deployment_params,
+        router_defaults,
+    )
+
+    assert sent == _CLEAN_PROMPT
+
+
+_EMPTIED_MESSAGES_ERROR: Final = "messages: no message has content left after dropping empty or non-string text blocks"
+
+
+def _non_string_text_error(field: str) -> str:
+    return f"{field}: Input should be a valid string"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "request_params", "error"),
+    (
+        (
+            [{"role": "user", "content": [{"type": "text", "text": None}]}],
+            {"drop_params": True},
+            _EMPTIED_MESSAGES_ERROR,
+        ),
+        ([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, _EMPTIED_MESSAGES_ERROR),
+        (_prompt_beside({"type": "text", "text": None}), {}, _non_string_text_error("messages.0.content.1.text")),
+        (_prompt_beside({"type": "text", "text": 5}), {}, _non_string_text_error("messages.0.content.1.text")),
+        (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
+    ),
+    ids=("only-null-dropped", "only-empty-string", "null-beside-text", "number-beside-text", "blank-before-null"),
+)
+@pytest.mark.parametrize(
+    "model",
+    (
+        "anthropic/claude-sonnet-5-5",
+        "openai/gpt-5.6",
+        "gemini/gemini-3.8-flash",
+        "mistral/mistral-small-latest",
+    ),
+)
+async def test_anthropic_count_tokens_answers_the_inference_400_before_any_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    messages: list[dict[str, JsonValue]],
+    request_params: Mapping[str, JsonValue],
+    error: str,
+) -> None:
+    response, upstream = await _count_through_the_anthropic_endpoint(
+        monkeypatch, model, {"messages": messages, **request_params}, {}
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {"type": "invalid_request_error", "message": error}
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params", "router_defaults"),
+    (({"drop_params": False}, {}, {"drop_params": True}), ({}, {"drop_params": True}, {"drop_params": False})),
+    ids=("request-over-router-defaults", "router-defaults-over-deployment"),
+)
+async def test_anthropic_count_tokens_takes_drop_params_in_the_order_inference_does(
+    monkeypatch: pytest.MonkeyPatch,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: Mapping[str, JsonValue],
+) -> None:
+    response, upstream = await _count_through_the_anthropic_endpoint(
+        monkeypatch,
+        "anthropic/claude-sonnet-5-5",
+        {"messages": _prompt_beside({"type": "text", "text": None}), **request_params},
+        deployment_params,
+        router_defaults,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {
+        "type": "invalid_request_error",
+        "message": _non_string_text_error("messages.0.content.1.text"),
+    }
+    assert upstream.call_count == 0

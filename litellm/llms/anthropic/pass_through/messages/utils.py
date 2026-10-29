@@ -11,6 +11,11 @@ from litellm.llms.anthropic.common_utils import (
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    drop_non_string_texts,
+    reject_emptied_messages,
+    reject_non_string_user_text,
+)
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequestOptionalParams,
@@ -136,6 +141,21 @@ def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, obje
     )
 
 
+def native_messages_to_send(
+    messages: Sequence[object], drop_params: object
+) -> list[dict[str, object]]:  # mutable-ok: cache-control injection and token counters take list[dict]
+    return list(drop_non_string_texts(normalize_native_messages(messages), drop_params))
+
+
+def cleaned_native_messages(
+    messages: Sequence[object], drop_params: object, *, model: str, custom_llm_provider: str | None
+) -> list[dict[str, object]]:  # mutable-ok: maybe_inject_cache_control takes these messages as list[dict]
+    reject_non_string_user_text(messages, drop_params, model, custom_llm_provider)
+    cleaned: Final = native_messages_to_send(messages, drop_params)
+    reject_emptied_messages(messages, cleaned, model, custom_llm_provider)
+    return cleaned
+
+
 def prepare_native_messages(
     messages: list[dict[str, JsonValue]],
     system: str | list[dict[str, JsonValue]] | None,
@@ -149,7 +169,13 @@ def prepare_native_messages(
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
     from litellm.responses.bridge_check import needs_empty_user_turn_back
 
-    normalized: Final = messages if presanitized else normalize_native_messages(messages)
+    normalized: Final = (
+        messages
+        if presanitized
+        else cleaned_native_messages(
+            messages, kwargs.get("drop_params"), model=model, custom_llm_provider=custom_llm_provider
+        )
+    )
     restored: Final = (
         [*normalized, {"role": "user", "content": ""}]
         if needs_empty_user_turn_back(
