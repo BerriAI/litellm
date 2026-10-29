@@ -25,12 +25,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.ref_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+          FORCED: ${{ github.event.forced }}
           COST_MAP_PATHS: '["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json", "ci_cd/cost_map_pins.json"]'
           PINS_PATHS: '["ci_cd/cost_map_pins.json"]'
         run: |
-          if jq -e --arg pins ci_cd/cost_map_pins.json \
-            '(.commits | length) as $n | $n == 0 or $n >= 2048 or any(.commits[]; ((.added // []) + (.modified // []) + (.removed // [])) | index($pins))' \
-            "$GITHUB_EVENT_PATH" > /dev/null; then
+          if [[ "$BEFORE_SHA" =~ ^0+$ || "$FORCED" == true ]] \
+            || ! gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${AFTER_SHA}?per_page=1" \
+              --jq '(env.PINS_PATHS | fromjson) as $pins | (.files | length) < 300 and all(.files[]; [.filename, .previous_filename] | any(IN($pins[])) | not)' \
+              | grep -qx true; then
             export RECHECK_PATHS="$COST_MAP_PATHS"
           else
             export RECHECK_PATHS="$PINS_PATHS"
