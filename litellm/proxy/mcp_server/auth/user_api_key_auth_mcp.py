@@ -10,6 +10,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
+import jwt
 from fastapi import HTTPException
 from pydantic import SecretStr, TypeAdapter
 from starlette.datastructures import Headers
@@ -45,6 +46,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -250,10 +252,25 @@ def _caused_by(exc: BaseException, error_type: type[BaseException]) -> bool:
     return any(isinstance(link, error_type) for link in _cause_chain(exc))
 
 
+def _signed_with(token: str, secret: str) -> bool:
+    """True when ``token`` is a JWT whose HS256 signature verifies with ``secret``, whatever its claims say."""
+    try:
+        jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            options={"verify_exp": False, "verify_nbf": False, "verify_iat": False, "verify_aud": False},
+        )
+    except jwt.PyJWTError:
+        return False
+    return True
+
+
 async def _bearer_is_litellm_credential(token: str) -> bool:
-    """True when ``token`` is, or may be, a credential LiteLLM issued: the master key, a sealed gateway
-    bearer, or a virtual key the key table holds (a lookup fault counts as held). Only ``sk-`` tokens are
-    looked up, because no other token can be a virtual key."""
+    """True when ``token`` is, or may be, a credential LiteLLM issued: the master key or a JWT it signed
+    (dashboard sessions, BYOK sessions), a sealed gateway bearer, or a virtual key the key table holds (a
+    lookup fault counts as held). Only ``sk-`` tokens are looked up, because no other token can be a
+    virtual key."""
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         is_sealed_gateway_bearer,
         virtual_key_may_exist,
@@ -263,7 +280,7 @@ async def _bearer_is_litellm_credential(token: str) -> bool:
     )
     from litellm.proxy.proxy_server import master_key  # noqa: PLC0415  # startup owns the master key
 
-    if master_key and secrets.compare_digest(token.encode(), master_key.encode()):
+    if master_key and (secrets.compare_digest(token.encode(), master_key.encode()) or _signed_with(token, master_key)):
         return True
     if is_sealed_gateway_bearer(token):
         return True
@@ -298,16 +315,13 @@ def _identity_check(token: str, route: str, settings: Mapping[str, object]) -> _
     return None
 
 
-async def _verify_identity(check: _IdentityCheck, token: str, request: Request) -> None:
-    from litellm.proxy.auth.oauth2_check import Oauth2Handler  # noqa: PLC0415  # proxy import cycle
+async def _verify_identity(check: Literal["oauth2_proxy", "jwt"], token: str, request: Request) -> None:
     from litellm.proxy.auth.oauth2_proxy_hook import (  # noqa: PLC0415  # proxy import cycle
         handle_oauth2_proxy_request,
     )
     from litellm.proxy.proxy_server import jwt_handler  # noqa: PLC0415  # startup owns the active auth configuration
 
     match check:
-        case "oauth2":
-            await Oauth2Handler.check_oauth2_token(token=token)
         case "oauth2_proxy":
             await handle_oauth2_proxy_request(request=request)
         case "jwt":
@@ -320,8 +334,10 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
     """The LiteLLM user an upstream bearer also proves, or ``None`` when it proves none.
 
     Custom auth decides alone, so any rejection is ``None``. Otherwise the identity check LiteLLM would run
-    (OAuth2 introspection, reverse-proxy headers, or a JWT) must pass first. Past that, only a user LiteLLM
-    does not know is ``None``; every other refusal (budget, blocked team, disallowed route) propagates."""
+    must vouch for the caller. Reverse-proxy headers and a JWT are verified first, and OAuth2 introspection
+    runs once inside the full check, where a provider that does not vouch is ``None``. Past that, only a
+    user LiteLLM does not know is ``None``; every other refusal (budget, blocked team, disallowed route)
+    propagates."""
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         custom_auth_configured,
@@ -340,14 +356,15 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
     )
     if check is None:
         return None
-    try:
-        await _verify_identity(check, token, request)
-    except Exception:  # noqa: BLE001  # any verification failure means LiteLLM does not vouch for this bearer
-        return None
+    if check != "oauth2":
+        try:
+            await _verify_identity(check, token, request)
+        except Exception:  # noqa: BLE001  # any verification failure means LiteLLM does not vouch for this bearer
+            return None
     try:
         return await user_api_key_auth(api_key=litellm_api_key, request=request)
     except (HTTPException, ProxyException) as exc:
-        if _caused_by(exc, UserNotFoundError):
+        if _caused_by(exc, UserNotFoundError) or _caused_by(exc, OAuth2TokenValidationError):
             return None
         raise
 
