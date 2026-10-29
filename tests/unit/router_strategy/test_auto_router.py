@@ -398,6 +398,19 @@ def _auto_router(routelayer: Any, litellm_router_instance: Any = None, **kwargs:
     return auto_router
 
 
+@pytest.mark.parametrize("routes", [{}, ""])
+def test_should_load_no_routes_from_an_empty_non_list_routes_value(routes: object) -> None:
+    auto_router: Final = AutoRouter(
+        model_name="my-auto-router",
+        auto_router_config=json.dumps({"routes": routes}),
+        default_model="fallback-model",
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=StubEmbeddingRouter(),
+    )
+
+    assert auto_router.loaded_routes == []
+
+
 class TestAutoRouterAlwaysResolvesARoutableModel:
     """The hook returns the alias's default model instead of failing or leaking the alias downstream."""
 
