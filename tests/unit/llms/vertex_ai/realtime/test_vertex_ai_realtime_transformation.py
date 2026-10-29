@@ -272,6 +272,26 @@ def test_vertex_keeps_turn_detection_tuning_when_auto_response_is_off():
     }
 
 
+
+@pytest.mark.parametrize(
+    ("session", "disabled"),
+    [
+        ({"turn_detection": None}, True),
+        ({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, True),
+        ({"type": "realtime", "audio": {"input": {}}}, False),
+    ],
+)
+def test_vertex_turns_activity_detection_off_for_null_turn_detection(session, disabled):
+    """OpenAI's turn_detection null is push-to-talk, so Vertex must wait for the client's activity markers."""
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+    setup: Final = json.loads(messages[0])["setup"]
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is disabled
+
 # ---------------------------------------------------------------------------
 # Round-trip test: text-in / text-out via RealTimeStreaming
 # ---------------------------------------------------------------------------

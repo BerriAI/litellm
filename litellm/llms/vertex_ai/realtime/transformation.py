@@ -177,15 +177,16 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # ``silence_duration_ms``). ``map_automatic_turn_detection`` sets
         # ``disabled=True`` whenever ``create_response`` is absent or
         # ``False``. Force ``disabled=False`` only when the client did
-        # not explicitly request ``create_response: False`` — that path
+        # not explicitly request ``create_response: False`` or
+        # ``turn_detection: null`` — the first of those paths
         # is how transcription guardrails suppress automatic responses,
         # and overriding it here would silently bypass the guardrail.
         # Vertex Live has no "VAD on, no auto-response" mode, so callers
         # that need that behaviour must accept that VAD is off.
         client_turn_detection: Final = session_params.get("turn_detection")
         client_disabled_auto_response: Final = (
-            isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False
-        )
+            "turn_detection" in session_params and client_turn_detection is None
+        ) or (isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False)
         realtime_input_config: Final = setup_config.setdefault("realtimeInputConfig", {})
         automatic_detection: Final = realtime_input_config.setdefault("automaticActivityDetection", {})
         if not client_disabled_auto_response:

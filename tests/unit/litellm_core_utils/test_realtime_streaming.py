@@ -2967,6 +2967,36 @@ async def test_deferred_setup_merges_session_updates_until_the_first_content(mon
 
 
 @pytest.mark.asyncio
+async def test_deferred_setup_sends_the_default_setup_before_text_content_that_comes_first(monkeypatch):
+    """Gemini Live closes the socket on content sent before any setup, so text that arrives
+    before a session.update in deferred mode gets the model's default setup first."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws: Final = MagicMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            _TEXT_ITEM_CREATE,
+            json.dumps({"type": "session.update", "event_id": "evt_late", "session": {"modalities": ["text"]}}),
+            ConnectionClosed(None, None),
+        ]
+    )
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, MagicMock(), provider_config=GeminiRealtimeConfig(), model="gemini-live-2.5-flash"
+    )
+
+    await streaming.client_ack_messages()
+
+    frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    errors: Final = [event["error"] for event in _events_sent_to_client(streaming) if event["type"] == "error"]
+    assert [(error["code"], error["event_id"]) for error in errors] == [("session_update_not_applied", "evt_late")]
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeypatch):
     """Pipecat may send audio before session.update when setup is deferred."""
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)

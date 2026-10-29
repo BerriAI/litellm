@@ -770,7 +770,10 @@ class RealTimeStreaming:
     async def _send_default_setup_before_first_client_message(self, msg_type: str | None) -> None:
         if self.session_configuration_request is not None or self.provider_config is None:
             return
-        if msg_type == "session.update" or self._uses_deferred_backend_setup():
+        if msg_type == "session.update" or (
+            self._uses_deferred_backend_setup()
+            and (msg_type in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES or self._pending_messages_until_setup)
+        ):
             return
         default_setup: Final = self.provider_config.session_configuration_request(self.model)
         if not default_setup:
