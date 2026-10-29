@@ -243,6 +243,17 @@ class TestGitHubCopilotAuthenticator:
 
         assert api_key_file.read_bytes() == malformed
 
+    def test_refreshed_key_is_used_when_the_key_file_cannot_be_written(self, logged_in_token_dir):
+        unwritable_key_file: Final = logged_in_token_dir / "api-key.json"
+        unwritable_key_file.mkdir()
+
+        with respx.mock(assert_all_called=True) as router:
+            route: Final = router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
+            assert Authenticator().get_api_key() == "new-api-key"
+
+        assert route.call_count == 1
+        assert unwritable_key_file.is_dir()
+
     @pytest.mark.parametrize(
         "malformed",
         [

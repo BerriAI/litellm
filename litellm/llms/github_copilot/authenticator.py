@@ -171,28 +171,26 @@ class Authenticator:
             verbose_logger.warning("API key expired, refreshing")
 
         try:
-            api_key_info = self._refresh_api_key()
-            with open(self.api_key_file, "w") as f:
-                json.dump(api_key_info, f)
-            token: Final = api_key_info.get("token")
-            if token:
-                return token
-            else:
-                raise GetAPIKeyError(
-                    message="API key response missing token",
-                    status_code=401,
-                )
-        except OSError as e:
-            verbose_logger.error("Error saving API key to file: %s", e)
-            raise GetAPIKeyError(
-                message=f"Failed to save API key: {e}",
-                status_code=500,
-            )
+            api_key_info: Final = self._refresh_api_key()
         except RefreshAPIKeyError as e:
             raise GetAPIKeyError(
                 message=f"Failed to refresh API key: {e}",
                 status_code=401,
+            ) from e
+        try:
+            with open(self.api_key_file, "w") as f:
+                json.dump(api_key_info, f)
+        except OSError as e:
+            verbose_logger.warning(
+                "Using the refreshed API key without saving it, %s is not writable: %s", self.api_key_file, e
             )
+        token: Final = api_key_info.get("token")
+        if not token:
+            raise GetAPIKeyError(
+                message="API key response missing token",
+                status_code=401,
+            )
+        return token
 
     def get_api_base(self) -> str | None:
         """

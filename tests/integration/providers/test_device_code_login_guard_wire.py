@@ -659,6 +659,7 @@ _UNUSABLE_COPILOT_FILES: Final[Mapping[str, Mapping[str, bytes]]] = MappingProxy
     {
         "empty-access-token": MappingProxyType({"access-token": b""}),
         "blank-access-token": MappingProxyType({"access-token": b"  \n"}),
+        "access-token-truncated-utf-16": MappingProxyType({"access-token": b"\xff\xfe\x00\xd8"}),
         "invalid-api-key-json": MappingProxyType({"api-key.json": b"{not json"}),
         "api-key-list": MappingProxyType({"api-key.json": b"[]"}),
         "api-key-expiry-text": MappingProxyType(
