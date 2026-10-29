@@ -1,4 +1,4 @@
-"""Live provider checks for embeddings and chat fallback from an explicitly restricted model."""
+"""Live provider checks for embeddings, the chat refusal, and chat fallback from an explicitly restricted model."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from e2e_config import unique_marker
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, ModelInfoBody, ModelMode, ModelNewBody
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
@@ -102,3 +102,18 @@ class TestEmbeddingOnlySupportedEndpoints:
         assert completion.choices and completion.choices[0].message.content, (
             f"the fallback {fallback} should answer a chat call to {model}, got {completion!r}"
         )
+
+    @pytest.mark.covers("llm.embeddings.openai.supported_endpoints_gate.nonstream.works")
+    @meta(_subject(Route.CHAT_COMPLETIONS))
+    def test_chat_completions_without_a_fallback_are_refused_by_the_gateway(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(proxy, resources, "e2e-embed-only", EMBEDDINGS_ONLY)
+        with pytest.raises(BadRequestError) as refused:
+            _ = _openai_at(sdk, "/v1", resources.key()).chat.completions.create(
+                model=model, messages=[{"role": "user", "content": PROMPT}], extra_body=NO_PROXY_CACHE
+            )
+        assert (
+            f"/v1/chat/completions is not supported by model={model}. Supported endpoints: /v1/embeddings"
+            in refused.value.message
+        ), f"chat on {model} should be refused by the gateway before any provider call, got {refused.value!r}"

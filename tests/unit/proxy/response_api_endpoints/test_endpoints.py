@@ -1835,6 +1835,7 @@ def test_responses_ws_failure_frame_shows_only_the_refusal_for_a_model_that_refu
 
     assert json.loads(_responses_ws_failure_frame(failure)) == {
         "type": "error",
+        "status": 400,
         "error": {"type": "invalid_request_error", "message": refusal},
     }
 
@@ -2941,8 +2942,6 @@ class TestResponsesWSFirstFrameModelAuth:
             request_data={"model": "gpt-4o-mini"},
             route="/v1/responses",
         )
-
-
 
 
 class TestReadWSModelFromFirstFrameErrors:

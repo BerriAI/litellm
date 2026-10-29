@@ -872,6 +872,17 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
+def _fallback_probe_data(
+    pristine: object, fallback_model: str, key_aliases: object, group_alias: object
+) -> Mapping[str, object]:
+    return {
+        **_REQUEST_FIELDS.validate_python(pristine),
+        "model": resolve_served_model(
+            fallback_model, _DECODED_JSON.validate_python(litellm.model_alias_map), key_aliases, group_alias
+        ),
+    }
+
+
 def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
     try:
         return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
@@ -2703,16 +2714,12 @@ class ProxyBaseLLMRequestProcessing:
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
                     try:
-                        probe_data = {
-                            **_REQUEST_FIELDS.validate_python(pristine),
-                            "model": resolve_served_model(
-                                fallback_model,
-                                _DECODED_JSON.validate_python(litellm.model_alias_map),
-                                key_aliases,
-                                group_alias,
-                            ),
-                        }
-                        if endpoint_unsupported_by_model(route_type, probe_data, llm_router, user_api_key_dict.team_id):
+                        if endpoint_unsupported_by_model(
+                            route_type,
+                            _fallback_probe_data(pristine, fallback_model, key_aliases, group_alias),
+                            llm_router,
+                            user_api_key_dict.team_id,
+                        ):
                             continue
                         return await self.common_processing_pre_call_logic(
                             request=request,

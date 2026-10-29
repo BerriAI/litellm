@@ -18713,7 +18713,7 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
 async def test_anthropic_messages_same_group_retry_skips_an_embedding_only_deployment():
     """The retry of a /v1/messages stream dropped before content must not land on an enforced embedding-only
     deployment of the same group, even when that deployment is the group's preferred order."""
-    router = Router(
+    router: Final = Router(
         model_list=[
             {"model_name": "glm", "litellm_params": {"model": "anthropic/glm-chat", "api_key": "sk-test", "order": 2}},
             {
@@ -18728,7 +18728,7 @@ async def test_anthropic_messages_same_group_retry_skips_an_embedding_only_deplo
         _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
     )
 
-    async def anthropic_messages(**kwargs):
+    async def anthropic_messages(**kwargs: object) -> object:
         return await provider(**kwargs)
 
     stream: Final = await _anthropic_messages_stream_through_router(router, anthropic_messages)

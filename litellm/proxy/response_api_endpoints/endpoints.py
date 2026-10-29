@@ -1996,6 +1996,7 @@ def _responses_ws_failure_frame(failure: Exception) -> str:
         return json.dumps(
             {
                 "type": "error",
+                "status": 400,
                 "error": {"type": "invalid_request_error", "message": failure.message.split("\n\n", 1)[0]},
             }
         )
@@ -2296,7 +2297,6 @@ async def _responses_websocket_session(
             user_api_base=user_api_base,
             model=resolved_model,
             route_type="_aresponses_websocket",
-            llm_router=llm_router,
             skip_guardrails=True,
         )
     except Exception as e:

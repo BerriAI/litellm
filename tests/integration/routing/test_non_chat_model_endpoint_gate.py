@@ -419,6 +419,7 @@ def _websocket_rejection(model: str) -> tuple[dict[str, JsonValue], int | None, 
     return (
         {
             "type": "error",
+            "status": 400,
             "error": {
                 "type": "invalid_request_error",
                 "message": f"/v1/responses is not supported by model={model}. Supported endpoints: /v1/embeddings",

@@ -38,7 +38,7 @@ def test_explicit_restriction_excludes_an_embedding_deployment_from_a_mixed_grou
         {"enforce_supported_endpoints": False, "supported_endpoints": ["/v1/embeddings"]},
         {"enforce_supported_endpoints": True},
         {"enforce_supported_endpoints": True, "supported_endpoints": None},
-        {"enforce_supported_endpoints": True, "supported_endpoints": "invalid"},
+        {"enforce_supported_endpoints": True, "supported_endpoints": 7},
         {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/messages"]},
     ],
 )
@@ -47,6 +47,14 @@ def test_advisory_or_incomplete_metadata_preserves_routing(info: Mapping[str, ob
     with endpoint_selection("acompletion"):
         result: Final = eligible_deployments("shared", (deployment,))
     assert result == (deployment,)
+
+
+def test_a_single_endpoint_string_is_enforced_like_a_one_item_list() -> None:
+    deployment: Final = _deployment({"enforce_supported_endpoints": True, "supported_endpoints": "/v1/embeddings"})
+    with endpoint_selection("acompletion"):
+        result: Final = eligible_deployments("shared", (deployment,))
+    assert isinstance(result, EndpointNotSupportedByModelError)
+    assert result.message.endswith("Supported endpoints: /v1/embeddings")
 
 
 def test_unsupported_error_explains_the_requested_operation_and_available_endpoints() -> None:
@@ -79,7 +87,16 @@ def test_nested_non_chat_calls_do_not_inherit_the_outer_chat_restriction() -> No
 
 @pytest.mark.parametrize(
     "endpoint",
-    ["/messages", "/interactions", "/responses/compact", "/openai/v1/responses/compact", "/openai/v1/chat/completions"],
+    [
+        "/messages",
+        "/interactions",
+        "/responses/compact",
+        "/openai/v1/responses/compact",
+        "/openai/v1/chat/completions",
+        "chat/completions",
+        "v1/responses",
+        " /v1/chat/completions ",
+    ],
 )
 def test_chat_endpoint_declarations_keep_their_meaning_across_prefixes(endpoint: str) -> None:
     deployment: Final = _deployment({"enforce_supported_endpoints": True, "supported_endpoints": [endpoint]})

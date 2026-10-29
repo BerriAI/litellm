@@ -4,7 +4,7 @@ from contextvars import ContextVar
 from types import MappingProxyType
 from typing import Final, TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from litellm.exceptions import EndpointNotSupportedByModelError
 
@@ -31,7 +31,8 @@ CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
 
 
 def _endpoint_path(endpoint: str) -> str:
-    return endpoint.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
+    rooted: Final = "/" + endpoint.strip().lstrip("/")
+    return rooted.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
 
 
 CHAT_ENDPOINTS: Final = frozenset(_endpoint_path(endpoint) for endpoint in CHAT_ENDPOINT_BY_CALL.values())
@@ -46,6 +47,11 @@ class _EndpointDeclaration(BaseModel):
 
     enforce_supported_endpoints: bool | None = None
     supported_endpoints: tuple[str, ...] | None = None
+
+    @field_validator("supported_endpoints", mode="before")
+    @classmethod
+    def _one_endpoint_as_a_list(cls, value: object) -> object:
+        return (value,) if isinstance(value, str) else value
 
 
 @contextmanager
