@@ -55,6 +55,17 @@ REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
 
 
+def _reasoning_effort(thinking: Mapping[str, object], explicit_effort: object, *, drop_params: bool) -> object:
+    match thinking.get("type"):
+        case "adaptive":
+            return explicit_effort or "medium"
+        case "enabled":
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            return explicit_effort or budget_effort
+        case _:
+            return None
+
+
 class LiteLLMAnthropicToResponsesAPIAdapter:
     """
     Converts Anthropic /v1/messages requests to OpenAI Responses API format and
@@ -547,27 +558,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
 
-        ``thinking.budget_tokens`` is bucketed via the shared
-        ``reasoning_effort_from_thinking_budget`` thresholds. For adaptive
-        thinking, uses ``output_config.effort`` if available, otherwise defaults
-        to medium.
+        An explicit ``output_config.effort`` wins on both thinking types. Without
+        one, ``thinking.budget_tokens`` is bucketed via the shared
+        ``reasoning_effort_from_thinking_budget`` thresholds, and adaptive
+        thinking defaults to medium.
         """
         if not isinstance(thinking, dict):
             return None
 
-        thinking_type: Final = thinking.get("type")
-
-        if thinking_type == "adaptive":
-            # Use output_config.effort if available
-            effort = "medium"
-            if isinstance(output_config, dict) and output_config.get("effort"):
-                effort = output_config["effort"]
-        elif thinking_type == "enabled":
-            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
-            if budget_effort is None:
-                return None
-            effort = budget_effort
-        else:
+        explicit_effort: Final = output_config.get("effort") if isinstance(output_config, dict) else None
+        effort: Final = _reasoning_effort(thinking, explicit_effort, drop_params=drop_params)
+        if effort is None:
             return None
 
         auto_summary: Final = is_reasoning_auto_summary_enabled()

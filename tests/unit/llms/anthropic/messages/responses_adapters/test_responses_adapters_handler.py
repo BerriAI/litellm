@@ -739,3 +739,134 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+BRIDGED_ALIAS: Final = "bridged-gpt"
+DECLARING_LOW_AND_HIGH: Final = {"reasoning_effort_levels": ["low", "high"]}
+BUDGET_2048: Final = {"type": "enabled", "budget_tokens": 2048}
+
+
+async def _bridged_reasoning_sent(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: Mapping[str, object] | None,
+    **params: object,
+) -> object:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=REASONING_RESPONSE
+    )
+    deployment: Final = {
+        "model_name": BRIDGED_ALIAS,
+        "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-bridged-effort-test"},
+        **({"model_info": model_info} if model_info is not None else {}),
+    }
+    await Router(model_list=[deployment]).aanthropic_messages(
+        messages=MESSAGES, model=BRIDGED_ALIAS, max_tokens=1024, **params
+    )
+    return json.loads(route.calls.last.request.read()).get("reasoning")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, budget_tokens, effort",
+    [
+        (DECLARING_LOW_AND_HIGH, 2048, "low"),
+        (DECLARING_LOW_AND_HIGH, 16384, "low"),
+        (None, 2048, "low"),
+        (None, 1024, "high"),
+    ],
+)
+async def test_explicit_output_config_effort_wins_over_a_thinking_budget_on_the_responses_bridge(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: Mapping[str, object] | None,
+    budget_tokens: int,
+    effort: str,
+) -> None:
+    sent: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        model_info,
+        thinking={"type": "enabled", "budget_tokens": budget_tokens},
+        output_config={"effort": effort},
+    )
+
+    assert sent == {"effort": effort}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thinking", [BUDGET_2048, {"type": "adaptive"}])
+@pytest.mark.parametrize("dropped_effort", ["turbo", "none"])
+async def test_an_effort_drop_params_drops_on_the_responses_bridge_counts_as_never_sent(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: Mapping[str, object],
+    dropped_effort: str,
+) -> None:
+    output_format: Final = {"type": "json_schema", "schema": {"type": "object"}}
+
+    dropped: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        DECLARING_LOW_AND_HIGH,
+        thinking=thinking,
+        output_config={"effort": dropped_effort, "format": output_format},
+        drop_params=True,
+    )
+    never_sent: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        DECLARING_LOW_AND_HIGH,
+        thinking=thinking,
+        output_config={"format": output_format},
+        drop_params=True,
+    )
+
+    assert never_sent == {"effort": "high"}
+    assert dropped == never_sent
+
+
+@pytest.mark.asyncio
+async def test_an_undeclared_effort_beside_a_thinking_budget_reaches_the_provider_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: Final = await _bridged_reasoning_sent(
+        respx_mock, monkeypatch, DECLARING_LOW_AND_HIGH, thinking=BUDGET_2048, output_config={"effort": "turbo"}
+    )
+
+    assert sent == {"effort": "turbo"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_a_default_effort_beside_a_thinking_budget_leaves_the_effort_to_the_provider_on_the_responses_bridge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop_params: bool
+) -> None:
+    sent: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        DECLARING_LOW_AND_HIGH,
+        thinking=BUDGET_2048,
+        output_config={"effort": "default"},
+        drop_params=drop_params,
+    )
+
+    assert sent is None
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_effort_still_applies_beside_a_thinking_budget_drop_params_drops(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        None,
+        thinking={"type": "enabled", "budget_tokens": "lots"},
+        output_config={"effort": "high"},
+        drop_params=True,
+    )
+
+    assert sent == {"effort": "high"}

@@ -17,6 +17,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
 from litellm.responses.utils import auto_reasoning_summary
+from litellm.router_utils.reasoning_effort_capability import deployment_drops_reasoning_effort
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -119,6 +120,17 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def _deployment_output_config(
+    output_config: AnthropicOutputConfig | None, *, deployment_model_info: object, drop_params: bool
+) -> AnthropicOutputConfig | None:
+    if output_config is None or not deployment_drops_reasoning_effort(
+        output_config, deployment_model_info, drop_params=drop_params
+    ):
+        return output_config
+    output_format: Final = output_config.get("format")
+    return None if output_format is None else AnthropicOutputConfig(format=output_format)
+
+
 def _build_responses_kwargs(
     *,
     max_tokens: int,
@@ -143,6 +155,10 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    drop_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
+    request_output_config: Final = _deployment_output_config(
+        output_config, deployment_model_info=forwarded_kwargs.get("model_info"), drop_params=drop_params
+    )
     reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
@@ -166,8 +182,8 @@ def _build_responses_kwargs(
     }
     if context_management:
         request_data["context_management"] = context_management
-    if output_config:
-        request_data["output_config"] = output_config
+    if request_output_config:
+        request_data["output_config"] = request_output_config
     if metadata:
         request_data["metadata"] = metadata
     if request_system:
@@ -192,7 +208,7 @@ def _build_responses_kwargs(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
-        drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        drop_params=drop_params,
     )
 
     # Normalize reasoning effort based on model capabilities

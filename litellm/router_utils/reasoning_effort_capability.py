@@ -287,6 +287,31 @@ def model_group_from_metadata(*metadata: object) -> str | None:
     return next((group for group in groups if isinstance(group, str)), None)
 
 
+def _sent_level(
+    requested_level: str, declared: Sequence[str], rounding: ReasoningEffortRounding, *, drop_params: bool
+) -> str | None:
+    rounded_level: Final = (
+        None
+        if requested_level == _DEFAULT_EFFORT
+        else nearest_declared_reasoning_effort(requested_level, declared, rounding)
+    )
+    return None if drop_params and rounded_level not in declared else rounded_level
+
+
+def deployment_drops_reasoning_effort(
+    requested: RequestedReasoningEffort, deployment_model_info: object, *, drop_params: bool
+) -> bool:
+    requested_level: Final = _requested_level(requested)
+    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
+    return (
+        requested_level is not None
+        and requested_level != _DEFAULT_EFFORT
+        and declared is not None
+        and _sent_level(requested_level, declared, _deployment_rounding(deployment_model_info), drop_params=drop_params)
+        is None
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentReasoningEffort:
     value: RequestedReasoningEffort
@@ -310,12 +335,7 @@ def resolve_deployment_reasoning_effort(
     if declared is None:
         return unchanged
     rounding: Final = _deployment_rounding(deployment_model_info)
-    rounded_level: Final = (
-        None
-        if requested_level == _DEFAULT_EFFORT
-        else nearest_declared_reasoning_effort(requested_level, declared, rounding)
-    )
-    sent_level: Final = None if drop_params and rounded_level not in declared else rounded_level
+    sent_level: Final = _sent_level(requested_level, declared, rounding, drop_params=drop_params)
     deployment_accepts_effort: Final = sent_level is not None and len(declared) > 0
     if sent_level == requested_level:
         return DeploymentReasoningEffort(value=requested, deployment_accepts_effort=deployment_accepts_effort)
