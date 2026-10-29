@@ -92,6 +92,8 @@ _STOCK_MODELS = {
         "base_instructions": "You are Codex, a coding agent based on GPT-5.6.",
         "apply_patch_tool_type": "freeform",
         "supports_parallel_tool_calls": True,
+        "supports_search_tool": True,
+        "tool_mode": "code_mode_only",
         "context_window": 272000,
         "comp_hash": "terra-hash",
     },
@@ -669,10 +671,16 @@ class TestCodexModelSync:
     def _row(model_id, **extra):
         return {"id": model_id, "object": "model", "created": 1, "owned_by": "openai", **extra}
 
-    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None):
+    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None, model_info=None):
         captured = {}
 
         def fake_get(url, headers, timeout):
+            if headers.get("Authorization") != "Bearer sk-key":
+                return _FakeResponse(401)
+            if url.endswith("/v1/model/info"):
+                if isinstance(model_info, Exception):
+                    raise model_info
+                return model_info if model_info is not None else _FakeResponse(200, {"data": []})
             captured["url"] = url
             captured["headers"] = headers
             return _FakeResponse(200, listing)
@@ -736,6 +744,202 @@ class TestCodexModelSync:
         entries = self._entries(tmp_path)
         assert entries["gpt-5.4"]["upgrade"] == _STOCK_MODELS["gpt-5.4"]["upgrade"]
         assert [entries["gpt-5.4"]["priority"], entries["gpt-5.6-terra"]["priority"]] == [0, 1]
+
+    @pytest.mark.parametrize(
+        "deployment",
+        [
+            {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+            {"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}, "model_info": None},
+            {
+                "model_name": "api-terra",
+                "litellm_params": {"model": "openai/gpt-5.6-terra"},
+                "model_info": {"id": "d1", "team_public_model_name": ""},
+            },
+            {
+                "model_name": "model_name_team-1_d1",
+                "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://api.openai.com/v1"},
+                "model_info": {"id": "d1", "team_public_model_name": "api-terra"},
+            },
+        ],
+        ids=["provider_prefixed", "bare_without_model_info", "empty_team_public_name", "team_public_model_name"],
+    )
+    def test_alias_of_a_codex_model_gets_that_models_entry_under_its_own_name(self, tmp_path, deployment):
+        listing = self._listing(self._row("api-terra"), self._row("m"))
+        _, result = self._sync(listing, tmp_path, model_info=_FakeResponse(200, {"data": [deployment]}))
+
+        assert isinstance(result, ModelSyncArgs)
+        entries = self._entries(tmp_path)
+        assert entries["api-terra"] == {
+            **_STOCK_MODELS["gpt-5.6-terra"],
+            "slug": "api-terra",
+            "display_name": "api-terra",
+            "priority": 0,
+            "service_tiers": [],
+            "default_service_tier": None,
+            "default_verbosity": None,
+            "availability_nux": None,
+            "default_reasoning_level": None,
+        }
+        assert entries["m"]["supports_search_tool"] is False
+
+    def test_alias_gets_no_upgrade_nudge_away_from_its_own_name(self, tmp_path):
+        listing = self._listing(self._row("gpt-5.6-terra"), self._row("api-54"))
+        deployment = {"model_name": "api-54", "litellm_params": {"model": "openai/gpt-5.4"}}
+        self._sync(listing, tmp_path, model_info=_FakeResponse(200, {"data": [deployment]}))
+
+        entry = self._entries(tmp_path)["api-54"]
+        assert (entry["comp_hash"], entry["upgrade"]) == (_STOCK_MODELS["gpt-5.4"]["comp_hash"], None)
+
+    @pytest.mark.parametrize(
+        ("pins", "expected"),
+        [
+            (("high",), "high"),
+            (("high", "high"), "high"),
+            (("high", None), None),
+            (("high", "low"), None),
+            (({"effort": "high"},), None),
+        ],
+        ids=["one_deployment", "every_deployment_agrees", "one_unpinned", "pins_differ", "non_string_pin"],
+    )
+    def test_alias_starts_at_the_reasoning_effort_every_deployment_pins(self, tmp_path, pins, expected):
+        deployments = [
+            {
+                "model_name": "api-terra",
+                "litellm_params": {"model": "openai/gpt-5.6-terra", **({"reasoning_effort": p} if p else {})},
+            }
+            for p in pins
+        ]
+        self._sync(
+            self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments})
+        )
+
+        entry = self._entries(tmp_path)["api-terra"]
+        assert (entry["comp_hash"], entry["default_reasoning_level"]) == ("terra-hash", expected)
+
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+                {"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}},
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "openai"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.5"},
+                    "model_info": {"id": "paused", "blocked": True},
+                },
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "https://eu.api.openai.com/v1"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.6-terra",
+                        "api_base": "https://api.openai.com/v1",
+                        "litellm_credential_name": "openai-key",
+                    },
+                }
+            ],
+        ],
+        ids=[
+            "same_model_with_and_without_prefix",
+            "openai_custom_llm_provider",
+            "paused_deployment_ignored",
+            "openai_regional_host",
+            "credential_under_an_openai_host",
+        ],
+    )
+    def test_alias_whose_deployments_all_route_to_one_openai_model_gets_its_entry(self, tmp_path, deployments):
+        self._sync(
+            self._listing(self._row("api-terra")), tmp_path, model_info=_FakeResponse(200, {"data": deployments})
+        )
+
+        assert self._entries(tmp_path)["api-terra"]["comp_hash"] == _STOCK_MODELS["gpt-5.6-terra"]["comp_hash"]
+
+    @pytest.mark.parametrize(
+        "deployments",
+        [
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.5"}},
+                {
+                    "model_name": "model_name_team-1_d1",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra"},
+                    "model_info": {"id": "d1", "team_public_model_name": "api-terra"},
+                },
+            ],
+            [
+                {"model_name": "api-terra", "litellm_params": {"model": "openai/gpt-5.6-terra"}},
+                {"model_name": "api-terra", "litellm_params": {"model": "anthropic/claude-opus-4-7"}},
+            ],
+            [{"model_name": "api-terra", "litellm_params": {"model": "azure/gpt-5.6-terra"}}],
+            [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra", "custom_llm_provider": "azure"}}],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "api_base": "http://vllm.example.invalid/v1"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "gpt-5.6-terra", "api_base": "https://api.openai.com.example.invalid"},
+                }
+            ],
+            [
+                {
+                    "model_name": "api-terra",
+                    "litellm_params": {"model": "openai/gpt-5.6-terra", "litellm_credential_name": "gateway"},
+                }
+            ],
+        ],
+        ids=[
+            "team_row_and_global_row_differ",
+            "load_balanced_across_providers",
+            "azure_prefix",
+            "azure_provider",
+            "openai_prefix_on_another_host",
+            "openai_lookalike_host",
+            "host_only_a_credential_knows",
+        ],
+    )
+    def test_alias_without_one_shared_openai_upstream_keeps_the_fallback_entry(self, tmp_path, deployments):
+        listing = self._listing(self._row("api-terra"))
+        self._sync(listing, tmp_path / "with", model_info=_FakeResponse(200, {"data": deployments}))
+        self._sync(listing, tmp_path / "without")
+
+        assert self._entries(tmp_path / "with")["api-terra"] == self._entries(tmp_path / "without")["api-terra"]
+
+    @pytest.mark.parametrize(
+        "model_info",
+        [
+            requests.ConnectionError("refused"),
+            _FakeResponse(500, {"data": [{"model_name": "api-terra", "litellm_params": {"model": "gpt-5.6-terra"}}]}),
+            _FakeResponse(200, {"data": "nope"}),
+            _FakeResponse(200, {"data": [{"model_name": "api-terra"}]}),
+        ],
+        ids=["unreachable", "http_500", "unexpected_body", "deployment_without_litellm_params"],
+    )
+    def test_unavailable_model_info_keeps_the_alias_on_the_fallback_entry(self, tmp_path, model_info):
+        _, result = self._sync(self._listing(self._row("api-terra")), tmp_path, model_info=model_info)
+
+        catalog = tmp_path / "litellm-models.json"
+        assert result == ModelSyncArgs(("-c", f"model_catalog_json={json.dumps(str(catalog))}"))
+        entry = self._entries(tmp_path)["api-terra"]
+        assert entry["slug"] == "api-terra"
+        assert entry["supports_search_tool"] is False
 
     def test_stock_catalog_is_decoded_as_utf8_regardless_of_locale(self, tmp_path):
         description = "Modelo equilibrado para el trabajo diario, con acentos y ñ."
