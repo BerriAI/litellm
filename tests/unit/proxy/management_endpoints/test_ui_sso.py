@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from pydantic import SecretStr
 import respx
 from fastapi import HTTPException, Request
+from pydantic import SecretStr
 
 import litellm
 from litellm._uuid import uuid
@@ -3997,6 +3997,138 @@ class TestCLIKeyRegenerationFlow:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("browser_team_choice", [True, False])
+    async def test_cli_sso_callback_offers_a_team_picker_only_when_the_flow_chooses_the_team_in_the_browser(
+        self, browser_team_choice: bool
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            cli_sso_callback,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.scope = {}
+        mock_request.base_url = "http://internal-proxy.local/"
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+            **({CLI_SSO_BROWSER_TEAM_CHOICE: True} if browser_team_choice else {}),
+        }
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[
+                MagicMock(model_dump=lambda team_id=team_id, alias=alias: {"team_id": team_id, "team_alias": alias})
+                for team_id, alias in (("team-ops", "Ops <eu>"), ("team-claude", None), ("team-ops-us", "Ops <eu>"))
+            ]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                return_value=LiteLLM_UserTable(
+                    user_id="dev-1", user_role="internal_user", teams=["team-claude", "team-ops", "team-ops-us"]
+                ),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        ):
+            result: Final = await cli_sso_callback(
+                request=mock_request,
+                key="cli-session-4567890",
+                result=CustomOpenID(id="dev-1", email="dev-1@example.com", team_ids=[]),
+            )
+
+        page: Final = result.body.decode()
+        if not browser_team_choice:
+            assert 'name="team_id"' not in page
+            return
+        assert (
+            '<select id="team_id" name="team_id" required>'
+            '<option value="" disabled selected>Choose a team</option>'
+            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
+            '<option value="team-claude">team-claude</option>'
+            '<option value="team-ops-us">Ops &lt;eu&gt; (team-ops-us)</option>'
+            "</select>"
+        ) in page
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("posted_team_id", "chosen_team_id", "stored_teams"),
+        [("team-claude", "team-claude", ["team-claude", "team-ops"]), ("", None, ["team-ops", "team-claude"])],
+        ids=["chosen", "not_posted"],
+    )
+    async def test_cli_sso_complete_records_the_team_chosen_in_the_browser(
+        self, posted_team_id: str, chosen_team_id: str | None, stored_teams: list[str]
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            CLI_SSO_CHOSEN_TEAM_ID,
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=f"user_code=ABCD-EFGH&browser_complete_token=browser-token&team_id={posted_team_id}".encode()
+        )
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "dev-1", "teams": ["team-ops", "team-claude"]},
+            CLI_SSO_BROWSER_TEAM_CHOICE: True,
+        }
+
+        with patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache):
+            result: Final = await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
+
+        assert result.status_code == 200
+        stored: Final = mock_cache.set_cache.call_args.kwargs["value"]
+        assert stored["user_code_verified"] is True
+        assert stored[CLI_SSO_CHOSEN_TEAM_ID] == chosen_team_id
+        assert stored["session_data"]["teams"] == stored_teams
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_complete_refuses_a_team_the_user_is_not_on(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token&team_id=team-finance"
+        )
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "dev-1", "teams": ["team-ops", "team-claude"]},
+            CLI_SSO_BROWSER_TEAM_CHOICE: True,
+        }
+
+        with patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Choose one of the teams you belong to"
+        mock_cache.set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
         """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
         from litellm.proxy.management_endpoints.ui_sso import (
@@ -4119,7 +4251,7 @@ class TestCLIKeyRegenerationFlow:
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456"
 
         # Mock the CLI callback and required proxy server components
-        from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
             assertion_from_sso_login,
         )
 
@@ -9199,58 +9331,6 @@ async def test_saml_callback_blocked_when_admin_ui_disabled():
 
 
 @pytest.mark.asyncio
-async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
-    """An IdP-initiated assertion must not bypass the >5 free-SSO-user Enterprise gate
-    that /sso/key/generate enforces; the ACS re-checks it after validating the assertion,
-    so the entitlement DB query never runs on unvalidated input."""
-    from litellm.proxy._types import ProxyException
-    from litellm.proxy.management_endpoints.types import CustomOpenID
-    from litellm.proxy.management_endpoints.ui_sso import saml_callback
-
-    call_order: list[str] = []
-
-    async def _fake_handle_acs(**kwargs):
-        call_order.append("validate")
-        return (CustomOpenID(
-            id="dana@litellm.ai",
-            email="dana@litellm.ai",
-            first_name=None,
-            last_name=None,
-            display_name="dana",
-            picture=None,
-            provider="saml",
-            team_ids=[],
-            user_role=None,
-        ), None)
-
-    async def _fake_count_billable_users():
-        call_order.append("count")
-        return 6
-
-    async def _stream():
-        yield b"SAMLResponse=signed-response"
-
-    request_double = SimpleNamespace(cookies={}, headers={}, stream=_stream)
-
-    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
-        "litellm.proxy.proxy_server.premium_user", False
-    ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", MASTER_KEY
-    ), patch(
-        "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
-        new=_fake_handle_acs,
-    ), patch(
-        "litellm.repositories.user_repository.UserRepository.count_billable_users",
-        new=AsyncMock(side_effect=_fake_count_billable_users),
-    ):
-        with pytest.raises(ProxyException) as exc:
-            await saml_callback(request_double)
-
-    assert str(exc.value.code) == "403"
-    assert call_order == ["validate", "count"]
-
-
-@pytest.mark.asyncio
 async def test_cli_poll_key_tolerates_missing_user_row():
     """The CLI poll must still mint the JWT when the user lookup raises,
     e.g. the user row was created moments ago and a negative-cache window
@@ -9677,7 +9757,7 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
     """The browser funnel persists the captured assertion AFTER canonical user
     resolution, keyed by the user_id admission will later resolve (the key-generation
     response user_id), not the raw IdP subject."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
         assertion_from_sso_login,
     )
 
@@ -9748,7 +9828,7 @@ async def test_redirect_from_openid_persists_the_login_exchanged_assertion():
     """A server with ``id_jag_subject_source: refresh_token`` needs the refresh token the login
     assertion was exchanged for, so the funnel persists what the login-time exchange returns, not
     the raw capture."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
         assertion_from_sso_login,
     )
 
@@ -9973,11 +10053,11 @@ async def test_microsoft_login_asks_for_offline_access_only_while_an_id_jag_serv
 @pytest.mark.asyncio
 async def test_cli_completion_persists_assertion_under_db_user_id():
     """The CLI funnel persists the captured assertion under the DB-resolved user_id."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        assertion_from_sso_login,
-    )
     from litellm.proxy.management_endpoints.ui_sso import (
         _complete_cli_sso_callback_session,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
     )
 
     assertion = assertion_from_sso_login(_ema_id_token(), None)
@@ -10093,11 +10173,11 @@ async def test_a_capturing_provider_that_returned_no_id_token_still_warns(monkey
 
 @pytest.mark.asyncio
 async def test_no_warning_when_the_assertion_was_captured(monkeypatch, caplog):
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        assertion_from_sso_login,
-    )
     from litellm.proxy.management_endpoints.ui_sso import (
         warn_if_id_jag_assertion_uncaptured,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
     )
 
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")

@@ -71,7 +71,9 @@ export interface MessageType {
 }
 
 export interface MultimodalContent {
-  type: "input_text" | "input_image";
+  type: "input_text" | "input_image" | "input_file";
+  filename?: string;
+  file_data?: string;
   text?: string;
   image_url?: string;
   detail?: "low" | "high" | "auto";

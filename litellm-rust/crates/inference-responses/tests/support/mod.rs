@@ -13,6 +13,9 @@ use litellm_secrets::source::SecretSource;
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
+/// A port nothing listens on, for calls that must fail before any request is sent.
+pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
+
 pub fn responses_route(
     secrets: Arc<dyn SecretSource>,
 ) -> litellm_inference_responses::ResponsesRoute {

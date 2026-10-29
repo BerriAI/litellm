@@ -12,15 +12,18 @@ Ref: https://docs.perplexity.ai/api-reference/responses-post
 from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
@@ -81,7 +84,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         """Handle preset/ model prefix: send as {"preset": name} instead of {"model": name}."""
         input = self._ensure_message_type(input)
         if model.startswith("preset/"):
-            input = self._validate_input_param(input)
+            input = self._validate_input_param(input, drops_set_created_by=drops_params(litellm_params))
             data: Final[dict] = {
                 "preset": model[len("preset/") :],
                 "input": input,
@@ -104,7 +107,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """Check for Perplexity's status:'failed' on HTTP 200 before delegating to base."""
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raw_response_json = None
 
