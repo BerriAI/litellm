@@ -15,6 +15,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     codex_model_list_body,
     codex_models_response_json,
     configured_service_tiers,
+    merged_codex_catalog,
 )
 
 _PROMPT = "base prompt"
@@ -358,6 +359,26 @@ def test_an_entry_too_large_for_the_bytes_left_is_passed_over_and_the_smaller_on
     assert models == [unlimited[0], unlimited[2], unlimited[4]]
     assert [entry["priority"] for entry in models] == [0, 2, 4]
     assert len(body.json.encode()) <= limit
+
+
+def test_merged_catalog_keeps_upstream_whole_and_adds_only_the_entries_that_fit_the_byte_limit():
+    upstream = {"models": [{"slug": "upstream-model", "priority": 4, "base_instructions": "u" * 500}]}
+    upstream_only = len(json.dumps(upstream, separators=(",", ":")))
+    rows = tuple(_row(f"model-{index}") for index in range(4))
+
+    def merged(*merged_rows, byte_limit):
+        return merged_codex_catalog(
+            json.dumps(upstream).encode(), merged_rows, stock=_STOCK, instructions=_PROMPT, byte_limit=byte_limit
+        )
+
+    unlimited = json.loads(merged(*rows, byte_limit=upstream_only * 100))["models"]
+    limit = len(merged(*rows[:2], byte_limit=upstream_only * 100).encode())
+
+    body = merged(*rows, byte_limit=limit)
+
+    assert len(body.encode()) <= limit
+    assert json.loads(body)["models"] == unlimited[:3]
+    assert merged(*rows, byte_limit=upstream_only) is None
 
 
 def test_unlimited_body_keeps_every_entry():

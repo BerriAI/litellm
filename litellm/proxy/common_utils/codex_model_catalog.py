@@ -18,6 +18,7 @@ a newer tag.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -43,6 +44,8 @@ CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 _TierId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 _BODY_PREFIX: Final = '{"models":['
 _BODY_SUFFIX: Final = "]}"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
 
 
 class CodexServiceTier(LiteLLMBaseModel):
@@ -311,13 +314,12 @@ def _bytes_left_after(left: int, size: int) -> int:
     return left - size if size <= left else left
 
 
-def _fits(serialized: Sequence[str], byte_limit: int | None) -> tuple[bool, ...]:
-    """Whether each entry, taken in order, fits in what is left of a body of at most `byte_limit`
-    bytes: an entry larger than the bytes left is passed over and a smaller one after it is still
-    taken, each entry counted with its separating comma and the last one's comma given back."""
-    if byte_limit is None:
+def _fits(serialized: Sequence[str], budget: int | None) -> tuple[bool, ...]:
+    """Whether each entry, taken in order, fits in what is left of `budget` bytes: an entry larger
+    than the bytes left is passed over and a smaller one after it is still taken, each entry
+    counted with its separating comma."""
+    if budget is None:
         return (True,) * len(serialized)
-    budget: Final = byte_limit - len(_BODY_PREFIX) - len(_BODY_SUFFIX) + 1
     left: Final = tuple(
         accumulate((len(entry.encode()) + 1 for entry in serialized), _bytes_left_after, initial=budget)
     )
@@ -325,15 +327,27 @@ def _fits(serialized: Sequence[str], byte_limit: int | None) -> tuple[bool, ...]
 
 
 def _kept_positions(
-    entries: Sequence[CodexCatalogEntry], serialized: Sequence[str], byte_limit: int | None
+    entries: Sequence[CodexCatalogEntry], serialized: Sequence[str], budget: int | None
 ) -> frozenset[int]:
     """The listing positions that survive the byte limit: an entry offering a service tier is taken
     ahead of one offering none, each group in listing order, since a model without a tier is driven
     by name just as well off Codex's bundled catalog; an entry too large for the bytes left never
     costs the smaller ones after it their place."""
     survival: Final = sorted(range(len(entries)), key=lambda position: (not entries[position].service_tiers, position))
-    fits: Final = _fits(tuple(serialized[position] for position in survival), byte_limit)
+    fits: Final = _fits(tuple(serialized[position] for position in survival), budget)
     return frozenset(position for position, fit in zip(survival, fits, strict=True) if fit)
+
+
+def _entries(
+    drivable: Sequence[CodexCatalogRow],
+    stock: Mapping[str, CodexStockModel] | None,
+    instructions: str | None,
+    first_priority: int,
+) -> tuple[CodexCatalogEntry, ...]:
+    known: Final = bundled_codex_models() if stock is None else stock
+    prompt: Final = codex_base_instructions() if instructions is None else instructions
+    served: Final = frozenset(row.id for row in drivable)
+    return tuple(_entry(first_priority + index, row, known, served, prompt) for index, row in enumerate(drivable))
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,18 +375,55 @@ def codex_models_response_json(
     for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
     keeps every entry.
     """
-    known: Final = bundled_codex_models() if stock is None else stock
-    prompt: Final = codex_base_instructions() if instructions is None else instructions
     drivable: Final = tuple(row for row in rows if _codex_can_drive(row))
-    served: Final = frozenset(row.id for row in drivable)
-    entries: Final = tuple(_entry(index, row, known, served, prompt) for index, row in enumerate(drivable))
+    entries: Final = _entries(drivable, stock, instructions, 0)
     serialized: Final = tuple(_serialized(entry) for entry in entries)
-    kept: Final = _kept_positions(entries, serialized, byte_limit)
+    kept: Final = _kept_positions(
+        entries, serialized, None if byte_limit is None else byte_limit - len(_BODY_PREFIX) - len(_BODY_SUFFIX) + 1
+    )
     return CodexCatalogBody(
         json=f"{_BODY_PREFIX}{','.join(serialized[position] for position in sorted(kept))}{_BODY_SUFFIX}",
         listed=tuple(row.id for position, row in enumerate(drivable) if position in kept),
         left_out=tuple(row.id for position, row in enumerate(drivable) if position not in kept),
     )
+
+
+def _priority(model: Mapping[str, object]) -> int:
+    priority: Final = model.get("priority")
+    return priority if isinstance(priority, int) else -1
+
+
+def _compact_json(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"))
+
+
+def merged_codex_catalog(
+    upstream_body: bytes,
+    rows: Sequence[CodexCatalogRow],
+    *,
+    stock: Mapping[str, CodexStockModel] | None = None,
+    instructions: str | None = None,
+    byte_limit: int = CODEX_CATALOG_BYTE_LIMIT,
+) -> str | None:
+    try:
+        top: Final = _JSON_OBJECT.validate_json(upstream_body)
+        upstream: Final = _JSON_OBJECTS.validate_python(top.get("models"))
+    except ValidationError:
+        return None
+    slugs: Final = frozenset(model.get("slug") for model in upstream)
+    added: Final = tuple(row for row in rows if _codex_can_drive(row) and row.id not in slugs)
+    first_priority: Final = max((_priority(model) for model in upstream), default=-1) + 1
+    entries: Final = _entries(added, stock, instructions, first_priority)
+    added_models: Final = tuple(
+        _JSON_OBJECT.validate_python(entry.model_dump(mode="json", exclude_unset=isinstance(entry, CodexStockModel)))
+        for entry in entries
+    )
+    serialized: Final = tuple(_compact_json(model) for model in added_models)
+    budget: Final = byte_limit - len(_compact_json({**top, "models": upstream}))
+    kept: Final = tuple(sorted(_kept_positions(entries, serialized, budget)))
+    if not kept:
+        return None
+    return _compact_json({**top, "models": [*upstream, *(added_models[position] for position in kept)]})
 
 
 def _catalog_row(

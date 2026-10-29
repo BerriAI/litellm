@@ -1801,13 +1801,15 @@ export interface paths {
         };
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         get: operations["codex_passthrough_route_backend_api_codex__endpoint__get"];
         put?: never;
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         post: operations["codex_passthrough_route_backend_api_codex__endpoint__post"];
         delete?: never;
@@ -53860,7 +53862,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unmodified Codex response or server-sent events */
+            /** @description Codex response, the model catalog with the key's LiteLLM models, or server-sent events */
             200: {
                 headers: {
                     [name: string]: unknown;

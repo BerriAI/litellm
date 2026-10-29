@@ -213,6 +213,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+    from litellm.types.proxy.model_listing import ModelInfoResponse
 
     Span = _Span | Any
 else:
@@ -472,7 +473,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
-from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
+from litellm.proxy.common_utils.codex_model_catalog import CodexCatalogRow, codex_catalog_rows, codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
@@ -507,6 +508,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401, RUF10
 from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
+    CallerAliases,
     ClaudeCodeRoutingNames,
     DeployedModelGroups,
     TeamModelNameTranslator,
@@ -12263,6 +12265,112 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
     return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
 
 
+async def _caller_aliases(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> CallerAliases:
+    caller_router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
+    return caller_alias_maps(
+        user_api_key_dict.aliases,
+        user_api_key_dict.team_model_aliases,
+        user_api_key_dict.team_id,
+        team_id,
+        caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
+    )
+
+
+async def _listing_hidden_names(healthy_only: bool | None) -> frozenset[str]:
+    blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set[str]()
+    unhealthy_names: Final = await get_hidden_unhealthy_model_names(
+        healthy_only=healthy_only,
+        general_settings=general_settings_view(),
+        llm_router=llm_router,
+    )
+    return frozenset(blocked_names | unhealthy_names)
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyModelListing:
+    rows: "tuple[ModelInfoResponse, ...]"
+    entries: tuple[tuple[str, str], ...]
+    labels: tuple[tuple[str, str], ...]
+
+
+def _listed_model_info(
+    response_id: str, lookup_id: str, include_metadata: bool, fallback_type: str | None
+) -> "ModelInfoResponse":
+    from litellm.proxy.utils import create_model_info_response
+
+    model_info: Final = create_model_info_response(
+        model_id=lookup_id,
+        provider="openai",
+        include_metadata=include_metadata,
+        fallback_type=fallback_type,
+        llm_router=llm_router,
+    )
+    model_info["id"] = response_id
+    return model_info
+
+
+async def _key_model_listing(
+    user_api_key_dict: UserAPIKeyAuth,
+    caller_aliases: CallerAliases,
+    hidden_names: frozenset[str],
+    *,
+    team_id: str | None = None,
+    include_model_access_groups: bool = False,
+    only_model_access_groups: bool = False,
+    include_wildcard_routes: bool = False,
+    include_metadata: bool = False,
+    fallback_type: str | None = None,
+) -> _KeyModelListing:
+    from litellm.proxy.utils import get_available_models_for_user
+
+    available: Final = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=team_id,
+        include_model_access_groups=include_model_access_groups,
+        only_model_access_groups=only_model_access_groups,
+        return_wildcard_routes=include_wildcard_routes,
+        user_api_key_cache=user_api_key_cache,
+    )
+    excluded: Final = hidden_names | undiscoverable_model_names(
+        available, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
+    listed_entries: Final = await _entries_kept_by_listing_callbacks(
+        TeamModelNameTranslator.listing_entries(
+            [name for name in available if name not in excluded], llm_router, general_settings_view()
+        ),
+        user_api_key_dict,
+    )
+    entries: Final = alias_listing_entries(
+        listed_entries,
+        caller_aliases,
+        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
+    )
+    return _KeyModelListing(
+        rows=tuple(
+            _listed_model_info(response_id, lookup_id, include_metadata, fallback_type)
+            for response_id, lookup_id in entries
+        ),
+        entries=entries,
+        labels=label_entries(listed_entries, entries),
+    )
+
+
+async def codex_catalog_rows_for_key(user_api_key_dict: UserAPIKeyAuth) -> tuple[CodexCatalogRow, ...]:
+    listing: Final = await _key_model_listing(
+        user_api_key_dict,
+        await _caller_aliases(user_api_key_dict, None),
+        await _listing_hidden_names(None),
+    )
+    return codex_catalog_rows(listing.rows, listing.entries, llm_router, user_api_key_dict.team_id, listing.labels)
+
+
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -12327,10 +12435,7 @@ async def model_list(
     from litellm.proxy.management_endpoints.common_utils import (
         user_has_admin_privileges,
     )
-    from litellm.proxy.utils import (
-        create_model_info_response,
-        get_available_models_for_user,
-    )
+    from litellm.proxy.utils import create_model_info_response
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
     http_request: Final = cast(Request | None, request)  # cast-ok: in-process callers pass no request
@@ -12338,16 +12443,7 @@ async def model_list(
         http_request is not None and http_request.headers.get("anthropic-version") is not None
     )
     client_headers: Final[Mapping[str, str]] = http_request.headers if http_request is not None else _EMPTY_HEADERS
-    caller_router_settings: Final = await proxy_config.get_hierarchical_router_settings(
-        user_api_key_dict, prisma_client, proxy_logging_obj
-    )
-    caller_aliases: Final = caller_alias_maps(
-        user_api_key_dict.aliases,
-        user_api_key_dict.team_model_aliases,
-        user_api_key_dict.team_id,
-        team_id,
-        caller_router_settings.get("model_group_alias") if isinstance(caller_router_settings, Mapping) else None,
-    )
+    caller_aliases: Final = await _caller_aliases(user_api_key_dict, team_id)
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
@@ -12373,18 +12469,7 @@ async def model_list(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    # Compute once — used in both branches below to hide paused models from the listing.
-    blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set[str]()
-
-    # Opt-in: also hide models whose deployments are all unhealthy per background
-    # health checks. Empty when health state is unavailable or stale (fail open).
-    unhealthy_names: Final = await get_hidden_unhealthy_model_names(
-        healthy_only=healthy_only,
-        general_settings=settings,
-        llm_router=llm_router,
-    )
-
-    hidden_names: Final = blocked_names | unhealthy_names
+    hidden_names: Final = await _listing_hidden_names(healthy_only)
 
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
@@ -12465,53 +12550,20 @@ async def model_list(
             object="list",
         )
 
-    # Otherwise, use the normal behavior (current implementation)
-    # Get available models for the user
-    all_models = await get_available_models_for_user(
-        user_api_key_dict=user_api_key_dict,
-        llm_router=llm_router,
-        general_settings=general_settings,
-        user_model=user_model,
-        prisma_client=prisma_client,
-        proxy_logging_obj=proxy_logging_obj,
+    key_listing: Final = await _key_model_listing(
+        user_api_key_dict,
+        caller_aliases,
+        hidden_names,
         team_id=team_id,
         include_model_access_groups=include_model_access_groups or False,
         only_model_access_groups=only_model_access_groups or False,
-        return_wildcard_routes=include_wildcard_routes,
-        user_api_key_cache=user_api_key_cache,
+        include_wildcard_routes=include_wildcard_routes,
+        include_metadata=include_metadata or False,
+        fallback_type=fallback_type,
     )
-
-    undiscoverable_names: Final = undiscoverable_model_names(
-        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
-    )
-    if hidden_names or undiscoverable_names:
-        all_models = [m for m in all_models if m not in hidden_names and m not in undiscoverable_names]
-
-    # Surface the public team name by default; legacy internal keys via flag.
-    # The internal routing key drives the metadata/fallback lookup, while the
-    # public name is what the client sees as the model id.
-    model_data = []
-    listed_entries: Final = await _entries_kept_by_listing_callbacks(
-        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
-    )
-    entries: Final = alias_listing_entries(
-        listed_entries,
-        caller_aliases,
-        _describable_model_groups(listed_entries, hidden_names, user_api_key_dict, team_id),
-    )
-    labels: Final = label_entries(listed_entries, entries)
-    for response_id, lookup_id in entries:
-        model_info = create_model_info_response(
-            model_id=lookup_id,
-            provider="openai",
-            include_metadata=include_metadata or False,
-            fallback_type=fallback_type,
-            llm_router=llm_router,
-        )
-        model_info["id"] = response_id
-        model_data.append(model_info)
-
-    listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+    listing: Final = key_listing.rows
+    entries: Final = key_listing.entries
+    labels: Final = key_listing.labels
     if client_version is not None:
         return Response(
             content=codex_model_list_body(listing, entries, llm_router, team_id or user_api_key_dict.team_id, labels),
@@ -12530,7 +12582,7 @@ async def model_list(
         )
 
     return dict(
-        data=model_data,
+        data=list(listing),
         object="list",
     )
 

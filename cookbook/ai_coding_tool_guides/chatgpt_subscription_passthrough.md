@@ -46,7 +46,35 @@ For a managed workspace rollout, use OpenAI's [gateway configuration guide](http
 
 ## Native compatibility and Pi
 
-For a native Codex model catalog and request format, change Codex's `base_url` to `https://litellm.example.com/backend-api/codex`. This route uses the same credentials but does not need a model deployment or resolve model aliases. Restricted keys must allow the upstream model name.
+For a native Codex model catalog and request format, change Codex's `base_url` to `https://litellm.example.com/backend-api/codex`. This route uses the same credentials. A ChatGPT model keeps its upstream name and needs no deployment of its own.
+
+### Mix ChatGPT and LiteLLM models
+
+On the native route, Codex's model picker shows OpenAI's catalog first and then the other chat and responses models the virtual key can use. Pick one of those and Codex's requests go through LiteLLM's `/v1/responses` with the key's usual routing, budgets, guardrails, and logging. The proxy removes the ChatGPT bearer and account header from that request, so the other provider and your callbacks never receive them. Only a model listed under its exact `model_name` on another provider is routed this way. A ChatGPT model, or a name that only a wildcard deployment matches, keeps the passthrough, so a model OpenAI adds later still uses the subscription. When the key can use many models, the picker lists the ones that fit in Codex's catalog size limit.
+
+Codex sends earlier reasoning items back with each turn. When a session switches from another provider's model to a ChatGPT model, the proxy drops the reasoning items that other provider produced before forwarding the request to OpenAI, which would reject them. Messages, tool calls, and ChatGPT's own reasoning are kept.
+
+The merged catalog carries no ETag, so Codex picks up a newly allowed model on its next regular catalog refresh.
+
+### Restrict native models with an access group
+
+A key with a model allowlist needs a rule for ChatGPT names that OpenAI adds over time. Put the subscription wildcards in an access group:
+
+```yaml
+model_list:
+  - model_name: gpt-*
+    litellm_params:
+      model: chatgpt/gpt-*
+    model_info:
+      access_groups: ["chatgpt-native"]
+  - model_name: codex-*
+    litellm_params:
+      model: chatgpt/codex-*
+    model_info:
+      access_groups: ["chatgpt-native"]
+```
+
+Then add `chatgpt-native` to the key's models, next to any other model names it should reach. The key can call every ChatGPT model that matches the wildcards, including ones the proxy configuration does not name. These wildcards are also served on `/v1`, where a request without a ChatGPT login falls back to the proxy's own saved login if it has one, so keep that login unset as described above.
 
 ### Configure Pi
 
@@ -71,7 +99,7 @@ Keep Pi's subscription login as the provider credential. The header value names 
 
 Send a prompt and check the completed request in LiteLLM's Logs page. Its gateway user/key and token counts should match the caller. Give each person their own LiteLLM virtual key for separate attribution. The gateway credential and ChatGPT login are independently authenticated; LiteLLM does not establish that both identities belong to the same person.
 
-The native routes are `GET /backend-api/codex/models` and `POST /backend-api/codex/responses`. Model requests use the upstream model name, so a restricted LiteLLM key must allow that name. OpenAI's model catalog is returned in its native format; seeing a model there does not override gateway permissions.
+The native routes are `GET /backend-api/codex/models` and `POST /backend-api/codex/responses`. Model requests use the upstream model name, so a restricted LiteLLM key needs the `chatgpt-native` access group above or that exact name. OpenAI's model catalog is returned in its native format; seeing a model there does not override gateway permissions.
 
 The proxy forwards the ChatGPT bearer and account header to the fixed OpenAI Codex endpoint. It removes gateway credentials and cookies from the upstream request and redacts credential headers in logging callbacks. The client remains responsible for refresh and reauthentication. Native passthrough returns authentication and quota errors without switching subscriptions. Standard model routes retain the caller login across ChatGPT retries; explicitly configured cross-provider fallbacks use their own credentials. An explicit workspace header is preserved for OpenAI to validate.
 

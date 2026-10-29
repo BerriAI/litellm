@@ -1,6 +1,7 @@
 import asyncio
+import base64
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Final
 
@@ -10,8 +11,18 @@ import respx
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.chatgpt.common_utils import OPENAI_AUTH_CLAIM_KEY
 from litellm.proxy import proxy_server
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
+from litellm.proxy.utils import hash_token
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    mint_reasoning_item_id,
+)
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from tests._master_key import MASTER_KEY
 
 _BASE: Final = "https://chatgpt.com/backend-api/codex"
@@ -183,3 +194,304 @@ async def test_usage_logged_without_credentials(
     serialized: Final = json.dumps(logged, default=str)
     for secret in (_TOKEN, MASTER_KEY, "test-hidden-token", "test-hidden-cookie"):
         assert secret not in serialized
+
+
+_PROVIDER_BASE: Final = "https://open-weights.test/v1"
+_CHATGPT_JWT: Final = ".".join(
+    base64.urlsafe_b64encode(json.dumps(part).encode()).decode().rstrip("=")
+    for part in ({"alg": "none"}, {OPENAI_AUTH_CLAIM_KEY: {"chatgpt_account_id": "account-a"}})
+) + "."
+_PROVIDER_KEY: Final = "test-provider-key"
+_BUNDLED_SLUG: Final = next(iter(bundled_codex_models()))
+_PRICED_CHATGPT_SLUG: Final = "priced-subscription-model"
+_UPSTREAM_CATALOG: Final = {
+    "models": [
+        {"slug": "subscription-model", "priority": 0, "supported_reasoning_levels": ["high"]},
+        {"slug": "shared-name", "priority": 7, "visibility": "list"},
+        {"slug": "subscription-hidden", "priority": 3, "visibility": "hide"},
+    ]
+}
+
+
+def _open_weights(model_name: str, mode: str | None = None) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": f"fireworks_ai/{model_name}", "api_base": _PROVIDER_BASE, "api_key": _PROVIDER_KEY},
+        "model_info": {"mode": mode} if mode else {},
+    }
+
+
+@pytest.fixture
+def mixed_router(monkeypatch: pytest.MonkeyPatch) -> Router:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-*",
+                "litellm_params": {"model": "chatgpt/gpt-*"},
+                "model_info": {"access_groups": ["chatgpt-native"]},
+            },
+            {
+                "model_name": "codex-*",
+                "litellm_params": {"model": "chatgpt/codex-*"},
+                "model_info": {"access_groups": ["chatgpt-native"]},
+            },
+            {"model_name": "chatgpt-subscription", "litellm_params": {"model": "chatgpt/subscription-model"}},
+            _open_weights("open-weights"),
+            _open_weights("shared-name"),
+            _open_weights(_BUNDLED_SLUG),
+            _open_weights(_PRICED_CHATGPT_SLUG),
+            _open_weights("open-embedder", mode="embedding"),
+            _open_weights("*"),
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    unpriced_bundled: Final = {
+        name: price for name, price in litellm.model_cost.items() if name != f"chatgpt/{_BUNDLED_SLUG}"
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**unpriced_bundled, f"chatgpt/{_PRICED_CHATGPT_SLUG}": {"litellm_provider": "chatgpt", "mode": "responses"}},
+    )
+    return router
+
+
+def test_native_catalog_lists_the_keys_other_chat_models_after_chatgpts(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
+) -> None:
+    respx_mock.get(f"{_BASE}/models").respond(json=_UPSTREAM_CATALOG, headers={"etag": '"upstream-v1"'})
+    response: Final = client.get("/backend-api/codex/models?client_version=1.0.0", headers=_HEADERS)
+    assert response.status_code == 200
+    models: Final = response.json()["models"]
+    assert models[: len(_UPSTREAM_CATALOG["models"])] == _UPSTREAM_CATALOG["models"]
+    added: Final = models[len(_UPSTREAM_CATALOG["models"]) :]
+    assert [model["slug"] for model in added] == ["open-weights"]
+    assert added[0]["visibility"] == "list"
+    assert added[0]["priority"] > max(model["priority"] for model in _UPSTREAM_CATALOG["models"])
+    assert "etag" not in response.headers
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        pytest.param(httpx.Response(503, json={"detail": "busy"}, headers={"etag": '"e"'}), id="non-200"),
+        pytest.param(httpx.Response(200, content=b"<html>login</html>", headers={"etag": '"e"'}), id="not json"),
+        pytest.param(httpx.Response(200, json={"models": "none"}, headers={"etag": '"e"'}), id="no model list"),
+    ],
+)
+def test_native_catalog_relays_an_unmergeable_upstream_answer_unchanged(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, upstream: httpx.Response
+) -> None:
+    respx_mock.get(f"{_BASE}/models").mock(return_value=upstream)
+    response: Final = client.get("/backend-api/codex/models?client_version=1.0.0", headers=_HEADERS)
+    assert response.status_code == upstream.status_code
+    assert response.content == upstream.content
+    assert response.headers["etag"] == '"e"'
+
+
+def _provider_stream(text: str) -> bytes:
+    completed: Final = {
+        "id": "resp_open_weights",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "open-weights",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_open_weights",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+    }
+    events: Final = (
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {**completed, "status": "in_progress", "output": []},
+        },
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg_open_weights",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        },
+        {"type": "response.completed", "sequence_number": 2, "response": completed},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+def _event_types(stream: bytes) -> list[str]:
+    payloads: Final = [line.removeprefix(b"data: ") for line in stream.splitlines() if line.startswith(b"data: {")]
+    return [json.loads(payload)["type"] for payload in payloads]
+
+
+class PreCallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: Final[list[tuple[str | None, str]]] = []
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: object, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        self.requests.append((user_api_key_dict.request_route, repr(data)))
+        return data
+
+
+def test_litellm_model_on_native_route_streams_like_v1_without_chatgpt_credentials(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = PreCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    chatgpt: Final = respx_mock.post(f"{_BASE}/responses").respond(json={})
+    provider: Final = respx_mock.post(f"{_PROVIDER_BASE}/responses").mock(
+        side_effect=lambda _: httpx.Response(
+            200, content=_provider_stream("Hi"), headers={"content-type": "text/event-stream"}
+        )
+    )
+    body: Final = {"model": "open-weights", "input": "Say hi", "stream": True, "store": False}
+    native: Final = client.post(
+        "/backend-api/codex/responses",
+        json=body,
+        headers={**_HEADERS, "authorization": f"Bearer {_CHATGPT_JWT}", "chatgpt-account-id": "account-a"},
+    )
+    v1: Final = client.post("/v1/responses", json=body, headers={"authorization": f"Bearer {MASTER_KEY}"})
+    assert native.status_code == v1.status_code == 200
+    assert native.headers["content-type"].startswith("text/event-stream")
+    assert _event_types(native.content) == _event_types(v1.content)
+    assert "response.completed" in _event_types(native.content)
+    assert not chatgpt.called
+    provider_headers: Final = provider.calls[0].request.headers
+    assert provider_headers["authorization"] == f"Bearer {_PROVIDER_KEY}"
+    assert "chatgpt-account-id" not in provider_headers
+    assert all(_CHATGPT_JWT not in value for value in provider_headers.values())
+    (native_route, native_call), (v1_route, _) = recorder.requests
+    assert native_route == v1_route == "/v1/responses"
+    assert _CHATGPT_JWT not in native_call
+    assert "account-a" not in native_call
+
+
+@pytest.mark.parametrize(
+    "model", ["gpt-unlisted", "chatgpt-subscription", _BUNDLED_SLUG, _PRICED_CHATGPT_SLUG, "newly-released"]
+)
+def test_chatgpt_model_keeps_passthrough_without_other_providers_reasoning(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, model: str
+) -> None:
+    provider: Final = respx_mock.post(f"{_PROVIDER_BASE}/responses").respond(json={})
+    chatgpt: Final = respx_mock.post(f"{_BASE}/responses").respond(
+        content=b"event: response.completed\ndata: {}\n\n",
+        headers={"content-type": "text/event-stream", "x-models-etag": '"upstream-v2"'},
+    )
+    user_turn: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}
+    chatgpt_reasoning: Final = {
+        "type": "reasoning",
+        "id": "rs_upstream",
+        "summary": [],
+        "encrypted_content": "opaque-upstream-blob",
+    }
+    assistant_turn: Final = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hi"}]}
+    other_providers_reasoning: Final = [
+        {"type": "reasoning", "id": mint_reasoning_item_id(), "summary": []},
+        {
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": encode_thinking_blocks([{"type": "thinking", "thinking": "t", "signature": "s"}]),
+        },
+        {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "t"}]},
+        {
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob", "deployment"),
+        },
+    ]
+    body: Final = {
+        "model": model,
+        "input": [user_turn, *other_providers_reasoning, chatgpt_reasoning, assistant_turn],
+        "stream": True,
+    }
+    response: Final = client.post("/backend-api/codex/responses", json=body, headers=_HEADERS)
+    assert response.status_code == 200
+    assert not provider.called
+    assert json.loads(chatgpt.calls.last.request.content) == {
+        **body,
+        "input": [user_turn, chatgpt_reasoning, assistant_turn],
+    }
+    assert "x-models-etag" not in response.headers
+
+
+@pytest.fixture
+def restricted_key(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str]], str]:
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+
+    def mint(models: list[str]) -> str:
+        key: Final = f"sk-test-{'-'.join(models)}"
+        proxy_server.user_api_key_cache.set_cache(
+            key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=models)
+        )
+        return key
+
+    return mint
+
+
+@pytest.mark.parametrize(
+    ("models", "added"),
+    [
+        pytest.param(["chatgpt-native", "open-weights"], ["open-weights"], id="key with a LiteLLM model"),
+        pytest.param(["chatgpt-native"], [], id="key with ChatGPT models only"),
+    ],
+)
+def test_native_catalog_adds_only_the_litellm_models_the_key_can_call(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    mixed_router: Router,
+    restricted_key: Callable[[list[str]], str],
+    models: list[str],
+    added: list[str],
+) -> None:
+    respx_mock.get(f"{_BASE}/models").respond(json=_UPSTREAM_CATALOG, headers={"etag": '"upstream-v1"'})
+    response: Final = client.get(
+        "/backend-api/codex/models?client_version=1.0.0",
+        headers={**_HEADERS, "x-litellm-api-key": restricted_key(models)},
+    )
+    assert response.status_code == 200
+    assert [model["slug"] for model in response.json()["models"]] == [
+        *(model["slug"] for model in _UPSTREAM_CATALOG["models"]),
+        *added,
+    ]
+    assert ("etag" in response.headers) is not added
+
+
+@pytest.mark.parametrize(
+    ("models", "model", "allowed"),
+    [
+        pytest.param(["chatgpt-native", "open-weights"], "gpt-unlisted", True, id="chatgpt access group"),
+        pytest.param(["chatgpt-subscription", "open-weights"], "gpt-unlisted", False, id="single subscription model"),
+        pytest.param(["chatgpt-native"], "open-weights", False, id="litellm model outside the key"),
+    ],
+)
+def test_native_route_serves_only_the_models_the_key_allows(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    mixed_router: Router,
+    restricted_key: Callable[[list[str]], str],
+    models: list[str],
+    model: str,
+    allowed: bool,
+) -> None:
+    provider: Final = respx_mock.post(f"{_PROVIDER_BASE}/responses").respond(json={})
+    chatgpt: Final = respx_mock.post(f"{_BASE}/responses").respond(
+        content=b"event: response.completed\ndata: {}\n\n", headers={"content-type": "text/event-stream"}
+    )
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": model, "input": "Hello", "stream": True},
+        headers={**_HEADERS, "x-litellm-api-key": restricted_key(models)},
+    )
+    assert (response.status_code == 200) is allowed
+    assert chatgpt.called is allowed
+    assert not provider.called
