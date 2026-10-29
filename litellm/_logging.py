@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.secret_redaction import (
     python_redact_string,
     python_redact_structured_value,
     redact_internal_details,
+    redact_structured_value,
 )
 from litellm.litellm_core_utils.secret_redaction import (
     redact_string as redact_secret_string,
@@ -138,6 +139,15 @@ def redact_internal_details_from_client_message(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_internal_details(value)
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    if not _ENABLE_SECRET_REDACTION:
+        return fields
+    redacted: Final = (
+        redact_internal_details(redact_structured_value(key, value)) for key, value in _string_leaves(None, fields)
+    )
+    return _replace_string_leaves(fields, redacted)
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:

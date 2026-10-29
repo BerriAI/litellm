@@ -10,7 +10,7 @@ from typing import Final
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
 
-from litellm._logging import redact_internal_details_from_client_message
+from litellm._logging import redact_internal_details_from_client_fields
 from litellm.constants import STRINGIFIED_NONE
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -29,8 +29,6 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
 
 _ERROR_BODY: Final = TypeAdapter(dict[str, object])
-
-_ERROR_ITEMS: Final = TypeAdapter(list[object])
 
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
 
@@ -90,25 +88,9 @@ def relayed_provider_specific_fields(
     if not isinstance(body, dict):
         return None
     fields: Final = _ERROR_BODY.validate_python(body).get("provider_specific_fields")
-    return _redacted_fields(_ERROR_BODY.validate_python(fields)) if isinstance(fields, dict) else None
-
-
-def _redacted_fields(
-    fields: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: ProxyException.provider_specific_fields is a dict
-    return {key: _redacted_field(value) for key, value in fields.items()}
-
-
-def _redacted_field(value: object) -> object:
-    match value:
-        case str():
-            return redact_internal_details_from_client_message(value)
-        case dict():
-            return _redacted_fields(_ERROR_BODY.validate_python(value))
-        case list():
-            return tuple(map(_redacted_field, _ERROR_ITEMS.validate_python(value)))
-        case _:
-            return value
+    if not isinstance(fields, dict):
+        return None
+    return _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(_ERROR_BODY.validate_python(fields)))
 
 
 def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:
