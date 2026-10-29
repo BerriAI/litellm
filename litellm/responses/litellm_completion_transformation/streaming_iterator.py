@@ -260,28 +260,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self._queue_tool_search_output(call_id)
 
-    def _tool_search_output_index(self, call_id: str) -> int:
-        existing: Final = self._tool_search_output_index_by_call_id.get(call_id)
-        if existing is not None:
-            return existing
-        output_index: Final = self._allocate_output_index()
-        self._tool_search_output_index_by_call_id = MappingProxyType(
-            {**self._tool_search_output_index_by_call_id, call_id: output_index}
-        )
-        return output_index
-
-    def _reserve_tool_search_output_indexes(self) -> None:
+    def _queue_arrived_tool_search_outputs(self) -> None:
         if "tool_results" not in self._accumulated_provider_specific_fields:
             return
         for call_id in tool_search_results_by_call_id((self._accumulated_provider_specific_fields,)):
             if self._tool_search_executions.get(call_id) == "server":
-                self._tool_search_output_index(call_id)
+                self._queue_tool_search_output(call_id)
 
     def _queue_tool_search_output(self, call_id: str) -> None:
+        if call_id in self._tool_search_output_index_by_call_id:
+            return
         result: Final = tool_search_results_by_call_id((self._accumulated_provider_specific_fields,)).get(call_id)
         if result is None:
             return
-        output_index: Final = self._tool_search_output_index(call_id)
+        output_index: Final = self._allocate_output_index()
+        self._tool_search_output_index_by_call_id = MappingProxyType(
+            {**self._tool_search_output_index_by_call_id, call_id: output_index}
+        )
         request_tools: Final = parts_of(_REQUEST_FIELDS.validate_python(self.responses_api_request).get("tools"))
         item: Final = build_tool_search_output(result, request_tools)
         self._queue_output_item_added(
@@ -1302,7 +1297,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             if src and isinstance(src, dict):
                                 self._merge_provider_specific_fields(src)
                                 self._reserve_web_search_indexes(src)
-                                self._reserve_tool_search_output_indexes()
+                                self._queue_arrived_tool_search_outputs()
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
@@ -1361,7 +1356,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         if src and isinstance(src, dict):
                             self._merge_provider_specific_fields(src)
                             self._reserve_web_search_indexes(src)
-                            self._reserve_tool_search_output_indexes()
+                            self._queue_arrived_tool_search_outputs()
                     self._ensure_output_item_for_chunk(chunk)
                     # Always snapshot before returning any pending events so that
                     # finish_reason (e.g. content_filter) is captured even when

@@ -1658,7 +1658,7 @@ def _streamed_tool_use(index: int, block: Mapping[str, object]) -> tuple[Mapping
     )
 
 
-def test_streamed_responses_over_anthropic_emit_the_tool_search_output_at_its_completed_position(
+def test_streamed_responses_over_anthropic_emit_the_tool_search_output_in_order_at_its_completed_position(
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
@@ -1684,6 +1684,11 @@ def test_streamed_responses_over_anthropic_emit_the_tool_search_output_at_its_co
     }
     done: Final = [event for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     assert [item.type for item in completed] == ["tool_search_call", "tool_search_output", "function_call"]
+    assert [event.output_index for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED] == [
+        0,
+        1,
+        2,
+    ]
     assert sorted((event.output_index, event.item.id) for event in done) == [
         (index, item.id) for index, item in enumerate(completed)
     ]

@@ -413,8 +413,8 @@ def _search_call_fields(item: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _assert_search_call_output(payload: Mapping[str, JsonValue], marker: str) -> None:
     items: Final = _tool_items(payload)
-    assert len(items) == 2, payload
-    search, function = items
+    assert len(items) == 3, payload
+    search, search_output, function = items
     assert search["type"] == "tool_search_call", payload
     assert _search_call_fields(search) == {
         "id": f"tsc_srvtoolu_{marker}",
@@ -423,6 +423,14 @@ def _assert_search_call_output(payload: Mapping[str, JsonValue], marker: str) ->
         "execution": "server",
         "status": "completed",
     }, search
+    assert {key: search_output[key] for key in ("type", "id", "call_id", "execution", "status")} == {
+        "type": "tool_search_output",
+        "id": f"tso_srvtoolu_{marker}",
+        "call_id": f"srvtoolu_{marker}",
+        "execution": "server",
+        "status": "completed",
+    }, search_output
+    assert [tool["name"] for tool in _ITEMS.validate_python(search_output["tools"])] == ["get_weather"], search_output
     assert (function["type"], function["name"], function["call_id"]) == (
         "function_call",
         "get_weather",
@@ -445,6 +453,8 @@ def _item_events(events: Sequence[Mapping[str, JsonValue]], item_type: str) -> l
 
 
 def _assert_search_call_events(events: Sequence[Mapping[str, JsonValue]], marker: str, final_status: str) -> None:
+    added_indexes: Final = [event["output_index"] for event in events if event["type"] == "response.output_item.added"]
+    assert added_indexes == list(range(len(added_indexes))), [event["type"] for event in events]
     search_events: Final = _item_events(events, "tool_search_call")
     assert [event["type"] for event in search_events] == [
         "response.output_item.added",
@@ -593,6 +603,24 @@ def test_tool_search_reaches_claude_with_deferred_tools_and_returns_a_tool_searc
         _assert_spend_rows(model, (str(answer.payload["id"]),))
 
 
+def test_the_openai_sdk_stream_helper_reads_a_streamed_claude_tool_search(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        body: Final = _responses_body(model, marker, (_tool_search(), _function_tool(), _namespace_tool()), True)
+        with _sdk(gateway).responses.stream(
+            model=model,
+            input=str(body["input"]),
+            tools=_ITEMS.validate_python(body["tools"]),
+            extra_body=dict(_CACHE_BUST),
+        ) as stream:
+            events: Final = [event.model_dump() for event in stream]
+            final: Final = stream.get_final_response()
+        _assert_search_call_output(final.model_dump(), marker)
+        _assert_search_call_events(events, marker, "completed")
+        _only_request(wire)
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
 @pytest.mark.parametrize("provider", ["bedrock_invoke", "vertex_ai"])
 def test_bedrock_invoke_and_vertex_claude_keep_the_tool_search_tool(
@@ -678,7 +706,11 @@ def test_tool_search_alone_reaches_claude_as_the_only_tool(gateway: Gateway) -> 
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
         answer: Final = _raw_answer(gateway, _responses_body(model, marker, (_tool_search(),), False))
-        assert [item["type"] for item in _tool_items(answer.payload)] == ["tool_search_call", "function_call"], answer
+        assert [item["type"] for item in _tool_items(answer.payload)] == [
+            "tool_search_call",
+            "tool_search_output",
+            "function_call",
+        ], answer
         request, body = _only_request(wire)
         _assert_anthropic_wire(request, body, ())
 
@@ -889,9 +921,18 @@ def _assert_only_the_function_call_is_replayed(messages: Sequence[Mapping[str, J
     assert [block["tool_use_id"] for block in _tool_results(messages)] == [f"toolu_{marker}"], messages
 
 
-def test_tool_search_items_are_not_replayed_to_claude(gateway: Gateway) -> None:
-    marker: Final = uuid.uuid4().hex
-    history: Final[list[JsonValue]] = [
+def _assert_the_search_is_replayed_before_the_function_call(
+    messages: Sequence[Mapping[str, JsonValue]], marker: str
+) -> None:
+    (assistant,) = [turn for turn in messages if turn["role"] == "assistant"]
+    blocks: Final = _ITEMS.validate_python(assistant["content"])
+    assert blocks[:2] == list(_search_blocks(marker)), blocks
+    assert [(block["type"], block.get("id")) for block in blocks[2:]] == [("tool_use", f"toolu_{marker}")], blocks
+    assert [block["tool_use_id"] for block in _tool_results(messages)] == [f"toolu_{marker}"], messages
+
+
+def _replayed_search_history(marker: str) -> list[JsonValue]:
+    return [
         {"role": "user", "content": _prompt(marker)},
         {
             "type": "tool_search_call",
@@ -919,11 +960,15 @@ def test_tool_search_items_are_not_replayed_to_claude(gateway: Gateway) -> None:
         {"type": "function_call_output", "call_id": f"toolu_{marker}", "output": "22C"},
         {"role": "user", "content": f"And tomorrow? marker-{marker}"},
     ]
+
+
+def test_a_replayed_tool_search_reaches_claude_as_its_search_and_result(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
         body: Final[dict[str, JsonValue]] = {
             "model": model,
-            "input": history,
+            "input": _replayed_search_history(marker),
             "tools": [_tool_search(), _function_tool()],
             **_CACHE_BUST,
         }
@@ -932,6 +977,22 @@ def test_tool_search_items_are_not_replayed_to_claude(gateway: Gateway) -> None:
         _assert_search_call_output(_JSON_OBJECT.validate_json(response.content), marker)
         request, sent = _only_request(wire)
         _assert_anthropic_wire(request, sent, ("get_weather",))
+        _assert_the_search_is_replayed_before_the_function_call(_ITEMS.validate_python(sent["messages"]), marker)
+
+
+def test_a_replayed_tool_search_whose_tool_is_no_longer_sent_is_left_out(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        body: Final[dict[str, JsonValue]] = {
+            "model": model,
+            "input": _replayed_search_history(marker),
+            "tools": [_tool_search(), _namespace_tool()],
+            **_CACHE_BUST,
+        }
+        response: Final = _raw(gateway, "/v1/responses", body)
+        assert response.status_code == 200, response.text
+        request, sent = _only_request(wire)
         _assert_only_the_function_call_is_replayed(_ITEMS.validate_python(sent["messages"]), marker)
 
 
