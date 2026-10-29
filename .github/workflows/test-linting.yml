@@ -48,10 +48,11 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          BASE_REF=$(retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
           MERGE_BASE=$(retry gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$MERGE_BASE"
           retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
@@ -281,12 +282,11 @@ jobs:
         id: changed
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # The event's base.sha can be weeks behind the base branch, so diff the PR head
-          # against its merge base with the branch's current tip, which is what this PR changed.
-          merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          base_ref=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+          merge_base=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${base_ref}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
           test -n "$merge_base"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
           : > "$RUNNER_TEMP/prettier_files.txt"

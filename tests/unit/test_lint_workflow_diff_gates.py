@@ -34,6 +34,8 @@ case "$1 $endpoint ${3-} ${4-}" in
   "api compare/"*"..."*" --jq .merge_base_commit.sha")
     basehead=${endpoint#compare/}
     git -C "$UPSTREAM" merge-base "$(commit "${basehead%%...*}")" "$(commit "${basehead#*...}")" ;;
+  "api pulls/1 --jq .base.ref")
+    printf '%s\n' "$LIVE_BASE_REF" ;;
   "api branches/"*" --jq .commit.sha")
     commit "refs/heads/${endpoint#branches/}" ;;
   *)
@@ -198,7 +200,7 @@ def _resolved(text: str, pull_request: Mapping[str, str]) -> str:
 
 
 def _merge_base_assigned_by(
-    step: MergeBaseStep, pull_request: Mapping[str, str], upstream: Path, tmp_path: Path
+    step: MergeBaseStep, pull_request: Mapping[str, str], live_base_ref: str, upstream: Path, tmp_path: Path
 ) -> str:
     assignment: Final = MERGE_BASE_ASSIGNMENT.search(step.step.run)
     assert assignment is not None, f"{step.label} never assigns the merge base to a variable"
@@ -216,6 +218,7 @@ def _merge_base_assigned_by(
             "HOME": str(tmp_path),
             "GITHUB_REPOSITORY": REPOSITORY,
             "UPSTREAM": str(upstream),
+            "LIVE_BASE_REF": live_base_ref,
         },
         capture_output=True,
         text=True,
@@ -261,15 +264,20 @@ def test_every_workflow_that_reads_a_merge_base_has_its_steps_discovered() -> No
     )
 
 
-@pytest.mark.parametrize("base_ref", BASE_REFS)
+@pytest.mark.parametrize(
+    ("event_base_ref", "live_base_ref"),
+    ((BASE_REFS[0], BASE_REFS[0]), (BASE_REFS[1], BASE_REFS[1]), ("litellm_deleted_after_merge", BASE_REFS[0])),
+    ids=("main", "stacked", "rerun_after_the_stacked_base_was_deleted"),
+)
 @pytest.mark.parametrize("step", MERGE_BASE_STEPS, ids=lambda step: step.label)
-def test_merge_base_step_measures_from_the_target_branch_tip_when_the_event_base_sha_is_stale(
-    upstream: StaleBaseUpstream, tmp_path: Path, step: MergeBaseStep, base_ref: str
+def test_merge_base_step_measures_from_the_pull_requests_current_base_branch_tip(
+    upstream: StaleBaseUpstream, tmp_path: Path, step: MergeBaseStep, event_base_ref: str, live_base_ref: str
 ) -> None:
     pull_request: Final = MappingProxyType(
-        {"number": "1", "base.ref": base_ref, "base.sha": upstream.stale_base, "head.sha": upstream.head}
+        {"number": "1", "base.ref": event_base_ref, "base.sha": upstream.stale_base, "head.sha": upstream.head}
     )
-    assert _merge_base_assigned_by(step, pull_request, upstream.path, tmp_path) == upstream.merge_base_by_ref[base_ref]
+    merge_base: Final = _merge_base_assigned_by(step, pull_request, live_base_ref, upstream.path, tmp_path)
+    assert merge_base == upstream.merge_base_by_ref[live_base_ref]
 
 
 UI_API_TYPES_DETECT: Final[str] = next(

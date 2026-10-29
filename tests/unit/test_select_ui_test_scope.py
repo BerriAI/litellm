@@ -20,7 +20,10 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 import yaml
@@ -30,7 +33,9 @@ SCOPE_SCRIPT = REPO_ROOT / ".github" / "scripts" / "select_ui_test_scope.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-unit.yml"
 STEP_NAME = "Run UI unit tests (Vitest)"
 EXPRESSION = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
-PULL_REQUEST_EVENT = {"number": "1", "base.ref": "main", "base.sha": "basesha", "head.sha": "headsha"}
+PULL_REQUEST_EVENT: Final = MappingProxyType(
+    {"number": "1", "base.ref": "main", "base.sha": "basesha", "head.sha": "headsha"}
+)
 
 FULL_SUITE_ARGV = ["run", "test", "--", "--run", "--pool", "forks", "--maxWorkers=14"]
 
@@ -76,25 +81,25 @@ def test_an_empty_change_set_fails_open_to_the_full_suite() -> None:
     assert scope([]) == "full"
 
 
-def _resolve(text: str, pull_request: dict[str, str] | None) -> str:
+def _resolve(text: str, pull_request: Mapping[str, str] | None) -> str:
     def value(match: re.Match[str]) -> str:
-        expression = match.group(1)
+        expression: Final = match.group(1)
         if expression == "github.repository":
             return "BerriAI/litellm"
         if expression == "github.token":
             return "token"
-        field = expression.removeprefix("github.event.pull_request.")
+        field: Final = expression.removeprefix("github.event.pull_request.")
         assert field != expression, f"the step uses ${{{{ {expression} }}}}, which this harness does not resolve"
         return "" if pull_request is None else pull_request[field]
 
     return EXPRESSION.sub(value, text)
 
 
-def _step_script_and_env(pull_request: dict[str, str] | None) -> tuple[str, dict[str, str]]:
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    steps = workflow["jobs"]["ui-unit"]["steps"]
-    step = next(step for step in steps if step.get("name") == STEP_NAME)
-    env = {name: _resolve(str(value), pull_request) for name, value in step.get("env", {}).items()}
+def _step_script_and_env(pull_request: Mapping[str, str] | None) -> tuple[str, dict[str, str]]:
+    workflow: Final = yaml.safe_load(WORKFLOW.read_text())
+    steps: Final = workflow["jobs"]["ui-unit"]["steps"]
+    step: Final = next(step for step in steps if step.get("name") == STEP_NAME)
+    env: Final = {name: _resolve(str(value), pull_request) for name, value in step.get("env", {}).items()}
     return _resolve(step["run"], pull_request), env
 
 
@@ -105,7 +110,7 @@ def _stub(bin_dir: Path, name: str, body: str) -> None:
 
 
 def _run_step(
-    tmp_path: Path, changed: list[str], pull_request: dict[str, str] | None = PULL_REQUEST_EVENT
+    tmp_path: Path, changed: list[str], pull_request: Mapping[str, str] | None = PULL_REQUEST_EVENT
 ) -> tuple[int, str, list[list[str]]]:
     """Run the workflow step's real shell; return its status, stdout and every npm argv."""
     bin_dir = tmp_path / "bin"
@@ -122,13 +127,15 @@ def _run_step(
     script = tmp_path / "step.sh"
     script.write_text(step_script)
 
-    env = dict(os.environ)
-    env.update(step_env)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env["GITHUB_WORKSPACE"] = str(REPO_ROOT)
-    env["GITHUB_REF_NAME"] = "release_branch"
-    env["CHANGED_FILES"] = str(changed_file)
-    env["NPM_LOG"] = str(npm_log)
+    env: Final = {
+        **os.environ,
+        **step_env,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "GITHUB_WORKSPACE": str(REPO_ROOT),
+        "GITHUB_REF_NAME": "release_branch",
+        "CHANGED_FILES": str(changed_file),
+        "NPM_LOG": str(npm_log),
+    }
 
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
