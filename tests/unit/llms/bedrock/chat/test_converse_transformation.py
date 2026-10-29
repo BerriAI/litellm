@@ -9194,7 +9194,7 @@ def test_not_found_error():
             headers={"x-amzn-ErrorType": "ValidationException"},
         )
 
-    with pytest.raises(litellm.NotFoundError):
+    with pytest.raises(litellm.NotFoundError) as exc_info:
         completion(
             model="bedrock/bad_model",
             messages=[{"role": "user", "content": "What is the meaning of life"}],
@@ -9204,6 +9204,7 @@ def test_not_found_error():
             aws_region_name="us-west-2",
         )
 
+    assert exc_info.value.status_code == 404
     assert [request.url.raw_path for request in sent] == [b"/model/bad_model/converse"]
 
 

@@ -971,7 +971,6 @@ def _map_bedrock_exception(
             message=f"BedrockException - {error_str}",
             model=model,
             llm_provider="bedrock",
-            response=getattr(original_exception, "response", None),
         )
     elif "Malformed input request" in error_str:
         raise BadRequestError(
