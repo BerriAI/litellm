@@ -726,14 +726,15 @@ def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[s
 
 @pytest.mark.parametrize("compact_position", [None, "after", "before"], ids=["alone", "before_compact", "after_compact"])
 async def test_input_tokens_trigger_counts_a_client_compaction_summary(compact_position: str | None) -> None:
-    """A client compaction summary moves into the system prompt, so the trigger counts it too, in any edit order."""
+    """A client compaction summary counts toward the trigger and calls beside it stay clearable, in any edit order."""
     tail: Final = _make_history(n_pairs=3)
     edit_spec: Final = {
         "type": "clear_tool_uses_20250919",
         "trigger": {"type": "input_tokens", "value": litellm.token_counter(model=MODEL, messages=tail) + 100},
         "keep": {"type": "tool_uses", "value": 1},
     }
-    compacted_turn: Final = {"role": "assistant", "content": [{"type": "compaction", "content": "Earlier work. " * 400}]}
+    compaction: Final = {"type": "compaction", "content": "Earlier work. " * 400}
+    compacted_history: Final = [tail[0], {**tail[1], "content": [compaction, *tail[1]["content"]]}, *tail[2:]]
     compact_spec: Final = {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50_000}}
     edits: Final = {None: [edit_spec], "after": [edit_spec, compact_spec], "before": [compact_spec, edit_spec]}[
         compact_position
@@ -756,7 +757,7 @@ async def test_input_tokens_trigger_counts_a_client_compaction_summary(compact_p
         return [edit.get("cleared_tool_uses") for edit in applied if edit.get("type") == "clear_tool_uses_20250919"]
 
     without_summary: Final = await prepare(deepcopy(tail))
-    with_summary: Final = await prepare([compacted_turn, *deepcopy(tail)])
+    with_summary: Final = await prepare(deepcopy(compacted_history))
 
     assert cleared(without_summary) == []
     assert cleared(with_summary) == [2]
