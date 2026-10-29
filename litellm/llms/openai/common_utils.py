@@ -107,10 +107,14 @@ def is_openai_backed_api_base(api_base: str) -> bool:
 _OPENAI_AGENTS_API_RESOURCES: Final = frozenset({"agents", "vaults"})
 
 
-def is_openai_agents_api_path(path: str) -> bool:
+def openai_api_resource(path: str) -> str | None:
     segments: Final = tuple(segment for segment in path.split("/") if segment)
     resource_segments: Final = segments[1:] if segments[:1] == ("v1",) else segments
-    return next(iter(resource_segments), None) in _OPENAI_AGENTS_API_RESOURCES
+    return next(iter(resource_segments), None)
+
+
+def is_openai_agents_api_path(path: str) -> bool:
+    return openai_api_resource(path) in _OPENAI_AGENTS_API_RESOURCES
 
 
 class OpenAIError(BaseLLMException):

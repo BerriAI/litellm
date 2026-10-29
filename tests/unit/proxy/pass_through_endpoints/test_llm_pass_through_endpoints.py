@@ -173,10 +173,15 @@ class TestBaseOpenAIPassThroughHandler:
             api_key="sk-upstream",
             endpoint="v1/agents/sessions",
             request=client_request,
+            custom_llm_provider=litellm.LlmProviders.AZURE_AI,
             extra_headers={"OpenAI-Beta": "agents=v2"},
         )
 
-        assert assembled == {"authorization": "Bearer sk-upstream", "api-key": "sk-upstream", "OpenAI-Beta": "agents=v2"}
+        assert assembled == {
+            "authorization": "Bearer sk-upstream",
+            "api-key": "sk-upstream",
+            "OpenAI-Beta": "agents=v2",
+        }
 
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
@@ -4022,7 +4027,9 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
 @pytest.mark.parametrize(
     ("method", "client_base_path", "path", "client_headers", "upstream_openai_beta"),
     [
-        pytest.param("POST", "/openai/v1", "/agents/sessions", {"OpenAI-Beta": "agents=v1"}, ["agents=v1"], id="sdk_agents"),
+        pytest.param(
+            "POST", "/openai/v1", "/agents/sessions", {"OpenAI-Beta": "agents=v1"}, ["agents=v1"], id="sdk_agents"
+        ),
         pytest.param(
             "GET",
             "/openai_passthrough/v1",
@@ -4032,6 +4039,14 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
             id="sdk_agents_events",
         ),
         pytest.param("POST", "/openai/v1", "/agents/sessions", {}, ["agents=v1"], id="agents_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/agents/sessions",
+            {"OpenAI-Beta": "agents=v2"},
+            ["agents=v2"],
+            id="client_value_beats_route_default",
+        ),
         pytest.param("POST", "/openai", "/agents/sessions", {}, ["agents=v1"], id="agents_default_without_v1"),
         pytest.param("GET", "/openai_passthrough/v1", "/vaults", {}, ["agents=v1"], id="vaults_default"),
         pytest.param(
@@ -4050,6 +4065,7 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
             ["agents=v2"],
             id="x_pass_wins",
         ),
+        pytest.param("POST", "/openai/v1", "/chatkit/threads", {}, [], id="chatkit_threads_no_default"),
         pytest.param("POST", "/openai/v1", "/assistants", {}, ["assistants=v2"], id="assistants_default"),
         pytest.param("POST", "/openai/v1", "/threads/thread_123/messages", {}, ["assistants=v2"], id="threads_default"),
         pytest.param("POST", "/openai/v1", "/chat/completions", {}, [], id="no_beta"),
@@ -4067,9 +4083,41 @@ def test_openai_passthrough_sends_the_openai_beta_header_upstream(
         route: Final = upstream.request(method, f"https://api.openai.com/v1{path}").mock(
             return_value=httpx.Response(200, json={"id": "upstream_123"})
         )
-        response: Final = openai_passthrough_client.request(
-            method, f"{client_base_path}{path}", headers=client_headers
+        response: Final = openai_passthrough_client.request(method, f"{client_base_path}{path}", headers=client_headers)
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers.get_list("openai-beta") == upstream_openai_beta
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "client_headers", "upstream_openai_beta"),
+    [
+        pytest.param("GET", "/openai/v1/vector_stores", {"OpenAI-Beta": "assistants=v2"}, [], id="client_beta_dropped"),
+        pytest.param("POST", "/v1/agents/sessions", {}, [], id="no_agents_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1/threads/thread_123/messages",
+            {"OpenAI-Beta": "assistants=v1"},
+            ["assistants=v2"],
+            id="assistants_default_kept",
+        ),
+    ],
+)
+def test_azure_passthrough_keeps_its_own_openai_beta_rule(
+    openai_passthrough_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    client_headers: dict[str, str],
+    upstream_openai_beta: list[str],
+) -> None:
+    monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.request(method, f"https://operator.openai.azure.com{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
         )
+        response: Final = openai_passthrough_client.request(method, f"/azure{path}", headers=client_headers)
 
         assert response.status_code == 200
         assert route.calls.last.request.headers.get_list("openai-beta") == upstream_openai_beta
@@ -7324,9 +7372,7 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
     respx_mock: respx.MockRouter,
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
 ) -> None:
-    result: Final = await _bedrock_native_count(
-        monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12})
-    )
+    result: Final = await _bedrock_native_count(monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}))
 
     assert result == {"input_tokens": 12}
     assert len(respx_mock.calls) == 1
@@ -7408,7 +7454,6 @@ async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answe
     )
 
 
-
 @pytest.mark.asyncio
 async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_validation_error_and_logs_it(
     monkeypatch: pytest.MonkeyPatch,
@@ -7450,6 +7495,7 @@ async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_
             "status_code": exc_info.value.status_code,
         },
     )
+
 
 class _AzureGroupRouter:
     def __init__(self, captured: list[dict]) -> None:
