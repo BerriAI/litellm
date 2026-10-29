@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import contextvars
 import copy
 import datetime
 import importlib.abc
@@ -50,7 +51,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
     set_callbacks,
 )
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
@@ -8336,12 +8337,14 @@ async def test_streaming_success_callbacks_survive_guardrail_logging_hook_failur
     releasing.async_log_success_event.assert_awaited_once()
 
 
-def _async_request_logging_obj(call_id: str, callbacks: list[CustomLogger], stream: bool = False) -> LitellmLogging:
+def _async_request_logging_obj(
+    call_id: str, callbacks: list[CustomLogger], stream: bool = False, call_type: str = "acompletion"
+) -> LitellmLogging:
     logging_obj: Final = LitellmLogging(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=stream,
-        call_type="acompletion",
+        call_type=call_type,
         start_time=datetime.datetime.now(),
         litellm_call_id=call_id,
         function_id=call_id,
@@ -13691,6 +13694,298 @@ def test_legacy_s3_logs_a_streamed_anthropic_messages_call_handed_off_from_the_a
     assert s3_writer.log_event.call_count == expected_s3_writes
     if expected_s3_writes:
         assert s3_writer.log_event.call_args.kwargs["response_obj"] is complete_response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("response_kind", ["chat", "responses"])
+@pytest.mark.parametrize("accounting_first", [False, True])
+@pytest.mark.parametrize("duplicate_accounting", [False, True])
+@pytest.mark.parametrize("blocked_phase", ["hook", "delivery", "neither", "redacted"])
+async def test_slow_optional_logging_cannot_cancel_accounting(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    response_kind: str,
+    accounting_first: bool,
+    duplicate_accounting: bool,
+    blocked_phase: str,
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.spend_tracking.spend_event import SpendEvent, decode_spend_event
+    from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
+
+    recorded: Final[asyncio.Queue[tuple[bytes, str]]] = asyncio.Queue()
+    hook_context: Final = contextvars.ContextVar("accounting_hook_context", default="outside")
+    delivered: Final = asyncio.Event()
+    deliveries: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def store_event(line: bytes) -> None:
+        recorded.put_nowait((line, hook_context.get()))
+
+    producer: Final = SpendEventProducer(
+        address=UnixAddress("/unused"),
+        on_unavailable="fallback",
+        buffer_size=1,
+        connect_timeout=1,
+        fallback=store_event,
+    )
+    await producer.close(drain_timeout=1)
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    cancelled: Final = asyncio.Event()
+    never: Final = asyncio.Event()
+
+    class OptionalLogger(CustomLogger):
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            hook_context.set("inside")
+            if blocked_phase == "hook":
+                try:
+                    await never.wait()
+                finally:
+                    cancelled.set()
+            return kwargs, result
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            delivered.set()
+            deliveries.put_nowait(json.dumps(kwargs, default=str) + str(response_obj))
+            if blocked_phase == "delivery":
+                try:
+                    await never.wait()
+                finally:
+                    cancelled.set()
+
+    optional: Final = OptionalLogger(message_logging=blocked_phase != "redacted")
+    accounting: Final = _ProxyDBLogger(producer)
+    accounting_callbacks: Final = [accounting, _ProxyDBLogger(producer)] if duplicate_accounting else [accounting]
+    callbacks: Final = [*accounting_callbacks, optional] if accounting_first else [optional, *accounting_callbacks]
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj: Final = _async_request_logging_obj(
+        "accounting-timeout",
+        callbacks,
+        stream=stream,
+        call_type="aresponses" if response_kind == "responses" else "acompletion",
+    )
+    response: Final = (
+        ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "private-marker"}}],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        if response_kind == "chat"
+        else ResponsesAPIResponse(
+            id="resp-private-instructions",
+            created_at=1,
+            model="gpt-4o-mini",
+            status="completed",
+            instructions="private-instructions-canary" if blocked_phase != "redacted" else None,
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-private",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "private-marker", "annotations": []}],
+                }
+            ],
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        )
+    )
+    original_response: Final = response.model_dump(exclude={"usage"})
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "acompletion": True,
+            "metadata": {},
+            "proxy_server_request": {
+                "body": {
+                    "instructions": "private-request-instructions",
+                    "system": "private-system-canary",
+                    "tools": [{"description": "private-tool-canary"}],
+                }
+            },
+        }
+        if blocked_phase == "hook"
+        else {"acompletion": True, "metadata": {}},
+        optional_params={},
+    )
+    logging_result: Final = (
+        ResponseCompletedEvent(type="response.completed", sequence_number=1, response=response)
+        if stream and isinstance(response, ResponsesAPIResponse)
+        else response
+    )
+    worker: Final = LoggingWorker(timeout=0.5)
+    worker.ensure_initialized_and_enqueue(logging_obj.async_success_handler(result=logging_result))
+    try:
+        await worker.flush()
+        line, context = recorded.get_nowait()
+        assert context == "inside"
+        assert delivered.is_set()
+        event: Final = decode_spend_event(line)
+        assert isinstance(event, SpendEvent)
+        assert event.response is not None
+        assert isinstance(event.response["usage"], dict)
+        assert event.response["usage"]["total_tokens"] == 15
+        assert recorded.empty()
+        assert cancelled.is_set() is (blocked_phase in ("hook", "delivery"))
+        assert ("private-marker" in line.decode()) is (blocked_phase not in ("hook", "redacted"))
+        assert (REDACTED_BY_LITELLM in line.decode()) is (blocked_phase == "redacted")
+        assert ("private-instructions-canary" in line.decode()) is (
+            response_kind == "responses" and blocked_phase in ("neither", "delivery")
+        )
+        delivery: Final = deliveries.get_nowait()
+        assert not any(
+            value in delivery
+            for value in (
+                "private-request-instructions",
+                "private-system-canary",
+                "private-tool-canary",
+            )
+        )
+        assert ("private-instructions-canary" in delivery) is (
+            response_kind == "responses" and blocked_phase in ("neither", "delivery")
+        )
+        assert response.model_dump(exclude={"usage"}) == original_response
+    finally:
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_invalid_accounting_after_a_hook_timeout_never_exports_unmasked_data(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+    exported: Final = asyncio.Event()
+    never: Final = asyncio.Event()
+
+    class InvalidMaskingHook(CustomLogger):
+        async def async_logging_hook(
+            self,
+            kwargs: dict[str, object],
+            result: object,
+            call_type: str,
+        ) -> tuple[dict[str, object], object]:
+            kwargs["stream"] = "invalid"
+            await never.wait()
+            return kwargs, result
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            exported.set()
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj: Final = _async_request_logging_obj("invalid-accounting", [InvalidMaskingHook(), _ProxyDBLogger()])
+    worker: Final = LoggingWorker(timeout=0.5)
+    worker.ensure_initialized_and_enqueue(logging_obj.async_success_handler(result=ModelResponse()))
+    try:
+        await worker.flush()
+        assert not exported.is_set()
+        assert "Cannot prepare body-free spend accounting after a logging hook timeout" in caplog.text
+    finally:
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("no_log", [False, True])
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_masking_timeout_preserves_opt_outs_and_redacts_hidden_provider_content(
+    monkeypatch: pytest.MonkeyPatch,
+    no_log: bool,
+    metadata_field: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
+
+    recorded: Final[asyncio.Queue[str]] = asyncio.Queue()
+    exported: Final[asyncio.Queue[str]] = asyncio.Queue()
+    never: Final = asyncio.Event()
+
+    async def store_event(line: bytes) -> None:
+        recorded.put_nowait(line.decode())
+
+    producer: Final = SpendEventProducer(
+        address=UnixAddress("/unused"),
+        on_unavailable="fallback",
+        buffer_size=1,
+        connect_timeout=1,
+        fallback=store_event,
+    )
+    await producer.close(drain_timeout=1)
+
+    class MaskingLogger(CustomLogger):
+        async def async_logging_hook(
+            self,
+            kwargs: dict[str, object],
+            result: object,
+            call_type: str,
+        ) -> tuple[dict[str, object], object]:
+            await never.wait()
+            return kwargs, result
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            exported.put_nowait(json.dumps(kwargs, default=str) + str(response_obj))
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    monkeypatch.setattr(litellm, "allow_dynamic_callback_disabling", True)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    logging_obj: Final = _async_request_logging_obj(
+        "private-provider-content", [MaskingLogger(), _ProxyDBLogger(producer)]
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "acompletion": True,
+            "no-log": no_log,
+            metadata_field: {
+                "hidden_params": {
+                    "provider_specific_fields": {
+                        "reasoning_content": "private-thinking-canary",
+                        "thinking_blocks": [{"type": "thinking", "thinking": "private-thinking-canary"}],
+                        "citations": [{"cited_text": "private-citation-canary"}],
+                    }
+                }
+            },
+            "proxy_server_request": {"headers": {"x-litellm-disable-callbacks": "dynamodb"}},
+        },
+        optional_params={},
+    )
+    worker: Final = LoggingWorker(timeout=0.5)
+    worker.ensure_initialized_and_enqueue(logging_obj.async_success_handler(result=ModelResponse()))
+    try:
+        await worker.flush()
+        assert recorded.qsize() == int(not no_log)
+        assert exported.qsize() == int(not no_log)
+        payloads: Final = tuple(recorded.get_nowait() for _ in range(recorded.qsize())) + tuple(
+            exported.get_nowait() for _ in range(exported.qsize())
+        )
+        assert all(
+            "private-thinking-canary" not in payload and "private-citation-canary" not in payload
+            for payload in payloads
+        )
+        assert not logging_obj.should_run_callback(
+            "dynamodb", logging_obj.model_call_details["litellm_params"], "async_success"
+        )
+    finally:
+        await worker.stop()
 
 
 _GO_PRICED_MESSAGE: Final = {
