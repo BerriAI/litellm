@@ -3,9 +3,7 @@ from typing import Final
 
 import pytest
 
-from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
-from litellm.router_strategy.complexity_router.jev_classifier import DEFAULT_JEV_INSTRUCTIONS
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     capability_limit_violation,
     carries_complexity_router_settings,
@@ -18,6 +16,8 @@ from litellm.router_utils.auto_router_model_naming import (
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
+from litellm.router_strategy.complexity_router.jev_classifier import DEFAULT_JEV_INSTRUCTIONS
 
 COMPLEXITY_FIELDS = frozenset({"complexity_router_config"})
 SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"})
@@ -596,7 +596,7 @@ def test_custom_classifier_prompt_capability(config: Mapping[str, object], expec
     ],
 )
 def test_is_complexity_router_model(model: str | None, expected: bool) -> None:
-    from litellm.router_utils.auto_router_model_naming import is_complexity_router_model
+    from litellm.router_strategy.auto_router.auto_router_model_naming import is_complexity_router_model
 
     assert is_complexity_router_model(model) is expected
 
