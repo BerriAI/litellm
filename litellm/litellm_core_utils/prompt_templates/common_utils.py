@@ -2238,7 +2238,7 @@ def migrate_file_to_image_url(
     image_url_object: Final = ChatCompletionImageObject(
         type="image_url",
         image_url=ChatCompletionImageUrlObject(
-            url=cast(str, file_id or file_data),
+            url=cast(str, file_data or file_id),
         ),
     )
     if format and isinstance(image_url_object["image_url"], dict):

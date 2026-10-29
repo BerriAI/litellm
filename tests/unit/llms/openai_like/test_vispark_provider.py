@@ -292,8 +292,15 @@ def test_other_json_providers_keep_additional_properties_and_file_parts():
     assert body["messages"][0]["content"][1] == file_part
 
 
-def test_vispark_sends_a_pdf_file_part_as_an_image_url():
-    pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+_PDF_DATA_URL: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+
+
+@pytest.mark.parametrize(
+    "file",
+    [{"file_data": _PDF_DATA_URL}, {"file_id": "file-abc123", "file_data": _PDF_DATA_URL}],
+    ids=["file_data", "file_id_and_file_data"],
+)
+def test_vispark_sends_a_pdf_file_part_as_an_image_url(file: dict[str, str]):
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
             200, json=_CHAT_COMPLETION
@@ -305,7 +312,7 @@ def test_vispark_sends_a_pdf_file_part_as_an_image_url():
                     "role": "user",
                     "content": [
                         {"type": "text", "text": "What code is in this PDF?"},
-                        {"type": "file", "file": {"file_data": pdf_data_url}},
+                        {"type": "file", "file": file},
                     ],
                 }
             ],
@@ -315,7 +322,7 @@ def test_vispark_sends_a_pdf_file_part_as_an_image_url():
     sent_content: Final = json.loads(route.calls.last.request.content)["messages"][0]["content"]
     assert sent_content[0] == {"type": "text", "text": "What code is in this PDF?"}
     assert sent_content[1]["type"] == "image_url"
-    assert sent_content[1]["image_url"]["url"] == pdf_data_url
+    assert sent_content[1]["image_url"]["url"] == _PDF_DATA_URL
     assert all(part["type"] != "file" for part in sent_content)
 
 
