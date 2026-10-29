@@ -68,6 +68,22 @@ _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
+def _realtime_provider_config(
+    custom_llm_provider: str, model: str, params: Mapping[str, object], *, drop_params: bool
+) -> BaseRealtimeConfig | None:
+    if custom_llm_provider == LlmProviders.ELEVENLABS.value:
+        from ..llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+        return elevenlabs_realtime_config(params, drop_params=drop_params)
+    if custom_llm_provider in LlmProviders._member_map_.values():
+        return ProviderConfigManager.get_provider_realtime_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+            drop_params=drop_params,
+        )
+    return None
+
+
 def _model_params_with_stored_credentials(model_params: Mapping[str, object]) -> Mapping[str, object]:
     credential_name: Final = model_params.get("litellm_credential_name")
     credential_values: Final = (
@@ -533,20 +549,10 @@ async def _arealtime(
         return
 
     drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
-    provider_config: BaseRealtimeConfig | None = None
-    if _custom_llm_provider == LlmProviders.ELEVENLABS.value:
-        from ..llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
-
-        elevenlabs_params: Final = TypeAdapter(dict[str, object]).validate_python(kwargs)
-        provider_config = (  # rebind-ok: LIT010 existing shared provider dispatch
-            elevenlabs_realtime_config(elevenlabs_params, drop_params=drop_params)
-        )
-    elif _custom_llm_provider in LlmProviders._member_map_.values():
-        provider_config = ProviderConfigManager.get_provider_realtime_config(
-            model=model,
-            provider=LlmProviders(_custom_llm_provider),
-            drop_params=drop_params,
-        )
+    realtime_params: Final = TypeAdapter(dict[str, object]).validate_python(kwargs)
+    provider_config: Final = _realtime_provider_config(
+        _custom_llm_provider, model, realtime_params, drop_params=drop_params
+    )
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(
             model=model,
