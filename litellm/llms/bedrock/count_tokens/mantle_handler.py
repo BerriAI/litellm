@@ -67,6 +67,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 optional_params=_COUNT_OPTIONS.validate_python(
                     {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
                 ),
+                drop_params=True,
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")
