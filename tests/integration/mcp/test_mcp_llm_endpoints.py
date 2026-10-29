@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
-from itertools import chain
+from itertools import chain, count
 from pathlib import Path
 from typing import Final, Literal, TypeVar
 
@@ -50,6 +50,7 @@ def _llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gat
     directory: Final = tmp_path_factory.mktemp("mcp-llm-gateway")
     stock: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = directory / "stored-responses.yaml"
+    (directory / f"{STREAM_BLOCK_MODULE}.py").write_text(STREAM_BLOCK_SOURCE)
     config.write_text(
         yaml.safe_dump(
             {
@@ -57,8 +58,17 @@ def _llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gat
                 "general_settings": {**object_value(stock["general_settings"]), "store_prompts_in_spend_logs": True},
                 "litellm_settings": {
                     **object_value(stock["litellm_settings"]),
-                    "cost_margin_config": {"hosted_vllm": {"fixed_amount": FIXED_MARGIN}},
+                    "cost_margin_config": {
+                        "hosted_vllm": {"fixed_amount": FIXED_MARGIN},
+                        "deepseek": {"fixed_amount": FIXED_MARGIN},
+                    },
                 },
+                "guardrails": [
+                    {
+                        "guardrail_name": STREAM_BLOCK,
+                        "litellm_params": {"guardrail": f"{STREAM_BLOCK_MODULE}.BlockGuard", "mode": "post_call"},
+                    }
+                ],
             }
         )
     )
@@ -79,7 +89,7 @@ def gateway(_llm_gateway: tuple[Gateway, Mapping[str, str]]) -> Iterator[Gateway
         yield private
 
 
-Surface = Literal["chat", "responses", "messages", "messages_bridge"]
+Surface = Literal["chat", "responses", "messages", "messages_bridge", "responses_bridge"]
 SURFACES: Final[tuple[Surface, ...]] = ("chat", "responses", "messages", "messages_bridge")
 ADD: Final = {"a": 2, "b": 3}
 ANSWER: Final = "the sum is 5"
@@ -88,6 +98,19 @@ AUTO: Final = {**GATEWAY_REF, "require_approval": "never"}
 OUTAGE: Final = "bridge-outage"
 DIRECT: Final = "answer-without-tools"
 FIXED_MARGIN: Final = 0.25
+STREAM_BLOCK: Final = "mcp-stream-block"
+STREAM_BLOCK_MODULE: Final = "mcp_stream_block"
+STREAM_BLOCK_DETAIL: Final = "blocked by output policy"
+STREAM_BLOCK_SOURCE: Final = (
+    "from fastapi import HTTPException\n\n"
+    "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
+    "class BlockGuard(CustomGuardrail):\n"
+    "    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):\n"
+    "        async for _ in response:\n"
+    "            pass\n"
+    f'        raise HTTPException(status_code=400, detail="{STREAM_BLOCK_DETAIL}")\n'
+    "        yield\n"
+)
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
@@ -128,6 +151,8 @@ class Billing:
     first: tuple[int, int] = (10, 5)
     follow_up: tuple[int, int] = (10, 5)
     follow_up_fails: bool = False
+    follow_up_breaks: bool = False
+    tool_rounds: int = 1
 
 
 EVEN_ROUNDS: Final = Billing()
@@ -136,6 +161,10 @@ FOLLOW_UP_OUTAGE: Final = "scripted follow-up outage"
 
 def _fixed_turn(tool: str) -> Callable[[Mapping[str, JsonValue]], Turn]:
     return lambda _: Turn(tool, json.dumps(ADD), ANSWER)
+
+
+def _slow_turn(tool: str, seconds: float) -> Callable[[Mapping[str, JsonValue]], Turn]:
+    return lambda _: Turn(tool, json.dumps({"seconds": seconds}), ANSWER)
 
 
 def _echoing_turn(body: Mapping[str, JsonValue]) -> Turn:
@@ -183,6 +212,50 @@ def _item_events(index: int, item: Mapping[str, JsonValue]) -> tuple[dict[str, J
     )
 
 
+def _event_stream(events: Sequence[Mapping[str, JsonValue]]) -> Reply:
+    return Reply(
+        content_type="text/event-stream",
+        chunks=tuple(
+            f"event: {event['type']}\ndata: {json.dumps({**event, 'sequence_number': number})}\n\n".encode()
+            for number, event in enumerate(events)
+        ),
+    )
+
+
+def _broken_follow_up(target: str, identity: str, tokens: tuple[int, int]) -> Reply:
+    outage: Final = {"message": FOLLOW_UP_OUTAGE, "type": "server_error", "code": None}
+    if target.endswith("/chat/completions"):
+        delta: Final = {"role": "assistant", "content": "the sum"}
+        started: Final = {
+            "id": f"chatcmpl-{identity}",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+        return Reply(
+            content_type="text/event-stream",
+            chunks=tuple(f"data: {json.dumps(frame)}\n\n".encode() for frame in (started, {"error": outage})),
+        )
+    input_tokens, output_tokens = tokens
+    failed: Final[dict[str, JsonValue]] = {
+        "id": f"resp_{identity}",
+        "object": "response",
+        "created_at": 1,
+        "status": "failed",
+        "model": "gpt-4o-mini",
+        "output": [],
+        "error": {"code": "server_error", "message": FOLLOW_UP_OUTAGE},
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": sum(tokens)},
+    }
+    return _event_stream(
+        (
+            {"type": "response.created", "response": {**failed, "status": "in_progress", "error": None, "usage": None}},
+            {"type": "response.failed", "response": failed},
+        )
+    )
+
+
 def _responses_stream(response: Mapping[str, JsonValue], items: Sequence[Mapping[str, JsonValue]]) -> Reply:
     item_events: Final = tuple(chain.from_iterable(_item_events(index, item) for index, item in enumerate(items)))
     events: Final = (
@@ -191,13 +264,7 @@ def _responses_stream(response: Mapping[str, JsonValue], items: Sequence[Mapping
         *item_events,
         {"type": "response.completed", "response": response},
     )
-    return Reply(
-        content_type="text/event-stream",
-        chunks=tuple(
-            f"event: {event['type']}\ndata: {json.dumps({**event, 'sequence_number': number})}\n\n".encode()
-            for number, event in enumerate(events)
-        ),
-    )
+    return _event_stream(events)
 
 
 def _block_ids(message: JsonValue, kind: str, field: str) -> frozenset[str]:
@@ -252,6 +319,8 @@ def _anthropic_tool_result_rule(body: Mapping[str, JsonValue]) -> Reply | None:
 def _model_double(
     plan: Callable[[Mapping[str, JsonValue]], Turn], billing: Billing = EVEN_ROUNDS, parallel: int = 1
 ) -> Callable[[Request], Reply]:
+    served: Final = count()
+
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target.endswith("/models"):
             return _json({"object": "list", "data": []})
@@ -260,11 +329,12 @@ def _model_double(
             outage: Final = {"error": {"message": "scripted provider outage", "type": "server_error", "code": None}}
             return Reply(status=500, body=json.dumps(outage).encode())
         turn: Final = plan(body)
+        call_number: Final = next(served)
         answered: Final = _has_tool_result(body)
         if answered and billing.follow_up_fails:
             failure: Final = {"error": {"message": FOLLOW_UP_OUTAGE, "type": "server_error", "code": None}}
             return Reply(status=500, body=json.dumps(failure).encode())
-        done: Final = answered or DIRECT in _prompt(body)
+        done: Final = DIRECT in _prompt(body) or (answered and call_number >= billing.tool_rounds)
         calls: Final = range(1, parallel + 1)
         prompt_tokens, completion_tokens = billing.follow_up if answered else billing.first
         identity: Final = uuid.uuid4().hex[:12]
@@ -273,9 +343,15 @@ def _model_double(
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
         }
+        if answered and billing.follow_up_breaks:
+            return _broken_follow_up(request.target, identity, (prompt_tokens, completion_tokens))
         if request.target.endswith("/chat/completions"):
             requested: Final = tuple(
-                {"id": f"call_{call}", "type": "function", "function": {"name": turn.tool, "arguments": turn.arguments}}
+                {
+                    "id": f"call_{identity}_{call}",
+                    "type": "function",
+                    "function": {"name": turn.tool, "arguments": turn.arguments},
+                }
                 for call in calls
             )
             message: Final = (
@@ -460,6 +536,7 @@ def _upstream_model(surface: Surface) -> str:
         "responses": "openai/responses/gpt-4o-mini",
         "messages": "anthropic/claude-sonnet-4-5",
         "messages_bridge": "hosted_vllm/gpt-4o-mini",
+        "responses_bridge": "deepseek/gpt-4o-mini",
     }[surface]
 
 
@@ -475,11 +552,15 @@ def _rig(
     billing: Billing = EVEN_ROUNDS,
     prices: Mapping[str, JsonValue] | None = None,
     parallel: int = 1,
+    slow_tool_seconds: float | None = None,
 ) -> Iterator[Rig]:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
+    plan: Final = (
+        _fixed_turn(f"{alias}-add") if slow_tool_seconds is None else _slow_turn(f"{alias}-slow", slow_tool_seconds)
+    )
     with (
-        mcp_peer() as peer,
-        wire_server(_model_double(_fixed_turn(f"{alias}-add"), billing, parallel)) as wire,
+        mcp_peer(rich=slow_tool_seconds is not None) as peer,
+        wire_server(_model_double(plan, billing, parallel)) as wire,
         gateway.scenario() as scenario,
     ):
         server_id: Final = register_mcp(scenario, peer, alias)
@@ -1039,6 +1120,262 @@ def test_bridged_next_turn_replays_the_mcp_turn_answer(gateway: Gateway) -> None
             lambda found: len(found) == 1,
             seconds=70,
         )
+        rig.wire.drain()
+        second: Final = rig.send(key, [AUTO], previous_response_id=first_id, cache={"no-cache": True})
+        assert second.status_code == 200, second.text
+        opening: Final = next(
+            JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
+        )
+        assert ANSWER in _assistant_texts(opening), opening
+
+
+StreamedUpstream = Literal["messages_bridge", "responses_bridge"]
+STREAMED_UPSTREAMS: Final[tuple[StreamedUpstream, ...]] = ("messages_bridge", "responses_bridge")
+STREAMED_IDS: Final = ("native", "bridged")
+SLOW_TOOL_SECONDS: Final = 5.0
+
+
+def _events(response: httpx.Response) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(
+        JSON_OBJECT.validate_json(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    )
+
+
+def _completed(response: httpx.Response) -> dict[str, JsonValue]:
+    finished: Final = tuple(
+        object_value(event["response"]) for event in _events(response) if event["type"] == "response.completed"
+    )
+    assert len(finished) == 1, response.text
+    return finished[0]
+
+
+def _model_rows(call_id: str, settled: Callable[[list[dict[str, JsonValue]]], bool]) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            "SELECT request_id, status, spend, prompt_tokens, completion_tokens "
+            'FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s AND call_type NOT IN (%s, %s)',
+            (call_id, "call_mcp_tool", "list_mcp_tools"),
+        ),
+        settled,
+        seconds=70,
+        return_last_on_timeout=True,
+    )
+
+
+def _billed(rows: Sequence[Mapping[str, JsonValue]]) -> float:
+    return sum(float(str(row["spend"])) for row in rows)
+
+
+def _bills_at_least(expected: float) -> Callable[[list[dict[str, JsonValue]]], bool]:
+    return lambda rows: bool(rows) and _billed(rows) >= expected - 1e-9
+
+
+def _statuses(rows: Sequence[Mapping[str, JsonValue]]) -> list[str]:
+    return sorted(str(row["status"]) for row in rows)
+
+
+def _logs_a_failure_billing(expected: float) -> Callable[[list[dict[str, JsonValue]]], bool]:
+    return lambda rows: "failure" in _statuses(rows) and _billed(rows) >= expected - 1e-9
+
+
+def _limited_key(rig: Rig) -> str:
+    return rig.scenario.key(object_permission={"mcp_servers": [rig.server_id]}, max_parallel_requests=1)
+
+
+def _answers_directly(rig: Rig, key: str) -> int:
+    return rig.send(key, [AUTO], prompt=f"{DIRECT} {rig.alias}").status_code
+
+
+STREAMED_ROUNDS: Final = (
+    pytest.param("messages_bridge", 1, id="native"),
+    pytest.param("responses_bridge", 1, id="bridged"),
+    pytest.param("messages_bridge", 2, id="native-two-tool-rounds"),
+    pytest.param("responses_bridge", 2, id="bridged-two-tool-rounds"),
+    pytest.param("messages_bridge", 0, id="native-no-tool-call"),
+    pytest.param("responses_bridge", 0, id="bridged-no-tool-call"),
+)
+
+
+@pytest.mark.parametrize(("upstream", "tool_rounds"), STREAMED_ROUNDS)
+def test_streaming_responses_auto_execute_bills_every_round_once_on_one_success_row(
+    gateway: Gateway, upstream: StreamedUpstream, tool_rounds: int
+) -> None:
+    rounds: Final = (FIRST_ROUND, *(FOLLOW_UP_ROUND,) * tool_rounds)
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, tool_rounds=max(tool_rounds, 1))
+    with _rig(gateway, "responses", upstream=upstream, billing=billing, prices=PRICES) as rig:
+        prompt: Final = None if tool_rounds else f"{DIRECT} {rig.alias}"
+        response: Final = rig.send(_granted_key(rig), [AUTO], prompt=prompt, stream=True)
+        assert response.status_code == 200, response.text
+        completed: Final = _completed(response)
+        assert rig.final_text(completed) == ANSWER, response.text
+        assert len(rig.upstream_tools()) == len(rounds)
+        assert len(_peer_add_calls(rig.peer)) == tool_rounds
+        expected: Final = _price(*rounds) + FIXED_MARGIN
+        rows: Final = _model_rows(response.headers["x-litellm-call-id"], _bills_at_least(expected))
+        assert [row["status"] for row in rows] == ["success"], rows
+        row: Final = rows[0]
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (
+            sum(prompt_tokens for prompt_tokens, _ in rounds),
+            sum(completion_tokens for _, completion_tokens in rounds),
+        ), row
+        usage: Final = object_value(completed["usage"])
+        assert (usage["input_tokens"], usage["output_tokens"]) == (row["prompt_tokens"], row["completion_tokens"])
+        assert float(str(row["spend"])) == pytest.approx(expected), row
+
+
+@pytest.mark.parametrize("upstream", STREAMED_UPSTREAMS, ids=STREAMED_IDS)
+def test_streaming_responses_rejected_follow_up_bills_round_one_once(
+    gateway: Gateway, upstream: StreamedUpstream
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_fails=True)
+    with _rig(gateway, "responses", upstream=upstream, billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], stream=True)
+        assert FOLLOW_UP_OUTAGE in response.text, response.text
+        assert ANSWER not in response.text, response.text
+        assert len(rig.upstream_tools()) == 2
+        expected: Final = _price(FIRST_ROUND) + FIXED_MARGIN
+        rows: Final = _model_rows(response.headers["x-litellm-call-id"], _bills_at_least(expected))
+        assert _billed(rows) == pytest.approx(expected), rows
+
+
+BROKEN_FOLLOW_UPS: Final = (
+    pytest.param("messages_bridge", FOLLOW_UP_ROUND, id="native"),
+    pytest.param("responses_bridge", None, id="bridged"),
+)
+
+
+@pytest.mark.parametrize(("upstream", "reported_usage"), BROKEN_FOLLOW_UPS)
+def test_streaming_responses_follow_up_broken_mid_stream_bills_round_one_once_and_itself_on_a_failure_row(
+    gateway: Gateway, upstream: StreamedUpstream, reported_usage: tuple[int, int] | None
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_breaks=True)
+    with _rig(gateway, "responses", upstream=upstream, billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], stream=True)
+        assert ANSWER not in response.text, response.text
+        assert len(rig.upstream_tools()) == 2
+        round_one: Final = _price(FIRST_ROUND) + FIXED_MARGIN
+        rows: Final = _model_rows(response.headers["x-litellm-call-id"], _logs_a_failure_billing(round_one))
+        assert _statuses(rows) == ["failure", "success"], rows
+        (success,) = (row for row in rows if row["status"] == "success")
+        (failure,) = (row for row in rows if row["status"] == "failure")
+        assert (success["prompt_tokens"], success["completion_tokens"]) == FIRST_ROUND, rows
+        assert float(str(success["spend"])) == pytest.approx(round_one), rows
+        failed_round: Final = (int(str(failure["prompt_tokens"])), int(str(failure["completion_tokens"])))
+        assert min(failed_round) > 0, rows
+        assert reported_usage in (None, failed_round), rows
+        assert float(str(failure["spend"])) == pytest.approx(_price(failed_round)), rows
+
+
+@pytest.mark.parametrize("upstream", STREAMED_UPSTREAMS, ids=STREAMED_IDS)
+def test_streaming_responses_blocked_by_a_post_call_guardrail_bills_every_round_once(
+    gateway: Gateway, upstream: StreamedUpstream
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(gateway, "responses", upstream=upstream, billing=billing, prices=PRICES) as rig:
+        key: Final = _granted_key(rig)
+        one_round: Final = rig.send(key, [], prompt=f"{DIRECT} {rig.alias}", stream=True, guardrails=[STREAM_BLOCK])
+        assert STREAM_BLOCK_DETAIL in one_round.text, one_round.text
+        one_round_rows: Final = _model_rows(
+            one_round.headers["x-litellm-call-id"], _logs_a_failure_billing(_price(FIRST_ROUND) + FIXED_MARGIN)
+        )
+        rig.wire.drain()
+        response: Final = rig.send(key, [AUTO], stream=True, guardrails=[STREAM_BLOCK])
+        assert STREAM_BLOCK_DETAIL in response.text, response.text
+        assert len(rig.upstream_tools()) == 2 and len(_peer_add_calls(rig.peer)) == 1
+        expected: Final = _price(FIRST_ROUND, FOLLOW_UP_ROUND) + FIXED_MARGIN
+        rows: Final = _model_rows(response.headers["x-litellm-call-id"], _logs_a_failure_billing(expected))
+        assert _statuses(rows) == _statuses(one_round_rows), (rows, one_round_rows)
+        assert _billed(rows) == pytest.approx(expected), rows
+
+
+@pytest.mark.parametrize(
+    ("surface", "stream"),
+    (("responses", True), ("responses", False), ("chat", False)),
+    ids=("responses-stream", "responses", "chat"),
+)
+def test_auto_executed_tool_call_runs_inside_the_requests_one_parallel_slot(
+    gateway: Gateway, surface: Surface, stream: bool
+) -> None:
+    with _rig(gateway, surface, slow_tool_seconds=SLOW_TOOL_SECONDS) as rig:
+        key: Final = _limited_key(rig)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running: Final = pool.submit(rig.send, key, [AUTO], None, stream=stream)
+            eventually(lambda: _peer_add_calls(rig.peer), lambda found: len(found) == 1, seconds=30)
+            during: Final = _answers_directly(rig, key)
+            served: Final = running.result(timeout=90)
+        assert during == 429
+        assert served.status_code == 200 and ANSWER in served.text, served.text
+        eventually(lambda: _answers_directly(rig, key), lambda status: status == 200, seconds=30)
+
+
+@pytest.mark.parametrize("upstream", STREAMED_UPSTREAMS, ids=STREAMED_IDS)
+def test_streaming_responses_hung_up_during_the_tool_call_bills_each_served_round_once_and_frees_the_slot(
+    gateway: Gateway, upstream: StreamedUpstream
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(
+        gateway,
+        "responses",
+        upstream=upstream,
+        billing=billing,
+        prices=PRICES,
+        slow_tool_seconds=SLOW_TOOL_SECONDS,
+    ) as rig:
+        key: Final = _limited_key(rig)
+        with rig.gateway.client.stream(
+            "POST",
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": rig.model, "input": f"add {rig.alias}", "tools": [AUTO], "stream": True},
+            timeout=90,
+        ) as hung_up:
+            assert hung_up.status_code == 200
+            call_id: Final = hung_up.headers["x-litellm-call-id"]
+            eventually(lambda: _peer_add_calls(rig.peer), lambda found: len(found) == 1, seconds=30)
+        eventually(lambda: _answers_directly(rig, key), lambda status: status == 200, seconds=60)
+        posted: Final = tuple(
+            JSON_OBJECT.validate_json(request.body) for request in rig.wire.drain() if request.method == "POST"
+        )
+        served: Final = tuple(
+            FOLLOW_UP_ROUND if _has_tool_result(body) else FIRST_ROUND for body in posted if DIRECT not in _prompt(body)
+        )
+        expected: Final = _price(*served) + FIXED_MARGIN
+        rows: Final = _model_rows(call_id, _bills_at_least(expected))
+        assert served and rows, (served, rows)
+        assert _billed(rows) == pytest.approx(expected), (served, rows)
+
+
+@pytest.mark.parametrize("upstream", STREAMED_UPSTREAMS, ids=STREAMED_IDS)
+def test_streaming_responses_repeated_from_the_response_cache_bills_nothing(
+    gateway: Gateway, upstream: StreamedUpstream
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(gateway, "responses", upstream=upstream, billing=billing, prices=PRICES) as rig:
+        key: Final = _granted_key(rig)
+        paid: Final = rig.send(key, [AUTO], stream=True)
+        assert paid.status_code == 200 and rig.final_text(_completed(paid)) == ANSWER, paid.text
+        paid_price: Final = _price(FIRST_ROUND, FOLLOW_UP_ROUND) + FIXED_MARGIN
+        _model_rows(paid.headers["x-litellm-call-id"], _bills_at_least(paid_price))
+        assert len(rig.upstream_tools()) == 2
+        cached: Final = rig.send(key, [AUTO], stream=True)
+        assert cached.status_code == 200 and rig.final_text(_completed(cached)) == ANSWER, cached.text
+        assert rig.upstream_tools() == ()
+        rows: Final = _model_rows(
+            cached.headers["x-litellm-call-id"], lambda found: "success" in {row["status"] for row in found}
+        )
+        assert "success" in {row["status"] for row in rows} and _billed(rows) == 0.0, rows
+
+
+def test_bridged_next_turn_after_a_streamed_mcp_turn_replays_its_answer(gateway: Gateway) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND)
+    with _rig(gateway, "responses", upstream="responses_bridge", billing=billing, prices=PRICES) as rig:
+        key: Final = _granted_key(rig)
+        first: Final = rig.send(key, [AUTO], stream=True)
+        assert first.status_code == 200, first.text
+        first_id: Final = string_value(_completed(first)["id"])
+        _model_rows(first.headers["x-litellm-call-id"], _bills_at_least(_price(FIRST_ROUND, FOLLOW_UP_ROUND)))
         rig.wire.drain()
         second: Final = rig.send(key, [AUTO], previous_response_id=first_id, cache={"no-cache": True})
         assert second.status_code == 200, second.text
