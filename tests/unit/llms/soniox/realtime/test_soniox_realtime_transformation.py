@@ -308,6 +308,17 @@ def test_a_commit_without_speech_answers_with_an_empty_turn_billed_for_the_silen
     assert _events(config, [_token("Next"), _token("<end>")])[0]["item_id"] != events[0]["item_id"]
 
 
+def test_a_commit_soniox_answers_after_its_endpoint_already_ended_the_turn_adds_no_second_turn():
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(_append(), MODEL)
+    _events(config, [_token("Hello")])
+    config.transform_realtime_request(_event("input_audio_buffer.commit"), MODEL)
+
+    events = _events(config, [_token("<end>"), _token("<fin>")])
+
+    assert [event["transcript"] for event in events if "transcript" in event] == ["Hello"]
+
+
 def test_a_clear_without_speech_still_answers_nothing():
     config = SonioxRealtimeConfig()
     config.transform_realtime_request(_append(), MODEL)
