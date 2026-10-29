@@ -947,6 +947,54 @@ class TestOllamaToolCallTransformation:
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
 
+    def test_transform_request_preserves_assistant_tool_call_id(self):
+        """
+        The id on an assistant tool call must survive transform_request so
+        the following tool result can be matched to the call that produced
+        it. Previously the translated tool call carried only its function,
+        while the tool message kept its tool_call_id, so a downstream
+        model could not read the result.
+        Regression: https://github.com/BerriAI/litellm/issues/48457
+        """
+        config = OllamaChatConfig()
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "What time is it?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_time",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": "12:00",
+                },
+            ],
+        )
+
+        result = config.transform_request(
+            model="minimax-m3.1-flash:cloud",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assistant_msg = result["messages"][1]
+        assert assistant_msg["tool_calls"][0]["id"] == "call_123"
+        assert assistant_msg["tool_calls"][0]["id"] == result["messages"][2]["tool_call_id"]
+
 
 class TestOllamaStreamingUsage:
     @staticmethod

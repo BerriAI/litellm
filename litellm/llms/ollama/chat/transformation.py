@@ -259,6 +259,9 @@ class OllamaChatConfig(BaseConfig):
                                 arguments=arguments,
                             )
                         )
+                        tool_call_id = typed_tool.get("id")
+                        if tool_call_id is not None:
+                            ollama_tool_call["id"] = tool_call_id
                         new_tools.append(ollama_tool_call)
             reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))

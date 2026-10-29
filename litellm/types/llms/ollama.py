@@ -11,8 +11,9 @@ class OllamaToolCallFunction(
     arguments: dict
 
 
-class OllamaToolCall(TypedDict):
-    function: OllamaToolCallFunction
+class OllamaToolCall(TypedDict, total=False):
+    function: Required[OllamaToolCallFunction]
+    id: str
 
 
 class OllamaVisionModelObject(TypedDict):
