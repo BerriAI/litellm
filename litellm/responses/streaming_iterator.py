@@ -2503,22 +2503,24 @@ class ResponsesWebSocketStreaming:
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
             litellm_call_id=str(uuid.uuid4()), start_time=start_time
         )
-        self._detach_budget_reservation()
+        self._detach_admission_reservations()
         _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         _set_turn_io_token_reservation(turn_logging_obj, io_token_reservation)
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 
-    def _detach_budget_reservation(self) -> None:
-        """Only the first turn settles the connection's admission reservation; later turns charge their cost directly."""
+    def _detach_admission_reservations(self) -> None:
+        """Only the first turn settles the connection's admission reservations; later turns charge their own usage."""
+        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import without_io_token_reservation
+
         litellm_params: Final = _json_object_or_none(
             self.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
         )
         if litellm_params is None:
             return
         self.logging_obj.litellm_params = {
-            key: without_budget_reservation(value)
+            key: without_io_token_reservation(without_budget_reservation(value))
             if key in _PER_TURN_METADATA_KEYS and _is_json_object(value)
             else value
             for key, value in litellm_params.items()
@@ -3393,6 +3395,14 @@ class ManagedResponsesWebSocketHandler:
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
+    def _detach_io_token_reservation(self) -> None:
+        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import without_io_token_reservation
+
+        connection_metadata: Final = self.extra_kwargs.get("metadata")
+        self.litellm_metadata = without_io_token_reservation(self.litellm_metadata)
+        if _is_json_object(connection_metadata):
+            self.extra_kwargs = {**self.extra_kwargs, "metadata": without_io_token_reservation(connection_metadata)}
+
     async def _guard_frame(self, raw_message: str) -> GuardedResponsesWsFrame | None:
         """Same per-frame pre_call guardrail walk as the native socket: a rejected frame errors and is not sent."""
         if self.frame_guard is None:
@@ -3584,6 +3594,7 @@ class ManagedResponsesWebSocketHandler:
             }
         self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
         call_kwargs.update(self.extra_kwargs)
+        self._detach_io_token_reservation()
 
         try:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)

@@ -48,6 +48,7 @@ ITPM_RESERVED_KEY: Final = "_litellm_itpm_reserved"
 OTPM_RESERVED_KEY: Final = "_litellm_otpm_reserved"
 ITPM_CACHE_KEY: Final = "_litellm_itpm_cache_key"
 OTPM_CACHE_KEY: Final = "_litellm_otpm_cache_key"
+IO_TOKEN_RESERVATION_KEYS: Final = frozenset({ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY})
 
 
 def set_io_token_rate_limit_request_kwargs(kwargs: dict[str, object] | None, store_in_context: bool = True) -> None:
@@ -334,8 +335,12 @@ def _clear_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> None:
     for channel in _reservation_channels(kwargs):
         channel_dict = _as_mutable_mapping(channel)
         if channel_dict is not None:
-            for key in (ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY):
+            for key in IO_TOKEN_RESERVATION_KEYS:
                 channel_dict.pop(key, None)
+
+
+def without_io_token_reservation(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in metadata.items() if key not in IO_TOKEN_RESERVATION_KEYS}
 
 
 def _reservation_value(value: int, limit: int | None) -> int:
