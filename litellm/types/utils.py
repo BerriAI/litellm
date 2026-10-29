@@ -1200,7 +1200,7 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     unlikely.
     """
 
-    top_logprobs: list[TopLogprob]
+    top_logprobs: list[TopLogprob] = Field(default_factory=list)
     """List of the most likely tokens and their log probability, at this token
     position.
 
@@ -1242,6 +1242,8 @@ class ChoiceLogprobs(OpenAIObject):
     content: list[ChatCompletionTokenLogprob] | None = None
     """A list of message content tokens with log probability information."""
 
+    refusal: Sequence[ChatCompletionTokenLogprob] | None = None
+
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -1258,7 +1260,7 @@ class ChoiceLogprobs(OpenAIObject):
 def _sdk_logprobs_as_dict(logprobs: object) -> object:
     if isinstance(logprobs, ChoiceLogprobs) or not isinstance(logprobs, BaseModel):
         return logprobs
-    return logprobs.model_dump()
+    return logprobs.model_dump(exclude_unset=True)
 
 
 CHOICE_LOGPROBS_OR_JSON: Final[TypeAdapter[ChoiceLogprobs | JsonValue]] = TypeAdapter(
@@ -2149,7 +2151,7 @@ class StreamingChoices(OpenAIObject):
         if enhancements is not None:
             self.enhancements = enhancements
 
-        if logprobs is not None and isinstance(logprobs, dict):
+        if isinstance(logprobs, (dict, BaseModel)):
             self.logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
         else:
             self.logprobs = logprobs

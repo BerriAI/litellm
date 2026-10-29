@@ -1815,6 +1815,13 @@ async def _sdk_stream_chunks(
             [],
             id="null-logprob",
         ),
+        pytest.param(
+            {"content": [{"token": "<|return|>", "logprob": None}]},
+            {},
+            None,
+            [],
+            id="null-logprob-keeps-only-the-keys-upstream-sent",
+        ),
         pytest.param(-0.25, {}, None, [], id="scalar-logprobs"),
         pytest.param(
             {"content": [{"token": "<|return|>", "bytes": None, "logprob": None, "top_logprobs": None}], "refusal": None},
@@ -1868,8 +1875,9 @@ async def test_stream_with_nonstandard_logprobs_passes_them_through_and_finishes
 
 
 @pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("logprobs_field", ["content", "refusal"])
 async def test_stream_logprobs_without_top_logprobs_reach_caller_as_litellm_logprobs(
-    async_stream: bool, logging_obj: Logging
+    async_stream: bool, logprobs_field: Literal["content", "refusal"], logging_obj: Logging
 ) -> None:
     chunks: Final = await _sdk_stream_chunks(
         tuple(
@@ -1878,7 +1886,7 @@ async def test_stream_logprobs_without_top_logprobs_reach_caller_as_litellm_logp
                     {
                         "index": 0,
                         "delta": delta,
-                        "logprobs": {"content": [{"token": token, "logprob": -0.5}]},
+                        "logprobs": {logprobs_field: [{"token": token, "logprob": -0.5}]},
                         "finish_reason": finish_reason,
                     }
                 ]
@@ -1898,7 +1906,10 @@ async def test_stream_logprobs_without_top_logprobs_reach_caller_as_litellm_logp
         if choice.logprobs is not None
     )
     streamed_entries: Final = tuple(
-        itertools.chain.from_iterable(logprobs.content or () for logprobs in streamed_logprobs)
+        itertools.chain.from_iterable(
+            (logprobs.content if logprobs_field == "content" else logprobs.refusal) or ()
+            for logprobs in streamed_logprobs
+        )
     )
 
     assert [(entry.token, entry.logprob, entry.top_logprobs) for entry in streamed_entries] == [

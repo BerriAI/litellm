@@ -1202,7 +1202,10 @@ class CustomStreamWrapper:
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                        choices.append(StreamingChoices(**choice_json))
+                                        choice_json.pop("logprobs", None)
+                                        choices.append(
+                                            StreamingChoices(**choice_json, logprobs=getattr(choice, "logprobs", None))
+                                        )
                                 except Exception:
                                     choices.append(StreamingChoices())
                             setattr(model_response, "choices", choices)
