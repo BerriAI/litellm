@@ -1180,9 +1180,7 @@ class Logging(LiteLLMLoggingBaseClass):
         automatically extracts metadata/litellm_metadata from kwargs,
         so callers don't need to manually plumb them into litellm_params.
         """
-        base_litellm_params: Final[dict[str, object]] = {
-            key: kwargs[key] for key in _CUSTOM_PRICING_KEYS & kwargs.keys() if kwargs[key] is not None
-        }
+        base_litellm_params: Final[dict[str, object]] = {}
 
         if isinstance(kwargs.get("metadata"), dict):
             base_litellm_params["metadata"] = kwargs["metadata"].copy()
