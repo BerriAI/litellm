@@ -24,7 +24,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
 from litellm.llms.anthropic.messages.stream_assembly import (
     is_raw_sse_stream as is_raw_sse_stream,  # noqa: PLC0414  # public re-export
 )
-from litellm.types.utils import Choices, ModelResponse
+from litellm.types.utils import Choices, ModelResponse, StreamingChoices
 
 
 def model_response_text(response: ModelResponse) -> str:
@@ -101,6 +101,16 @@ def _rewritten_message_delta_fields(
     )
 
 
+def _choice_without_refusal(choice: Choices | StreamingChoices) -> Choices | StreamingChoices:
+    if not isinstance(choice, Choices) or getattr(choice.message, "refusal", None) is None:
+        return choice
+    return choice.model_copy(update={"message": choice.message.model_copy(update={"refusal": None})})
+
+
+def _without_refusals(response: ModelResponse) -> ModelResponse:
+    return response.model_copy(update={"choices": [_choice_without_refusal(choice) for choice in response.choices]})
+
+
 def anthropic_sse_chunks_from_response(
     assembled: ModelResponse, source_chunks: Sequence[object] = (), *, keep_explanations: bool = False
 ) -> tuple[bytes, ...]:
@@ -119,7 +129,7 @@ def anthropic_sse_chunks_from_response(
     )
 
     adapter: Final = LiteLLMAnthropicMessagesAdapter()
-    anthropic_response: Final = adapter.translate_openai_response_to_anthropic(response=assembled)
+    anthropic_response: Final = adapter.translate_openai_response_to_anthropic(response=_without_refusals(assembled))
     source_response: Final = assemble_anthropic_sse_stream(source_chunks)
     source_content: Final = (
         adapter.translate_openai_response_to_anthropic(response=source_response).get("content")

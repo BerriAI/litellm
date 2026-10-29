@@ -22,6 +22,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 def test_response_api_handler_merges_metadata_and_service_tier_without_error():
@@ -1198,3 +1199,294 @@ def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_th
             ],
         }
     ]
+
+
+_REFUSAL_EXPLANATION: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]["explanation"]
+_ANSWER_BEFORE_REFUSAL: Final = {"type": "text", "text": "Here is the start."}
+
+
+def _part_texts(item: BaseModel) -> list[tuple[str, str]]:
+    return [(part["type"], part.get("text") or part.get("refusal")) for part in item.model_dump()["content"]]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_parts"),
+    [
+        ((), [("refusal", _REFUSAL_EXPLANATION)]),
+        (
+            (_ANSWER_BEFORE_REFUSAL,),
+            [("output_text", _ANSWER_BEFORE_REFUSAL["text"]), ("refusal", _REFUSAL_EXPLANATION)],
+        ),
+    ],
+    ids=["refusal_only", "answer_then_refusal"],
+)
+def test_responses_over_anthropic_return_the_refusal_explanation_as_a_refusal_part(
+    respx_mock: respx.MockRouter, content: tuple[Mapping[str, object], ...], expected_parts: list[tuple[str, str]]
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": list(content)})
+    )
+
+    response: Final = litellm.responses(model=_MODEL, input="Write the exploit.", api_key="mock_api_key")
+
+    assert (response.status, response.incomplete_details.reason) == ("incomplete", "content_filter")
+    assert [_part_texts(item) for item in response.output] == [expected_parts]
+
+
+def _refusal_stream(*content: Mapping[str, object]) -> bytes:
+    text_events: Final = tuple(
+        chain.from_iterable(
+            (
+                {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": block["text"]}},
+                {"type": "content_block_stop", "index": index},
+            )
+            for index, block in enumerate(content)
+        )
+    )
+    return _anthropic_sse(
+        {
+            "type": "message_start",
+            "message": {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": [], "stop_reason": None, "stop_details": None},
+        },
+        *text_events,
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "refusal",
+                "stop_sequence": None,
+                "stop_details": ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"],
+            },
+            "usage": {"output_tokens": 0},
+        },
+        {"type": "message_stop"},
+    )
+
+
+_REFUSAL_PART_EVENTS: Final = (
+    ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+    ResponsesAPIStreamEvents.REFUSAL_DELTA,
+    ResponsesAPIStreamEvents.REFUSAL_DONE,
+    ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+)
+_TEXT_PART_EVENTS: Final = (
+    ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+    ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+    ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+    ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+)
+
+
+@pytest.mark.parametrize(
+    ("content", "part_events", "expected_parts"),
+    [
+        ((), _REFUSAL_PART_EVENTS, [("refusal", _REFUSAL_EXPLANATION)]),
+        (
+            (_ANSWER_BEFORE_REFUSAL,),
+            (*_TEXT_PART_EVENTS, *_REFUSAL_PART_EVENTS),
+            [("output_text", _ANSWER_BEFORE_REFUSAL["text"]), ("refusal", _REFUSAL_EXPLANATION)],
+        ),
+    ],
+    ids=["refusal_only", "answer_then_refusal"],
+)
+def test_streamed_responses_over_anthropic_stream_the_refusal_explanation_as_a_refusal_part(
+    respx_mock: respx.MockRouter,
+    content: tuple[Mapping[str, object], ...],
+    part_events: tuple[ResponsesAPIStreamEvents, ...],
+    expected_parts: list[tuple[str, str]],
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_refusal_stream(*content)
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(model=_MODEL, input="Write the exploit.", stream=True, api_key="mock_api_key")
+    )
+    refusal_done: Final = next(event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE)
+    item_done: Final = next(event for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    finished: Final = events[-1]
+
+    assert tuple(event.type for event in events) == (
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        *part_events,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+    )
+    assert (refusal_done.content_index, refusal_done.refusal) == (len(expected_parts) - 1, _REFUSAL_EXPLANATION)
+    assert _part_texts(item_done.item) == expected_parts
+    assert finished.response.incomplete_details.reason == "content_filter"
+    assert [_part_texts(item) for item in finished.response.output] == [expected_parts]
+
+
+def test_streamed_responses_over_anthropic_give_a_refusal_after_thinking_its_own_message(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_details": None,
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Hmm."}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+                {"type": "content_block_stop", "index": 0},
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "refusal",
+                        "stop_sequence": None,
+                        "stop_details": ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"],
+                    },
+                    "usage": {"output_tokens": 3},
+                },
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL, input="Write the exploit.", reasoning={"effort": "low"}, stream=True, api_key="mock_api_key"
+        )
+    )
+    refusal_done: Final = next(event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE)
+    finished: Final = events[-1]
+
+    assert (refusal_done.output_index, refusal_done.content_index, refusal_done.refusal) == (
+        1,
+        0,
+        _REFUSAL_EXPLANATION,
+    )
+    assert [item.type for item in finished.response.output] == ["reasoning", "message"]
+    assert _part_texts(finished.response.output[1]) == [("refusal", _REFUSAL_EXPLANATION)]
+
+
+_RAN_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_ran",
+    "name": "web_search",
+    "input": {"query": "tokyo"},
+}
+_RAN_SEARCH_RESULT: Final = {
+    "type": "web_search_tool_result",
+    "tool_use_id": "srvtoolu_ran",
+    "content": [
+        {"type": "web_search_result", "url": "https://tokyo.example", "title": "Tokyo", "encrypted_content": "e"}
+    ],
+}
+_PENDING_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_pending",
+    "name": "web_search",
+    "input": {"query": "next city"},
+}
+_EXPECTED_PAUSED_OUTPUT: Final = [
+    ("web_search_call", "completed", "tokyo"),
+    ("web_search_call", "in_progress", "next city"),
+]
+
+
+def _search_calls(output: Sequence[BaseModel]) -> list[tuple[str, str, str]]:
+    return [(item.type, item.status, item.action.query) for item in output]
+
+
+def test_responses_over_anthropic_report_a_paused_turn_as_incomplete_with_its_pending_search(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
+                "content": [_RAN_SEARCH, _RAN_SEARCH_RESULT, _PENDING_SEARCH],
+                "stop_reason": "pause_turn",
+                "stop_details": None,
+            },
+        )
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL, input="Chain sister cities.", tools=[{"type": "web_search"}], api_key="mock_api_key"
+    )
+
+    assert (response.status, response.incomplete_details.reason) == ("incomplete", "max_output_tokens")
+    assert _search_calls(response.output) == _EXPECTED_PAUSED_OUTPUT
+
+
+def _server_tool_use_events(index: int, block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": {**block, "input": {}}},
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": json.dumps(block["input"])},
+        },
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def test_streamed_responses_over_anthropic_leave_a_paused_turn_pending_search_in_progress(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": [], "stop_reason": None},
+                },
+                *_server_tool_use_events(0, _RAN_SEARCH),
+                {"type": "content_block_start", "index": 1, "content_block": _RAN_SEARCH_RESULT},
+                {"type": "content_block_stop", "index": 1},
+                *_server_tool_use_events(2, _PENDING_SEARCH),
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "pause_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 5},
+                },
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input="Chain sister cities.",
+            tools=[{"type": "web_search"}],
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+    pending_item_id: Final = f"ws_{_PENDING_SEARCH['id']}"
+    pending_events: Final = [
+        event.type
+        for event in events
+        if getattr(event, "item_id", None) == pending_item_id
+        or getattr(getattr(event, "item", None), "id", None) == pending_item_id
+    ]
+    finished: Final = events[-1]
+
+    assert pending_events == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+    ]
+    assert finished.type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+    assert finished.response.incomplete_details.reason == "max_output_tokens"
+    assert _search_calls(finished.response.output) == _EXPECTED_PAUSED_OUTPUT

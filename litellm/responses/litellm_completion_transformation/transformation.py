@@ -28,7 +28,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
+from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch, ResponseOutputRefusal
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
@@ -57,6 +57,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
@@ -3555,7 +3556,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif choice.message.content is not None:
+            elif content := LiteLLMCompletionResponsesConfig._message_output_content(choice.message):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3564,14 +3565,22 @@ class LiteLLMCompletionResponsesConfig:
                             choice.finish_reason
                         ),
                         role=choice.message.role,
-                        content=[
-                            LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
-                                choice.message
-                            )
-                        ],
+                        content=list(content),
                     )
                 )
         return message_output_items
+
+    @staticmethod
+    def _message_output_content(message: Message) -> tuple[OutputText | ResponseOutputRefusal, ...]:
+        refusal: Final = openai_chat_refusal_text(message)
+        refusal_parts: Final = (ResponseOutputRefusal(type="refusal", refusal=refusal),) if refusal is not None else ()
+        has_text_part: Final = bool(message.content) or (message.content is not None and not refusal_parts)
+        text_parts: Final = (
+            (LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(message),)
+            if has_text_part
+            else ()
+        )
+        return (*text_parts, *refusal_parts)
 
     @staticmethod
     def _transform_responses_api_outputs_to_chat_completion_messages(

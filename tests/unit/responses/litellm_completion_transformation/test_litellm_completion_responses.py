@@ -4299,6 +4299,7 @@ class TestEnsureOutputItemContentPartAdded:
 
         iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
         iterator.sent_output_item_added_event = False
+        iterator.sent_message_item_added_event = False
         iterator.sent_content_part_added_event = False
         iterator._sequence_number = 0
         iterator._cached_item_id = None

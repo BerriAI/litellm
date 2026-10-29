@@ -38,6 +38,7 @@ from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
 
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -1814,7 +1815,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             return
 
         # Handle both GenericResponseOutputItem and dict
-        content: list[OutputText] | list[dict] | None = None
+        content: list[OutputText | ResponseOutputRefusal] | list[dict] | None = None
         if isinstance(output_item, BaseModel):
             try:
                 output_item_dump: Final = output_item.model_dump()
