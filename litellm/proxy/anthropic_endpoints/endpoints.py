@@ -2,7 +2,7 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -236,19 +236,12 @@ async def anthropic_response(
         if data.get("stream") is True:
             block_chunks: Final = block_handler.build_block_sse_chunks(e)
 
-            async def _blocked_stream() -> AsyncIterator[bytes]:
+            async def _blocked_stream() -> AsyncGenerator[str, None]:
                 for chunk in block_chunks:
-                    yield chunk
+                    yield chunk.decode()
 
             return await create_response(
-                generator=ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                    response=_blocked_stream(),
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=_data,
-                    proxy_logging_obj=proxy_logging_obj,
-                ),
-                media_type="text/event-stream",
-                headers=block_headers,
+                generator=_blocked_stream(), media_type="text/event-stream", headers=block_headers
             )
 
         fastapi_response.headers.update(block_headers)

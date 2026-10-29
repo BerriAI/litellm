@@ -5,18 +5,22 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 import json
 import logging
 import unittest
-from collections.abc import Callable, Mapping
-from typing import Final
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import Response
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import ModelResponseStream, TokenCountResponse
 
 
 class TestAnthropicEndpoints(unittest.TestCase):
@@ -68,6 +72,63 @@ class TestAnthropicEndpoints(unittest.TestCase):
         mock_safe_dumps.assert_any_call({"type": "message_start", "message": {"id": "msg_123"}})
         mock_safe_dumps.assert_any_call({"type": "content_block_delta", "delta": {"text": "more data"}})
         assert mock_safe_dumps.call_count == 2  # Called twice, once for each dict object
+
+
+_BLOCK_CALL_ID: Final = "messages-block"
+
+
+class _RewriteEveryStreamedReply(CustomGuardrail):
+    async def async_post_call_streaming_iterator_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        async for _ in response:
+            yield ModelResponseStream(choices=[])
+
+
+async def _blocked_messages_reply(
+    body: Mapping[str, object], fastapi_response: Response, rails: tuple[CustomGuardrail, ...]
+) -> tuple[object, str]:
+    import litellm
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.caching.dual_cache import DualCache
+    from litellm.integrations.custom_guardrail import ModifyResponseException
+    from litellm.proxy.utils import ProxyLogging
+
+    exc: Final = ModifyResponseException(
+        message="blocked by guardrail",
+        model="claude-haiku-5-5",
+        request_data={**body},
+        guardrail_name="deny-list",
+    )
+
+    async def fake_process(self: ProxyBaseLLMRequestProcessing, **kwargs: object) -> NoReturn:
+        self.data = {**self.data, "litellm_call_id": _BLOCK_CALL_ID}
+        raise exc
+
+    with (
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value={**body})
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
+        ),  # test-quality-ok: the guardrail block happens inside this call; the test targets the endpoint's except block
+        patch.object(
+            proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
+        ),  # test-quality-ok: module global imported at call time; no injection seam
+        patch.object(litellm, "callbacks", new=[*rails]),  # test-quality-ok: guardrails register through this global
+    ):
+        response = await ep.anthropic_response(
+            fastapi_response=fastapi_response,
+            request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        if not isinstance(response, StreamingResponse):
+            return response, ""
+        streamed: Final = b"".join(
+            [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+        ).decode()
+        return response, streamed
 
 
 class TestBlockedResponseUsage:
@@ -132,53 +193,26 @@ class TestBlockedResponseUsage:
         mock_logging.post_call_failure_hook.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_streaming_block_answers_anthropic_events_with_the_call_id(self):
-        import litellm.proxy.anthropic_endpoints.endpoints as ep
-        import litellm.proxy.proxy_server as proxy_server
-        from litellm.caching.dual_cache import DualCache
-        from litellm.integrations.custom_guardrail import ModifyResponseException
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.utils import ProxyLogging
-
-        call_id: Final = "messages-stream-block"
-        exc: Final = ModifyResponseException(
-            message="blocked by guardrail",
-            model="claude-haiku-5-5",
-            request_data={"model": "claude-haiku-5-5", "stream": True},
-            guardrail_name="deny-list",
+    @pytest.mark.parametrize(
+        "rails",
+        ((), (_RewriteEveryStreamedReply(guardrail_name="post-call-rewrite", default_on=True),)),
+        ids=("no_rails", "post_call_rail"),
+    )
+    async def test_streaming_block_answers_anthropic_events_with_the_call_id(
+        self, rails: tuple[CustomGuardrail, ...]
+    ) -> None:
+        response, streamed = await _blocked_messages_reply(
+            {"model": "claude-haiku-5-5", "stream": True}, Response(), rails
         )
 
-        async def fake_process(self, **kwargs):
-            self.data = {**self.data, "litellm_call_id": call_id}
-            raise exc
-
-        with (
-            patch.object(
-                ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-haiku-5-5", "stream": True})
-            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-            patch.object(
-                ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
-            ),  # test-quality-ok: the guardrail block happens inside this call; the test targets the endpoint's except block
-            patch.object(
-                proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
-            ),  # test-quality-ok: module global imported at call time; no injection seam
-        ):
-            response = await ep.anthropic_response(
-                fastapi_response=MagicMock(),
-                request=MagicMock(),
-                user_api_key_dict=UserAPIKeyAuth(),
-            )
-            body: Final = b"".join(
-                [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
-            ).decode()
-
-        frames: Final = tuple(frame for frame in body.split("\n\n") if frame.strip())
+        frames: Final = tuple(frame for frame in streamed.split("\n\n") if frame.strip())
         events: Final = tuple(
             (frame.split("\n")[0].removeprefix("event: "), json.loads(frame.split("\n")[1].removeprefix("data: ")))
             for frame in frames
         )
+        assert isinstance(response, StreamingResponse)
         assert response.media_type == "text/event-stream"
-        assert response.headers["x-litellm-call-id"] == call_id
+        assert response.headers["x-litellm-call-id"] == _BLOCK_CALL_ID
         assert [name for name, _ in events] == [
             "message_start",
             "content_block_start",
@@ -190,6 +224,16 @@ class TestBlockedResponseUsage:
         assert all(payload["type"] == name for name, payload in events)
         assert events[2][1]["delta"] == {"type": "text_delta", "text": "blocked by guardrail"}
         assert events[4][1]["delta"]["stop_reason"] == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_json_block_answers_with_the_call_id(self) -> None:
+        fastapi_response: Final = Response()
+
+        response, _ = await _blocked_messages_reply({"model": "claude-haiku-5-5"}, fastapi_response, ())
+
+        assert fastapi_response.headers["x-litellm-call-id"] == _BLOCK_CALL_ID
+        assert isinstance(response, Mapping)
+        assert response["content"] == [{"type": "text", "text": "blocked by guardrail"}]
 
 
 class TestProxyExceptionAnthropicEnvelope:
