@@ -4000,25 +4000,24 @@ class TestChatPathProviderStamp:
 
 class TestChatPathResolvesTheDeploymentProvider:
     MODEL = "azure_ai/gpt-6-astra"
-    FOUNDRY_API_BASE = "https://foundry.services.ai.azure.com"
-    AZURE_OPENAI_API_BASE = "https://other-deployment.openai.azure.com"
+    AMBIENT_API_BASE = "https://other-deployment.openai.azure.com"
     POINTS = [{"location": "message", "role": "system"}]
     MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
 
     def _pin_ambient_api_base(self, monkeypatch: pytest.MonkeyPatch, pinned: bool) -> None:
         if pinned:
-            monkeypatch.setenv("AZURE_AI_API_BASE", self.AZURE_OPENAI_API_BASE)
+            monkeypatch.setenv("AZURE_AI_API_BASE", self.AMBIENT_API_BASE)
         else:
             monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
 
-    def _chat(self, custom_llm_provider: str | None) -> tuple[list[AllMessageValues], dict]:
-        seeded: Final[dict] = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+    def _chat(self, custom_llm_provider: str | None, api_base: str) -> tuple[list[AllMessageValues], dict[str, object]]:
+        seeded: Final[dict[str, object]] = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
         AnthropicCacheControlHook.maybe_seed_default_injection_points(
             non_default_params=seeded,
             messages=copy.deepcopy(self.MESSAGES),
             model=self.MODEL,
             custom_llm_provider=custom_llm_provider,
-            api_base=self.FOUNDRY_API_BASE,
+            api_base=api_base,
         )
         _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
             model=self.MODEL,
@@ -4030,13 +4029,17 @@ class TestChatPathResolvesTheDeploymentProvider:
         )
         return out, params
 
-    def test_chat_path_marks_the_foundry_deployment_the_same_whatever_the_ambient_api_base(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "api_base",
+        ["https://foundry.services.ai.azure.com", "https://resource.cognitiveservices.azure.com"],
+    )
+    def test_chat_path_marks_the_deployment_the_same_as_when_told_its_provider(
+        self, monkeypatch: pytest.MonkeyPatch, api_base: str
     ) -> None:
         self._pin_ambient_api_base(monkeypatch, True)
-        pinned_resolved, pinned_told = self._chat(None), self._chat("azure_ai")
+        pinned_resolved, pinned_told = self._chat(None, api_base), self._chat("azure_ai", api_base)
         self._pin_ambient_api_base(monkeypatch, False)
-        unset_resolved, unset_told = self._chat(None), self._chat("azure_ai")
+        unset_resolved, unset_told = self._chat(None, api_base), self._chat("azure_ai", api_base)
         assert pinned_resolved == pinned_told == unset_resolved == unset_told
         assert AnthropicCacheControlHook.count_request_cache_breakpoints(pinned_resolved[0]) == 1
 

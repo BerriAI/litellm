@@ -113,15 +113,22 @@ def configured_injection_points(value: object) -> Sequence[CacheControlInjection
     return tuple(cast(CacheControlInjectionPoint, entry) for entry in value if isinstance(entry, dict))
 
 
-def _served_provider_for_model(model: str, api_base: str | None = None) -> str | None:
+def _served_provider_for_model(model: str) -> str | None:
     from litellm.exceptions import BadRequestError
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     try:
-        _, provider, _, _ = get_llm_provider(model=model, api_base=api_base)
+        _, provider, _, _ = get_llm_provider(model=model)
     except BadRequestError:
         return None
     return provider
+
+
+def _declared_provider(model: str) -> str | None:
+    import litellm
+
+    prefix, separator, _ = model.partition("/")
+    return prefix if separator and prefix in litellm.provider_list else None
 
 
 def supports_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -510,23 +517,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> bool:
         if model is None:
             return False
-        deployment_api_base: Final = api_base if isinstance(api_base, str) else None
         hosted_flag: Final = _hosted_openai_dialect_flag(
-            model,
-            custom_llm_provider,
-            lambda name: AnthropicCacheControlHook._resolve_provider(name, deployment_api_base),
+            model, custom_llm_provider or _declared_provider(model), AnthropicCacheControlHook._resolve_provider
         )
         if hosted_flag is not None:
             return hosted_flag
         if not supports_openai_prompt_cache_breakpoint(model):
             return False
-        if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, deployment_api_base)) != "openai":
+        if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
             return False
         return prompt_cache_options is not None or targets_openai_api(api_base)
 
     @staticmethod
-    def _resolve_provider(model: str, api_base: str | None = None) -> str | None:
-        return _served_provider_for_model(model, api_base)
+    def _resolve_provider(model: str) -> str | None:
+        return _served_provider_for_model(model)
 
     @staticmethod
     def count_request_cache_breakpoints(
