@@ -258,15 +258,13 @@ def _resolve_reconcile_usage_tokens(
         if isinstance(standard_logging_object, dict):
             prompt_tokens = int(standard_logging_object.get("prompt_tokens") or 0)
             completion_tokens = int(standard_logging_object.get("completion_tokens") or 0)
-            cached_tokens = 0
-            metadata: Final = standard_logging_object.get("metadata")
-            if isinstance(metadata, dict):
-                cached_tokens = int(metadata.get("cache_read_input_tokens") or 0)
+            logged_usage: Final = _usage_field(standard_logging_object.get("metadata"), "usage_object")
+            logged_cached_tokens: Final = _cached_prompt_tokens(logged_usage)
             # Same rationale as _usage_is_present: a bare total_tokens with no
             # prompt/completion breakdown can't be split, so it isn't treated
             # as resolved usage - the reservation is kept instead of refunded.
             if prompt_tokens or completion_tokens:
-                return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+                return max(0, prompt_tokens - logged_cached_tokens), completion_tokens, True
 
     return 0, 0, False
 

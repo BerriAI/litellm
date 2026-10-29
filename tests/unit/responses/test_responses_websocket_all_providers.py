@@ -1743,6 +1743,56 @@ def _connection_settling_turns_through(
     return connection
 
 
+_ITPM_OPENED_ON: Final = "global_router:ws-dep:openai/gpt-5-mini:itpm:12-34"
+_ITPM_DEPLOYMENT: Final = {
+    "litellm_params": {"model": "openai/gpt-5-mini", "itpm": 40_000},
+    "model_info": {"id": "ws-dep"},
+}
+_TURN_INPUT_TOKENS: Final = 1_000
+
+
+def _turn_completed_reading_cache(cached_tokens: int) -> str:
+    return json.dumps(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_cached_turn",
+                "status": "completed",
+                "output": [],
+                "usage": {
+                    "input_tokens": _TURN_INPUT_TOKENS,
+                    "input_tokens_details": {"cached_tokens": cached_tokens},
+                    "output_tokens": _OUTPUT_TOKENS_PER_TURN,
+                    "total_tokens": _TURN_INPUT_TOKENS + _OUTPUT_TOKENS_PER_TURN,
+                },
+            },
+        }
+    )
+
+
+def _connection_logged_through(rate_limits: "ModelRateLimitingCheck", opened_with: Mapping[str, object]) -> "Logging":
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes
+
+    connection: Final = Logging(
+        model="gpt-5-mini",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="connection-call",
+        function_id="connection-call",
+        dynamic_async_success_callbacks=[rate_limits],
+    )
+    connection.update_environment_variables(
+        litellm_params={"metadata": dict(opened_with), CallTypes.aresponses_websocket.value: True},
+        optional_params={},
+    )
+    return connection
+
+
 class _TwoOutputTokenTurns(CustomLLM):
     def __init__(self, failing_turns: frozenset[int] = frozenset()) -> None:
         super().__init__()
@@ -1911,6 +1961,44 @@ class TestWebSocketTurnAdmission:
 
         assert await dual_cache.async_get_cache(key=_OPENED_ON) == _OTHER_USAGE + first_turn_tokens
         assert await dual_cache.async_get_cache(key=_TURNED_ON) == _OTHER_USAGE + 2 * _OUTPUT_TOKENS_PER_TURN
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("cached_tokens", "counted_input_tokens"),
+        [
+            pytest.param(800, _TURN_INPUT_TOKENS - 800, id="cached_input"),
+            pytest.param(0, _TURN_INPUT_TOKENS, id="uncached_input"),
+        ],
+    )
+    async def test_native_relay_leaves_a_turn_s_cached_input_out_of_the_deployment_s_itpm(
+        self, cached_tokens: int, counted_input_tokens: int
+    ) -> None:
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.caching.dual_cache import DualCache
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
+        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+        dual_cache: Final = DualCache()
+        opened_with: Final = await async_admit_io_token_turn(dual_cache, _ITPM_DEPLOYMENT, _OPENED_AT)
+        first, _, _ = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=[_turn_completed_reading_cache(cached_tokens), Exception("stop")])
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(),
+            backend_ws=backend_ws,
+            request_data={},
+            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            first_message=first,
+        )
+
+        await handler.client_to_backend()
+        await handler.backend_to_client()
+        await drain_logging_tasks()
+
+        assert await dual_cache.async_get_cache(key=_ITPM_OPENED_ON) == counted_input_tokens
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
