@@ -26,7 +26,11 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import (
+    is_claude_model_target,
+    merge_anthropic_beta_headers,
+    tools_without_custom_field,
+)
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
@@ -372,6 +376,7 @@ class AnthropicCountTokensConfig:
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        drop_params: bool = False,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -391,7 +396,19 @@ class AnthropicCountTokensConfig:
                     **MappingProxyType(
                         {
                             key: value
-                            for key, value in (("system", counted_system), ("tools", tools))
+                            for key, value in (
+                                ("system", counted_system),
+                                (
+                                    "tools",
+                                    None
+                                    if tools is None
+                                    else tools_without_custom_field(
+                                        tools,
+                                        hoist_defer_loading=is_claude_model_target("anthropic", model),
+                                        drop_custom=drop_params,
+                                    ),
+                                ),
+                            )
                             if value is not None
                         }
                     ),

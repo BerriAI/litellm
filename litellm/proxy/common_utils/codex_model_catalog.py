@@ -24,7 +24,7 @@ from functools import cache
 from itertools import accumulate, pairwise
 from pathlib import Path
 from types import MappingProxyType, NoneType
-from typing import TYPE_CHECKING, Annotated, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, StringConstraints, TypeAdapter, ValidationError
 
@@ -102,12 +102,19 @@ class CodexFallbackModel(LiteLLMBaseModel):
     experimental_supported_tools: tuple[()] = ()
     context_window: int | None
     base_instructions: str
+    supports_search_tool: bool = False
 
 
 class CodexStockUpgrade(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     model: str
+
+
+class CodexReasoningLevel(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    effort: str
 
 
 class CodexStockModel(LiteLLMBaseModel):
@@ -128,6 +135,9 @@ class CodexStockModel(LiteLLMBaseModel):
     upgrade: CodexStockUpgrade | None = None
     service_tiers: tuple[CodexServiceTier, ...] = ()
     default_service_tier: str | None = None
+    supports_search_tool: bool = False
+    supported_reasoning_levels: tuple[CodexReasoningLevel, ...] = ()
+    context_window: int | None = None
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -135,21 +145,24 @@ class CodexStockCatalog(LiteLLMBaseModel):
 
 
 CodexCatalogEntry = CodexFallbackModel | CodexStockModel
+CodexAliasDefaults: TypeAlias = Literal["codex", "deployment"]
 
 
 @dataclass(frozen=True, slots=True)
 class CodexCatalogRow:
     """What the catalog needs to know about one listed model: its public id, the listing's mode and
-    input limit, the upstream model behind it, and the `model_info` values the operator set;
-    `service_tiers` holds one raw `model_info.service_tiers` value per deployment behind the id, None
-    where a deployment sets none."""
+    input limit, the upstream model behind it, the reasoning effort its deployments pin, and the
+    `model_info` values the operator set; `service_tiers` holds one raw `model_info.service_tiers`
+    value per deployment behind the id, None where a deployment sets none."""
 
     id: str
     mode: str | None = None
     max_input_tokens: int | None = None
     upstream_model: str | None = None
+    reasoning_effort: str | None = None
     display_name: str | None = None
     service_tiers: tuple[object, ...] = ()
+    search_tool_support: tuple[bool | None, ...] = ()
 
 
 @cache
@@ -242,6 +255,12 @@ def configured_service_tiers(
     return offered
 
 
+def offered_search_tool(per_deployment: Sequence[bool | None]) -> bool | None:
+    if False in per_deployment:
+        return False
+    return True if per_deployment and None not in per_deployment else None
+
+
 def _codex_can_drive(row: CodexCatalogRow) -> bool:
     return "*" not in row.id and (row.mode is None or row.mode in CODEX_CHAT_MODES)
 
@@ -254,18 +273,49 @@ def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> Co
     return upstream if upstream is not None else stock.get(row.upstream_model.partition("/")[2])
 
 
+def _alias_context_window(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, int]:
+    if row.max_input_tokens is None or stock_model.context_window is None:
+        return MappingProxyType({})
+    return MappingProxyType({"context_window": min(stock_model.context_window, row.max_input_tokens)})
+
+
+def _alias_reasoning_level(row: CodexCatalogRow, stock_model: CodexStockModel) -> str | None:
+    efforts: Final = frozenset(level.effort for level in stock_model.supported_reasoning_levels)
+    return row.reasoning_effort if row.reasoning_effort in efforts else None
+
+
+def _deployment_defaults(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, object]:
+    """What an alias's deployments decide in place of the defaults Codex picks for the model they route to:
+    no service tier, verbosity, upgrade nudge or startup promo of Codex's own, so what the deployment
+    pins (or OpenAI's API default) stays in force, the pinned reasoning effort when Codex offers it and
+    none otherwise, and a window no larger than the alias's own limit."""
+    return MappingProxyType(
+        {
+            "service_tiers": (),
+            "default_service_tier": None,
+            "default_verbosity": None,
+            "upgrade": None,
+            "availability_nux": None,
+            "default_reasoning_level": _alias_reasoning_level(row, stock_model),
+            **_alias_context_window(row, stock_model),
+        }
+    )
+
+
 def _entry(
     index: int,
     row: CodexCatalogRow,
     stock: Mapping[str, CodexStockModel],
     served: frozenset[str],
     instructions: str,
+    alias_defaults: CodexAliasDefaults,
 ) -> CodexCatalogEntry:
     stock_model: Final = _stock_for(row, stock)
     stock_tiers: Final = MappingProxyType(
         {tier.id: tier for tier in (stock_model.service_tiers if stock_model is not None else ())}
     )
     configured: Final = configured_service_tiers(row.service_tiers, row.id, stock_tiers)
+    search_tool: Final = offered_search_tool(row.search_tool_support)
     if stock_model is None:
         return CodexFallbackModel(
             slug=row.id,
@@ -274,11 +324,13 @@ def _entry(
             service_tiers=configured if configured is not None else (),
             context_window=row.max_input_tokens,
             base_instructions=instructions,
+            supports_search_tool=search_tool is True,
         )
     upgrade: Final = (
         stock_model.upgrade if stock_model.upgrade is not None and stock_model.upgrade.model in served else None
     )
-    stock_name: Final = stock_model.display_name if row.id == stock_model.slug else row.id
+    is_alias: Final = row.id != stock_model.slug
+    stock_name: Final = row.id if is_alias else stock_model.display_name
     listing: Final = {
         "slug": row.id,
         "display_name": row.display_name if row.display_name is not None else stock_name,
@@ -286,6 +338,8 @@ def _entry(
         "visibility": "list",
         "supported_in_api": True,
         "upgrade": upgrade,
+        **({} if search_tool is None else {"supports_search_tool": search_tool}),
+        **(_deployment_defaults(row, stock_model) if is_alias and alias_defaults == "deployment" else {}),
     }
     if configured is None:
         return stock_model.model_copy(update=listing)
@@ -351,6 +405,7 @@ def codex_models_response_json(
     stock: Mapping[str, CodexStockModel] | None = None,
     instructions: str | None = None,
     byte_limit: int | None = CODEX_CATALOG_BYTE_LIMIT,
+    alias_defaults: CodexAliasDefaults = "codex",
 ) -> CodexCatalogBody:
     """Codex's `ModelsResponse` body for `rows`, in listing order, cut to Codex's byte limit.
 
@@ -359,13 +414,18 @@ def codex_models_response_json(
     byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
     the ones offering a service tier taken first and the rest in listing order, an entry too large
     for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
-    keeps every entry.
+    keeps every entry. A row listed under another name than the Codex model its `upstream_model`
+    names (an alias) takes that model's entry; `alias_defaults="deployment"` drops the defaults
+    Codex picks for that model in favor of what the alias's deployments pin, while `"codex"` keeps
+    them, as Codex would use them for the model's own name.
     """
     known: Final = bundled_codex_models() if stock is None else stock
     prompt: Final = codex_base_instructions() if instructions is None else instructions
     drivable: Final = tuple(row for row in rows if _codex_can_drive(row))
     served: Final = frozenset(row.id for row in drivable)
-    entries: Final = tuple(_entry(index, row, known, served, prompt) for index, row in enumerate(drivable))
+    entries: Final = tuple(
+        _entry(index, row, known, served, prompt, alias_defaults) for index, row in enumerate(drivable)
+    )
     serialized: Final = tuple(_serialized(entry) for entry in entries)
     kept: Final = _kept_positions(entries, serialized, byte_limit)
     return CodexCatalogBody(
@@ -385,6 +445,7 @@ def _catalog_row(
         upstream_model=llm_router.get_routable_upstream_model(lookup_id, team_id) if llm_router is not None else None,
         display_name=llm_router.get_configured_display_name(label_id) if llm_router is not None else None,
         service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
+        search_tool_support=llm_router.get_search_tool_support(lookup_id, team_id) if llm_router is not None else (),
     )
 
 

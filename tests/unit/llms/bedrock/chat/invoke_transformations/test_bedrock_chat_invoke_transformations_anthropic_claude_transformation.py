@@ -2078,3 +2078,25 @@ def test_bedrock_invoke_claude_default_max_tokens_reads_an_inference_profile_arn
     )
 
     assert body["max_tokens"] == mapped_cap, f"an ARN should take its base_model's cap, got {body['max_tokens']}"
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    block_binding: Final = {"prefix_mismatch_behavior": "error"}
+    result: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding},
+        },
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
+    assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
