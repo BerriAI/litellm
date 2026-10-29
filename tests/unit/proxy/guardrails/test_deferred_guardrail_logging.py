@@ -1538,6 +1538,27 @@ class TestArmDeferredStreamDispatch:
         assert recorded["prefer_async_handlers"] is True
 
     @pytest.mark.asyncio
+    async def test_text_completion_stream_logs_after_the_guardrails_finish(self):
+        from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
+
+        logging_obj, recorded = self._dispatch_recording_logging_obj()
+
+        self._processor()._arm_deferred_stream_dispatch(
+            response=TextCompletionStreamWrapper(completion_stream=MagicMock(), model="gpt-test"),
+            route_type="atext_completion",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        assembled = object()
+        logging_obj._deferred_stream_complete_args = (assembled, False)
+        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        await asyncio.sleep(0)
+
+        assert recorded["result"] is assembled
+        assert recorded["cache_hit"] is False
+
+    @pytest.mark.asyncio
     async def test_router_wrapped_bridged_iterator_gets_csw_arg_shape(self):
         """The router wraps iterators without _hidden_params in
         HiddenParamsAsyncIteratorWrapper before the proxy arms deferral, so
