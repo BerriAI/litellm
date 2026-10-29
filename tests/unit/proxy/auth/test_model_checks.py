@@ -588,6 +588,67 @@ async def test_a_hung_wildcard_listing_leaves_the_event_loop_free_for_other_requ
     assert "hosted_vllm/qwen2.5" in await listing
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_model_list_that_needs_no_listing_answers_while_hung_listings_hold_every_discovery_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    import litellm
+    from litellm import Router
+    from litellm.constants import PROVIDER_MODEL_DISCOVERY_MAX_THREADS
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    listing_started: Final = threading.Event()
+    hung_server_released: Final = threading.Event()
+
+    def hung_listing(request: httpx.Request) -> httpx.Response:
+        listing_started.set()
+        hung_server_released.wait(timeout=10)
+        return httpx.Response(503)
+
+    respx.get("http://vllm-holding-every-thread.test:8000/v1/models").mock(side_effect=hung_listing)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "stuck/*",
+                "litellm_params": {
+                    "model": "hosted_vllm/*",
+                    "api_base": "http://vllm-holding-every-thread.test:8000/v1",
+                },
+            },
+            {
+                "model_name": "qwen-open",
+                "litellm_params": {"model": "hosted_vllm/qwen2.5", "api_base": "http://vllm-open.test:8000/v1"},
+            },
+        ]
+    )
+
+    def list_models(models: list[str]) -> asyncio.Task[list[str]]:
+        return asyncio.create_task(
+            get_available_models_for_user(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=models),
+                llm_router=router,
+                general_settings={},
+                user_model=None,
+            )
+        )
+
+    try:
+        admin_listings: Final = tuple(list_models([]) for _ in range(PROVIDER_MODEL_DISCOVERY_MAX_THREADS))
+        assert await asyncio.to_thread(listing_started.wait, 3)
+        await asyncio.sleep(0.1)
+
+        assert await asyncio.wait_for(list_models(["qwen-open"]), timeout=2) == ["qwen-open"]
+    finally:
+        hung_server_released.set()
+    for admin_models in await asyncio.gather(*admin_listings):
+        assert "qwen-open" in admin_models
+
+
 @respx.mock
 def test_a_hung_wildcard_listing_leaves_the_default_executor_free_for_completion_calls(
     monkeypatch: pytest.MonkeyPatch,

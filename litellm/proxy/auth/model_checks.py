@@ -22,7 +22,7 @@ from litellm.router_utils.fallback_event_handlers import get_fallback_model_grou
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_valid_models
+from litellm.utils import ProviderConfigManager, answer_from_cached_provider_listings, get_valid_models
 
 LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
 
@@ -40,6 +40,11 @@ async def run_model_discovery(
     *args: _P.args,
     **kwargs: _P.kwargs,  # kwargs-ok: forwards the discovery function's own arguments
 ) -> _R:
+    cached_answer, needs_provider_listing = answer_from_cached_provider_listings(
+        functools.partial(discover, *args, **kwargs)
+    )
+    if not needs_provider_listing:
+        return cached_answer
     context: Final = contextvars.copy_context()
     return await asyncio.get_running_loop().run_in_executor(
         _MODEL_DISCOVERY_EXECUTOR, lambda: context.run(discover, *args, **kwargs)

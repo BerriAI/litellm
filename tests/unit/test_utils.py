@@ -10617,6 +10617,43 @@ def test_a_timed_out_provider_model_listing_is_retried_only_after_its_timeout_tt
 
 
 @respx.mock
+def test_concurrent_listings_of_one_server_share_a_single_request() -> None:
+    import time
+
+    from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
+    from litellm.types.router import LiteLLM_Params
+    from litellm.utils import AvailableModelsCache, _get_valid_models_from_provider_api
+
+    listing_started: Final = threading.Event()
+    server_released: Final = threading.Event()
+
+    def slow_listing(request: httpx.Request) -> httpx.Response:
+        listing_started.set()
+        server_released.wait(timeout=5)
+        return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+
+    models_route: Final = respx.get("http://vllm-slow.test:8000/v1/models").mock(side_effect=slow_listing)
+    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-slow.test:8000/v1")
+    model_cache: Final = AvailableModelsCache(clock=Mock(return_value=1000.0))
+
+    def list_models() -> list[str]:
+        return _get_valid_models_from_provider_api(
+            HostedVLLMModelInfo(), "hosted_vllm", litellm_params, model_cache=model_cache
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as callers:
+        listings: Final = tuple(callers.submit(list_models) for _ in range(4))
+        try:
+            assert listing_started.wait(timeout=3)
+            time.sleep(0.3)
+        finally:
+            server_released.set()
+        assert [listing.result(timeout=5) for listing in listings] == [["qwen2.5"]] * 4
+
+    assert models_route.call_count == 1
+
+
+@respx.mock
 def test_a_listing_that_times_out_keeps_the_models_a_concurrent_listing_cached() -> None:
     from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
     from litellm.types.router import LiteLLM_Params

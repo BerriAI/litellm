@@ -79,6 +79,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
+    PROVIDER_MODEL_DISCOVERY_LISTING_LOCK_STRIPES,
     PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
@@ -8371,6 +8372,13 @@ class AvailableModelsCache(InMemoryCache):
         super().__init__(ttl_seconds, max_size, clock=clock)
         self._env_hash: str | None = None
         self._listing_lock = threading.Lock()
+        self._single_flight_locks: Final = tuple(
+            threading.RLock() for _ in range(PROVIDER_MODEL_DISCOVERY_LISTING_LOCK_STRIPES)
+        )
+
+    def single_flight_lock(self, custom_llm_provider: str, litellm_params: LiteLLM_Params | None) -> threading.RLock:
+        cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
+        return self._single_flight_locks[hash(cache_key) % len(self._single_flight_locks)]
 
     def _get_env_hash(self) -> str:
         """Create a hash of relevant environment variables"""
@@ -8451,6 +8459,22 @@ class AvailableModelsCache(InMemoryCache):
 # Global cache instance
 _model_cache: Final = AvailableModelsCache()
 
+_UNCACHED_PROVIDER_LISTING: Final[contextvars.ContextVar[threading.Event | None]] = contextvars.ContextVar(
+    "uncached_provider_listing", default=None
+)
+_Answer: Final = TypeVar("_Answer")
+
+
+def answer_from_cached_provider_listings(compute: Callable[[], _Answer]) -> tuple[_Answer, bool]:
+    uncached_listing: Final = threading.Event()
+    answer: Final = contextvars.copy_context().run(_answer_marking_uncached_listings, uncached_listing, compute)
+    return answer, uncached_listing.is_set()
+
+
+def _answer_marking_uncached_listings(uncached_listing: threading.Event, compute: Callable[[], _Answer]) -> _Answer:
+    _UNCACHED_PROVIDER_LISTING.set(uncached_listing)
+    return compute()
+
 
 def _infer_valid_provider_from_env_vars(
     custom_llm_provider: str | None = None,
@@ -8504,21 +8528,40 @@ def _get_valid_models_from_provider_api(
 
         if cached_result is not None:
             return cached_result
+        uncached_listing: Final = _UNCACHED_PROVIDER_LISTING.get()
+        if uncached_listing is not None:
+            uncached_listing.set()
+            return []
+        with model_cache.single_flight_lock(custom_llm_provider, litellm_params):
+            return _list_provider_models_unless_cached(
+                provider_config, custom_llm_provider, litellm_params, model_cache
+            )
+    except Exception as e:
+        verbose_logger.warning("Error getting valid models: %s", e)
+        return []
+
+
+def _list_provider_models_unless_cached(
+    provider_config: BaseLLMModelInfo,
+    custom_llm_provider: str,
+    litellm_params: LiteLLM_Params | None,
+    model_cache: AvailableModelsCache,
+) -> list[str]:
+    cached_while_waiting: Final = model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
+    if cached_while_waiting is not None:
+        return cached_while_waiting
+    try:
         models: Final = provider_config.discover_models(
             litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
         )
-
-        model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
-        return models
     except httpx.TimeoutException as e:
-        verbose_logger.warning("Timed out getting valid models: %s", e)
+        verbose_logger.warning("Error getting valid models: %s", e)
         model_cache.cache_timed_out_listing_unless_listed(
             custom_llm_provider, litellm_params, ttl=PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
         )
         return model_cache.get_cached_model_info(custom_llm_provider, litellm_params) or []
-    except Exception as e:
-        verbose_logger.warning("Error getting valid models: %s", e)
-        return []
+    model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+    return models
 
 
 def get_valid_models(

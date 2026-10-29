@@ -509,6 +509,18 @@ _UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
 class _RouterDeployment(TypedDict):
     model_name: ReadOnly[NotRequired[str]]
     model_info: ReadOnly[Mapping[str, object]]
+    litellm_params: ReadOnly[Mapping[str, object]]
+
+
+def _deployment_serves_provider(llm_router: "Router", deployment: _RouterDeployment, custom_llm_provider: str) -> bool:
+    litellm_params: Final = deployment["litellm_params"]
+    model: Final = litellm_params.get("model")
+    deployment_provider: Final = litellm_params.get("custom_llm_provider")
+    return (
+        isinstance(model, str)
+        and llm_router.credential_provider(deployment_provider if isinstance(deployment_provider, str) else None, model)
+        == custom_llm_provider
+    )
 
 
 def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
@@ -631,6 +643,11 @@ def get_team_provider_credentials(
             return team_credentials
 
     if not include_accessible_deployments:
+        return None
+    if not any(
+        _deployment_serves_provider(llm_router, deployment, custom_llm_provider)
+        for deployment in llm_router.model_list or []
+    ):
         return None
 
     # 2. Fall back to deployments the caller is allowed to access. The key's

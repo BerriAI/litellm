@@ -12379,17 +12379,19 @@ class Router:
             credentials.pop("litellm_credential_name", None)
 
         credentials["model"] = deployment.litellm_params.model
-
-        # Add custom_llm_provider
-        if deployment.litellm_params.custom_llm_provider:
-            credentials["custom_llm_provider"] = deployment.litellm_params.custom_llm_provider
-        elif "/" in deployment.litellm_params.model:
-            # Extract provider from "provider/model" format
-            credentials["custom_llm_provider"] = deployment.litellm_params.model.split("/")[0]
-        else:
-            credentials["custom_llm_provider"] = "openai"  # default
+        credentials["custom_llm_provider"] = self.credential_provider(
+            deployment.litellm_params.custom_llm_provider, deployment.litellm_params.model
+        )
 
         return credentials
+
+    @staticmethod
+    def credential_provider(custom_llm_provider: str | None, model: str) -> str:
+        if custom_llm_provider:
+            return custom_llm_provider
+        if "/" in model:
+            return model.split("/")[0]
+        return "openai"
 
     @overload
     def get_router_model_info(

@@ -802,10 +802,11 @@ async def test_a_hung_wildcard_listing_during_a_credential_lookup_leaves_the_eve
                             "model": "hosted_vllm/*",
                             "api_base": "http://vllm-credential-lookup.test:8000/v1",
                         },
-                    }
+                    },
+                    {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "openai-key"}},
                 ]
             ),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=["hosted_vllm/*"]),
             custom_llm_provider="openai",
         )
     )
@@ -834,14 +835,20 @@ async def test_a_hung_wildcard_listing_during_a_credential_lookup_leaves_the_eve
             ("gpt-4o", "openai/gpt-4o"),
             ("api_base", "http://vllm-route-match.test:8000/v1"),
         ),
+        (
+            "anthropic",
+            "http://vllm-beside-no-anthropic-deployment.test:8000/v1",
+            ("gpt-4o", "openai/gpt-4o"),
+            ("api_key", None),
+        ),
     ],
 )
-async def test_a_credential_lookup_a_configured_model_answers_never_lists_the_wildcard_server(
+async def test_a_credential_lookup_never_lists_a_wildcard_server_whose_models_cannot_change_the_answer(
     monkeypatch: pytest.MonkeyPatch,
     custom_llm_provider: str,
     vllm_api_base: str,
     openai_deployment: tuple[str, str],
-    applied_credential: tuple[str, str],
+    applied_credential: tuple[str, str | None],
 ) -> None:
     import litellm
 
