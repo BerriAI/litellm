@@ -365,6 +365,15 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       type: "text",
       initialValue: "text",
     },
+    {
+      name: "opensearch_index_name",
+      label: "Index Name (optional)",
+      tooltip:
+        "The OpenSearch index to search. Leave blank to use the Vector Store ID, and set it to register same-named indexes from two endpoints under different IDs",
+      placeholder: "my-knn-index",
+      required: false,
+      type: "text",
+    },
   ],
   s3_vectors: [
     {

@@ -156,7 +156,7 @@ async def _search(
     "api_base,region_params,service,region",
     [
         (SERVERLESS, {}, "aoss", "us-east-1"),
-        (SERVERLESS, {"aws_region_name": "us-west-2"}, "aoss", "us-west-2"),
+        (SERVERLESS, {"aws_region_name": "us-west-2"}, "aoss", "us-east-1"),
         ("https://search-docs-xyz.eu-west-1.es.amazonaws.com/", {}, "es", "eu-west-1"),
         ("https://vpc-docs-xyz.cn-north-1.es.amazonaws.com.cn", {}, "es", "cn-north-1"),
         ("https://abc123.us-gov-west-1.aoss-fips.amazonaws.com", {}, "aoss", "us-gov-west-1"),
@@ -247,6 +247,7 @@ async def test_opensearch_error_keeps_its_status(asynchronous: bool, status: int
         ({"litellm_embedding_model": None}, "litellm_embedding_model"),
         ({"opensearch_text_feild": "passage"}, "opensearch_text_feild"),
         ({"opensearch_text_field": 7}, "opensearch_text_field"),
+        ({"opensearch_index_name": ["docs"]}, "opensearch_index_name"),
         ({"extra_body": {"min_score": 0.5}}, "extra_body"),
         ({"api_base": None}, "api_base"),
         ({"api_base": "abc123.us-east-1.aoss.amazonaws.com"}, "api_base"),
@@ -352,6 +353,46 @@ def test_failing_credential_source_is_a_401_that_keeps_its_output_out_of_the_rep
     assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_opensearch_index_name_picks_the_index_so_the_store_id_can_differ(asynchronous: bool) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+
+    response: Final = await _search(
+        asynchronous,
+        respond,
+        RecordingEmbeddingExecutor(),
+        {"vector_store_id": "east-docs", "opensearch_index_name": "docs/v2"},
+    )
+
+    assert response["data"] == EXPECTED_RESULTS
+    assert str(_sent(respond)[0].url) == f"{SERVERLESS}/docs%2Fv2/_search"
+
+
+@pytest.mark.parametrize(
+    "unsupported",
+    [
+        {"filters": {"type": "eq", "key": "category", "value": "hr"}},
+        {"ranking_options": {"score_threshold": 0.5}},
+        {"rewrite_query": True},
+    ],
+)
+@pytest.mark.asyncio
+async def test_unsupported_search_params_are_dropped_under_drop_params(unsupported: Mapping[str, object]) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+
+    response: Final = await _search(
+        True, respond, RecordingEmbeddingExecutor(), {**unsupported, "drop_params": True, "max_num_results": 3}
+    )
+
+    assert response["data"] == EXPECTED_RESULTS
+    assert json.loads(_sent(respond)[0].content) == {
+        "size": 3,
+        "query": {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3}}},
+        "_source": {"excludes": ["embedding"]},
+    }
+
+
 @pytest.mark.asyncio
 async def test_no_op_values_of_unsupported_params_are_accepted() -> None:
     def respond(request: httpx.Request) -> httpx.Response:
@@ -389,6 +430,28 @@ async def test_store_operations_besides_search_send_nothing_to_the_index(asynchr
 
     with pytest.raises(litellm.BadRequestError, match="search-only") as error:
         await _store_operation(asynchronous, operation, respond)
+
+    assert error.value.status_code == 400
+    respond.assert_not_called()
+
+
+async def _list_stores(asynchronous: bool, respond: Callable[[httpx.Request], httpx.Response]) -> object:
+    request_kwargs: Final = {**BASE_PARAMS, "custom_llm_provider": "opensearch"}
+    if asynchronous:
+        return await vector_stores.alist(
+            **request_kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+        )
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        return vector_stores.list(**request_kwargs, client=HTTPHandler(client=transport))
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_listing_stores_sends_nothing_to_the_endpoint(asynchronous: bool) -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json={"cluster_name": "docs", "tagline": "OpenSearch"}))
+
+    with pytest.raises(litellm.BadRequestError, match="search-only") as error:
+        await _list_stores(asynchronous, respond)
 
     assert error.value.status_code == 400
     respond.assert_not_called()

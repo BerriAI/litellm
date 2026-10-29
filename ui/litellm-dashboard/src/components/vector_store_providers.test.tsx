@@ -82,6 +82,7 @@ describe("getVectorStoreProviderLogoAndName", () => {
       "embedding_model",
       "opensearch_embedding_field",
       "opensearch_text_field",
+      "opensearch_index_name",
     ]);
     expect(byName("api_base")).toMatchObject({ required: true });
     expect(byName("aws_region_name")).toMatchObject({ required: false });
@@ -89,6 +90,8 @@ describe("getVectorStoreProviderLogoAndName", () => {
     expect(byName("embedding_model")).not.toHaveProperty("options");
     expect(byName("opensearch_embedding_field")).toMatchObject({ required: false, initialValue: "embedding" });
     expect(byName("opensearch_text_field")).toMatchObject({ required: false, initialValue: "text" });
+    expect(byName("opensearch_index_name")).toMatchObject({ required: false });
+    expect(byName("opensearch_index_name")).not.toHaveProperty("initialValue");
   });
 
   it("registers valkey in the provider, logo, and field maps", () => {

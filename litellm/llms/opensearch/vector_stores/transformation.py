@@ -11,6 +11,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -51,7 +52,7 @@ _QUERY_VECTOR: Final = TypeAdapter(tuple[float, ...])
 _ATTRIBUTE_VALUE_TYPES: Final = (str, int, float, bool)
 _SEARCH_ONLY_MESSAGE: Final = (
     "The OpenSearch vector store is search-only. Create the k-NN index in OpenSearch, "
-    "then register it here with the index name as vector_store_id."
+    "then register it here with its name as opensearch_index_name or vector_store_id."
 )
 _PER_ACCOUNT_MESSAGE: Final = (
     "api_base is an OpenSearch Serverless per-account endpoint, which needs a collection header the vector store "
@@ -92,6 +93,7 @@ class _OpenSearchParams(LiteLLMBaseModel):
 
     litellm_embedding_model: str | None = None
     opensearch_embedding_field: str | None = None
+    opensearch_index_name: str | None = None
     opensearch_text_field: str | None = None
 
     @property
@@ -101,6 +103,9 @@ class _OpenSearchParams(LiteLLMBaseModel):
     @property
     def text_field(self) -> str:
         return self.opensearch_text_field or DEFAULT_TEXT_FIELD
+
+    def index_name(self, vector_store_id: str) -> str:
+        return self.opensearch_index_name or vector_store_id
 
     def require_embedding_model(self) -> str:
         if not self.litellm_embedding_model:
@@ -221,8 +226,10 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         return {**headers, "Content-Type": "application/json"}
 
     def _signing_region(self, params: Mapping[str, object], api_base: str) -> str:
-        configured_region: Final = _SigningRegion.model_validate(params).aws_region_name
-        return self._aws.get_aws_region_name_for_non_llm_api_calls(configured_region or aws_signing_target(api_base)[1])
+        host_region: Final = aws_signing_target(api_base)[1]
+        return self._aws.get_aws_region_name_for_non_llm_api_calls(
+            host_region or _SigningRegion.model_validate(params).aws_region_name
+        )
 
     def _signing_credentials(self, params: Mapping[str, object], region: str) -> "Credentials":
         if params.get("api_key"):
@@ -260,6 +267,9 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
     def get_vector_store_url(self, api_base: str, encoded_vector_store_id: str) -> NoReturn:
         raise _bad_request(_SEARCH_ONLY_MESSAGE)
 
+    def get_vector_store_list_url(self, api_base: str) -> NoReturn:
+        raise _bad_request(_SEARCH_ONLY_MESSAGE)
+
     @staticmethod
     def _params(
         litellm_params: Mapping[str, object],
@@ -280,16 +290,17 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
             options: Final = _SearchOptions.model_validate(optional_params)
         except ValidationError as error:
             raise _bad_request(f"Invalid vector store search parameters: {error}") from None
-        if options.unsupported:
+        if options.unsupported and not drops_unsupported_params(litellm_params.get("drop_params")):
             raise _bad_request(
                 f"The OpenSearch vector store does not support {', '.join(options.unsupported)} yet. "
-                "Remove it from the request."
+                "Remove it from the request, or set drop_params to drop it."
             )
         try:
             return _OpenSearchParams.model_validate(litellm_params), options.k
         except ValidationError:
             raise _bad_request(
-                "opensearch_embedding_field, opensearch_text_field, and litellm_embedding_model must be strings."
+                "opensearch_embedding_field, opensearch_index_name, opensearch_text_field, and litellm_embedding_model "
+                "must be strings."
             ) from None
 
     @staticmethod
@@ -302,7 +313,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
         vector: Final = _QUERY_VECTOR.validate_python(embedding.data[0]["embedding"])  # pyright: ignore[reportUnknownMemberType]  # EmbeddingResponse.data is an untyped list, the vector is validated here
         return (
-            f"{api_base}/{quote(vector_store_id, safe='')}/_search",
+            f"{api_base}/{quote(params.index_name(vector_store_id), safe='')}/_search",
             {
                 "size": k,
                 "query": {"knn": {params.embedding_field: {"vector": vector, "k": k}}},

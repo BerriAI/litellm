@@ -85,6 +85,7 @@ const PROVIDER_FIELD_NAMES = [
   "valkey_embedding_field",
   "opensearch_embedding_field",
   "opensearch_text_field",
+  "opensearch_index_name",
 ] as const;
 
 type ProviderFieldName = (typeof PROVIDER_FIELD_NAMES)[number];
@@ -123,6 +124,7 @@ const vectorStoreShape = {
   valkey_embedding_field: optionalText,
   opensearch_embedding_field: optionalText,
   opensearch_text_field: optionalText,
+  opensearch_index_name: optionalText,
 };
 
 const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) => {
@@ -396,7 +398,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                     <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
                         The index has a knn_vector field holding each document&apos;s embedding. Enter the index name as
-                        the Vector Store ID
+                        the Vector Store ID, or under Index Name when another endpoint already uses that ID
                       </li>
                       <li>
                         You know which embedding model created those embeddings. That model must be added to this proxy
