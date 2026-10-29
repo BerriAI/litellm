@@ -3785,6 +3785,20 @@ class TestMultiPodBatchCostClaim:
         await self._run_deletion_guard(prisma, _CLAIM_OUTPUT_FILE_ID)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("has_batch_processed_column", (True, False))
+    async def test_billing_a_batch_keeps_the_endpoint_it_was_created_for(self, has_batch_processed_column: bool) -> None:
+        row: Final = _FakeManagedObjectRow()
+        row.file_object = json.dumps({**json.loads(row.file_object), "endpoint": "/v1/embeddings"})
+        instance: Final = self._instance(self._prisma(row, []), self._router())
+        instance._has_batch_processed_column = has_batch_processed_column
+
+        with self._billing_patches([]):
+            await instance.check_batch_cost()
+
+        assert row.status == "complete"
+        assert json.loads(row.file_object)["endpoint"] == "/v1/embeddings"
+
+    @pytest.mark.asyncio
     async def test_schema_without_batch_processed_still_bills(self):
         """Older schemas have no column to claim, so they keep the pre-fix behavior instead
         of losing every batch's cost."""

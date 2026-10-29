@@ -1879,6 +1879,20 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
 
 
 @pytest.mark.asyncio
+async def test_retrieve__provider_sync_keeps_the_endpoint_the_batch_was_created_for(retrieve_harness):
+    stored = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": "/v1/embeddings"})
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = make_batch(id="batch-raw-xyz", status="in_progress")
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "in_progress")
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+    assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
 async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_harness, status):
     db_response = make_batch(id="litellm-executed-batch", status=status)
@@ -2630,6 +2644,23 @@ async def test_cancel__db_write_receives_caller_auth(cancel_harness):
         await call_cancel(cancel_harness, "batch-unified-blob", user=caller)
 
     assert cancel_harness.update_batch_in_db.call_args.kwargs["user_api_key_dict"] is caller
+
+
+@pytest.mark.asyncio
+async def test_cancel__keeps_the_endpoint_the_batch_was_created_for(cancel_harness):
+    stored_row = MagicMock(status="in_progress")
+    stored = make_batch(id="batch-unified-blob", status="in_progress").model_copy(update={"endpoint": "/v1/embeddings"})
+    cancel_harness.router.acancel_batch.return_value = make_batch(id="batch-raw-xyz", status="cancelling")
+
+    with (
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
+        patch.object(endpoints, "get_batch_from_database", AsyncMock(return_value=(stored_row, stored))),
+    ):
+        resp = await call_cancel(cancel_harness, "batch-unified-blob")
+
+    assert (resp.endpoint, resp.status) == ("/v1/embeddings", "cancelling")
+    written = cancel_harness.update_batch_in_db.call_args.kwargs
+    assert (written["response"].endpoint, written["db_batch_object"]) == ("/v1/embeddings", stored_row)
 
 
 @pytest.mark.asyncio

@@ -662,6 +662,11 @@ class CheckBatchCost:
 
     @staticmethod
     def _get_input_file_id(job: "ManagedObjectRow") -> Optional[str]:
+        stored_batch: Final = CheckBatchCost._stored_batch(job)
+        return stored_batch.input_file_id if stored_batch is not None else None
+
+    @staticmethod
+    def _stored_batch(job: "ManagedObjectRow") -> Optional["LiteLLMBatch"]:
         from litellm.types.utils import LiteLLMBatch
 
         file_object: Final = job.file_object
@@ -674,7 +679,7 @@ class CheckBatchCost:
         if not isinstance(parsed_file_object, dict):
             return None
         try:
-            return LiteLLMBatch.model_validate(parsed_file_object).input_file_id
+            return LiteLLMBatch.model_validate(parsed_file_object)
         except Exception:
             return None
 
@@ -1138,6 +1143,8 @@ class CheckBatchCost:
         - if not, return False
         - if so, return True
         """
+        from litellm.proxy.openai_files_endpoints.common_utils import with_created_batch_endpoint
+
         try:
             from litellm.integrations.prometheus import PrometheusLogger
 
@@ -1199,7 +1206,7 @@ class CheckBatchCost:
             )
 
             try:
-                response = await self.llm_router.aretrieve_batch(
+                provider_response = await self.llm_router.aretrieve_batch(
                     model=model_id,
                     batch_id=batch_id,
                     litellm_metadata={
@@ -1218,6 +1225,7 @@ class CheckBatchCost:
                 else:
                     await self._expire_if_old_and_unfinished(job)
                 continue
+            response = with_created_batch_endpoint(provider_response, self._stored_batch(job))
             if self._is_completed_with_output_id_pending(response):
                 verbose_proxy_logger.info(
                     f"CheckBatchCost: batch {batch_id} is completed but its output file id "

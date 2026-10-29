@@ -1593,6 +1593,12 @@ def batch_cost_poller_is_active() -> bool:
         return False
 
 
+def with_created_batch_endpoint(provider_batch: "LiteLLMBatch", stored_batch: "LiteLLMBatch | None") -> "LiteLLMBatch":
+    if stored_batch is None or not stored_batch.endpoint or stored_batch.endpoint == provider_batch.endpoint:
+        return provider_batch
+    return provider_batch.model_copy(update={"endpoint": stored_batch.endpoint})
+
+
 def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
     """Whether a "completed" batch may be retired from cost recovery.
 

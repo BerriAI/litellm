@@ -67,6 +67,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     prepare_data_with_credentials,
     update_batch_in_database,
     validate_managed_id_requirement,
+    with_created_batch_endpoint,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_request_data
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
@@ -644,6 +645,7 @@ async def retrieve_batch(
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=user_api_key_dict,
         )
+        stored_batch: Final = response
 
         if executed_batch and response is None:
             raise batch_error(404, f"No batch found with id '{batch_id}'.")
@@ -788,11 +790,12 @@ async def retrieve_batch(
                 **data,
             )
 
+        retrieved_batch: Final = with_created_batch_endpoint(response, stored_batch)
         # FIX: Update the database with the latest state from provider
         await update_batch_in_database(
             batch_id=batch_id,
             unified_batch_id=unified_batch_id,
-            response=response,
+            response=retrieved_batch,
             managed_files_obj=managed_files_obj,
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
@@ -803,7 +806,7 @@ async def retrieve_batch(
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response
+            data=data, user_api_key_dict=user_api_key_dict, response=retrieved_batch
         )
 
         # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
@@ -1230,20 +1233,29 @@ async def cancel_batch(
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         from litellm.proxy.proxy_server import prisma_client
 
-        await update_batch_in_database(
+        db_batch_object, stored_batch = await get_batch_from_database(
             batch_id=batch_id,
             unified_batch_id=unified_batch_id,
-            response=response,
             managed_files_obj=managed_files_obj,
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
+        )
+        cancelled_batch: Final = with_created_batch_endpoint(response, stored_batch)
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            response=cancelled_batch,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+            db_batch_object=db_batch_object,
             operation="cancel",
             user_api_key_dict=user_api_key_dict,
         )
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response
+            data=data, user_api_key_dict=user_api_key_dict, response=cancelled_batch
         )
 
         ### ALERTING ###
