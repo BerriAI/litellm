@@ -174,11 +174,15 @@ def _requested_agent(
     )
 
 
+def _caller_agent_fields(fields: Mapping[str, object]) -> tuple[tuple[str, object], ...]:
+    return tuple((key, fields[key]) for key in _CALLER_AGENT_KEYS if key in fields)
+
+
 def _deployment_agent(
-    model: str, caller_fields: Mapping[str, object], litellm_params: GenericLiteLLMParams
+    model: str, caller_fields: Sequence[tuple[str, object]], litellm_params: GenericLiteLLMParams
 ) -> FoundryAgentReference:
-    caller_keys: Final = tuple(key for key in _CALLER_AGENT_KEYS if key in caller_fields)
-    caller_agents: Final = tuple(_caller_agent_reference(caller_fields[key]) for key in caller_keys)
+    caller_keys: Final = tuple(key for key, _ in caller_fields)
+    caller_agents: Final = tuple(_caller_agent_reference(value) for _, value in caller_fields)
     agent: Final = _requested_agent(_agent_reference(model), caller_agents)
     other_agents: Final = tuple(
         key
@@ -272,7 +276,9 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
                 if isinstance(instructions, str) and instructions
                 else {}
             ),
-            "agent_reference": _deployment_agent(model, litellm_params.model_extra or {}, litellm_params),
+            "agent_reference": _deployment_agent(
+                model, _caller_agent_fields(litellm_params.model_extra or {}), litellm_params
+            ),
         }
 
     def transform_extra_body(
@@ -285,4 +291,9 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
         passthrough: Final = {key: value for key, value in extra_body.items() if key not in _CALLER_AGENT_KEYS}
         if len(passthrough) == len(extra_body):
             return passthrough
-        return {**passthrough, "agent_reference": _deployment_agent(model, extra_body, litellm_params)}
+        return {
+            **passthrough,
+            "agent_reference": _deployment_agent(
+                model, (*_caller_agent_fields(request), *_caller_agent_fields(extra_body)), litellm_params
+            ),
+        }

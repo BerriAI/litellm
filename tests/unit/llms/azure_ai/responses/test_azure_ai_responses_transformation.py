@@ -539,6 +539,50 @@ async def test_router_aresponses_rejects_another_version_of_a_pinned_agent_witho
     assert not route.called
 
 
+VERSION_THREE: Final = {"name": "support-agent", "version": "3"}
+NAME_ONLY: Final = {"name": "support-agent"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "top_level,in_extra_body",
+    [
+        ({"agent_reference": VERSION_THREE}, {"agent_reference": NAME_ONLY}),
+        ({"agent": VERSION_THREE}, {"agent_reference": NAME_ONLY}),
+        ({"agent_reference": NAME_ONLY}, {"agent_reference": VERSION_THREE}),
+    ],
+)
+async def test_router_aresponses_keeps_a_version_requested_at_the_top_level_or_in_extra_body(top_level, in_extra_body):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await _support_agent_router().aresponses(
+        model="support-agent", input="What is 2+2?", **top_level, extra_body={**in_extra_body, "store": False}
+    )
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["agent_reference"] == {"type": "agent_reference", **VERSION_THREE}
+    assert body["store"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_router_aresponses_rejects_different_versions_at_the_top_level_and_in_extra_body():
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
+        await _support_agent_router().aresponses(
+            model="support-agent",
+            input="What is 2+2?",
+            agent_reference=VERSION_THREE,
+            extra_body={"agent_reference": {"name": "support-agent", "version": "4"}},
+        )
+
+    assert not route.called
+
+
 AGENT_OWNED_PARAMS = {
     "temperature": 0.2,
     "top_p": 0.5,
