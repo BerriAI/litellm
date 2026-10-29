@@ -1342,6 +1342,16 @@ def _response_id_from(model_id: str) -> str:
             id="websocket-first-frame-routing-hint",
         ),
         pytest.param(
+            {"prompt_cache_options": {"comparison_response_id": f"resp_{_response_id_from('B')}"}},
+            ("A", "B", "C"),
+            id="comparison-with-an-extra-resp-prefix-pins-nothing",
+        ),
+        pytest.param(
+            {COMPARISON_RESPONSE_ID_ROUTING_HINT: ComparisonRoutingHint(f"resp_{_response_id_from('C')}")},
+            ("A", "B", "C"),
+            id="websocket-routing-hint-with-an-extra-resp-prefix-pins-nothing",
+        ),
+        pytest.param(
             {COMPARISON_RESPONSE_ID_ROUTING_HINT: _response_id_from("C")},
             ("A", "B", "C"),
             id="request-body-key-named-like-the-routing-hint",

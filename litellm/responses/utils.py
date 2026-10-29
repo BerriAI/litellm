@@ -837,9 +837,13 @@ class ResponsesAPIRequestUtils:
         previous_response_id: Final = request.get("previous_response_id")
         if previous_response_id is not None:
             return ResponsesAPIRequestUtils.get_model_id_from_response_id(str(previous_response_id))
-        compared_model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(
-            ResponsesAPIRequestUtils.comparison_response_id(request)
+        comparison_id: Final = ResponsesAPIRequestUtils.comparison_response_id(request)
+        decoded: Final = (
+            None
+            if comparison_id is None
+            else ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(comparison_id)
         )
+        compared_model_id: Final = None if decoded is None else decoded.get("model_id") or None
         return None if compared_model_id in failed_deployment_ids else compared_model_id
 
     @staticmethod
