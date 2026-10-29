@@ -59,6 +59,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
+    _search_tool_support,
     Span,
 )
 from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
@@ -13482,6 +13483,33 @@ def test_get_search_tool_support_reports_each_routable_deployment_of_the_group()
 
     assert router.get_search_tool_support("mixed") == (True, None)
     assert router.get_search_tool_support("not-a-real-model") == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("provider", ["chatgpt", "github_copilot"])
+@pytest.mark.parametrize("explicit_provider", [False, True])
+async def test_search_tool_catalog_lookup_needs_no_credentials(
+    provider: str, explicit_provider: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "copilot"))
+    (tmp_path / "chatgpt").mkdir()
+    (tmp_path / "chatgpt" / "auth.json").write_text(
+        json.dumps({"access_token": "expired-access", "refresh_token": "test-refresh", "expires_at": 1})
+    )
+    (tmp_path / "copilot").mkdir()
+    (tmp_path / "copilot" / "api-key.json").write_text(json.dumps({"token": "expired-key", "expires_at": 1}))
+    (tmp_path / "copilot" / "access-token").write_text("test-access")
+    respx_mock.route().respond(401, json={"error": "invalid_grant"})
+    params: Final = (
+        {"model": "catalog-model", "custom_llm_provider": provider}
+        if explicit_provider
+        else {"model": f"{provider}/catalog-model"}
+    )
+
+    assert _search_tool_support({"model_name": "catalog-model", "litellm_params": params}) is None
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.parametrize(

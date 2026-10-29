@@ -720,7 +720,7 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
 
 
 def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
-    from litellm.responses.litellm_completion_transformation.tool_search import provider_builds_anthropic_request
+    from litellm.responses.litellm_completion_transformation.tool_search import chat_config_builds_anthropic_request
 
     configured: Final = _configured_model_info(deployment).get("supports_search_tool")
     if isinstance(configured, bool):
@@ -731,12 +731,15 @@ def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
     if not isinstance(model, str):
         return None
     try:
-        builds_anthropic_request: Final = provider_builds_anthropic_request(
-            model, provider if isinstance(provider, str) else None
+        resolved_model, resolved_provider = resolve_model_and_provider_for_metadata(
+            model=model, custom_llm_provider=provider if isinstance(provider, str) else None
         )
-    except litellm.BadRequestError:
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=resolved_model, provider=LlmProviders(resolved_provider)
+        )
+    except (litellm.BadRequestError, ValueError):
         return None
-    return True if builds_anthropic_request else None
+    return True if chat_config_builds_anthropic_request(chat_config) else None
 
 
 def _every_deployment_refused(
