@@ -137,6 +137,7 @@ jobs:
         include:
           - shard: core-utils
             test-path: |-
+              tests/unit/accounting
               tests/unit/batch_completion
               tests/unit/decisions
               tests/unit/extraction
@@ -244,6 +245,7 @@ jobs:
               tests/unit/llms/clarifai
               tests/unit/llms/claude_code
               tests/unit/llms/cloudflare
+              tests/unit/llms/codestral
               tests/unit/llms/codex
               tests/unit/llms/cohere
               tests/unit/llms/cometapi
