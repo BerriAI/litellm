@@ -1800,8 +1800,11 @@ def _strip_empty_content_blocks_from_message(message: object) -> object:
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return message
     content: Final = message["content"]
+    from_user: Final = message.get("role") in ("user",)
     filtered: Final = [
-        block for block in content if not _is_empty_text_block(block) and not is_empty_unsigned_thinking_block(block)
+        block
+        for block in content
+        if not _is_empty_text_block(block, from_user) and not is_empty_unsigned_thinking_block(block)
     ]
     if len(filtered) == len(content):
         return message
@@ -1849,11 +1852,16 @@ def strip_empty_content_blocks_from_anthropic_messages(
     ]
 
 
-def _is_empty_text_block(block: object) -> bool:
-    if not isinstance(block, dict) or block.get("type") != "text":
-        return False
-    text: Final = block.get("text")
-    return not isinstance(text, str) or not text.strip()
+def _is_empty_text_block(block: object, from_user: bool) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object()}:
+            return not from_user
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
 
 
 def is_empty_thinking_block(block: object) -> bool:

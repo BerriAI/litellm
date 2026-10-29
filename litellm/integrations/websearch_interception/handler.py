@@ -37,6 +37,7 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import malformed_text_error
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -365,7 +366,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_last_user_message,
         )
 
-        last_user_message: Final = get_last_user_message(cast(list[AllMessageValues], messages)) or ""
+        chat_messages: Final = cast(list[AllMessageValues], messages)
+        if malformed_text_error(chat_messages) is not None:
+            return None
+        last_user_message: Final = get_last_user_message(chat_messages) or ""
         query: Final = last_user_message.removeprefix(_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX).strip()
         if not query:
             return None

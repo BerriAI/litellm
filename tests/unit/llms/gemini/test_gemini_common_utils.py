@@ -206,6 +206,28 @@ async def test_google_ai_studio_count_tokens_rejects_a_non_string_tool_result_te
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_google_ai_studio_count_tokens_rejects_a_non_string_user_text_without_request(
+    text: JsonValue, respx_mock: respx.MockRouter
+) -> None:
+    count_route: Final = respx_mock.post(_COUNT_TOKENS_URL).respond(200, json={"totalTokens": 11})
+
+    result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": text}]}],
+        contents=None,
+        deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+        request_model="gemini/gemini-2.5-flash",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert result.error_message == "messages.0.content.1.text: Input should be a valid string"
+    assert not count_route.called
+
+
+@pytest.mark.asyncio
 async def test_google_ai_studio_count_tokens_leaves_out_a_numeric_tool_result_text_under_drop_params(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -537,13 +559,9 @@ def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config()
         ("gemini-3.1-flash-image", "1024x256", {"aspectRatio": "4:1", "imageSize": "512"}),
     ),
 )
-def test_size_mapping_respects_model_image_limits(
-    prefix: str, model: str, size: str, expected: dict[str, str]
-) -> None:
+def test_size_mapping_respects_model_image_limits(prefix: str, model: str, size: str, expected: dict[str, str]) -> None:
     """Limits as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
-    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {
-        "imageConfig": expected
-    }
+    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {"imageConfig": expected}
 
 
 @pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])

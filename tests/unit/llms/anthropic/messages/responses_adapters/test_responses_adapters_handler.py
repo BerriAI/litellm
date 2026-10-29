@@ -648,6 +648,24 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
     ]
 
 
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_non_string_user_text_answers_400_naming_its_field(text_block: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs=OPENAI_API,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "run the build"},
+                {"role": "assistant", "content": "on it"},
+                {"role": "user", "content": [{"type": "text", "text": "and test"}, dict(text_block)]},
+            ],
+        )
+
+    assert rejected.value.status_code == 400
+    assert "messages.2.content.1.text: Input should be a valid string" in rejected.value.message
+
+
 def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",

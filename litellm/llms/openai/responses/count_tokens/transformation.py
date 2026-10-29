@@ -15,7 +15,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.messages.convertible_blocks import malformed_tool_result_text_error
+from litellm.llms.anthropic.messages.convertible_blocks import malformed_text_error
 from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -334,7 +334,7 @@ class OpenAICountTokensConfig:
             return "; ".join(
                 f"messages.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in e.errors()
             )
-        return None if drop_params else malformed_tool_result_text_error(messages)
+        return None if drop_params else malformed_text_error(messages)
 
     @staticmethod
     def anthropic_messages_to_responses_input(

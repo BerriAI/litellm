@@ -10,7 +10,7 @@ from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
+from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -707,7 +707,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                drop_non_string_tool_result_texts(messages, getattr(litellm_params, "drop_params", None))
+                drop_non_string_texts(messages, getattr(litellm_params, "drop_params", None))
             ),
             max_tokens=max_tokens,
             model=model,

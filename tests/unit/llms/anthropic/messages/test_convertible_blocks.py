@@ -8,7 +8,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.messages.convertible_blocks import (
-    malformed_tool_result_text_error,
+    drop_non_string_texts,
+    malformed_text_error,
     unconvertible_anthropic_blocks,
     unconvertible_blocks_error,
 )
@@ -209,4 +210,77 @@ def test_an_encrypted_web_search_inference_cannot_send_is_named() -> None:
 def test_a_non_string_tool_result_text_is_named_with_or_without_a_tool_use_id(
     tool_result: Mapping[str, object], error: str
 ) -> None:
-    assert malformed_tool_result_text_error([{"role": "user", "content": [tool_result]}]) == error
+    assert malformed_text_error([{"role": "user", "content": [tool_result]}]) == error
+
+
+_TOOL_RESULT_WITH_NULL_TEXT: Final = {
+    "type": "tool_result",
+    "tool_use_id": "toolu_01",
+    "content": [{"type": "text", "text": None}],
+}
+
+
+@pytest.mark.parametrize(
+    ("messages", "error"),
+    (
+        (
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": None}]}],
+            "messages.0.content.1.text: Input should be a valid string",
+        ),
+        (
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": [{"type": "text", "text": 5}]},
+            ],
+            "messages.2.content.0.text: Input should be a valid string",
+        ),
+        (
+            [{"role": "user", "content": [_TOOL_RESULT_WITH_NULL_TEXT, {"type": "text", "text": {"nested": "x"}}]}],
+            "tool_result toolu_01 content.0.text: Input should be a valid string",
+        ),
+        (
+            [{"role": "user", "content": [{"type": "text", "text": [1]}, _TOOL_RESULT_WITH_NULL_TEXT]}],
+            "messages.0.content.0.text: Input should be a valid string",
+        ),
+    ),
+    ids=("null-beside-text", "number-in-a-later-turn", "tool-result-first", "user-text-first"),
+)
+def test_a_non_string_user_text_is_named_by_its_field_in_block_order(
+    messages: list[dict[str, object]], error: str
+) -> None:
+    assert malformed_text_error(messages) == error
+
+
+@pytest.mark.parametrize(
+    "messages",
+    (
+        [{"role": "user", "content": [{"type": "text"}, {"type": "text", "text": ""}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": None}, {"type": "text", "text": 5}]}],
+        [{"role": "user", "content": "hi"}],
+    ),
+    ids=("missing-and-empty-text", "assistant-turn", "string-content"),
+)
+def test_user_text_that_reads_as_a_string_is_not_malformed(messages: list[dict[str, object]]) -> None:
+    assert malformed_text_error(messages) is None
+
+
+_REPLAYED_ASSISTANT: Final[dict[str, object]] = {"role": "assistant", "content": [{"type": "text", "text": None}]}
+
+
+def test_drop_params_drops_non_string_user_texts_and_the_user_turns_they_empty() -> None:
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": None}]},
+        _REPLAYED_ASSISTANT,
+        {"role": "user", "content": [{"type": "text", "text": 5}]},
+        {"role": "user", "content": []},
+        {"role": "user", "content": [{**_TOOL_RESULT_WITH_NULL_TEXT, "content": [{"type": "text", "text": 1}]}]},
+    ]
+
+    assert drop_non_string_texts(messages, True) == [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        _REPLAYED_ASSISTANT,
+        {"role": "user", "content": []},
+        {"role": "user", "content": [{**_TOOL_RESULT_WITH_NULL_TEXT, "content": []}]},
+    ]
+    assert drop_non_string_texts(messages, None) is messages

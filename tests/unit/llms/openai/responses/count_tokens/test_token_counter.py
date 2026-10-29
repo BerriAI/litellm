@@ -459,12 +459,36 @@ async def test_anthropic_format_malformed_tool_result_text_answers_400_without_c
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+async def test_anthropic_format_non_string_user_text_answers_400_without_calling_openai(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}, dict(text_block)]}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            messages_format="anthropic",
+        )
+
+    assert route.called is False
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message) == (
+        True,
+        400,
+        "messages.0.content.1.text: Input should be a valid string",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 async def test_anthropic_format_drop_params_counts_the_tool_result_without_the_malformed_text(
     monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
 ) -> None:
-    result, route = await _count_tool_result_turns(
-        monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True}
-    )
+    result, route = await _count_tool_result_turns(monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True})
 
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 9)

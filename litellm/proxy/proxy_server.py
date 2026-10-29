@@ -379,9 +379,10 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
-    drop_non_string_tool_result_texts,
-    malformed_tool_result_count_error,
+    drop_non_string_texts,
+    malformed_text_count_error,
 )
+from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -14792,7 +14793,7 @@ def _counted_request_messages(
         return None
     if messages_format != "anthropic":
         return list(messages)
-    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+    return list(drop_non_string_texts(normalize_native_messages(messages), deployment_drops_params(deployment)))
 
 
 async def _try_provider_token_count(
@@ -15494,7 +15495,7 @@ async def _count_request_tokens(
     if isinstance(ladder, TokenCountResponse):
         return ladder
 
-    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    local_count_error: Final = malformed_text_count_error(request_messages, messages_format, count_deployment)
     if local_count_error is not None:
         raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
 

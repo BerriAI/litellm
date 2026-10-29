@@ -5419,3 +5419,85 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+def _user_text_beside(text_block: Mapping[str, object]) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "text", "text": "run the build"}, dict(text_block)]}]
+
+
+_CLEAN_USER_TURN: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
+]
+
+
+def _sent_chat_messages(route: respx.Route) -> list[object]:
+    return json.loads(route.calls.last.request.read())["messages"]
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_non_string_user_text_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter, text: object, stream: bool
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            stream=stream,
+            messages=_user_text_beside({"type": "text", "text": text}),
+        )
+
+    assert rejected.value.status_code == 400
+    assert (
+        rejected.value.message == "litellm.BadRequestError: messages.0.content.1.text: Input should be a valid string"
+    )
+    assert route.call_count == 0
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_drop_params_drops_a_non_string_user_text(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, text: object, drop_params_source: str
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+            **({"drop_params": True} if drop_params_source == "request" else {}),
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside({"type": "text", "text": text})) == sent_for(_CLEAN_USER_TURN)
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("text_block", [{"type": "text"}, {"type": "text", "text": " "}], ids=["missing", "blank"])
+def test_chat_bridge_sync_strips_a_missing_or_blank_user_text_without_drop_params(
+    respx_mock: respx.MockRouter, text_block: Mapping[str, object]
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside(text_block)) == sent_for(_CLEAN_USER_TURN)
