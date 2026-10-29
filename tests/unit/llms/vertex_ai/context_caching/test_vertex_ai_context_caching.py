@@ -304,10 +304,13 @@ class TestContextCachingEndpoints:
         ]
         assert cache_for("gemini-2.5-pro") == pro_cache
 
-    @pytest.mark.parametrize("api_base", ["https://gateway.example.com/v1", "https://gateway.example.com/v1/"])
-    @pytest.mark.parametrize("is_async", [False, True])
-    @pytest.mark.asyncio
-    async def test_check_and_create_cache_skips_a_gemini_v1_api_base(self, api_base: str, is_async: bool):
+    def _gemini_v1_gateway_call_args(self, list_response: MagicMock):
+        self.mock_client.get.return_value = list_response
+        self.mock_async_client.get = AsyncMock(return_value=list_response)
+        created: Final = MagicMock()
+        created.json.return_value = {"name": "cachedContents/gateway-cache"}
+        self.mock_client.post.return_value = created
+        self.mock_async_client.post = AsyncMock(return_value=created)
         messages: Final = [
             {
                 "role": "user",
@@ -319,7 +322,7 @@ class TestContextCachingEndpoints:
             messages=messages,
             optional_params={"tools": self.sample_tools},
             api_key="unused",
-            api_base=api_base,
+            api_base="https://gateway.example.com/gemini/v1",
             model="gemini-2.5-flash",
             timeout=30.0,
             logging_obj=self.mock_logging,
@@ -328,6 +331,19 @@ class TestContextCachingEndpoints:
             vertex_location=None,
             vertex_auth_header=None,
         )
+        return call_args
+
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_check_and_create_cache_sends_uncached_when_the_gemini_api_base_serves_no_cached_contents(
+        self, is_async: bool
+    ):
+        not_served: Final = MagicMock()
+        not_served.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Not Found", request=MagicMock(), response=MagicMock(status_code=404, text="")
+        )
+
+        call_args: Final = self._gemini_v1_gateway_call_args(not_served)
 
         result: Final = (
             await self.context_caching.async_check_and_create_cache(client=self.mock_async_client, **call_args)
@@ -335,9 +351,31 @@ class TestContextCachingEndpoints:
             else self.context_caching.check_and_create_cache(client=self.mock_client, **call_args)
         )
 
-        assert result == (messages, {"tools": self.sample_tools}, None)
-        assert not self.mock_client.mock_calls
-        assert not self.mock_async_client.mock_calls
+        assert result == (call_args["messages"], {"tools": self.sample_tools}, None)
+        self.mock_client.post.assert_not_called()
+        self.mock_async_client.post.assert_not_called()
+
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_check_and_create_cache_caches_through_a_gemini_v1_gateway_that_serves_cached_contents(
+        self, is_async: bool
+    ):
+        empty_list: Final = MagicMock()
+        empty_list.json.return_value = {}
+
+        call_args: Final = self._gemini_v1_gateway_call_args(empty_list)
+
+        _, params, cache_name = (
+            await self.context_caching.async_check_and_create_cache(client=self.mock_async_client, **call_args)
+            if is_async
+            else self.context_caching.check_and_create_cache(client=self.mock_client, **call_args)
+        )
+        client: Final = self.mock_async_client if is_async else self.mock_client
+
+        assert params == {}
+        assert cache_name == "cachedContents/gateway-cache"
+        assert client.get.call_args.kwargs["url"] == "https://gateway.example.com/gemini/v1/cachedContents"
+        assert client.post.call_args.kwargs["url"].startswith("https://gateway.example.com/gemini/v1/cachedContents")
 
     @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
     @patch("litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages")
@@ -1430,10 +1468,14 @@ class TestContextCachingEndpoints:
 
         self._token_check_patcher.start()
 
+    @pytest.mark.parametrize(
+        ("api_base_model", "deployment_model"),
+        [("gemini-2.5-pro", "gemini-2.5-flash"), ("gemini-not-in-the-cost-map", "gemini-2.5-pro")],
+    )
     @pytest.mark.parametrize("is_async", [False, True])
     @pytest.mark.asyncio
-    async def test_check_and_create_cache_applies_the_api_base_model_minimum(
-        self, local_model_cost_map, is_async: bool
+    async def test_check_and_create_cache_applies_the_stricter_model_minimum(
+        self, local_model_cost_map, is_async: bool, api_base_model: str, deployment_model: str
     ):
         self._token_check_patcher.stop()
         messages: Final = [
@@ -1444,8 +1486,8 @@ class TestContextCachingEndpoints:
             messages=messages,
             optional_params={},
             api_key="unused",
-            api_base="https://gateway.example.com/v1/projects/base-project/locations/global/publishers/google/models/gemini-2.5-pro",
-            model="gemini-2.5-flash",
+            api_base=f"https://gateway.example.com/v1/projects/base-project/locations/global/publishers/google/models/{api_base_model}",
+            model=deployment_model,
             timeout=30.0,
             logging_obj=self.mock_logging,
             custom_llm_provider="vertex_ai",
