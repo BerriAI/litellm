@@ -67,8 +67,12 @@ class _AsyncReleasingStream(httpx.AsyncByteStream):
         self._release: Final = weakref.finalize(self, release)
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        async for chunk in self._stream:
-            yield chunk
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        except BaseException:
+            self._release()
+            raise
 
     async def aclose(self) -> None:
         self._release()

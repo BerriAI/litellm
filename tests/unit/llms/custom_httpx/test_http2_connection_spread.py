@@ -1,6 +1,6 @@
 import asyncio
 import gc
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Final
 
 import httpx
@@ -205,3 +205,36 @@ async def test_async_spread_frees_the_streams_of_responses_dropped_without_closi
         assert spread.has_request_in_flight() is False
         assert (await client.get(URL)).text == "ok"
         assert len(connections.opened) == 1
+
+
+class _TwoChunks(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"o"
+        yield b"k"
+
+
+class _TwoChunkConnection(httpx.AsyncBaseTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_TwoChunks())
+
+
+@pytest.fixture
+def cyclic_gc_off() -> Iterator[None]:
+    gc.disable()
+    yield
+    gc.enable()
+
+
+async def _read_one_chunk_and_drop(client: httpx.AsyncClient) -> bytes:
+    response: Final = await client.send(client.build_request("GET", URL), stream=True)
+    return await anext(response.aiter_raw())
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cyclic_gc_off")
+async def test_async_spread_frees_the_stream_of_a_partly_read_response_dropped_without_closing():
+    spread: Final = AsyncHTTP2ConnectionSpread(lambda _limits: _TwoChunkConnection(), UNCAPPED)
+    async with httpx.AsyncClient(transport=spread) as client:
+        assert await _read_one_chunk_and_drop(client) == b"o"
+
+        await _until(lambda: not spread.has_request_in_flight())
