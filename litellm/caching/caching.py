@@ -131,6 +131,7 @@ class Cache:
         valkey_semantic_cache_index_name: str | None = None,
         redis_flush_size: int | None = None,
         redis_startup_nodes: list | None = None,
+        disk_cache_dir: str | None = None,
         qdrant_api_base: str | None = None,
         qdrant_api_key: str | None = None,
         qdrant_collection_name: str | None = None,
@@ -199,6 +200,8 @@ class Cache:
         Returns:
             None. Cache is set as a litellm param
         """
+        if disk_cache_dir is not None:
+            verbose_logger.warning("Ignoring disk_cache_dir, the disk cache backend was removed")
         if _backend is not None:
             self.cache: BaseCache = _backend
         elif type == LiteLLMCacheType.REDIS:
@@ -1052,7 +1055,7 @@ def enable_cache(
         None
 
     Raises:
-        None
+        ValueError: If an unsupported cache type is provided.
     """
     print_verbose("LiteLLM: Enabling Cache")
     if "cache" not in litellm.input_callback:
