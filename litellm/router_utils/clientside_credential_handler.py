@@ -115,6 +115,7 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     # admin's value in ``litellm_params`` and have it forwarded to the
     # redirected upstream.
     if "api_base" in request_kwargs or "base_url" in request_kwargs:
+        from litellm.llms.chatgpt.subscription_login import names_chatgpt_subscription_login
         from litellm.llms.github_copilot.per_user_auth import github_copilot_auth_mode
 
         if sends_api_key_secret_reference(litellm_params):  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is the untyped request dict
@@ -141,6 +142,8 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
         per_user_credential_locked: Final = github_copilot_auth_mode(
             credential_name_value,  # pyright: ignore[reportUnknownArgumentType]  # value comes from the untyped request dict
             auth_type,  # pyright: ignore[reportUnknownArgumentType]  # value comes from the untyped request dict
+        ) or names_chatgpt_subscription_login(
+            credential_name_value  # pyright: ignore[reportUnknownArgumentType]  # value comes from the untyped request dict
         )
         for field in _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE:
             if per_user_credential_locked and field in ("litellm_credential_name", "github_copilot_auth_type"):

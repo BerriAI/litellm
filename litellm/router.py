@@ -469,6 +469,7 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
+    chatgpt_subscription_login_litellm_params,
     is_server_derived_pricing_key,
     shared_backend_model_info,
 )
@@ -5073,6 +5074,22 @@ class Router:
             raise litellm.BadRequestError(
                 message="litellm_credential_name cannot be overridden on a deployment that uses per-user GitHub OAuth",
                 model=deployment_model_name,
+                llm_provider="",
+            )
+        from litellm.llms.chatgpt.subscription_login import locked_chatgpt_credential_name
+
+        locked_chatgpt_name: Final = locked_chatgpt_credential_name(deployment_context)
+        if (
+            locked_chatgpt_name is not None
+            and "litellm_credential_name" in kwargs
+            and caller_credential_name != locked_chatgpt_name
+        ):
+            raise litellm.BadRequestError(
+                message=(
+                    "litellm_credential_name cannot be overridden on a deployment that uses "
+                    "a ChatGPT subscription login"
+                ),
+                model=declared_model if isinstance(declared_model, str) else "",
                 llm_provider="",
             )
 
@@ -12377,7 +12394,11 @@ class Router:
                 verbose_router_logger.warning(
                     "Credential '%s' not found in credential_list", deployment.litellm_params.litellm_credential_name
                 )
-            credentials.update(credential_values)
+            credentials.update(
+                (key, value)
+                for key, value in credential_values.items()
+                if key not in chatgpt_subscription_login_litellm_params
+            )
             # Remove the credential name since we've resolved it
             credentials.pop("litellm_credential_name", None)
 

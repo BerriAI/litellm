@@ -237,6 +237,110 @@ def test_a_request_body_cannot_pick_a_federated_identity_by_credential_name(monk
         )
 
 
+_CHATGPT_LOGIN_FIELDS: Final = (
+    "chatgpt_access_token",
+    "chatgpt_refresh_token",
+    "chatgpt_id_token",
+    "chatgpt_account_id",
+    "chatgpt_expires_at",
+)
+
+
+@pytest.mark.parametrize("field", _CHATGPT_LOGIN_FIELDS)
+@pytest.mark.parametrize("nested", [False, True], ids=["top_level", "nested_litellm_params"])
+@pytest.mark.parametrize("allow_client_side_credentials", [False, True])
+def test_a_request_body_cannot_carry_a_chatgpt_subscription_login_value(
+    field: str, nested: bool, allow_client_side_credentials: bool
+) -> None:
+    login: Final = {field: "attacker-chosen"}
+    with pytest.raises(
+        ValueError, match="server-owned workload identity federation or OAuth token exchange parameter"
+    ) as error:
+        is_request_body_safe(
+            request_body={"model": "chatgpt/gpt-5.5", **({"litellm_params": login} if nested else login)},
+            general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+            llm_router=None,
+            model="chatgpt/gpt-5.5",
+        )
+
+    assert field in str(error.value)
+    assert "attacker-chosen" not in str(error.value)
+
+
+def test_a_deployment_opt_in_cannot_let_a_request_body_carry_a_chatgpt_refresh_token() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chatgpt/gpt-5.5",
+                "litellm_params": {
+                    "model": "chatgpt/gpt-5.5",
+                    "configurable_clientside_auth_params": ["chatgpt_refresh_token", "api_key"],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="chatgpt_refresh_token"):
+        is_request_body_safe(
+            request_body={"model": "chatgpt/gpt-5.5", "chatgpt_refresh_token": "attacker-chosen"},
+            general_settings={},
+            llm_router=router,
+            model="chatgpt/gpt-5.5",
+        )
+
+
+_NAMES_TEAM_A_LOGIN: Final = {"litellm_credential_name": "team-a-chatgpt"}
+_CLIENT_ROUTER_MODEL_NAMING_TEAM_A_LOGIN: Final = {
+    "model": "chatgpt/gpt-5.5",
+    "user_config": _client_router_config("model_list", {"model": "chatgpt/gpt-5.5", **_NAMES_TEAM_A_LOGIN}),
+}
+_CLIENT_ROUTER_DEFAULTS_NAMING_TEAM_A_LOGIN: Final = {
+    "model": "chatgpt/gpt-5.5",
+    "user_config": _client_router_config("default_litellm_params", dict(_NAMES_TEAM_A_LOGIN)),
+}
+
+
+@pytest.mark.parametrize(
+    ("body", "allow_client_side_credentials"),
+    [
+        pytest.param({"model": "chatgpt/gpt-5.5", **_NAMES_TEAM_A_LOGIN}, False, id="top_level"),
+        pytest.param({"model": "chatgpt/gpt-5.5", **_NAMES_TEAM_A_LOGIN}, True, id="top_level_opted_in"),
+        pytest.param({"model": "chatgpt/gpt-5.5", "litellm_params": _NAMES_TEAM_A_LOGIN}, False, id="nested"),
+        pytest.param(
+            {"model": "chatgpt/gpt-5.5", "litellm_params": _NAMES_TEAM_A_LOGIN}, True, id="nested_opted_in"
+        ),
+        pytest.param(_CLIENT_ROUTER_MODEL_NAMING_TEAM_A_LOGIN, True, id="client_router_model_list"),
+        pytest.param(_CLIENT_ROUTER_DEFAULTS_NAMING_TEAM_A_LOGIN, True, id="client_router_defaults"),
+    ],
+)
+def test_a_request_body_cannot_pick_a_chatgpt_subscription_login_by_credential_name(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, object], allow_client_side_credentials: bool
+) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-a-chatgpt",
+                credential_values={"chatgpt_access_token": "access-team-a-example", "chatgpt_account_id": "acct-a"},
+                credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="names a credential configured for") as error:
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": allow_client_side_credentials},
+            llm_router=None,
+            model="chatgpt/gpt-5.5",
+        )
+
+    assert "access-team-a-example" not in str(error.value)
+
+
 def test_a_request_body_may_still_name_a_credential_that_does_not_federate(monkeypatch):
     """Only federation makes a credential a deployment decision. An ordinary named credential stays
     usable from a request body, so the ban must read what the credential holds, not its presence."""
@@ -3192,6 +3296,33 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
                 request_kwargs={"api_base": "https://attacker.example"},
             )
         assert "github_copilot_auth_type" not in out
+
+    @pytest.mark.parametrize("override", ["api_base", "base_url"])
+    @pytest.mark.parametrize(
+        "credential_values",
+        [
+            pytest.param({"chatgpt_access_token": "access-team-a-example"}, id="chatgpt_subscription_login"),
+            pytest.param({"chatgpt_account_id": "acct-team-a"}, id="chatgpt_login_without_token_yet"),
+        ],
+    )
+    def test_a_chatgpt_subscription_credential_name_survives_a_base_override(
+        self, override: str, credential_values: dict[str, str]
+    ):
+        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.types.utils import CredentialItem
+
+        with patch.object(
+            litellm,
+            "credential_list",
+            [CredentialItem(credential_name="team-a-login", credential_values=credential_values, credential_info={})],
+        ):
+            out = get_dynamic_litellm_params(
+                litellm_params={"model": "chatgpt/gpt-5.5", "litellm_credential_name": "team-a-login"},
+                request_kwargs={override: "https://attacker.example"},
+            )
+
+        assert out["litellm_credential_name"] == "team-a-login"
+        assert out[override] == "https://attacker.example"
 
     def test_field_echo_does_not_preserve_admin_value(self):
         # Regression: a caller that echoes an admin-config field name with

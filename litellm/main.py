@@ -698,6 +698,7 @@ async def acompletion(
                 "str | None", kwargs.get("api_base")
             )
             or base_url,
+            api_key=api_key,
             litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
         )
 

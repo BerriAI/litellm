@@ -4267,6 +4267,15 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_scope",
 )
 github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
+chatgpt_subscription_login_secret_params: Final = (
+    "chatgpt_access_token",
+    "chatgpt_refresh_token",
+    "chatgpt_id_token",
+)
+chatgpt_subscription_login_litellm_params: Final = chatgpt_subscription_login_secret_params + (
+    "chatgpt_account_id",
+    "chatgpt_expires_at",
+)
 OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
 API_KEY_SECRET_REFERENCE_REJECTION: Final = (
     "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
@@ -4376,8 +4385,11 @@ server_owned_wif_litellm_params: Final = (
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
     + ("chatgpt_auth_file",)
+    + chatgpt_subscription_login_litellm_params
 )
-secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
+secret_bearing_wif_litellm_params: Final = tuple(
+    sorted(WIF_SECRET_BEARING_KEYS.union(chatgpt_subscription_login_secret_params))
+)
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,

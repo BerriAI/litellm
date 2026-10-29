@@ -4,6 +4,7 @@ Tests for ChatGPT subscription Responses API transformation
 Source: litellm/llms/chatgpt/responses/transformation.py
 """
 
+import asyncio
 import base64
 import json
 from collections.abc import Generator
@@ -13,15 +14,18 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.chatgpt.authenticator import Authenticator
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.main import responses_api_bridge_check
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CredentialItem, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 
@@ -667,3 +671,127 @@ def test_prompt_cache_key_keeps_one_session_header_across_requests(
             )
 
     assert [call.args[0].headers["session_id"] for call in upstream.call_args_list] == ["conv-123", "conv-123"]
+
+
+def _team_subscription_login(access_token: str) -> CredentialItem:
+    return CredentialItem(
+        credential_name="team-a-chatgpt",
+        credential_values={
+            "chatgpt_access_token": access_token,
+            "chatgpt_refresh_token": "refresh-team-a-example",
+            "chatgpt_id_token": "id-team-a-example",
+            "chatgpt_account_id": "acct-team-a",
+            "chatgpt_expires_at": "4102444800",
+        },
+        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
+    )
+
+
+def _completed_responses_reply(_request: httpx.Request) -> httpx.Response:
+    completed: Final = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.5",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    }
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
+    )
+
+
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.asyncio
+async def test_a_subscription_login_replaces_the_host_auth_file_login_on_the_wire(
+    sync: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    host_token: Final = _fake_chatgpt_oauth_token("acct-host")
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": host_token, "account_id": "acct-host", "expires_at": 4102444800})
+    )
+    subscription_token: Final = _fake_chatgpt_oauth_token("acct-team-a")
+    login: Final = _team_subscription_login(subscription_token)
+    monkeypatch.setattr(litellm, "credential_list", [login])
+    params: Final = {
+        "model": "chatgpt/gpt-5.5",
+        "input": "hi",
+        "litellm_credential_name": login.credential_name,
+        "secret_fields": {
+            "raw_headers": {},
+            "chatgpt_subscription_logins": RedactedDict({login.credential_name: subscription_token}),
+        },
+    }
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(f"{CHATGPT_API_BASE}/responses").mock(side_effect=_completed_responses_reply)
+        response: Final = (
+            await asyncio.to_thread(litellm.responses, **params) if sync else await litellm.aresponses(**params)
+        )
+
+    assert response.output_text == "OK"
+    assert route.call_count == 1
+    sent: Final = route.calls.last.request
+    assert sent.headers.get_list("authorization") == [f"Bearer {subscription_token}"]
+    assert sent.headers.get_list("chatgpt-account-id") == ["acct-team-a"]
+    body: Final = sent.content.decode()
+    assert [value for value in login.credential_values.values() if str(value) in body] == []
+    assert [key for key in login.credential_values if key in body] == []
+    assert host_token not in body
+
+
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("owned_logins", [None, {"team-b-chatgpt": "team-b-example-token"}])
+@pytest.mark.asyncio
+async def test_a_subscription_login_the_caller_does_not_own_never_falls_back_to_the_host_auth_file(
+    sync: bool, owned_logins: dict[str, str] | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {
+                "access_token": _fake_chatgpt_oauth_token("acct-host"),
+                "account_id": "acct-host",
+                "expires_at": 4102444800,
+            }
+        )
+    )
+    login: Final = _team_subscription_login(_fake_chatgpt_oauth_token("acct-team-a"))
+    monkeypatch.setattr(litellm, "credential_list", [login])
+    params: Final = {
+        "model": "chatgpt/gpt-5.5",
+        "input": "hi",
+        "litellm_credential_name": login.credential_name,
+        **(
+            {}
+            if owned_logins is None
+            else {"secret_fields": {"raw_headers": {}, "chatgpt_subscription_logins": RedactedDict(owned_logins)}}
+        ),
+    }
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{CHATGPT_API_BASE}/responses").mock(side_effect=_completed_responses_reply)
+        with pytest.raises(litellm.CallerCredentialAuthenticationError) as raised:
+            await (asyncio.to_thread(litellm.responses, **params) if sync else litellm.aresponses(**params))
+
+    assert raised.value.status_code == 401
+    assert route.call_count == 0

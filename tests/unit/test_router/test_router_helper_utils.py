@@ -1,11 +1,14 @@
 import asyncio
+import base64
 import functools
 import gc
+import itertools
 import json
 import os
 import weakref
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from types import MethodType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -3354,3 +3357,169 @@ def test_upsert_deployment_clears_stale_budget_config(monkeypatch):
 
     router.upsert_deployment(deployment=unbudgeted)
     assert budget_limiter._get_budget_config_for_deployment(model_id) is None
+
+
+def test_get_deployment_credentials_with_provider_never_returns_chatgpt_subscription_login_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.utils import CredentialItem
+
+    login_values: Final = {
+        "chatgpt_access_token": "access-team-a-example",
+        "chatgpt_refresh_token": "refresh-team-a-example",
+        "chatgpt_id_token": "id-team-a-example",
+        "chatgpt_account_id": "acct-team-a",
+        "chatgpt_expires_at": "4102444800",
+    }
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-a-chatgpt",
+                credential_values={**login_values, "api_version": "2026-01-01"},
+                credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
+            )
+        ],
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "team-a-gpt",
+                "litellm_params": {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "team-a-chatgpt"},
+                "model_info": {"id": "team-a-subscription"},
+            }
+        ]
+    )
+
+    credentials: Final = router.get_deployment_credentials_with_provider(model_id="team-a-subscription")
+
+    assert credentials == {"model": "chatgpt/gpt-5.5", "custom_llm_provider": "chatgpt", "api_version": "2026-01-01"}
+
+
+def _fake_chatgpt_jwt(account_id: str) -> str:
+    claims: Final = {"exp": 4102444800, "https://api.openai.com/auth": {"chatgpt_account_id": account_id}}
+    payload: Final = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"e30.{payload}.fake-signature"
+
+
+@pytest.fixture
+def chatgpt_logins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {"access_token": _fake_chatgpt_jwt("acct-host"), "account_id": "acct-host", "expires_at": 4102444800}
+        )
+    )
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            *(
+                CredentialItem(
+                    credential_name=name,
+                    credential_values={"chatgpt_access_token": _fake_chatgpt_jwt(f"acct-{name}")},
+                    credential_info={"custom_llm_provider": "chatgpt"},
+                )
+                for name in ("team-a-chatgpt", "team-b-chatgpt")
+            ),
+            CredentialItem(credential_name="plain-key", credential_values={"api_key": "sk-plain"}, credential_info={}),
+        ],
+    )
+
+
+_LOCKED_CHATGPT_DEPLOYMENTS: Final = {
+    "subscription": {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "team-a-chatgpt"},
+    "subscription_by_provider": {
+        "model": "gpt-5.5",
+        "custom_llm_provider": "chatgpt",
+        "litellm_credential_name": "team-a-chatgpt",
+    },
+    "chatgpt_naming_a_credential": {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "plain-key"},
+}
+_CREDENTIAL_NAME_OVERRIDES: Final = ("", None, "team-b-chatgpt", "plain-key", "unknown-credential")
+
+
+def _owned_logins() -> dict[str, object]:
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
+
+    return {"chatgpt_subscription_logins": RedactedDict({"team-a-chatgpt": _fake_chatgpt_jwt("acct-team-a-chatgpt")})}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("chatgpt_logins")
+@pytest.mark.parametrize(
+    ("deployment", "override"),
+    [
+        pytest.param(deployment, override, id=f"{name}-{override!r}")
+        for (name, deployment), override in itertools.product(
+            _LOCKED_CHATGPT_DEPLOYMENTS.items(), _CREDENTIAL_NAME_OVERRIDES
+        )
+        if override != deployment["litellm_credential_name"]
+    ],
+)
+async def test_a_request_cannot_swap_the_credential_a_chatgpt_deployment_names(
+    deployment: dict[str, str], override: str | None
+) -> None:
+    router: Final = Router(model_list=[{"model_name": "team-a-gpt", "litellm_params": deployment}])
+
+    with pytest.raises(litellm.BadRequestError, match="cannot be overridden on a deployment that uses a ChatGPT"):
+        await router.acompletion(
+            model="team-a-gpt",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ran",
+            secret_fields=_owned_logins(),
+            litellm_credential_name=override,
+            num_retries=0,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("chatgpt_logins")
+@pytest.mark.parametrize("deployment", _LOCKED_CHATGPT_DEPLOYMENTS.values(), ids=_LOCKED_CHATGPT_DEPLOYMENTS.keys())
+@pytest.mark.parametrize("repeats_its_own_name", [False, True])
+async def test_a_chatgpt_deployment_runs_when_the_request_leaves_its_credential_alone(
+    deployment: dict[str, str], repeats_its_own_name: bool
+) -> None:
+    router: Final = Router(model_list=[{"model_name": "team-a-gpt", "litellm_params": deployment}])
+    own_name: Final = {"litellm_credential_name": deployment["litellm_credential_name"]} if repeats_its_own_name else {}
+
+    response: Final = await router.acompletion(
+        model="team-a-gpt",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ran",
+        secret_fields=_owned_logins(),
+        num_retries=0,
+        **own_name,
+    )
+
+    assert response.choices[0].message.content == "ran"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("chatgpt_logins")
+@pytest.mark.parametrize("override", ["", None, "unknown-credential"])
+async def test_a_deployment_that_is_not_chatgpt_keeps_its_existing_credential_override_behavior(
+    override: str | None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "plain-gpt",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "litellm_credential_name": "plain-key"},
+            }
+        ]
+    )
+
+    response: Final = await router.acompletion(
+        model="plain-gpt",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ran",
+        litellm_credential_name=override,
+        num_retries=0,
+    )
+
+    assert response.choices[0].message.content == "ran"

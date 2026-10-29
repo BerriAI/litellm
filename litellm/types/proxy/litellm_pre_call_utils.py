@@ -26,3 +26,4 @@ class SecretFields(TypedDict):
     raw_headers: dict
     user_provider_credentials: NotRequired[ReadOnly[Mapping[str, Mapping[str, str]]]]
     user_provider_credentials_user_id: NotRequired[ReadOnly[str]]
+    chatgpt_subscription_logins: NotRequired[ReadOnly[Mapping[str, str]]]

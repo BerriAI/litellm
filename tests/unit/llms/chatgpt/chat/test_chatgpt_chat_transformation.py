@@ -4,7 +4,7 @@ import pytest
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.chatgpt.chat.transformation import ChatGPTConfig
-from litellm.llms.chatgpt.common_utils import GetAccessTokenError
+from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE, GetAccessTokenError
 
 GATEWAY_BASE = "https://chatgpt.example/backend-api/codex"
 
@@ -72,7 +72,9 @@ import litellm
 from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.chatgpt.chat.transformation import ChatGPTConfig
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CredentialItem
 
 
 def _write_auth_record(path: Path, token: str, account_id: str) -> None:
@@ -636,3 +638,54 @@ async def test_requests_preserve_gateway_token_and_selected_workspace(
                 else await litellm.aresponses(**params, input=[{"role": "user", "content": "Hello"}])
             )
             assert response.output[0].content[0].text == expected_account
+
+
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("through_router", [False, True])
+@pytest.mark.asyncio
+async def test_chat_on_a_subscription_deployment_sends_the_owned_login_instead_of_the_host_auth_file(
+    auth_files: tuple[Path, Path], through_router: bool, sync: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    subscription_token: Final = _client_token("acct-team-a")
+    login: Final = CredentialItem(
+        credential_name="team-a-chatgpt",
+        credential_values={
+            "chatgpt_access_token": subscription_token,
+            "chatgpt_refresh_token": "refresh-team-a-example",
+            "chatgpt_id_token": "id-team-a-example",
+            "chatgpt_account_id": "acct-team-a",
+            "chatgpt_expires_at": "4102444800",
+        },
+        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [login])
+    deployment_params: Final = {"model": "chatgpt/gpt-6.1-sol", "litellm_credential_name": login.credential_name}
+    router: Final = (
+        litellm.Router(model_list=[{"model_name": "team-a-gpt", "litellm_params": deployment_params}])
+        if through_router
+        else None
+    )
+    params: Final = {
+        **({"model": "team-a-gpt"} if router else deployment_params),
+        "messages": [{"role": "user", "content": "Hello"}],
+        "secret_fields": {
+            "raw_headers": {},
+            "chatgpt_subscription_logins": RedactedDict({login.credential_name: subscription_token}),
+        },
+    }
+    complete: Final = (router.completion if sync else router.acompletion) if router else (
+        litellm.completion if sync else litellm.acompletion
+    )
+
+    with respx.mock as transport:
+        route: Final = transport.post(f"{CHATGPT_API_BASE}/responses").mock(side_effect=_subscription_response)
+        result: Final = await asyncio.to_thread(complete, **params) if sync else await complete(**params)
+
+    assert result.choices[0].message.content == "acct-team-a"
+    assert route.call_count == 1
+    sent: Final = route.calls.last.request
+    assert sent.headers.get_list("authorization") == [f"Bearer {subscription_token}"]
+    body: Final = sent.content.decode()
+    assert [value for value in login.credential_values.values() if value in body] == []
+    assert [key for key in login.credential_values if key in body] == []
