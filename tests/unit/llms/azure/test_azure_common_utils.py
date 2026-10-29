@@ -33,7 +33,6 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
 from litellm.types.utils import CallTypes
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 AzureSdkClient = AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI
 
@@ -466,32 +465,38 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
     assert completed.stdout.strip() == "0"
 
 
-def test_default_max_retries_env_var_reaches_azure_audio_clients() -> None:
-    code: Final = (
-        "import httpx, litellm, openai, respx\n"
-        "router = respx.Router(assert_all_mocked=True)\n"
-        "route = router.route().respond(\n"
-        "    429, json={'error': {'message': 'rate limited'}}, headers={'retry-after-ms': '1'}\n"
-        ")\n"
-        "litellm.client_session = httpx.Client(transport=httpx.MockTransport(router.handler))\n"
-        "shared = dict(\n"
-        "    api_key='test-key', api_base='https://audio-env-retry-test.openai.azure.com', api_version='2024-02-01'\n"
-        ")\n"
-        "audio = ('hello.wav', b'RIFF0000WAVEfmt ', 'audio/wav')\n"
-        "for call in (\n"
-        "    lambda: litellm.transcription(model='azure/whisper', file=audio, **shared),\n"
-        "    lambda: litellm.speech(model='azure/tts', input='hi', voice='alloy', **shared),\n"
-        "):\n"
-        "    try:\n"
-        "        call()\n"
-        "    except openai.RateLimitError:\n"
-        "        pass\n"
-        "print(route.call_count)"
-    )
-    completed: Final = run_child_interpreter(code, env={**os.environ, "DEFAULT_MAX_RETRIES": "0"}, timeout=120)
+def test_default_max_retries_setting_reaches_azure_audio_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai import RateLimitError
 
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip().splitlines()[-1] == "2"
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(litellm, "DEFAULT_MAX_RETRIES", 0)
+    router: Final = respx.Router(assert_all_mocked=True)
+    rate_limited: Final = router.route().respond(
+        429, json={"error": {"message": "rate limited"}}, headers={"retry-after-ms": "1"}
+    )
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(router.handler))
+    monkeypatch.setattr(litellm, "client_session", sync_http)
+    api_base: Final = "https://audio-default-retry-test.openai.azure.com"
+
+    try:
+        with pytest.raises(RateLimitError):
+            litellm.transcription(
+                model="azure/whisper",
+                file=("hello.wav", b"RIFF0000WAVEfmt ", "audio/wav"),
+                api_key="test-key",
+                api_base=api_base,
+                api_version="2024-02-01",
+            )
+        with pytest.raises(RateLimitError):
+            litellm.speech(
+                model="azure/tts", input="hi", voice="alloy", api_key="test-key", api_base=api_base, api_version="2024-02-01"
+            )
+    finally:
+        sync_http.close()
+
+    assert rate_limited.call_count == 2
 
 
 @pytest.mark.parametrize(
