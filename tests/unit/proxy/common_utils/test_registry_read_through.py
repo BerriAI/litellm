@@ -1,5 +1,6 @@
 import asyncio
 from typing import TYPE_CHECKING, Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -785,3 +786,127 @@ async def test_resync_model_deployments_reconciles_every_db_row_when_the_missed_
 
     assert await _resync_model_deployments(router_name) is router_holds_the_name_after_reconcile
     reconciled.assert_called_once_with(prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj)
+
+
+def _index_prisma_client(find_unique: AsyncMock) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedvectorstoreindextable.find_unique = find_unique
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_vector_store_index_read_through_recovers_index_created_on_sibling_replica(
+    fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import is_vector_store_index_with_read_through
+    from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+
+    find_unique: Final = AsyncMock(return_value=FakeVectorStoreIndexRow("index-made-on-a-sibling"))
+    monkeypatch.setattr(proxy_server, "prisma_client", _index_prisma_client(find_unique))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    assert await is_vector_store_index_with_read_through("index-made-on-a-sibling") is True
+
+    find_unique.assert_awaited_once_with(where={"index_name": "index-made-on-a-sibling"})
+    assert litellm.vector_store_index_registry is not None
+    index: Final = litellm.vector_store_index_registry.get_vector_store_index_by_name("index-made-on-a-sibling")
+    assert index is not None
+    assert index.litellm_params.vector_store_name == "config-vector-store"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_index_read_through_keeps_indexes_already_in_the_registry(
+    fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import is_vector_store_index_with_read_through
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStoreIndex
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+    from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            vector_store_indexes=[LiteLLM_ManagedVectorStoreIndex.model_validate(dict(FakeVectorStoreIndexRow("loaded")))]
+        ),
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        _index_prisma_client(AsyncMock(return_value=FakeVectorStoreIndexRow("index-made-later"))),
+    )
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    assert await is_vector_store_index_with_read_through("index-made-later") is True
+
+    assert litellm.vector_store_index_registry.is_vector_store_index("loaded") is True
+    assert litellm.vector_store_index_registry.is_vector_store_index("index-made-later") is True
+
+
+@pytest.mark.asyncio
+async def test_vector_store_index_read_through_answers_false_for_an_index_nobody_created(
+    fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import is_vector_store_index_with_read_through
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _index_prisma_client(AsyncMock(return_value=None)))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    assert await is_vector_store_index_with_read_through("index-nobody-created") is False
+    assert litellm.vector_store_index_registry is None
+
+
+@pytest.mark.asyncio
+async def test_vector_store_index_read_through_answers_a_loaded_index_without_reading_the_db(
+    fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import is_vector_store_index_with_read_through
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStoreIndex
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+    from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            vector_store_indexes=[LiteLLM_ManagedVectorStoreIndex.model_validate(dict(FakeVectorStoreIndexRow("loaded")))]
+        ),
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        _index_prisma_client(AsyncMock(side_effect=AssertionError("db read for an index already in memory"))),
+    )
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    assert await is_vector_store_index_with_read_through("loaded") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "store_model_in_db, general_settings",
+    [(True, {"supported_db_objects": ["models"]}), (False, {})],
+)
+async def test_resync_vector_store_indexes_respects_db_loading_settings(
+    monkeypatch: pytest.MonkeyPatch, store_model_in_db: bool, general_settings: dict[str, object]
+):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_vector_store_indexes
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        _index_prisma_client(AsyncMock(side_effect=AssertionError("db hit for an object type this replica does not load"))),
+    )
+    monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+    assert await _resync_vector_store_indexes("gated-out-index") is False

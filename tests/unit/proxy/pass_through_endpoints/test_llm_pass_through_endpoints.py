@@ -5557,6 +5557,107 @@ class TestAzureProxyRouteCrossIndexAuthorization:
             assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE
 
 
+class TestAzureProxyRouteIndexRegistryMiss:
+    """An index created with POST /v1/indexes is only in the DB until the periodic
+    registry sync, so every replica has to find it there on the first request."""
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.headers = {"content-type": "application/json"}
+        request.url = MagicMock()
+        request.url.path = path
+        return request
+
+    def _use_index_table(self, monkeypatch: pytest.MonkeyPatch, find_unique: AsyncMock) -> None:
+        import litellm.proxy.proxy_server as proxy_server
+
+        prisma_client: Final = MagicMock()
+        prisma_client.db.litellm_managedvectorstoreindextable.find_unique = find_unique
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+        monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    @pytest.mark.asyncio
+    async def test_index_only_in_the_db_reaches_its_search_service_on_the_first_call(
+        self, fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
+    ):
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+
+        self._use_index_table(monkeypatch, AsyncMock(return_value=FakeVectorStoreIndexRow("kb-new")))
+        vector_store: Final = {"litellm_params": {"api_base": "https://svc.search.windows.net"}}
+        search_answer: Final = Response(content=b'{"value":[{"id":"doc-1"}]}', status_code=200)
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.ProviderConfigManager.get_provider_vector_stores_config"
+            ) as mock_get_config,
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.assert_user_can_access_vector_store",
+                new=AsyncMock(),
+            ),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str", return_value=None),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
+                new=AsyncMock(return_value=search_answer),
+            ) as mock_handler,
+            patch.object(litellm, "vector_store_registry") as mock_vector_registry,
+        ):
+            mock_get_config.return_value.get_auth_credentials.return_value = {"headers": {"api-key": "k"}}
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = vector_store
+
+            response = await azure_proxy_route(
+                endpoint="indexes/kb-new/docs/search",
+                request=self._request("POST", "/azure_ai/indexes/kb-new/docs/search"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+            assert response.status_code == 200
+            assert response.body == b'{"value":[{"id":"doc-1"}]}'
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.assert_called_once_with(
+                vector_store_name="config-vector-store"
+            )
+            mock_handler.assert_awaited_once()
+            assert mock_handler.await_args.kwargs["base_target_url"] == "https://svc.search.windows.net"
+            assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE_AI
+
+    @pytest.mark.asyncio
+    async def test_unregistered_index_without_azure_api_base_answers_404_naming_the_index(
+        self, fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
+    ):
+        self._use_index_table(monkeypatch, AsyncMock(return_value=None))
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+                return_value=False,
+            ),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str", return_value=None),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ) as mock_handler,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await azure_proxy_route(
+                    endpoint="indexes/kb-never-created/docs/search",
+                    request=self._request("POST", "/azure_ai/indexes/kb-never-created/docs/search"),
+                    fastapi_response=MagicMock(spec=Response),
+                    user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                )
+
+            assert exc_info.value.status_code == 404
+            assert "'kb-never-created' is not registered" in exc_info.value.detail["error"]
+            mock_handler.assert_not_awaited()
+
+
 class TestAzureProxyRouteServiceLevelIndexCreate:
     """``POST /indexes`` carries no index name, so the managed-index branch cannot
     claim it and it would otherwise reach the generic Azure passthrough on the

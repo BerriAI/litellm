@@ -1,6 +1,6 @@
 """Read-through recovery for in-memory registries in multi-replica deployments.
 
-A management write (POST /model/new, /guardrails, /v1/agents) lands on one
+A management write (POST /model/new, /guardrails, /v1/agents, /v1/indexes) lands on one
 replica and reaches Postgres, but sibling replicas only refresh their in-memory
 registries on the periodic config reload, so a request using the new object
 immediately can land on a sibling that has never heard of it and fail 400/404.
@@ -225,6 +225,25 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
         return True
 
 
+async def _resync_vector_store_indexes(index_name: str) -> bool:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    if not _db_backed_registries_enabled("vector_store_indexes"):
+        return False
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    index: Final = await VectorStoreIndexRegistry.get_vector_store_index_from_db(prisma_client, index_name)
+    if index is None:
+        return False
+    if litellm.vector_store_index_registry is None:
+        litellm.vector_store_index_registry = VectorStoreIndexRegistry(vector_store_indexes=[index])
+    else:
+        litellm.vector_store_index_registry.upsert_vector_store_index(vector_store_index=index)
+    return True
+
+
 def _model_is_loaded(model_name_or_id: str) -> bool:
     from litellm.proxy import proxy_server
 
@@ -242,9 +261,25 @@ def _agent_is_loaded(agent_id_or_name: str) -> bool:
     return _agent_from_registry(agent_id_or_name) is not None
 
 
+def _vector_store_index_is_loaded(index_name: str) -> bool:
+    import litellm
+
+    registry: Final = litellm.vector_store_index_registry
+    return registry is not None and registry.is_vector_store_index(vector_store_index_name=index_name)
+
+
 model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments, is_loaded=_model_is_loaded)
 guardrail_registry_read_through: Final = RegistryReadThrough(resync=_resync_guardrails, is_loaded=_guardrail_is_loaded)
 agent_registry_read_through: Final = RegistryReadThrough(resync=_resync_agents, is_loaded=_agent_is_loaded)
+vector_store_index_registry_read_through: Final = RegistryReadThrough(
+    resync=_resync_vector_store_indexes, is_loaded=_vector_store_index_is_loaded
+)
+
+
+async def is_vector_store_index_with_read_through(index_name: str) -> bool:
+    if _vector_store_index_is_loaded(index_name):
+        return True
+    return await vector_store_index_registry_read_through.attempt(index_name)
 
 
 def _agent_from_registry(agent_id_or_name: str) -> "AgentResponse | None":

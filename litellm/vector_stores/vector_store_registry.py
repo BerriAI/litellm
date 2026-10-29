@@ -134,6 +134,17 @@ class VectorStoreIndexRegistry:
 
     _get_vector_store_indexes_from_db = get_vector_store_indexes_from_db
 
+    @staticmethod
+    async def get_vector_store_index_from_db(
+        prisma_client: PrismaClient, index_name: str
+    ) -> LiteLLM_ManagedVectorStoreIndex | None:
+        row: Final = await ManagedVectorStoreIndexRepository(prisma_client).table.find_unique(
+            where={"index_name": index_name}
+        )
+        if row is None:
+            return None
+        return LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row)))
+
 
 class VectorStoreRegistry:
     def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):

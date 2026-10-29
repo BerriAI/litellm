@@ -102,6 +102,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_set_request_parsed_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
+from litellm.proxy.common_utils.registry_read_through import is_vector_store_index_with_read_through
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
@@ -2420,6 +2421,9 @@ async def azure_proxy_route(
     )  # azure model is in the url - e.g. https://{endpoint}/openai/deployments/{deployment-id}/completions?api-version=2024-10-21
 
     search_index_name: Final = get_azure_ai_search_index_from_endpoint(endpoint)
+    is_managed_search_index: Final = search_index_name is not None and await is_vector_store_index_with_read_through(
+        search_index_name
+    )
 
     if len(parts) > 1 and llm_router:
         for part in parts:
@@ -2428,11 +2432,7 @@ async def azure_proxy_route(
                 request_body={"model": part}, llm_router=llm_router
             )
             # check if vector store index
-            is_vector_store_index = (
-                part == search_index_name
-                and litellm.vector_store_index_registry is not None
-                and litellm.vector_store_index_registry.is_vector_store_index(vector_store_index_name=part)
-            )
+            is_vector_store_index = is_managed_search_index and part == search_index_name
 
             if is_router_model:
                 request_body = await get_request_body(request)
@@ -2514,6 +2514,12 @@ async def azure_proxy_route(
         return body_model_group_relay
 
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
+    if base_target_url is None and search_index_name is not None and not is_managed_search_index:
+        unregistered_index: Final[RelayRejection] = {
+            "error": f"Azure AI Search index '{search_index_name}' is not registered on this proxy; "
+            "create it with POST /v1/indexes"
+        }
+        raise HTTPException(status_code=404, detail=unregistered_index)
     if base_target_url is None:
         raise Exception("Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure.")
     # Add or update query parameters

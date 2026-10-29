@@ -426,6 +426,40 @@ def fresh_agent_read_through(monkeypatch):
     return read_through
 
 
+@pytest.fixture
+def fresh_vector_store_index_read_through(monkeypatch):
+    import litellm
+    from litellm.proxy.common_utils import registry_read_through
+
+    read_through = registry_read_through.RegistryReadThrough(
+        resync=registry_read_through._resync_vector_store_indexes,
+        is_loaded=registry_read_through._vector_store_index_is_loaded,
+    )
+    monkeypatch.setattr(registry_read_through, "vector_store_index_registry_read_through", read_through)
+    monkeypatch.setattr(litellm, "vector_store_index_registry", None)
+    return read_through
+
+
+class FakeVectorStoreIndexRow:
+    def __init__(self, index_name: str, vector_store_name: str = "config-vector-store") -> None:
+        self.index_name = index_name
+        self.vector_store_name = vector_store_name
+
+    def __iter__(self):
+        return iter(
+            {
+                "id": f"{self.index_name}-id",
+                "index_name": self.index_name,
+                "litellm_params": {"vector_store_index": "physical-index", "vector_store_name": self.vector_store_name},
+                "index_info": None,
+                "created_at": None,
+                "created_by": None,
+                "updated_at": None,
+                "updated_by": None,
+            }.items()
+        )
+
+
 TOKEN_COUNT_LOG_FIELDS: Final = (
     "litellm_call_id",
     "request_model",
