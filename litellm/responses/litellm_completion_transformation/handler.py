@@ -11,6 +11,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
@@ -83,7 +84,11 @@ class LiteLLMCompletionTransformationHandler:
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
-        hoisted: Final = hoist_additional_tools(input, responses_api_request.get("tools"))
+        hoisted: Final = hoist_additional_tools(
+            input,
+            responses_api_request.get("tools"),
+            drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
+        )
         continuation: Final = _CONTINUATION_FIELDS_ADAPTER.validate_python(responses_api_request)
         previous_response_id: Final = continuation.get("previous_response_id")
         if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
