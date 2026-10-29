@@ -2721,7 +2721,9 @@ def test_chatgpt_bridge_keeps_a_reasoning_mode_its_catalog_row_declares_under_dr
     assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "mode": "pro"}
 
 
+@pytest.mark.parametrize("base_model", ["azure/gpt-6.1-standard-only", "azure/eu/gpt-6.1-standard-only"])
 def test_azure_bridge_reads_reasoning_modes_from_the_deployment_base_model_under_drop_params(
+    base_model: str,
     non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
 ):
     _, kwargs, route = non_openai_responses_bridge("azure")
@@ -2730,12 +2732,49 @@ def test_azure_bridge_reads_reasoning_modes_from_the_deployment_base_model_under
         model="azure/responses/custom-deployment-name",
         messages=[{"role": "user", "content": "hello"}],
         reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
-        model_info={"base_model": "azure/gpt-6.1-standard-only"},
+        model_info={"base_model": base_model},
         drop_params=True,
         **kwargs,
     )
 
     assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "context": "all_turns"}
+
+
+@pytest.mark.parametrize(
+    ("backend", "model", "dropped_reasoning"),
+    [
+        ("azure", "azure/responses/gpt-6.1-standard-only-prod", {"effort": "low"}),
+        (
+            "databricks",
+            "databricks/responses/databricks-gpt-bridge-test",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+        ),
+    ],
+)
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_responses_bridge_sends_mode_and_context_for_an_unknown_deployment_as_its_backend_decides(
+    backend: str,
+    model: str,
+    dropped_reasoning: dict[str, str],
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge(backend)
+    requested: Final = {"effort": "low", "mode": "pro", "context": "all_turns", **summary}
+
+    litellm.completion(model=model, messages=[{"role": "user", "content": "hello"}], reasoning_effort=requested, **kwargs)
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=requested,
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert [json.loads(call.request.content)["reasoning"] for call in route.calls] == [
+        requested,
+        {**dropped_reasoning, **summary},
+    ]
 
 
 def test_azure_bridge_reads_reasoning_modes_from_the_deployment_cost_map_row_under_drop_params(

@@ -1471,10 +1471,8 @@ def _with_catalog_reasoning_values(
     return MappingProxyType({**(_ANY_REASONING_FIELD_VALUES if defaults is None else defaults), **overrides})
 
 
-def _openai_catalog_model(model: str, base_model: str | None, custom_llm_provider: str) -> str | None:
-    names: Final = (
-        name.removeprefix(f"{custom_llm_provider}/").removeprefix("openai/") for name in (base_model, model) if name
-    )
+def _openai_catalog_model(model: str, base_model: str | None) -> str | None:
+    names: Final = (name.rsplit("/", 1)[-1] for name in (base_model, model) if name)
     return next((name for name in names if OpenAIGPTConfig.is_openai_catalog_model(name)), None)
 
 
@@ -1482,11 +1480,12 @@ def _reasoning_field_values(
     model: str, base_model: str | None, custom_llm_provider: str, responses_config: BaseResponsesAPIConfig | None
 ) -> ReasoningFieldValues | None:
     declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
-    catalog_model: Final = (
-        None if declared is not None else _openai_catalog_model(model, base_model, custom_llm_provider)
-    )
+    catalog_model: Final = None if declared is not None else _openai_catalog_model(model, base_model)
     defaults: Final = declared if catalog_model is None else _openai_reasoning_field_values(catalog_model)
-    return _with_catalog_reasoning_values(defaults, model, custom_llm_provider)
+    values: Final = _with_catalog_reasoning_values(defaults, model, custom_llm_provider)
+    if values is not None or responses_config is None:
+        return values
+    return responses_config.unresolved_model_reasoning_field_values()
 
 
 def _accepts_reasoning_field(key: str, value: object, values_by_field: ReasoningFieldValues) -> bool:
