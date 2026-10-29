@@ -10,11 +10,15 @@ import pytest
 import litellm
 from litellm import completion
 from litellm.cost_calculator import cost_per_token
+from litellm.llms.zai.chat.transformation import ZAIChatConfig
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 JSON_SCHEMA_RESPONSE_FORMAT = {
     "type": "json_schema",
-    "json_schema": {"name": "profile", "schema": {"type": "object", "properties": {"name": {"type": "string"}}}},
+    "json_schema": {
+        "name": "profile",
+        "schema": {"type": "object", "properties": {"favorite_number": {"type": "integer"}}},
+    },
 }
 
 
@@ -130,32 +134,72 @@ def test_zai_sends_response_format_and_maps_max_completion_tokens(respx_mock, za
     "token_limits",
     [{"max_tokens": 300, "max_completion_tokens": 15}, {"max_completion_tokens": 15, "max_tokens": 300}],
 )
-def test_zai_max_completion_tokens_wins_over_max_tokens(respx_mock, zai_response, monkeypatch, token_limits):
+def test_zai_max_completion_tokens_wins_over_max_tokens(token_limits):
+    mapped = ZAIChatConfig().map_openai_params(token_limits, {}, "glm-5.3", drop_params=False)
+
+    assert mapped["max_tokens"] == 15
+    assert "max_completion_tokens" not in mapped
+
+
+@pytest.mark.parametrize(
+    ("over_limit_by", "drop_params", "forwarded"),
+    [(1, True, False), (1, False, True), (0, True, True)],
+)
+def test_zai_drop_params_drops_max_completion_tokens_above_model_limit(
+    local_model_cost_map, respx_mock, zai_response, monkeypatch, over_limit_by, drop_params, forwarded
+):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+    requested = litellm.model_cost["zai/glm-4.5-flash"]["max_output_tokens"] + over_limit_by
 
-    completion(model="zai/glm-5.3", messages=[{"role": "user", "content": "Count"}], **token_limits)
+    completion(
+        model="zai/glm-4.5-flash",
+        messages=[{"role": "user", "content": "Count"}],
+        max_completion_tokens=requested,
+        drop_params=drop_params,
+    )
 
     body = json.loads(respx_mock.calls[0].request.content)
-    assert body["max_tokens"] == 15
+    assert body.get("max_tokens") == (requested if forwarded else None)
 
 
 @pytest.mark.parametrize("pass_through", [{}, {"allowed_openai_params": ["response_format"]}])
-def test_zai_forwards_json_schema_response_format_as_sent(respx_mock, zai_response, monkeypatch, pass_through):
+def test_zai_forwards_json_schema_to_models_that_enforce_it(
+    local_model_cost_map, respx_mock, zai_response, monkeypatch, pass_through
+):
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+    messages = [{"role": "user", "content": "Ann likes 7"}]
+
+    completion(model="zai/glm-5.3", messages=messages, response_format=JSON_SCHEMA_RESPONSE_FORMAT, **pass_through)
+
+    body = json.loads(respx_mock.calls[0].request.content)
+    assert body["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+    assert body["messages"] == messages
+
+
+@pytest.mark.parametrize("pass_through", [{}, {"allowed_openai_params": ["response_format"]}])
+def test_zai_puts_json_schema_in_prompt_for_models_that_ignore_it(
+    local_model_cost_map, respx_mock, zai_response, monkeypatch, pass_through
+):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
     completion(
-        model="zai/glm-5.3",
-        messages=[{"role": "user", "content": "Ann is 30"}],
+        model="zai/glm-4.6",
+        messages=[{"role": "user", "content": "Ann likes 7"}],
         response_format=JSON_SCHEMA_RESPONSE_FORMAT,
         **pass_through,
     )
 
     body = json.loads(respx_mock.calls[0].request.content)
-    assert body["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+    assert body["response_format"] == {"type": "json_object"}
+    assert body["messages"][0] == {"role": "user", "content": "Ann likes 7"}
+    assert body["messages"][-1]["role"] == "user"
+    assert "favorite_number" in body["messages"][-1]["content"]
 
 
 def test_zai_glm_5v_turbo_bills_cached_input_at_cache_read_price(local_model_cost_map: None) -> None:
