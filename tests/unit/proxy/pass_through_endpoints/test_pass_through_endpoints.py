@@ -34,6 +34,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS, WEBSOCKET_CLOSE_REASON_MAX_BYTES
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.llms.custom_llm import CustomLLM
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
@@ -65,6 +67,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -8079,6 +8082,61 @@ async def test_vertex_live_setup_frame_never_refreshes_the_token_of_a_chatgpt_gr
         )
 
     assert not outbound.called
+    upstream_ws.send.assert_awaited_once()
+    assert _policy_close_reason(websocket) is None
+
+
+class SecretReadRecorder(CustomSecretManager):
+    """A hosted secret manager that answers every read and records the name it was asked for"""
+
+    def __init__(self) -> None:
+        self.names_read = MagicMock()
+
+    def sync_read_secret(
+        self, secret_name: str, optional_params: dict | None = None, timeout: float | httpx.Timeout | None = None
+    ) -> str:
+        self.names_read(secret_name)
+        return "a-value"
+
+    async def async_read_secret(
+        self, secret_name: str, optional_params: dict | None = None, timeout: float | httpx.Timeout | None = None
+    ) -> str:
+        return self.sync_read_secret(secret_name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "other_group",
+    [
+        {"model": "groq/llama-4-scout"},
+        {"model": "llama-4-scout", "custom_llm_provider": "groq"},
+        {"model": "veniceai/venice-uncensored"},
+        {"model": "in-house/assistant"},
+    ],
+    ids=["provider-prefix", "custom-llm-provider", "json-provider", "registered-custom-provider"],
+)
+async def test_vertex_live_setup_frame_never_reads_the_secret_manager_for_another_providers_group(
+    monkeypatch: pytest.MonkeyPatch, other_group: dict[str, str]
+):
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "in-house", "custom_handler": CustomLLM()}])
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "other", "litellm_params": other_group},
+            {"model_name": "native-audio", "litellm_params": {"model": f"vertex_ai/{VERTEX_LIVE_GROUP}"}},
+        ]
+    )
+    secret_manager: Final = SecretReadRecorder()
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_manager)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame("native-audio")],
+        UserAPIKeyAuth(token="hashed", models=["native-audio"]),
+        llm_router=llm_router,
+    )
+
+    secret_manager.names_read.assert_not_called()
     upstream_ws.send.assert_awaited_once()
     assert _policy_close_reason(websocket) is None
 
