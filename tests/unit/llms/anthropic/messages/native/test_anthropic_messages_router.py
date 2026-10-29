@@ -451,27 +451,26 @@ _PER_SECOND_RATE: Final = 0.5
 _UPSTREAM_PAUSE_SECONDS: Final = 0.3
 
 
-def _per_second_router() -> Router:
+def _priced_router(**pricing: float) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": _ALIAS,
-                "litellm_params": {
-                    "model": _ANTHROPIC_MODEL,
-                    "api_key": "fake-key",
-                    "input_cost_per_second": _PER_SECOND_RATE,
-                    "output_cost_per_second": _PER_SECOND_RATE,
-                },
+                "litellm_params": {"model": _ANTHROPIC_MODEL, "api_key": "fake-key", **pricing},
             }
         ]
     )
+
+
+def _per_second_router() -> Router:
+    return _priced_router(input_cost_per_second=_PER_SECOND_RATE, output_cost_per_second=_PER_SECOND_RATE)
 
 
 def _anthropic_sse_event(event: Mapping[str, object]) -> bytes:
     return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
 
 
-async def _route_like_the_proxy(**request: object) -> object:
+async def _route_like_the_proxy(router: Router, **request: object) -> object:
     logging_obj, routed_request = litellm.utils.function_setup(
         original_function="aanthropic_messages",
         rules_obj=litellm.utils.Rules(),
@@ -481,7 +480,7 @@ async def _route_like_the_proxy(**request: object) -> object:
         max_tokens=100,
         **request,
     )
-    return await _per_second_router().aanthropic_messages(**routed_request, litellm_logging_obj=logging_obj)
+    return await router.aanthropic_messages(**routed_request, litellm_logging_obj=logging_obj)
 
 
 async def _sse_pausing_after_the_first_event() -> AsyncIterator[bytes]:
@@ -492,7 +491,16 @@ async def _sse_pausing_after_the_first_event() -> AsyncIterator[bytes]:
 
 
 @pytest.mark.asyncio
-async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_call_duration(respx_mock, monkeypatch):
+@pytest.mark.parametrize(
+    "pricing",
+    [
+        {"input_cost_per_second": _PER_SECOND_RATE, "output_cost_per_second": _PER_SECOND_RATE},
+        {"cost_per_second": _PER_SECOND_RATE},
+    ],
+)
+async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_call_duration(
+    respx_mock, monkeypatch, pricing: Mapping[str, float]
+):
     messages: Final = _unique_messages()
     recorder: Final = _RecordingLogger(messages)
     monkeypatch.setattr(litellm, "callbacks", [recorder])
@@ -503,7 +511,7 @@ async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_
 
     respx_mock.post(url__regex=_ANTHROPIC_URL).mock(side_effect=slow_upstream)
     started: Final = time.monotonic()
-    await _route_like_the_proxy(messages=messages)
+    await _route_like_the_proxy(_priced_router(**pricing), messages=messages)
     await _wait_for_payload(recorder)
     elapsed: Final = time.monotonic() - started
 
@@ -525,7 +533,7 @@ async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_
         )
     )
     started: Final = time.monotonic()
-    stream: Final = await _route_like_the_proxy(messages=messages, stream=True)
+    stream: Final = await _route_like_the_proxy(_per_second_router(), messages=messages, stream=True)
     await _stream_events(stream)
     await _wait_for_payload(recorder)
     elapsed: Final = time.monotonic() - started
