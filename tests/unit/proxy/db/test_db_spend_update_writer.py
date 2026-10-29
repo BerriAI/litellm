@@ -21,13 +21,20 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
-from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendLogsPayload, SpendUpdateQueueItem
+from litellm.proxy._types import (
+    DailyTagSpendTransaction,
+    Litellm_EntityType,
+    SpendLogsPayload,
+    SpendUpdateQueueItem,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
     _spend_tables_left_to_send,
     _SpendTableName,
+    _virtual_key_team_id,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
@@ -1494,65 +1501,73 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
             )
 
 
-def _tagged_spend_log(tag: str, team_id: str | None, spend: float) -> SpendLogsPayload:
-    return cast(
+def _validated_key(**fields: str | bool | None) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="a" * 64, team_id="team-a").model_copy(update={"via_virtual_key": True, **fields})
+
+
+@pytest.mark.parametrize(
+    ("bucket", "auth", "expected"),
+    [
+        ("metadata", _validated_key(), "team-a"),
+        ("litellm_metadata", _validated_key(), "team-a"),
+        ("metadata", _validated_key(team_id=None), ""),
+        ("metadata", _validated_key(via_virtual_key=False), ""),
+        ("metadata", _validated_key(is_session_token=True), ""),
+        ("metadata", {"via_virtual_key": True, "team_id": "team-a"}, ""),
+        ("metadata", None, ""),
+    ],
+    ids=[
+        "virtual-key",
+        "virtual-key-litellm-metadata",
+        "virtual-key-without-team",
+        "jwt-or-custom-auth",
+        "ui-session",
+        "forged-metadata",
+        "no-auth",
+    ],
+)
+def test_tag_team_comes_only_from_a_proxy_validated_team_virtual_key(
+    bucket: str, auth: UserAPIKeyAuth | dict[str, object] | None, expected: str
+) -> None:
+    kwargs: Final = {"litellm_params": {bucket: {"user_api_key_auth": auth, "user_api_key_team_id": "team-a"}}}
+
+    assert _virtual_key_team_id(kwargs) == expected
+
+
+@pytest.mark.asyncio
+async def test_every_tag_row_of_a_request_carries_its_virtual_key_team() -> None:
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+    payload: Final = cast(
         SpendLogsPayload,
         {
-            "request_id": f"req-{tag}-{team_id}",
-            "request_tags": json.dumps([tag]),
-            "team_id": team_id,
+            "request_id": "req-1",
+            "request_tags": '["cost-center:cc-42", "prod"]',
+            "team_id": "team-from-jwt",
             "user": "user-1",
-            "startTime": "2026-10-17T00:00:00",
-            "api_key": "key-1",
+            "startTime": "2026-10-29T00:00:00",
+            "api_key": "a" * 64,
             "model": "gpt-4o",
             "custom_llm_provider": "openai",
             "model_group": "gpt-4o",
             "prompt_tokens": 10,
             "completion_tokens": 5,
-            "spend": spend,
+            "spend": 0.01,
             "metadata": '{"usage_object": {}}',
         },
     )
 
-
-@pytest.mark.parametrize(
-    ("requests", "expected"),
-    [
-        (
-            (
-                ("cost-center:cc-42", "team-a", 1.0),
-                ("cost-center:cc-42", "team-b", 2.0),
-                ("cost-center:cc-42", None, 0.5),
-            ),
-            [
-                ("cost-center:cc-42", "", 0.5),
-                ("cost-center:cc-42", "team-a", 1.0),
-                ("cost-center:cc-42", "team-b", 2.0),
-            ],
-        ),
-        (
-            (("cost_center", "west", 1.0), ("cost", "center_west", 2.0)),
-            [("cost", "center_west", 2.0), ("cost_center", "west", 1.0)],
-        ),
-    ],
-    ids=["one-tag-two-teams", "underscore-joined-names-collide"],
-)
-async def test_each_tag_and_team_pair_is_queued_as_its_own_entry(
-    requests: tuple[tuple[str, str | None, float], ...],
-    expected: list[tuple[str, str, float]],
-) -> None:
-    writer: Final = DBSpendUpdateWriter()
-    prisma: Final = MagicMock()
-    prisma.get_request_status = MagicMock(return_value="success")
-
-    for tag, team_id, spend in requests:
-        await writer.add_spend_log_transaction_to_daily_tag_transaction(
-            payload=_tagged_spend_log(tag, team_id, spend), prisma_client=prisma
-        )
-
+    await writer.add_spend_log_transaction_to_daily_tag_transaction(
+        payload=payload, prisma_client=prisma, virtual_key_team_id="team-a"
+    )
     queued: Final = await writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    tag_rows: Final = tuple(cast(DailyTagSpendTransaction, txn) for txn in queued.values())
 
-    assert sorted((txn["tag"], txn["team_id"], txn["spend"]) for txn in queued.values()) == expected, queued
+    assert sorted((txn["tag"], txn.get("team_id")) for txn in tag_rows) == [
+        ("cost-center:cc-42", "team-a"),
+        ("prod", "team-a"),
+    ], queued
 
 
 @pytest.mark.asyncio
