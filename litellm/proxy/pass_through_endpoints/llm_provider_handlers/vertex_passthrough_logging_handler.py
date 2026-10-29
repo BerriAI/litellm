@@ -20,7 +20,6 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_lyria_generation_cost,
     get_vertex_location_from_url,
     get_vertex_model_id_from_url,
-    get_vertex_project_id_from_url,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
@@ -50,7 +49,12 @@ from litellm.types.utils import (
 
 vertex_search_api_config: Final = VertexSearchAPIVectorStoreConfig()
 GEMINI_API_HOST_SUFFIX: Final = "generativelanguage.googleapis.com"
-VERTEX_API_HOST_SUFFIX: Final = "aiplatform.googleapis.com"
+GOOGLE_AI_HOST_SUFFIXES: Final = (
+    GEMINI_API_HOST_SUFFIX,
+    "aiplatform.googleapis.com",
+    "discoveryengine.googleapis.com",
+)
+_VERTEX_MULTI_REGION_HOST: Final = re.compile(r"aiplatform\.[a-z0-9-]+\.rep\.googleapis\.com")
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
@@ -692,10 +696,11 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def model_from_url_route(url_route: str) -> str | None:
-        model: Final = get_vertex_model_id_from_url(url_route)
+        path: Final = urlparse(url_route).path
+        model: Final = get_vertex_model_id_from_url(path)
         if model is None:
-            return "vertex_ai/search_api" if ":search" in url_route else None
-        if "rawPredict" in url_route or "streamRawPredict" in url_route:
+            return "vertex_ai/search_api" if ":search" in path else None
+        if path.endswith(":rawPredict"):
             return f"vertex_ai/{model}"
         return model
 
@@ -744,14 +749,9 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def is_google_ai_url(url: str) -> bool:
-        parsed_url: Final = urlparse(url)
-        if parsed_url.hostname is not None and parsed_url.hostname.endswith(
-            (GEMINI_API_HOST_SUFFIX, VERTEX_API_HOST_SUFFIX)
-        ):
-            return True
-        return (
-            get_vertex_project_id_from_url(parsed_url.path) is not None
-            and get_vertex_location_from_url(parsed_url.path) is not None
+        hostname: Final = urlparse(url).hostname
+        return hostname is not None and (
+            hostname.endswith(GOOGLE_AI_HOST_SUFFIXES) or _VERTEX_MULTI_REGION_HOST.fullmatch(hostname) is not None
         )
 
     @staticmethod

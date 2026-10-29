@@ -82,6 +82,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.utils import (
+    CallTypes,
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
     StandardLoggingZeroCostDiagnostic,
@@ -2942,6 +2943,15 @@ class PrometheusLogger(CustomLogger):
         return False
 
     @staticmethod
+    def _failed_request_requested_model(request_data: Mapping[str, object]) -> object:
+        requested_model: Final = request_data.get("model", "")
+        if request_data.get("call_type") != CallTypes.pass_through.value:
+            return requested_model
+        request_metadata: Final = _logged_fields(_logged_fields(request_data.get("litellm_params")).get("metadata"))
+        model_group: Final = request_metadata.get("model_group")
+        return model_group if isinstance(model_group, str) and model_group else requested_model
+
+    @staticmethod
     def _extract_api_provider_from_request_data(request_data: dict) -> str | None:
         """
         Best-effort provider for the client-side failure path.
@@ -2949,27 +2959,29 @@ class PrometheusLogger(CustomLogger):
         A request can fail before a deployment is resolved, so the provider is
         not always known. Prefer the resolved ``custom_llm_provider`` on
         ``litellm_params``, then any provider recovered onto a partial
-        ``standard_logging_object`` (e.g. a stream that broke mid-flight), then
-        the provider the request itself declares (e.g. a Gemini pass-through
-        route), and finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
-        ``openai``) since the proxy's failure ``request_data`` usually carries
-        only the client-supplied model. Declared values outside the known
-        provider set are ignored, since the request body can carry any string
-        and this label must stay bounded. Return ``None`` when it cannot be
-        determined so the label emits empty rather than a guess.
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight). On a
+        pass-through failure only, next take the provider the route declared on
+        ``request_data`` (e.g. ``gemini`` on the Gemini route), ignored unless it
+        is a known provider so the label stays bounded. Finally infer it from the
+        requested model name (e.g. ``gpt-4o-mini`` -> ``openai``) since the
+        proxy's failure ``request_data`` usually carries only the client-supplied
+        model. Return ``None`` when it cannot be determined so the label emits
+        empty rather than a guess.
         """
         litellm_params: Final = request_data.get("litellm_params") or {}
         standard_logging_object: Final = request_data.get("standard_logging_object") or {}
-        declared_providers: Final = (
-            litellm_params.get("custom_llm_provider"),
-            standard_logging_object.get("custom_llm_provider"),
-            request_data.get("custom_llm_provider"),
+        resolved_provider: Final = litellm_params.get("custom_llm_provider") or standard_logging_object.get(
+            "custom_llm_provider"
         )
-        known_provider: Final = next(
-            (p for p in declared_providers if isinstance(p, str) and _is_llm_provider(p)), None
-        )
-        if known_provider:
-            return known_provider
+        if resolved_provider:
+            return resolved_provider
+        declared_provider: Final = request_data.get("custom_llm_provider")
+        if (
+            request_data.get("call_type") == CallTypes.pass_through.value
+            and isinstance(declared_provider, str)
+            and _is_llm_provider(declared_provider)
+        ):
+            return declared_provider
         model: Final = litellm_params.get("model") or request_data.get("model")
         if not model:
             return None
@@ -3058,7 +3070,7 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_key_dict.team_alias,
                 org_id=user_api_key_dict.org_id,
                 org_alias=user_api_key_dict.organization_alias,
-                requested_model=_bounded_requested_model_label(request_data.get("model", "")),
+                requested_model=_bounded_requested_model_label(self._failed_request_requested_model(request_data)),
                 status_code=str(status_code),
                 exception_status=str(status_code),
                 exception_class=self._get_exception_class_name(original_exception),

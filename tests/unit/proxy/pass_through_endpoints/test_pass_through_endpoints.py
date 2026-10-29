@@ -8525,6 +8525,9 @@ _VERTEX_SEARCH_TARGET = (
     "/dataStores/default/servingConfigs/default:search"
 )
 _RELAYED_GEMINI_COUNT_TOKENS_TARGET = "http://127.0.0.1:30732/v1beta/models/gemini-3.8-flash:countTokens"
+_TRANSLATE_TARGET = "https://translate.googleapis.com/v3/projects/p/locations/global:translateText"
+_NON_GOOGLE_VERTEX_SHAPED_TARGET = "https://llm.example.com/v1/projects/a/locations/b/models/my-model:predict"
+_VEO_OPERATION_SUFFIX = "/models/veo-3.0-generate-001/operations/op-8f2c1"
 _RELAYED_VERTEX_COUNT_TOKENS_TARGET = (
     "http://127.0.0.1:30732/v1/projects/p/locations/us-east5/publishers/google/models/gemini-3.8-flash:countTokens"
 )
@@ -8628,7 +8631,6 @@ def _upstream_400_as_event_stream(target: str) -> httpx.Response:
         (_GEMINI_FLASH_TARGET.replace(":generateContent", ":countTokens"), "gemini", False, "gemini"),
         (_VERTEX_FLASH_TARGET.replace(":generateContent", ":countTokens"), None, False, "vertex_ai"),
         (_RELAYED_GEMINI_COUNT_TOKENS_TARGET, "gemini", False, "gemini"),
-        (_RELAYED_VERTEX_COUNT_TOKENS_TARGET, None, False, "vertex_ai"),
     ],
 )
 async def test_passthrough_upstream_error_logs_model_from_url(
@@ -8637,6 +8639,21 @@ async def test_passthrough_upstream_error_logs_model_from_url(
     failure = await _run_passthrough_failure(target, custom_llm_provider, _upstream_400(target), stream=stream)
     assert failure["request_data"]["model"] == "gemini-3.8-flash"
     assert failure["request_data"]["custom_llm_provider"] == expected_provider
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        _RELAYED_VERTEX_COUNT_TOKENS_TARGET,
+        _TRANSLATE_TARGET,
+        _NON_GOOGLE_VERTEX_SHAPED_TARGET,
+    ],
+)
+async def test_passthrough_upstream_error_to_a_host_outside_gemini_and_vertex_gets_no_url_attribution(target: str):
+    failure = await _run_passthrough_failure(target, None, _upstream_400(target))
+    assert failure["request_data"]["model"] == ""
+    assert failure["request_data"].get("custom_llm_provider") is None
 
 
 @pytest.mark.asyncio
@@ -8693,6 +8710,56 @@ async def test_passthrough_mid_stream_drop_logs_model_from_url(
     assert failure["request_data"]["custom_llm_provider"] == expected_provider
 
 
+def _websocket_connect_failure(kind: str) -> Exception:
+    from websockets.datastructures import Headers as WebSocketHeaders
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response as WebSocketHandshakeResponse
+
+    if kind == "rejected_handshake":
+        return InvalidStatus(WebSocketHandshakeResponse(403, "Forbidden", WebSocketHeaders()))
+    return OSError("connection refused")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["rejected_handshake", "unreachable_host"])
+@pytest.mark.parametrize(
+    "target, expected_provider",
+    [
+        (
+            "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService"
+            "/BidiGenerateContent",
+            "vertex_ai",
+        ),
+        ("wss://api.openai.com/v1/realtime?model=gpt-realtime", None),
+    ],
+)
+async def test_websocket_passthrough_connect_failure_logs_the_provider_of_the_upstream_url(
+    failure_kind: str, target: str, expected_provider: str | None
+):
+    recorder = _FailureHookRecorder()
+    with (
+        pytest.MonkeyPatch.context() as litellm_patch,
+        patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            side_effect=_websocket_connect_failure(failure_kind),
+        ),
+    ):
+        litellm_patch.setattr(litellm, "callbacks", [recorder])
+        await websocket_passthrough_request(
+            websocket=_client_websocket(_pending_receive),
+            target=target,
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+    assert len(recorder.failures) == 1
+    assert recorder.failures[0]["request_data"].get("custom_llm_provider") == expected_provider
+
+
 @pytest.mark.parametrize(
     "parsed_body, url, custom_llm_provider, expected_model, expected_provider",
     [
@@ -8722,10 +8789,42 @@ async def test_passthrough_mid_stream_drop_logs_model_from_url(
             {},
             _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"),
             None,
-            "vertex_ai/claude-opus-5",
+            "claude-opus-5",
             "vertex_ai",
         ),
         ({}, _VERTEX_SEARCH_TARGET, None, "vertex_ai/search_api", "vertex_ai"),
+        ({}, f"{_VERTEX_FLASH_TARGET}?tag=rawPredict", None, "gemini-3.8-flash", "vertex_ai"),
+        (
+            {},
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs"
+            "?filter=:search",
+            None,
+            "",
+            "vertex_ai",
+        ),
+        (
+            {},
+            f"https://generativelanguage.googleapis.com/v1beta{_VEO_OPERATION_SUFFIX}",
+            "gemini",
+            "veo-3.0-generate-001",
+            "gemini",
+        ),
+        (
+            {},
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1"
+            f"/publishers/google{_VEO_OPERATION_SUFFIX}",
+            None,
+            "veo-3.0-generate-001",
+            "vertex_ai",
+        ),
+        (
+            {"contents": []},
+            "https://aiplatform.us.rep.googleapis.com/v1/projects/p/locations/us"
+            "/publishers/google/models/gemini-3.8-flash:generateContent",
+            None,
+            "gemini-3.8-flash",
+            "vertex_ai",
+        ),
         (
             {},
             "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs",
@@ -8763,7 +8862,9 @@ async def test_passthrough_mid_stream_drop_logs_model_from_url(
             "vertex_ai",
         ),
         ({"contents": []}, _RELAYED_GEMINI_COUNT_TOKENS_TARGET, "gemini", "gemini-3.8-flash", "gemini"),
-        ({"contents": []}, _RELAYED_VERTEX_COUNT_TOKENS_TARGET, None, "gemini-3.8-flash", "vertex_ai"),
+        ({"contents": []}, _RELAYED_VERTEX_COUNT_TOKENS_TARGET, None, "", None),
+        ({"contents": []}, _TRANSLATE_TARGET, None, "", None),
+        ({"contents": []}, _NON_GOOGLE_VERTEX_SHAPED_TARGET, None, "", None),
         ({"contents": []}, "https://api.example.com/v1/models/gpt-x:countTokens", None, "", None),
         ({"contents": []}, "https://api.example.com/v1/models/gpt-x:predict", None, "", None),
         ({"contents": []}, "https://api.example.com/v1/models/gpt-x:thing", None, "", None),
@@ -8796,13 +8897,25 @@ def test_build_passthrough_failure_request_payload_model_and_provider_precedence
         (_VERTEX_FLASH_TARGET.replace(":generateContent", ":predict"), "gemini-3.8-flash"),
         (_VERTEX_FLASH_TARGET.replace(":generateContent", ":embedContent"), "gemini-3.8-flash"),
         (_VERTEX_CLAUDE_RAW_PREDICT_TARGET, "vertex_ai/claude-opus-5"),
-        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"), "vertex_ai/claude-opus-5"),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"), "claude-opus-5"),
+        (
+            _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict?alt=sse"),
+            "claude-opus-5",
+        ),
+        (f"{_VERTEX_FLASH_TARGET}?tag=rawPredict", "gemini-3.8-flash"),
         (_VERTEX_SEARCH_TARGET, "vertex_ai/search_api"),
         ("https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs", None),
+        (
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs"
+            "?filter=:search",
+            None,
+        ),
     ],
 )
 def test_vertex_failure_model_name_matches_success_handler_naming(url_route: str, expected_model: str | None):
     assert VertexPassthroughLoggingHandler.model_from_url_route(url_route) == expected_model
+
+
 @pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
 def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_body(client_metadata_key: str):
     """A provider route that resolved a router deployment stashes its model_info on request.state. That

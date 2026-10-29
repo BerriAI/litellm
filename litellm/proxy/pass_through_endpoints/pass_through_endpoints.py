@@ -3,6 +3,7 @@ import asyncio
 import copy
 import json
 import posixpath
+import re
 import traceback
 from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
@@ -878,12 +879,19 @@ def _passthrough_google_provider(url_route: str, custom_llm_provider: str | None
     return None
 
 
+_OPERATION_POLL_SUFFIX: Final = re.compile(r"/operations/[^/]+$")
+
+
+def _without_operation_poll_suffix(model: str | None) -> str | None:
+    return _OPERATION_POLL_SUFFIX.sub("", model) if model else model
+
+
 def _passthrough_google_model(url_route: str, google_provider: str | None) -> str | None:
     match google_provider:
         case "gemini":
-            return get_vertex_model_id_from_url(url_route)
+            return _without_operation_poll_suffix(get_vertex_model_id_from_url(url_route))
         case "vertex_ai":
-            return VertexPassthroughLoggingHandler.model_from_url_route(url_route)
+            return _without_operation_poll_suffix(VertexPassthroughLoggingHandler.model_from_url_route(url_route))
         case _:
             return None
 
@@ -2901,19 +2909,16 @@ async def websocket_passthrough_request(
     except InvalidStatus as exc:
         verbose_proxy_logger.exception("WebSocket passthrough (%s): upstream rejected WebSocket connection", endpoint)
 
-        # Prepare request payload for logging
-        request_payload = {}
-        if kwargs:
-            for key, value in kwargs.items():
-                request_payload[key] = value
-        if logging_obj is not None:
-            request_payload["litellm_logging_obj"] = logging_obj
-
-        # Log the connection failure using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=exc,
-            request_data=request_payload,
+            request_data=_build_passthrough_failure_request_payload(
+                parsed_body=None,
+                kwargs=kwargs,
+                logging_obj=logging_obj,
+                custom_llm_provider=None,
+                url=httpx.URL(target),
+            ),
             traceback_str=traceback.format_exc(
                 limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
             ),
@@ -2929,19 +2934,16 @@ async def websocket_passthrough_request(
             "WebSocket passthrough (%s): unexpected error while proxying WebSocket", endpoint
         )
 
-        # Prepare request payload for logging
-        request_payload = {}
-        if kwargs:
-            for key, value in kwargs.items():
-                request_payload[key] = value
-        if logging_obj is not None:
-            request_payload["litellm_logging_obj"] = logging_obj
-
-        # Log the unexpected error using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
-            request_data=request_payload,
+            request_data=_build_passthrough_failure_request_payload(
+                parsed_body=None,
+                kwargs=kwargs,
+                logging_obj=logging_obj,
+                custom_llm_provider=None,
+                url=httpx.URL(target),
+            ),
             traceback_str=traceback.format_exc(
                 limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
             ),
