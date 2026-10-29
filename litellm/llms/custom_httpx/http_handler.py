@@ -1123,6 +1123,8 @@ class AsyncHTTPHandler:
     async def _close_client_at_finalization(cls, client: httpx.AsyncClient) -> None:
         try:
             await client.aclose()
+        except (OSError, RuntimeError) as exc:
+            verbose_logger.debug("Error closing client at finalization: %s", exc)
         finally:
             task: Final = asyncio.current_task()
             if task is not None:
@@ -1816,7 +1818,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         cache = LLMClientCache()
         setattr(litellm, "in_memory_llm_clients_cache", cache)
 
-    _cached_client: Final = cache.get_cache(_cache_key_name)
+    _cached_client: Final = cache.get_cache(_cache_key_name, loop_bound=False)
     if _cached_client:
         return _cached_client
 
@@ -1832,6 +1834,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
         litellm_owned_client=True,
+        loop_bound=False,
     )
     return _new_client
 
