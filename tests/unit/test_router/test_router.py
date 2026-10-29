@@ -31327,19 +31327,22 @@ def _sagemaker_router(
     )
 
 
+_CHAT_COMPLETION_REPLY: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "served-model",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+)
+
+
 def _sagemaker_chat_route(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post(
         "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/chat-endpoint/invocations"
-    ).respond(
-        json={
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "served-model",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-    )
+    ).respond(json=dict(_CHAT_COMPLETION_REPLY))
 
 
 @_INFERENCE_COMPONENT_PRECEDENCE
@@ -31452,3 +31455,43 @@ async def test_a_client_model_id_cannot_move_a_sagemaker_embedding_call_off_the_
         response: Final = await router.aembedding(model="sagemaker-model", input=["hello"], model_id="client-component")
 
     assert response.data[0]["embedding"] == component_embeddings[sent_component]
+
+
+@pytest.mark.asyncio
+async def test_a_header_pin_holds_when_the_deployment_names_sagemaker_through_custom_llm_provider(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    route: Final = _sagemaker_chat_route(respx_mock)
+    router: Final = _sagemaker_router(
+        "chat-endpoint", MappingProxyType({**_HEADER_PINNED_COMPONENT, "custom_llm_provider": "sagemaker_chat"}), "chat"
+    )
+
+    await router.acompletion(
+        model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], model_id="client-component"
+    )
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == "deployment-component"
+
+
+@pytest.mark.asyncio
+async def test_a_component_header_on_a_non_sagemaker_deployment_leaves_the_clients_model_id_alone(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    route: Final = respx_mock.post("https://gateway.local/v1/chat/completions").respond(json=dict(_CHAT_COMPLETION_REPLY))
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gateway-model",
+                "litellm_params": {
+                    "model": "openai/served-model",
+                    "api_base": "https://gateway.local/v1",
+                    "api_key": "test-key",
+                    "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "gateway-component"},
+                },
+            }
+        ]
+    )
+
+    await router.acompletion(model="gateway-model", messages=[{"role": "user", "content": "hi"}], model_id="client-value")
+
+    assert json.loads(route.calls.last.request.content)["model_id"] == "client-value"

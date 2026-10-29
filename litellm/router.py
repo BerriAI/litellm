@@ -179,7 +179,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
-from litellm.llms.sagemaker.common_utils import inference_component_in_headers
+from litellm.llms.sagemaker.common_utils import deployment_inference_component
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
@@ -16265,7 +16265,7 @@ class Router:
             return None
         if Router._deployment_sets_litellm_param(deployment_litellm_params, "model_id"):
             return deployment_litellm_params["model_id"]
-        return inference_component_in_headers(deployment_litellm_params.get("extra_headers"))
+        return deployment_inference_component(deployment_litellm_params)
 
     @staticmethod
     def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
