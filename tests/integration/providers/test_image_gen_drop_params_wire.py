@@ -1,14 +1,99 @@
 import json
-from typing import Final
+import threading
+from types import MappingProxyType
+from typing import Final, Literal
 
+import httpx
 import openai
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROMPT: Final = "a transparent lighthouse at dawn"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("router_retries", (0, 1))
+@pytest.mark.parametrize("sdk_retries", (0, 5))
+@pytest.mark.parametrize("outcome", ("503", "timeout", "success"))
+async def test_proxy_image_retry_attempts_are_owned_only_by_router(
+    monkeypatch: pytest.MonkeyPatch,
+    router_retries: int,
+    sdk_retries: int,
+    outcome: Literal["503", "timeout", "success"],
+) -> None:
+    from litellm.proxy import proxy_server
+
+    release: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/images/generations"
+        assert request.headers["authorization"] == "Bearer synthetic-image-key"
+        assert _JSON_OBJECT.validate_json(request.body) == {"model": "gpt-image-1-mini", "prompt": "a red circle"}
+        if outcome == "timeout":
+            return Reply(chunks=(b"{}",), gate_before_first=release)
+        if outcome == "503":
+            return Reply(
+                status=503,
+                headers=MappingProxyType({"retry-after-ms": "1"}),
+                body=b'{"error":{"message":"scripted unavailable","type":"server_error"}}',
+            )
+        return Reply(body=b'{"created":1700000000,"data":[{"b64_json":"aW1n"}]}')
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with wire_server(respond) as wire:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "image-retries",
+                    "litellm_params": {
+                        "model": "openai/gpt-image-1-mini",
+                        "api_base": f"{wire.url}/v1",
+                        "api_key": "synthetic-image-key",
+                        "max_retries": sdk_retries,
+                        "timeout": 0.1,
+                    },
+                }
+            ],
+            num_retries=router_retries,
+            disable_cooldowns=True,
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "master_key", None)
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://proxy.test"
+            ) as client:
+                response: Final = await client.post(
+                    "/v1/images/generations",
+                    json={"model": "image-retries", "prompt": "a red circle", "max_retries": sdk_retries},
+                )
+        finally:
+            release.set()
+            router.discard()
+            litellm.in_memory_llm_clients_cache.flush_cache()
+        requests: Final = wire.drain()
+    status: Final = {"503": 503, "timeout": 408, "success": 200}[outcome]
+    attempts: Final = 1 if outcome == "success" else router_retries + 1
+    assert response.status_code == status, response.text
+    assert len(requests) == attempts, tuple(request.headers.get("x-stainless-retry-count") for request in requests)
+    if outcome == "success":
+        data: Final = TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(
+            _JSON_OBJECT.validate_json(response.content)["data"]
+        )
+        assert data[0]["b64_json"] == "aW1n"
 
 
 def test_image_generation_additional_drop_params_reaches_provider_body(gateway: Gateway) -> None:

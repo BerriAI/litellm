@@ -2,7 +2,7 @@ use rstest::rstest;
 
 #[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 use litellm_token_counter::TokenCounter;
-use litellm_token_counter::{CountableRequest, Error};
+use litellm_token_counter::{CountableRequest, Error, Unsupported};
 
 #[cfg(any(feature = "fast", feature = "huggingface"))]
 mod json {
@@ -100,7 +100,12 @@ mod json {
         let request = CountableRequest::parse(body).expect("shape parses");
         assert!(matches!(
             counter(load).count_request(&request),
-            Err(Error::MissingInput | Error::FloatText | Error::ContentBlock | Error::ArrayItems)
+            Err(Error::Unsupported(
+                Unsupported::MissingInput
+                    | Unsupported::FloatText
+                    | Unsupported::ContentBlock
+                    | Unsupported::ArrayItems
+            ))
         ));
     }
 
@@ -139,7 +144,7 @@ mod json {
     }
 
     fn assert_loading_a_bad_tokenizer_is_a_load_error(load: JsonLoader) {
-        assert!(matches!(load("{}"), Err(Error::Load(_))));
+        assert!(load("{}").is_err_and(|error| error.is_load()));
     }
 
     macro_rules! json_backend_tests {
@@ -206,7 +211,7 @@ mod json {
                 let counter = $loader(&tokenizer.to_string(false).unwrap()).unwrap();
                 let request = CountableRequest::parse(br#"{"prompt":"hello"}"#).unwrap();
                 let error = counter.count_request(&request).unwrap_err();
-                assert!(matches!(error, Error::Encode(_)));
+                assert!(!error.is_load() && !error.is_unsupported());
                 assert_eq!(error.source().unwrap().to_string(), expected.to_string());
             }
 
@@ -250,7 +255,7 @@ mod json {
 fn shapes_outside_the_mirror_are_declined_at_parse(#[case] body: &[u8]) {
     assert!(matches!(
         CountableRequest::parse(body),
-        Err(Error::RequestParse(_))
+        Err(Error::Unsupported(Unsupported::RequestParse(_)))
     ));
 }
 
@@ -443,7 +448,7 @@ mod tiktoken {
         #[case] rank_file: &str,
         #[values(CL100K, O200K)] encoding: TiktokenEncoding,
     ) {
-        assert!(matches!((encoding.load)(rank_file), Err(Error::Ranks(_))));
+        assert!((encoding.load)(rank_file).is_err_and(|error| error.is_load()));
     }
 }
 
@@ -452,6 +457,7 @@ mod tiktoken {
 fn unsupported_encoding_reaches_the_counter_caller() {
     assert!(matches!(
         TokenCounter::from_tiktoken("unknown-encoding"),
-        Err(Error::UnsupportedTokenizer(name)) if name == "unknown-encoding"
+        Err(error) if error.is_load()
+            && litellm_error::Report::new(&error).to_string().contains("unknown-encoding")
     ));
 }
