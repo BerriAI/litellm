@@ -2511,18 +2511,17 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
 @pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
 @pytest.mark.parametrize("first_retries", [None, 3])
 async def test_azure_client_cache_respects_retry_limit(
-    monkeypatch, is_async, api_version, first_retries
-):
-    import httpx
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, api_version: str, first_retries: int | None
+) -> None:
     from openai import RateLimitError
 
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.constants import DEFAULT_MAX_RETRIES
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    requests = []
+    requests: list[httpx.Request] = []
 
-    def rate_limited(request):
+    def rate_limited(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(
             429,
@@ -2530,48 +2529,37 @@ async def test_azure_client_cache_respects_retry_limit(
             headers={"retry-after-ms": "1"},
         )
 
-    sync_http = httpx.Client(transport=httpx.MockTransport(rate_limited))
-    async_http = httpx.AsyncClient(transport=httpx.MockTransport(rate_limited))
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(rate_limited))
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(rate_limited))
     monkeypatch.setattr(litellm, "client_session", sync_http)
     monkeypatch.setattr(litellm, "aclient_session", async_http)
-    llm = BaseAzureLLM()
-    kwargs = dict(
-        api_key="test-key",
-        api_base="https://retry-cache-test.openai.azure.com",
-        api_version=api_version,
-        _is_async=is_async,
-        model="test-deployment",
-    )
+    llm: Final = BaseAzureLLM()
+
+    def client_for(litellm_params: dict[str, int | None]) -> AzureSdkClient | None:
+        return llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base="https://retry-cache-test.openai.azure.com",
+            api_version=api_version,
+            _is_async=is_async,
+            model="test-deployment",
+            litellm_params=litellm_params,
+        )
+
     try:
-        initial = llm.get_azure_openai_client(
-            **kwargs, litellm_params={"max_retries": first_retries}
-        )
-        no_retry = llm.get_azure_openai_client(
-            **kwargs, litellm_params={"max_retries": 0}
-        )
+        initial: Final = client_for({"max_retries": first_retries})
+        no_retry: Final = client_for({"max_retries": 0})
+        assert no_retry is not None and initial is not None
         assert no_retry.max_retries == 0
-        assert initial.max_retries == (
-            DEFAULT_MAX_RETRIES if first_retries is None else first_retries
-        )
+        assert initial.max_retries == (DEFAULT_MAX_RETRIES if first_retries is None else first_retries)
         if first_retries is None:
-            assert llm.get_azure_openai_client(**kwargs, litellm_params={}) is initial
-            assert llm.get_azure_openai_client(
-                **kwargs, litellm_params={"max_retries": DEFAULT_MAX_RETRIES}
-            ) is initial
+            assert client_for({}) is initial
+            assert client_for({"max_retries": DEFAULT_MAX_RETRIES}) is initial
         with pytest.raises(RateLimitError):
             await _send_chat_completion(no_retry, is_async)
         assert len(requests) == 1
         assert no_retry is not initial
-        assert (
-            llm.get_azure_openai_client(**kwargs, litellm_params={"max_retries": 0})
-            is no_retry
-        )
-        assert (
-            llm.get_azure_openai_client(
-                **kwargs, litellm_params={"max_retries": first_retries}
-            )
-            is initial
-        )
+        assert client_for({"max_retries": 0}) is no_retry
+        assert client_for({"max_retries": first_retries}) is initial
     finally:
         sync_http.close()
         await async_http.aclose()
