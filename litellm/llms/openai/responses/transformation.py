@@ -1243,7 +1243,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def compact_dropped_params(self, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
         if self.custom_llm_provider not in _PROVIDERS_WITH_STRICT_COMPACT_PARAMS:
             return frozenset()
-        if _drops_params(litellm_params):
+        if drops_params(litellm_params):
             return _COMPACT_TRACKING_PARAMS | _COMPACT_REJECTED_PARAMS
         return _COMPACT_TRACKING_PARAMS
 
