@@ -8,6 +8,7 @@ import pytest
 from dotenv import load_dotenv
 from pydantic import JsonValue, ValidationError
 from starlette.requests import Request
+from starlette.responses import Response
 
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request, google_count_tokens
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
@@ -102,6 +103,7 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
             }
         ),
         model_name="volcengine/foo",
+        fastapi_response=Response(),
     )
 
     assert response.get("totalTokens") > 0

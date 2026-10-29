@@ -19068,6 +19068,7 @@ export interface paths {
          * Token Counter
          * @description Args:
          *         request: TokenCountRequest
+         *         fastapi_response: answers the x-litellm-call-id header the count's log line names
          *         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
          *         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
          *

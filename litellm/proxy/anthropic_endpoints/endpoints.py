@@ -48,7 +48,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
-from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.litellm_pre_call_utils import (
     forwarded_anthropic_oauth_token,
@@ -362,6 +362,7 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
 )
 async def count_tokens(
     request: Request,
+    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
@@ -384,9 +385,17 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+    return await answered_with_litellm_call_id(
+        _count_tokens(request, user_api_key_dict, litellm_call_id), litellm_call_id, fastapi_response
+    )
+
+
+async def _count_tokens(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, litellm_call_id: str
+) -> JSONResponse | Mapping[str, object]:
     from litellm.proxy.proxy_server import count_request_tokens, llm_router, proxy_config
 
-    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
         request_data: Final = await read_request_body(request=request)
         data: Final[dict] = {**request_data}
@@ -415,7 +424,9 @@ async def count_tokens(
         )
         if isinstance(token_request, ProxyException):
             return rejected_token_count(
-                _anthropic_error_json_response(token_request, request), litellm_call_id, request_model
+                _anthropic_error_json_response(with_litellm_call_id(token_request, litellm_call_id), request),
+                litellm_call_id,
+                request_model,
             )
 
         token_response: Final = await count_request_tokens(
@@ -427,12 +438,16 @@ async def count_tokens(
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:
-        return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
+        return _anthropic_error_json_response(
+            with_litellm_call_id(proxy_exception_from_http_exception(e, {}), litellm_call_id), request
+        )
     except ProxyException as e:
-        return _anthropic_error_json_response(e, request)
+        return _anthropic_error_json_response(with_litellm_call_id(e, litellm_call_id), request)
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
-        return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
+        return _anthropic_error_json_response(
+            with_litellm_call_id(proxy_exception_from_route_error(e), litellm_call_id), request
+        )
     else:
         return {"input_tokens": token_response.total_tokens, **count_source_fields(token_response)}
 

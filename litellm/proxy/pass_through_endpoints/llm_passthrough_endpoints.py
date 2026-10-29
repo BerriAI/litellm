@@ -107,6 +107,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
     deployment_model_id,
     logged_provider_token_count,
     rejected_token_count,
@@ -1269,7 +1270,7 @@ async def handle_bedrock_count_tokens(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
     request_body: dict[str, object],
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """
     Handle AWS Bedrock CountTokens API requests.
 
@@ -1277,11 +1278,19 @@ async def handle_bedrock_count_tokens(
     - /v1/messages/count_tokens
     - /v1/messages/count-tokens
     """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+    return await answered_with_litellm_call_id(
+        _bedrock_count_tokens(user_api_key_dict, request_body, litellm_call_id), litellm_call_id, fastapi_response
+    )
+
+
+async def _bedrock_count_tokens(
+    user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
+) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
     from litellm.proxy.proxy_server import llm_router
 
-    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     try:
         # Initialize the handler
         handler: Final = BedrockCountTokensHandler()

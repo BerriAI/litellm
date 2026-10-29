@@ -4830,6 +4830,7 @@ class TestResponsesInputTokens:
         )
 
         assert (response.status_code, response.json().get("input_tokens")) == (200, 7), response.text
+        assert response.headers.get("x-litellm-call-id") == "count-log-responses"
         assert token_count_log_lines() == (
             {
                 "litellm_call_id": "count-log-responses",
@@ -4862,6 +4863,48 @@ class TestResponsesInputTokens:
                 "status_code": 400,
             },
         )
+
+    def test_count_rejected_before_counting_answers_the_call_id_its_count_line_names(
+        self, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        response, _ = self._post_input_tokens({"model": "count-log-gpt"})
+
+        (line,) = token_count_log_lines()
+        assert (response.status_code, response.headers.get("x-litellm-call-id")) == (400, line["litellm_call_id"])
+
+    @pytest.mark.parametrize(
+        ("raised", "status_code"),
+        [
+            (
+                ProxyException(
+                    message="Token counting is disabled", type="token_counting_disabled", param="model", code=503
+                ),
+                503,
+            ),
+            (
+                ProxyException(
+                    message="LiteLLM does not support counting tokens for this model.",
+                    type="token_counting_error",
+                    param="model",
+                    code=400,
+                ),
+                400,
+            ),
+            (RuntimeError("tokenizer crashed"), 500),
+        ],
+        ids=["proxy-error", "provider-count-error", "crash"],
+    )
+    def test_a_failed_count_answers_the_callers_call_id(self, raised: Exception, status_code: int) -> None:
+        response, _ = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi"},
+            counter=AsyncMock(side_effect=raised),
+            headers={"x-litellm-call-id": "count-echo-failed"},
+        )
+
+        assert (response.status_code, response.headers.get("x-litellm-call-id")) == (
+            status_code,
+            "count-echo-failed",
+        ), response.text
 
     def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
         from litellm.integrations.custom_logger import CustomLogger
@@ -5147,6 +5190,21 @@ class TestResponsesInputTokens:
                 "litellm_call_id": "call-9564",
             }
         }
+
+
+    def test_provider_count_error_body_names_the_call_id_its_header_carries_when_opted_in(self) -> None:
+        failing_counter: Final = AsyncMock(
+            side_effect=ProxyException(
+                message="LiteLLM does not support counting tokens for this model.",
+                type="token_counting_error",
+                param="model",
+                code="400",
+            )
+        )
+        with patch("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True}):
+            response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.json()["error"]["litellm_call_id"] == response.headers.get("x-litellm-call-id")
 
 
 class TestGuardrailBlockedResponsesShape:

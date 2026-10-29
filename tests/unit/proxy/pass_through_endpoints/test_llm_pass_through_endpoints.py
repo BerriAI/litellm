@@ -7255,7 +7255,10 @@ _BEDROCK_COUNT_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1
 
 
 async def _bedrock_native_count(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, aws_reply: httpx.Response
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    aws_reply: httpx.Response,
+    fastapi_response: Response,
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         handle_bedrock_count_tokens,
@@ -7293,7 +7296,7 @@ async def _bedrock_native_count(
     return await handle_bedrock_count_tokens(
         endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
         request=request,
-        fastapi_response=Response(),
+        fastapi_response=fastapi_response,
         user_api_key_dict=MagicMock(),
         request_body={"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]},
     )
@@ -7306,11 +7309,13 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
     respx_mock: respx.MockRouter,
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
 ) -> None:
+    fastapi_response: Final = Response()
     result: Final = await _bedrock_native_count(
-        monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12})
+        monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), fastapi_response
     )
 
     assert result == {"input_tokens": 12}
+    assert fastapi_response.headers.get("x-litellm-call-id") == "bedrock-native-count"
     assert len(respx_mock.calls) == 1
     assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
     assert token_count_log_lines() == (
@@ -7335,9 +7340,12 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 ) -> None:
     rejected: Final = httpx.Response(400, json={"message": "The provided model doesn't support counting tokens."})
     with pytest.raises(HTTPException) as exc_info:
-        await _bedrock_native_count(monkeypatch, respx_mock, rejected)
+        await _bedrock_native_count(monkeypatch, respx_mock, rejected, Response())
 
-    assert exc_info.value.status_code == 400
+    assert (exc_info.value.status_code, (exc_info.value.headers or {}).get("x-litellm-call-id")) == (
+        400,
+        "bedrock-native-count",
+    )
     assert token_count_log_lines() == (
         {
             "litellm_call_id": "bedrock-native-count",
@@ -7389,6 +7397,33 @@ async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answe
         },
     )
 
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_without_a_model_answers_the_call_id_its_count_line_names(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": f"/bedrock/model/{_BEDROCK_COUNT_ALIAS}/count-tokens", "headers": []}
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    (line,) = token_count_log_lines()
+    assert (exc_info.value.status_code, (exc_info.value.headers or {}).get("x-litellm-call-id")) == (
+        400,
+        line["litellm_call_id"],
+    )
 
 
 @pytest.mark.asyncio

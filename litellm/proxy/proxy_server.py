@@ -559,6 +559,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
     deployment_model_id,
     logged_token_count,
     rejected_token_count,
@@ -15306,19 +15307,26 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
 )
 async def token_counter(
     request: TokenCountRequest,
+    fastapi_response: Response,
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
     """
     Args:
         request: TokenCountRequest
+        fastapi_response: answers the x-litellm-call-id header the count's log line names
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
 
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
+    call_id: Final = resolve_litellm_call_id(litellm_call_id)
+    return await answered_with_litellm_call_id(
+        count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
+        call_id,
+        fastapi_response,
+    )
 
 
 async def count_request_tokens(

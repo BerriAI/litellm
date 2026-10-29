@@ -70,8 +70,9 @@ from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     error_status_code,
     openai_error_type_for_status,
+    with_litellm_call_id,
 )
-from litellm.proxy.common_utils.token_count_log import rejected_token_count
+from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
@@ -1727,6 +1728,7 @@ def _responses_input_as_token_count_messages(
 )
 async def responses_input_tokens(
     request: Request,
+    fastapi_response: Response,
     token_counter: _TokenCounter = _token_counter_dep,
     llm_router: Router | None = _llm_router_dep,
     user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
@@ -1751,6 +1753,24 @@ async def responses_input_tokens(
     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
+    return await answered_with_litellm_call_id(
+        _responses_input_tokens(
+            request, token_counter, llm_router, user_api_key_dict, response_id_security, managed_files, litellm_call_id
+        ),
+        litellm_call_id,
+        fastapi_response,
+    )
+
+
+async def _responses_input_tokens(
+    request: Request,
+    token_counter: _TokenCounter,
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    response_id_security: ResponsesIDSecurity | None,
+    managed_files: _ManagedFileAccess | None,
+    litellm_call_id: str,
+) -> JSONResponse | _ResponsesInputTokensResult:
     data: Final = await read_request_body(request=request)
     model_name: Final = data.get("model")
     input_value: Final = data.get("input")
@@ -1833,7 +1853,7 @@ async def responses_input_tokens(
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
             raise
-        return _provider_count_error_response(e, request)
+        return _provider_count_error_response(with_litellm_call_id(e, litellm_call_id), request)
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,
