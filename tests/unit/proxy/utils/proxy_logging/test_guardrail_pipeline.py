@@ -2731,6 +2731,45 @@ async def test_streaming_iterator_hook_pipeline_modify_response_emits_translated
 
 
 @pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_modify_response_replaces_a_text_completion_stream(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Final[Dict[str, Any]] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen, block=True)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    pipeline: Final = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(
+                guardrail="gr-post",
+                on_pass="allow",
+                on_fail="modify_response",
+                modify_response_message="content policy block",
+            )
+        ],
+    )
+    data: Final = {**_post_call_pipeline_data(stream=True), "prompt": "hi"}
+    data["metadata"]["_guardrail_pipelines"] = [("response-governance", pipeline)]
+    chunks: Final = [_text_completion_chunk("hello "), _text_completion_chunk("world"), _text_completion_chunk("", "stop")]
+    auth: Final = make_user_api_key_auth(request_route="/v1/completions")
+
+    await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="text_completion", guardrails_only=True)
+    delivered: Final = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=_async_chunk_iter(chunks), request_data=data
+        )
+    ]
+
+    frames: Final = [json.loads(item.decode().removeprefix("data: ")) for item in delivered]
+    assert seen["count"] == 1
+    assert [(frame["choices"][0]["text"], frame["choices"][0].get("finish_reason")) for frame in frames] == [
+        ("content policy block", None),
+        ("", "content_filter"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_streaming_iterator_hook_pipeline_delivers_text_rewrite_on_anthropic_sse(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):

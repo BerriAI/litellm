@@ -30,7 +30,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterCategoryConfig,
     ContentFilterDetection,
 )
-from litellm.types.utils import StandardLoggingGuardrailInformation
+from litellm.types.utils import StandardLoggingGuardrailInformation, TextChoices, TextCompletionResponse
 
 
 class TestContentFilterGuardrail:
@@ -3523,3 +3523,55 @@ async def test_image_whose_description_is_clean_passes_through_unchanged():
     )
 
     assert result == {"images": ["https://example.com/desk.png"], "texts": []}
+
+
+def _fruit_word_filter() -> ContentFilterGuardrail:
+    return ContentFilterGuardrail(
+        guardrail_name="fruit-filter",
+        blocked_words=[
+            BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK),
+            BlockedWord(keyword="kumquat", action=ContentFilterAction.BLOCK),
+        ],
+        event_hook=GuardrailEventHooks.post_call,
+    )
+
+
+async def _text_completion_stream(*parts: tuple[str | None, str | None]):
+    for text, finish_reason in parts:
+        yield TextCompletionResponse(
+            id="cmpl-stream",
+            model="gpt-3.5-turbo-instruct",
+            object="text_completion",
+            choices=[TextChoices(index=0, text=text, finish_reason=finish_reason)],
+        )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_masks_a_word_split_across_text_completion_chunks():
+    request_data: Final[dict] = {}
+
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=_text_completion_stream(("A pers", None), ("immon tart", None), (None, "stop")),
+            request_data=request_data,
+        )
+    ]
+
+    assert "".join(chunk.choices[0].text or "" for chunk in delivered) == "A [KEYWORD_REDACTED] tart"
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_a_word_split_across_text_completion_chunks():
+    with pytest.raises(HTTPException) as exc_info:
+        async for _ in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=_text_completion_stream(("A kum", None), ("quat tart", None), (None, "stop")),
+            request_data={},
+        ):
+            pass
+
+    assert exc_info.value.status_code == 400
+    assert "kumquat" in str(exc_info.value.detail)

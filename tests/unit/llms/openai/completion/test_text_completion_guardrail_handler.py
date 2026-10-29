@@ -2,6 +2,7 @@
 Unit tests for OpenAI Text Completion Guardrail Translation Handler
 """
 
+import json
 from typing import List, Optional, Tuple
 from unittest.mock import MagicMock
 
@@ -367,6 +368,13 @@ class _RecordingKeywordFilter(ContentFilterGuardrail):
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
+class _PassthroughReplaceGuardrail(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        if any("kumquat" in text for text in inputs.get("texts") or []):
+            self.raise_passthrough_exception(violation_message="replaced kumquat", request_data=request_data)
+        return inputs
+
+
 def _text_chunk(index: int, text: str | None, finish_reason: str | None = None) -> TextCompletionResponse:
     return TextCompletionResponse(
         id="cmpl-stream",
@@ -486,3 +494,19 @@ class TestStreamingOutputProcessing:
         assert isinstance(error_frame, bytes)
         assert error_frame.startswith(b'data: {"error": ')
         assert b"kumquat" in error_frame
+
+    @pytest.mark.asyncio
+    async def test_flat_stream_passthrough_block_appends_the_replacement_and_ends_with_content_filter(self):
+        guardrail = _PassthroughReplaceGuardrail(
+            guardrail_name="passthrough", event_hook=GuardrailEventHooks.post_call, default_on=True
+        )
+        chunks = [_text_chunk(0, "A kum"), _text_chunk(0, "quat tart"), _text_chunk(0, "", "stop"), _usage_chunk()]
+
+        delivered = await _drive_flat_stream(guardrail, chunks)
+
+        frames = [json.loads(item.decode().removeprefix("data: ")) for item in delivered if isinstance(item, bytes)]
+        assert [(frame["choices"][0]["text"], frame["choices"][0].get("finish_reason")) for frame in frames] == [
+            ("replaced kumquat", None),
+            ("", "content_filter"),
+        ]
+        assert frames[-1]["usage"]["total_tokens"] == 8

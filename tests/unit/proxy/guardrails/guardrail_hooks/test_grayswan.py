@@ -889,7 +889,7 @@ async def test_pre_call_payload_unchanged() -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_call_on_a_text_completion_forwards_only_the_key_and_team_metadata() -> None:
+async def test_post_call_never_forwards_the_proxy_key_metadata_of_the_request_metadata() -> None:
     guardrail = _post_call_guardrail()
     client = _CapturingClient()
     guardrail.async_handler = client
@@ -899,11 +899,16 @@ async def test_post_call_on_a_text_completion_forwards_only_the_key_and_team_met
             id="cmpl-1", model="gpt-4.1-mini", choices=[TextChoices(index=0, text="hello", finish_reason="stop")]
         ),
         guardrail_to_apply=guardrail,
-        user_api_key_dict=UserAPIKeyAuth(team_id="team-456", key_alias="ci-key"),
-        request_data={"model": "gpt-4.1-mini", "prompt": "say hello", "metadata": {"requester_note": "private"}},
+        user_api_key_dict=UserAPIKeyAuth(team_id="team-456", key_alias="ci-key", user_email="dev@example.com"),
+        request_data={
+            "model": "gpt-4.1-mini",
+            "prompt": "say hello",
+            "metadata": {
+                "user_api_key_hash": "hashed-key",
+                "user_api_key_user_email": "dev@example.com",
+                "user_api_key_request_route": "/v1/completions",
+            },
+        },
     )
 
-    forwarded = client.calls[0]["json"]["litellm_metadata"]
-    assert forwarded["user_api_key_team_id"] == "team-456"
-    assert forwarded["user_api_key_key_alias"] == "ci-key"
-    assert "requester_note" not in forwarded
+    assert "litellm_metadata" not in client.calls[0]["json"]

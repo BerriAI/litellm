@@ -16,13 +16,17 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamingScanKey,
     StreamTransformSink,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
-from litellm.types.utils import GenericGuardrailAPIInputs, TextChoices, TextCompletionResponse
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_chat_stream_usage,
+    stream_item_field,
+    stream_item_items,
+)
+from litellm.types.utils import GenericGuardrailAPIInputs, TextChoices, TextCompletionResponse, Usage
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -257,6 +261,38 @@ class OpenAITextCompletionHandler(BaseTranslation):
             choices=[TextChoices(index=index, text="", finish_reason="length") for index in unfinished_indices],
         )
         return (*responses_so_far, terminator)
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes]:
+        streamed: Final = _text_completion_chunks(responses_so_far or ())
+        source: Final = streamed[0] if streamed else TextCompletionResponse(model=exc.model)
+        prompt_tokens, completion_tokens = blocked_chat_stream_usage(exc.original_response)
+        message_chunk: Final = TextCompletionResponse(
+            id=source.id,
+            created=source.created,
+            model=source.model or exc.model,
+            object="text_completion",
+            choices=[TextChoices(index=0, text=exc.message)],
+        )
+        final_chunk: Final = TextCompletionResponse(
+            id=source.id,
+            created=source.created,
+            model=source.model or exc.model,
+            object="text_completion",
+            choices=[TextChoices(index=0, text="", finish_reason="content_filter")],
+            usage=Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            ),
+        )
+        return tuple(
+            f"data: {chunk.model_dump_json(exclude_none=True)}\n\n".encode() for chunk in (message_chunk, final_chunk)
+        )
 
     def build_stream_error_items(
         self,

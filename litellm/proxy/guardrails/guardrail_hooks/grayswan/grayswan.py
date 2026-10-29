@@ -89,12 +89,13 @@ def _str_keyed(value: object) -> Mapping[str, object]:
     return _STR_KEYED_MAPPING.validate_python(value) if isinstance(value, Mapping) else {}
 
 
-def _proxy_metadata(request_data: Mapping[str, object]) -> Mapping[str, object]:
+def _request_route(request_data: Mapping[str, object]) -> str | None:
     litellm_metadata: Final = request_data.get("litellm_metadata")
-    if litellm_metadata is not None:
-        return _str_keyed(litellm_metadata)
-    metadata: Final = _str_keyed(request_data.get("metadata"))
-    return {key: value for key, value in metadata.items() if key.startswith("user_api_key_")}
+    metadata_bucket: Final = _str_keyed(
+        litellm_metadata if litellm_metadata is not None else request_data.get("metadata")
+    )
+    route: Final = metadata_bucket.get("user_api_key_request_route")
+    return route if isinstance(route, str) else None
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -640,8 +641,8 @@ class GraySwanGuardrail(CustomGuardrail):
         from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
         from litellm.llms import load_guardrail_translation_mappings
 
-        request_route: Final = _proxy_metadata(request_data).get("user_api_key_request_route")
-        route_call_types: Final = get_call_types_for_route(request_route) if isinstance(request_route, str) else None
+        request_route: Final = _request_route(request_data)
+        route_call_types: Final = get_call_types_for_route(request_route) if request_route is not None else None
         call_type: Final = (
             (route_call_types[0].value if route_call_types else None)
             or (logging_obj.call_type if logging_obj is not None else None)
@@ -710,11 +711,11 @@ class GraySwanGuardrail(CustomGuardrail):
 
         inbound_headers: Final = self._extract_inbound_headers(request_data, logging_obj)
 
-        proxy_metadata: Final = _proxy_metadata(request_data)
+        litellm_metadata: Final = _str_keyed(request_data.get("litellm_metadata"))
         cleaned_litellm_metadata: Final = (
-            {**proxy_metadata, "headers": {**_str_keyed(proxy_metadata.get("headers")), **inbound_headers}}
+            {**litellm_metadata, "headers": {**_str_keyed(litellm_metadata.get("headers")), **inbound_headers}}
             if inbound_headers
-            else proxy_metadata
+            else litellm_metadata
         )
         if cleaned_litellm_metadata:
             sanitized: Final = _DECODED_JSON.validate_python(
