@@ -2118,22 +2118,39 @@ async def test_stream_auto_execute_whose_follow_up_streams_nothing_still_bills_t
 async def test_stream_auto_execute_whose_follow_up_cannot_be_assembled_ends_with_the_usage_of_the_round_it_billed(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    answer_with_unreadable_audio: Final = MappingProxyType(
+        {
+            **_CHAT_ROUND_TWO,
+            "choices": (
+                MappingProxyType(
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": MappingProxyType(
+                            {
+                                "role": "assistant",
+                                "content": "PING",
+                                "audio": MappingProxyType(
+                                    {"id": "audio_echo", "data": "not base64", "transcript": "PING"}
+                                ),
+                            }
+                        ),
+                    }
+                ),
+            ),
+        }
+    )
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(answer_with_unreadable_audio)))
     recorder: Final = _ChatRoundRecorder()
     logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-follow-up-unassembled", stream=True)
 
-    def cannot_assemble(*args: object, **kwargs: object) -> ModelResponse:
-        raise ValueError("the follow-up's chunks cannot be assembled")
-
     with _echo_tool_served():
-        stream: Final = await _open_chat_echo_stream(logging_obj)
-        await _read_until(stream, "PING")
-        monkeypatch.setattr(litellm, "stream_chunk_builder", cannot_assemble)
-        rest: Final = await _read_all(stream)
+        chunks: Final = await _read_all(await _open_chat_echo_stream(logging_obj))
     await recorder.settled(logged=1)
 
     _assert_one_row_bills_round_one(recorder.logged)
-    usage: Final = _streamed_usage(rest)
+    assert any(chunk.choices and chunk.choices[0].delta.content == "PING" for chunk in chunks)
+    usage: Final = _streamed_usage(chunks)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (71, 19, 90)
     assert usage.cost == pytest.approx(recorder.logged[0]["response_cost"])
 
