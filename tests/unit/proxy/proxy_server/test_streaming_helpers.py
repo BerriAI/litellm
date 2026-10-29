@@ -146,6 +146,33 @@ async def test_responses_stream_dispatches_named_events_without_a_chat_done_sent
         assert payload["type"] == event_type
     assert json.loads(frames[1].split("data: ", 1)[1])["delta"] == "hello"
 
+
+@pytest.mark.asyncio
+async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_event() -> None:
+    response: Final = ResponsesAPIResponse(id="resp_error_then_raise", created_at=1, model="local-model", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    error_event: Final = ErrorEvent.model_validate(
+        {"type": "error", "sequence_number": 1, "code": "server_error", "message": "upstream failed", "param": None}
+    )
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        yield created
+        yield error_event
+        raise litellm.APIError(status_code=500, message="Stream close failed", llm_provider="openai", model="local-model")
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+
+    assert tuple(frame.split("\n", 1)[0] for frame in frames) == ("event: response.created", "event: error")
+
 @pytest.mark.asyncio
 async def test_a_guardrail_error_string_mid_responses_stream_ends_it_as_a_named_error_event() -> None:
     response: Final = ResponsesAPIResponse(id="resp_hook_error", created_at=1, model="local-model", output=[])

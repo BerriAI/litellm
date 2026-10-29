@@ -50,7 +50,8 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
-    _responses_event_data_payload,
+    OPENAI_FIRST_CHUNK_FRAMING,
+    RESPONSES_FIRST_CHUNK_FRAMING,
     include_guardrail_response_requested,
     is_azure_model_router_request,
     RESPONSES_LATE_SSE_FRAMING,
@@ -2250,6 +2251,14 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
 
+def _fail_stream_setup() -> str:
+    raise RuntimeError("stream setup failed")
+
+
+async def _stream_failing_before_its_first_chunk() -> AsyncGenerator[str, None]:
+    yield _fail_stream_setup()
+
+
 @pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:
     async def consume_stream(self, streaming_response: StreamingResponse) -> list:
@@ -2335,7 +2344,7 @@ class TestCommonRequestProcessingHelpers:
             yield f"event: error\ndata: {json.dumps({'type': 'error', 'sequence_number': 0, 'error': error})}\n\n"
 
         response: Final = await create_response(
-            responses_stream(), "text/event-stream", {}, first_chunk_payload=_responses_event_data_payload
+            responses_stream(), "text/event-stream", {}, framing=RESPONSES_FIRST_CHUNK_FRAMING
         )
 
         assert isinstance(response, JSONResponse)
@@ -2350,12 +2359,29 @@ class TestCommonRequestProcessingHelpers:
             yield f"event: error\ndata: {event}\n\n"
 
         response: Final = await create_response(
-            responses_stream(), "text/event-stream", {}, first_chunk_payload=_responses_event_data_payload
+            responses_stream(), "text/event-stream", {}, framing=RESPONSES_FIRST_CHUNK_FRAMING
         )
 
         assert isinstance(response, JSONResponse)
         assert response.status_code == 400
         assert json.loads(response.body) == {"error": error}
+
+    @pytest.mark.parametrize(
+        "framing,frame_starts",
+        [
+            (OPENAI_FIRST_CHUNK_FRAMING, ('data: {"error": ', "data: [DONE]")),
+            (RESPONSES_FIRST_CHUNK_FRAMING, ('event: error\ndata: {"type": "error", "code": "server_error"',)),
+        ],
+    )
+    async def test_a_stream_that_fails_before_its_first_chunk_ends_in_its_own_api_shape(self, framing, frame_starts):
+        response: Final = await create_response(
+            _stream_failing_before_its_first_chunk(), "text/event-stream", {}, framing=framing
+        )
+        frames: Final = await self.consume_stream(response)
+
+        assert response.status_code == 500
+        assert len(frames) == len(frame_starts)
+        assert all(frame.startswith(start) for frame, start in zip(frames, frame_starts, strict=True))
 
     async def test_create_streaming_response_first_chunk_not_error(self):
         async def mock_generator():
@@ -10591,6 +10617,11 @@ _POLICY_BLOCK_DETAIL: Final = MappingProxyType(
 )
 
 
+async def _slow_codeless_rate_limit_body() -> Response:
+    await asyncio.sleep(0.2)
+    return JSONResponse(status_code=429, content={"error": {"message": "slow down", "code": None}})
+
+
 async def _slow_dict_detail_failure() -> Response:
     await asyncio.sleep(0.2)
     raise HTTPException(status_code=400, detail=dict(_POLICY_BLOCK_DETAIL))
@@ -10600,6 +10631,7 @@ async def _slow_dict_detail_failure() -> Response:
     "produce,expected_code,expected_error",
     [
         (_slow_rate_limit_failure, "rate_limit_exceeded", {"message": "rate limited", "code": "429"}),
+        (_slow_codeless_rate_limit_body, "rate_limit_exceeded", {"message": "slow down", "code": "429"}),
         (
             _slow_guardrail_block_body,
             "invalid_request_error",

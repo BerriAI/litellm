@@ -1196,6 +1196,10 @@ def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     return f"data: {json.dumps({'error': error_obj}, default=str)}\n\n", "data: [DONE]\n\n"
 
 
+def _responses_error_frames(error_obj: Mapping[str, object]) -> tuple[str, ...]:
+    return (ResponsesStreamErrorState().format_error(error_obj),)
+
+
 @dataclass(frozen=True, slots=True)
 class LateSseFraming:
     """How a response the keepalive already opened ends once its upstream fails late."""
@@ -1216,19 +1220,33 @@ def _openai_late_body_frames(produced: Response) -> tuple[bytes, ...]:
 def _responses_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     if isinstance(exc, ModifyResponseException):
         return tuple(chunk.decode() for chunk in OpenAIResponsesHandler().build_block_sse_chunks(exc))
-    _, error_obj = sse_error_payload(exc)
-    return (ResponsesStreamErrorState().format_error(error_obj),)
+    return _responses_error_frames(sse_error_payload(exc)[1])
 
 
 def _responses_late_body_frames(produced: Response) -> tuple[bytes, ...]:
     body: Final = bytes(produced.body)
-    error_obj: Final = sse_error_object(body or b"{}") or {"message": body.decode(), "code": str(produced.status_code)}
-    return (ResponsesStreamErrorState().format_error(error_obj).encode(),)
+    error_obj: Final = sse_error_object(body or b"{}") or {"message": body.decode()}
+    with_status: Final = {**error_obj, "code": error_obj.get("code") or str(produced.status_code)}
+    return tuple(frame.encode() for frame in _responses_error_frames(with_status))
 
 
 OPENAI_LATE_SSE_FRAMING: Final = LateSseFraming(failure=_openai_late_failure_frames, body=_openai_late_body_frames)
 RESPONSES_LATE_SSE_FRAMING: Final = LateSseFraming(
     failure=_responses_late_failure_frames, body=_responses_late_body_frames
+)
+
+
+@dataclass(frozen=True, slots=True)
+class FirstChunkSseFraming:
+    """How a stream's first chunk is read for an error, and how the stream ends when reading it fails."""
+
+    data_payload: SseDataPayload
+    error_frames: Callable[[Mapping[str, object]], tuple[str, ...]]
+
+
+OPENAI_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(data_payload=_sse_data_payload, error_frames=_sse_error_frames)
+RESPONSES_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(
+    data_payload=_responses_event_data_payload, error_frames=_responses_error_frames
 )
 
 
@@ -1260,7 +1278,7 @@ async def create_response(
     request: Request | None = None,
     refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None = None,
     general_settings: Mapping[str, object] = _NO_GENERAL_SETTINGS,
-    first_chunk_payload: SseDataPayload = _sse_data_payload,
+    framing: FirstChunkSseFraming = OPENAI_FIRST_CHUNK_FRAMING,
 ) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
@@ -1296,7 +1314,9 @@ async def create_response(
 
         if first_chunk_value is not None:
             try:
-                error_code_from_chunk: Final = await _parse_event_data_for_error(first_chunk_value, first_chunk_payload)
+                error_code_from_chunk: Final = await _parse_event_data_for_error(
+                    first_chunk_value, framing.data_payload
+                )
                 if error_code_from_chunk is not None:
                     # First chunk is an error, stream hasn't really started yet
                     # Should return standard JSON error response instead of SSE format
@@ -1309,7 +1329,7 @@ async def create_response(
                     # Parse error content
                     error_dict: Final = with_call_id(
                         JSON_OBJECT.validate_python(
-                            _extract_error_from_sse_chunk(first_chunk_value, first_chunk_payload)
+                            _extract_error_from_sse_chunk(first_chunk_value, framing.data_payload)
                         ),
                         error_body_call_id(general_settings, resolved_headers.get(LITELLM_CALL_ID_HEADER)),
                     )
@@ -1352,7 +1372,7 @@ async def create_response(
         error_status, error_obj = sse_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
-            for frame in _sse_error_frames(error_obj):
+            for frame in framing.error_frames(error_obj):
                 yield frame
 
         return StreamingResponse(
@@ -3286,8 +3306,8 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                         refresh_headers=refresh_stream_headers,
                         general_settings=general_settings,
-                        first_chunk_payload=(
-                            _responses_event_data_payload if route_type == "aresponses" else _sse_data_payload
+                        framing=(
+                            RESPONSES_FIRST_CHUNK_FRAMING if route_type == "aresponses" else OPENAI_FIRST_CHUNK_FRAMING
                         ),
                     )
 

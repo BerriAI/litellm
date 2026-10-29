@@ -172,7 +172,7 @@ class ResponsesStreamErrorState:
             self.model = event.response.model or self.model
             if event.response.created_at is not None:
                 self.created_at = event.response.created_at
-        if event.type in ("response.completed", "response.failed", "response.incomplete"):
+        if event.type in ("response.completed", "response.failed", "response.incomplete", "error"):
             self.terminal_emitted = True
         if not event.type or "\n" in event.type or "\r" in event.type:
             return frame
