@@ -1512,7 +1512,7 @@ def _get_model_cost_info(
     llm_router: Router | None,
 ) -> Mapping[str, object] | None:
     if llm_router is not None:
-        model_group_info: Final = llm_router.cached_model_group_info(model)
+        model_group_info: Final = llm_router.registry().group(model, field="cached_info")
         if model_group_info is not None:
             return model_group_info.model_dump()
     return dict(litellm.get_model_info(model=model))
@@ -1568,7 +1568,7 @@ def _deployment_model_info(
     backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
-    return llm_router.cached_deployment_model_info(model_id, backend_model)
+    return llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
 
 
 def _get_deployment_model_infos(
@@ -1577,7 +1577,7 @@ def _get_deployment_model_infos(
 ) -> Sequence[Mapping[str, object]]:
     if llm_router is None:
         return []
-    deployments: Final = llm_router.get_model_list(model_name=model) or []
+    deployments: Final = llm_router.registry().deployments(model) or []
     return [
         deployment_info
         for deployment in deployments

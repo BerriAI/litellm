@@ -290,7 +290,7 @@ def validate_models_exist(model_names: Sequence[str], llm_router: "Router | None
     if llm_router is None:
         return False, model_names
 
-    router_model_names: Final = frozenset(llm_router.get_model_names())
+    router_model_names: Final = frozenset(llm_router.registry().names())
     missing: Final = tuple(m for m in model_names if m not in router_model_names)
     return (not missing, missing)
 
