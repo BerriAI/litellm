@@ -51,7 +51,7 @@ jobs:
         suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","extensions","accounting","management","management-replica","database","database-replica","mcp","security","cost","sdk","browser"]' || format('["{0}"]', inputs.suite)) }}
     env:
       UV_PYTHON: "3.12"
-      INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"32","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
+      INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"48","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
     services:
       postgres:
         image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
