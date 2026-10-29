@@ -8,6 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal, TypedDict
 
 import fastapi
@@ -31,7 +32,6 @@ from litellm.proxy._types import (
     EnterpriseLicenseData,
     Litellm_EntityType,
     LitellmUserRoles,
-    ProxyErrorTypes,
     ProxyException,
     SpecialModelNames,
     UserAPIKeyAuth,
@@ -42,11 +42,11 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
-    reject_server_owned_wif_params,
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.health_check_latest import (
@@ -74,12 +74,15 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.router import Router
+from litellm.router_api import deployment_usable_by_team
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
 )
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
+from litellm.types.router import reject_server_owned_wif_fields
+from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
 #### Health ENDPOINTS ####
 
@@ -159,6 +162,16 @@ def _request_inherits_config_credentials(
     if allow_client_side_credentials:
         return True
     return not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS)
+
+
+def _admin_api_key_from_request(
+    request_litellm_params: Mapping[str, object], call_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Only reached once the model auth check passed, which refuses an ``oidc/`` api_key from anyone but a proxy
+    admin."""
+    marked: Final = admin_api_key_secret_reference({**call_params, "api_key": request_litellm_params.get("api_key")})
+    api_key: Final = marked.get("api_key")
+    return MappingProxyType({"api_key": api_key} if isinstance(api_key, AdminApiKeySecretReference) else {})
 
 
 def _config_base_for_health_check(
@@ -671,21 +684,9 @@ async def health_services_endpoint(
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 def convert_health_check_to_dict(check) -> dict:
@@ -1053,11 +1054,12 @@ def _health_accessible_model_names(
         return None
     if llm_router is None:
         return frozenset(granted_models)
+    registry: Final = llm_router.registry()
     return frozenset(
         get_key_models(
             user_api_key_dict=user_api_key_dict,
-            proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
-            model_access_groups=llm_router.get_model_access_groups(),
+            proxy_model_list=registry.names(team_id=user_api_key_dict.team_id),
+            model_access_groups=registry.access_groups(),
         )
     )
 
@@ -1070,16 +1072,15 @@ def _caller_may_probe_deployment(
     caller_is_admin: bool,
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not deployment_usable_by_team(deployment, team_id):
         return False
     if allowed_models is None:
         return True
     if llm_router is None:
         return deployment.get("model_name") in allowed_models
     model: Final = dict(deployment)
-    return any(
-        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
-    )
+    registry: Final = llm_router.registry()
+    return any(registry.includes(model, model_name=name, team_id=team_id) for name in allowed_models)
 
 
 def _resolve_targeted_model_ids(
@@ -1184,7 +1185,7 @@ async def _perform_health_check_and_save(
 def _health_endpoint_resolve_target_model_name(
     model: str | None,
     model_id: str | None,
-    llm_router,
+    llm_router: Router | None,
 ) -> str | None:
     """Map ``model_id`` to its deployment's ``model_name`` for live health checks.
 
@@ -1199,7 +1200,7 @@ def _health_endpoint_resolve_target_model_name(
             detail={"error": f"Model with ID {model_id} not found"},
         )
     try:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
     except Exception as e:
         verbose_proxy_logger.error("Error getting deployment for model_id %s: %s", model_id, e)
         raise HTTPException(
@@ -1769,7 +1770,9 @@ async def no_redis_on_multiple_workers() -> bool:
 def _redis_configured() -> bool:
     from litellm.proxy.proxy_server import llm_router, redis_usage_cache
 
-    return redis_usage_cache is not None or (llm_router is not None and llm_router.cache.redis_cache is not None)
+    return redis_usage_cache is not None or (
+        llm_router is not None and llm_router.health().store.redis_cache is not None
+    )
 
 
 def no_redis_warning_disabled_by_env() -> bool:
@@ -2143,6 +2146,7 @@ async def test_model_connection(
         "ocr",
         "evaluation",
         "decisions",
+        "extraction",
     ]
     | None = fastapi.Body(
         None,
@@ -2258,7 +2262,7 @@ async def test_model_connection(
             request_model_id: Final = request_model_info.get("id")
             try:
                 if request_model_id:
-                    deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
+                    deployment_by_id = llm_router.registry().deployment(request_model_id)
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
@@ -2267,12 +2271,12 @@ async def test_model_connection(
                     # Fall back to model_name lookup for callers (e.g. the
                     # "Add Model" wizard, or curl) that don't supply an id.
                     # First try to find by proxy model_name (e.g., "gpt-4o")
-                    deployments = llm_router.get_model_list(model_name=model_name)
+                    deployments = llm_router.registry().deployments(model_name)
 
                     # If not found, try to find by litellm model name
                     # (e.g., "azure/gpt-4o")
                     if not deployments or len(deployments) == 0:
-                        all_deployments: Final = llm_router.get_model_list(model_name=None)
+                        all_deployments: Final = llm_router.registry().deployments(None)
                         if all_deployments:
                             for deployment in all_deployments:
                                 if deployment.get("litellm_params", {}).get("model") == model_name:
@@ -2291,7 +2295,15 @@ async def test_model_connection(
                 )
 
         selected_by_id: Final = deployment_by_id is not None
-        reject_server_owned_wif_params(request_litellm_params)
+        reject_server_owned_wif_fields(
+            MappingProxyType(
+                {
+                    key: value
+                    for key, value in _OBJECT_MAPPING.validate_python(request_litellm_params).items()
+                    if key != "chatgpt_auth_file"
+                }
+            )
+        )
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
@@ -2309,9 +2321,11 @@ async def test_model_connection(
             stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
             request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
         )
+        stored_model: Final = _OBJECT_MAPPING.validate_python(config_litellm_params).get("model")
         litellm_params = update_litellm_params_for_health_check(
             model_info=dict(probe_model_info),
             litellm_params=litellm_params,
+            deployment_model=stored_model if isinstance(stored_model, str) else None,
         )
 
         ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
@@ -2341,6 +2355,10 @@ async def test_model_connection(
         )
         health_check_params: Final = {
             **_OBJECT_MAPPING.validate_python(litellm_params),
+            **_admin_api_key_from_request(
+                _OBJECT_MAPPING.validate_python(request_litellm_params),
+                _OBJECT_MAPPING.validate_python(litellm_params),
+            ),
             "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
         }
 

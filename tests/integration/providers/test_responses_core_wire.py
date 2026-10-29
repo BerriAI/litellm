@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from collections.abc import Callable
 from typing import Final
 
 import openai
@@ -189,6 +190,42 @@ def test_previous_response_id_uses_the_raw_id_and_affinity(
                 "previous_response_id": first_raw_id,
                 "stream": stream,
             },
+        ], [request.body for request in requests]
+
+
+def _counting_peer(raw_id: str, input_tokens: int) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.target == "/v1/responses/input_tokens":
+            return Reply(body=json.dumps({"object": "response.input_tokens", "input_tokens": input_tokens}).encode())
+        return Reply(body=_response(raw_id))
+
+    return respond
+
+
+def test_input_tokens_count_goes_to_the_deployment_that_served_the_previous_response(gateway: Gateway) -> None:
+    raw_id: Final = f"resp_count_affinity_{uuid.uuid4().hex}"
+    with (
+        wire_server(_counting_peer(raw_id, 37)) as first_wire,
+        wire_server(_counting_peer(raw_id, 99)) as second_wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = f"integration-{uuid.uuid4().hex}"
+        _enable_responses_affinity(scenario)
+        assert _register(scenario, first_wire, model) == model
+        client: Final = openai.OpenAI(base_url=f"{gateway.client.base_url}/v1", api_key=gateway.key, max_retries=0)
+        first: Final = client.responses.create(model=model, input="turn one")
+        _register_in_group(scenario, second_wire, model, order=1)
+        counted: Final = client.responses.input_tokens.count(
+            model=model, input="turn two", previous_response_id=first.id
+        )
+        assert counted.input_tokens == 37, counted.model_dump_json()
+        assert drain_contract_requests(second_wire) == (), "the count left the previous response's deployment"
+        requests: Final = drain_contract_requests(first_wire)
+        assert [(request.target, _JSON_OBJECT.validate_json(request.body)) for request in requests] == [
+            ("/v1/responses", {"model": _MODEL, "input": "turn one"}),
+            ("/v1/responses/input_tokens", {"model": _MODEL, "input": "turn two", "previous_response_id": raw_id}),
         ], [request.body for request in requests]
 
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import socket
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -29,6 +28,7 @@ from websockets.exceptions import ConnectionClosed
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
 from tests.integration._support.upstream import delete_scenario, register_scenario
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests.integration._support.ports import allocate_port
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 
 _KEY: Final = "synthetic-declared-provider-key"
@@ -497,14 +497,8 @@ def _marker(request: Request) -> str:
     return string_value(body["prompt"] if request.target == _IMAGES else body["input"])
 
 
-def _closed_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def test_burst_across_declared_and_dead_deployments_reaches_each_live_provider_once(gateway: Gateway) -> None:
-    dead_base: Final = f"http://127.0.0.1:{_closed_port()}/v1"
+    dead_base: Final = f"http://127.0.0.1:{allocate_port()}/v1"
     with wire_server(_burst_reply) as wire, gateway.scenario() as scenario:
         live: Final = tuple(
             (route, _deployment(scenario, wire, form, _bare()))

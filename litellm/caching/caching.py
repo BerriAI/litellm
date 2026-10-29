@@ -25,7 +25,7 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper, peek_reasoning_summary_aliases
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
@@ -376,7 +376,7 @@ class Cache:
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
-    def get_cache_key(self, **kwargs) -> str:
+    def get_cache_key(self, **kwargs: object) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -410,13 +410,16 @@ class Cache:
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
-                    param_value = kwargs[param]
-                    cache_key += f"{param}: {param_value}"
+                    cache_key += f"{param}: {kwargs[param]}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
 
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
+        reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
+        reasoning_summary_material: Final = (
+            "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
+        )
+        hashed_cache_key = Cache._get_hashed_cache_key(cache_key + reasoning_summary_material)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",
@@ -452,17 +455,33 @@ class Cache:
         3. Else use the `model` passed in kwargs, plus `model_id` when set (e.g. a SageMaker inference component)
         """
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        metadata_sources: Final[tuple[dict, ...]] = (
-            kwargs.get("metadata") or {},
-            kwargs.get("litellm_metadata") or {},
-            litellm_params.get("metadata") or {},
-            litellm_params.get("litellm_metadata") or {},
+        metadata_sources: Final = cast(  # cast-ok: each source is the untyped request's metadata dict or empty
+            "tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]",
+            (
+                kwargs.get("metadata") or {},
+                kwargs.get("litellm_metadata") or {},
+                litellm_params.get("metadata") or {},
+                litellm_params.get("litellm_metadata") or {},
+            ),
         )
-        model_group: Final[str | None] = next(
-            (source["model_group"] for source in metadata_sources if source.get("model_group")), None
+        metadata, litellm_metadata, params_metadata, params_litellm_metadata = metadata_sources
+        call_model_info: Final[object] = kwargs.get("model_info")
+        routed_source: Final = next(
+            (
+                source
+                for source in (litellm_metadata, metadata, params_litellm_metadata, params_metadata)
+                if call_model_info and source.get("model_group") and source.get("model_info") == call_model_info
+            ),
+            None,
         )
+        model_group: Final = (
+            str(routed_source["model_group"])
+            if routed_source is not None
+            else next((str(source["model_group"]) for source in metadata_sources if source.get("model_group")), None)
+        )
+        caching_group_sources: Final = (routed_source,) if routed_source is not None else metadata_sources
         caching_group: Final = next(
-            (group for source in metadata_sources if (group := self._get_caching_group(source, model_group))), None
+            (group for source in caching_group_sources if (group := self._get_caching_group(source, model_group))), None
         )
         model_id_suffix: Final = (
             f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""

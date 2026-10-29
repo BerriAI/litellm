@@ -13,6 +13,7 @@ use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCal
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{
     CallOptions, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+    from_py,
 };
 use litellm_host_python::{Error as HostError, present};
 use pyo3::{
@@ -20,6 +21,7 @@ use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
 };
+use serde_json::{Map, Value};
 
 /// The public call as Python bound it: `base` holds the positional arguments by name plus
 /// the signature defaults, `kwargs` the caller's keyword dict.
@@ -90,6 +92,22 @@ impl RequestView {
         name: &str,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         present(arguments, self.request(py)?, name)
+    }
+
+    /// The body params `module.body_params` keeps from the keywords the call would send, so
+    /// each route's Python host decides which params reach the provider.
+    pub(crate) fn body_params(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+        module: &str,
+    ) -> PyResult<Map<String, Value>> {
+        let request = effective_py_args(self.request(py)?, arguments)?;
+        from_py(
+            &py.import(module)?
+                .getattr("body_params")?
+                .call1((request,))?,
+        )
     }
 
     pub(crate) fn close(&mut self) {

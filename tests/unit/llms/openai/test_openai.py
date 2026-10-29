@@ -2,15 +2,16 @@ import asyncio
 import importlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import ModuleType
 from typing import Final, Literal, Protocol
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, AzureOpenAI, OpenAI
+from openai._legacy_response import LegacyAPIResponse
 from openai._types import Response as SDKResponse
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -23,6 +24,7 @@ from litellm.llms.openai.openai import (
     AsyncCursorPage,
     MessageData,
     OpenAIChatCompletion,
+    OpenAIConfig,
     OpenAIMessage as Message,
     Run,
     SyncCursorPage,
@@ -219,6 +221,79 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
     prompt_tokens_details: Final = response.usage.prompt_tokens_details
     assert isinstance(prompt_tokens_details, PromptTokensDetails)
     assert prompt_tokens_details.cached_tokens == 7
+
+
+_REASONING_TOOL_CALL_REPLY: Final = {
+    "id": "chatcmpl-fake-stream",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "o4-mini",
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    },
+                    {
+                        "id": "call_time",
+                        "type": "function",
+                        "function": {"name": "get_time", "arguments": '{"city": "Paris"}'},
+                    },
+                ],
+            },
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 85,
+        "completion_tokens": 1955,
+        "total_tokens": 2040,
+        "prompt_tokens_details": {"cached_tokens": 64},
+        "completion_tokens_details": {"reasoning_tokens": 1920},
+    },
+}
+
+
+def test_azure_o_series_fake_stream_keeps_every_tool_call_and_token_detail():
+    request_bodies: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=_REASONING_TOOL_CALL_REPLY)
+
+    client: Final = AzureOpenAI(
+        api_key="transport-only",
+        api_version="2025-03-01-preview",
+        azure_endpoint="https://fake-stream.openai.azure.com",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    chunks: Final = list(
+        litellm.completion(
+            model="azure/o_series/reasoning-deployment",
+            api_key="transport-only",
+            api_version="2025-03-01-preview",
+            api_base="https://fake-stream.openai.azure.com",
+            client=client,
+            messages=[{"role": "user", "content": "weather and time in Paris?"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            num_retries=0,
+        )
+    )
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+
+    assert [body.get("stream") for body in request_bodies] == [None]
+    assert rebuilt is not None
+    assert rebuilt.choices[0].finish_reason == "tool_calls"
+    assert [call.function.name for call in rebuilt.choices[0].message.tool_calls] == ["get_weather", "get_time"]
+    assert rebuilt.usage.prompt_tokens_details.cached_tokens == 64
+    assert rebuilt.usage.completion_tokens_details.reasoning_tokens == 1920
 
 
 @respx.mock
@@ -1596,7 +1671,7 @@ async def test_openai_prediction_param_mock():
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -1615,7 +1690,7 @@ async def test_openai_prediction_param_mock():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the prediction parameter
         assert "prediction" in request_body
@@ -1627,10 +1702,12 @@ async def test_openai_prediction_param_mock():
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
-    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
-    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
-        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
-    )
+    raw_response: Final = MagicMock(spec=LegacyAPIResponse)
+    raw_response.headers = {}
+    raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    client_stub: Final = MagicMock()
+    client_stub.post.return_value = raw_response
+    mock_get_openai_client.return_value = client_stub
     litellm.set_verbose = True
     response = litellm.completion(
         model="gpt-4o-mini",
@@ -1739,7 +1816,7 @@ async def test_openai_safety_identifier_parameter():
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -1752,7 +1829,7 @@ async def test_openai_safety_identifier_parameter():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the safety_identifier parameter
         assert "safety_identifier" in request_body
@@ -1768,7 +1845,7 @@ def test_openai_safety_identifier_parameter_sync():
     client = OpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             litellm.completion(
@@ -1781,7 +1858,7 @@ def test_openai_safety_identifier_parameter_sync():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the safety_identifier parameter
         assert "safety_identifier" in request_body
@@ -1798,7 +1875,7 @@ async def test_openai_service_tier_parameter():
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -1811,7 +1888,7 @@ async def test_openai_service_tier_parameter():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
@@ -1829,7 +1906,7 @@ def test_openai_service_tier_parameter_sync():
     client = OpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             litellm.completion(
@@ -1842,7 +1919,7 @@ def test_openai_service_tier_parameter_sync():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
@@ -1874,3 +1951,100 @@ def test_responses_gpt54_with_xhigh_reasoning():
         assert request_body["model"] == "openai/gpt-5.4"
 
         assert request_body["reasoning"] == {"effort": "xhigh"}
+
+
+_CHAT_RESPONSE_JSON: Final = {
+    "id": "chatcmpl-wire",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.4",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_WIRE_REQUEST: Final = {
+    "model": "gpt-5.4",
+    "messages": [
+        {"role": "system", "content": "sys"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is in the image"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png", "detail": "low"}},
+            ],
+        },
+    ],
+    "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}],
+    "tool_choice": "auto",
+    "response_format": {"type": "json_schema", "json_schema": {"name": "r", "schema": {"type": "object"}}},
+    "max_completion_tokens": 7,
+    "reasoning_effort": "none",
+    "n": 2,
+    "seed": 3,
+}
+
+
+@pytest.mark.parametrize("is_async", (False, True))
+@respx.mock
+async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_headers_unchanged(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_RESPONSE_JSON)
+    )
+    kwargs: Final = {
+        **_WIRE_REQUEST,
+        "model": "openai/gpt-5.4",
+        "api_base": "https://api.openai.com/v1",
+        "api_key": "sk-test",
+        "num_retries": 0,
+        "extra_body": {"vendor_flag": True},
+        "extra_headers": {"x-caller": "unit"},
+    }
+
+    if is_async:
+        await litellm.acompletion(**kwargs)
+    else:
+        litellm.completion(**kwargs)
+
+    sent: Final = route.calls.last.request
+    assert json.loads(sent.content) == {**_WIRE_REQUEST, "vendor_flag": True}
+    assert sent.headers["x-caller"] == "unit"
+    assert sent.headers["authorization"] == "Bearer sk-test"
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "api_base", "declared", "expected_roles"),
+    [
+        ("openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        ("azure_ai", "https://example.services.ai.azure.com/models", None, ["system", "user", "assistant", "system", "user"]),
+        ("azure_ai", "https://example.services.ai.azure.com/models", False, ["system", "user", "assistant", "user"]),
+    ],
+)
+def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    custom_llm_provider: str,
+    api_base: str,
+    declared: bool | None,
+    expected_roles: list[str],
+) -> None:
+    if declared is not None:
+        declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
+    messages: Final = OpenAIConfig().translate_developer_role_to_system_role(
+        messages=_developer_message_after_a_user_turn(),
+        model="system-first-model",
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        model_info=None,
+    )
+    assert [message["role"] for message in messages] == expected_roles

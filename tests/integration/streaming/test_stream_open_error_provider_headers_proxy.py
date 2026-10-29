@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -29,6 +28,7 @@ from integration._support.client import (
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, configless_proxy_process, graceful_stop_seconds
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from openai.types.responses import ResponseFailedEvent
 from pydantic import JsonValue
 
@@ -76,12 +76,6 @@ class _Served:
     call_id: str
 
 
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 @contextmanager
 def _configless(gateway: Gateway, directory: Path, port: int) -> Iterator[_Rig]:
     url: Final = f"http://127.0.0.1:{port}"
@@ -99,7 +93,7 @@ def _configless(gateway: Gateway, directory: Path, port: int) -> Iterator[_Rig]:
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     with (
         gateway_from_environment() as shared,
-        _configless(shared, tmp_path_factory.mktemp("configless"), _free_port()) as owned,
+        _configless(shared, tmp_path_factory.mktemp("configless"), allocate_port()) as owned,
     ):
         yield owned
 
@@ -543,7 +537,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_each_stream
 async def test_proxy_sigterm_mid_burst_answers_each_in_flight_stream_and_the_restarted_proxy_serves(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     calls: Final = _stream_calls(20)
     held: Final = _held()
     with wire_server(held.respond, port=port) as wire:

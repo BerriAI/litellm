@@ -1,6 +1,5 @@
 import asyncio
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -12,22 +11,17 @@ import pytest
 
 from tests._master_key import MASTER_KEY
 from tests.integration._support.process import stop_child
+from tests.integration._support.ports import allocate_port
 
 MAX_IN_FLIGHT: Final = 8
 MAX_QUEUED: Final = 8
 REQUESTS: Final = 200
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
-
-
 @pytest.mark.asyncio
 async def test_granian_admission_control_saturation(tmp_path: Path) -> None:
-    fake_port: Final = _free_port()
-    proxy_port: Final = _free_port()
+    fake_port: Final = allocate_port()
+    proxy_port: Final = allocate_port()
     fake_script: Final = Path(__file__).parents[2] / "_fake_openai_endpoint_server.py"
     config_path: Final = tmp_path / "saturation_config.yaml"
     proxy_env: Final = {**{k: v for k, v in os.environ.items() if k != "DATABASE_URL"}, "LITELLM_MASTER_KEY": MASTER_KEY}
