@@ -2,3 +2,4 @@
 /litellm/model_prices_and_context_window_backup.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
 /helm/ @yassin-berriai
 /terraform/ @yassin-berriai
+/.github/workflows/zizmor.yml @yuneng-berri
