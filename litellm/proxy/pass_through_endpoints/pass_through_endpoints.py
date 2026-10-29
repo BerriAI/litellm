@@ -2456,9 +2456,6 @@ def _truncated_close_reason(reason: str) -> str:
 
 
 def _refusal_close_reason(message: str) -> str:
-    """
-    The proxy's own refusal message as a close reason, ending on the last whole sentence that fits
-    """
     clipped: Final = _truncated_close_reason(message)
     sentence_end: Final = clipped.rfind(". ")
     return clipped if clipped == message or sentence_end == -1 else clipped[: sentence_end + 1]

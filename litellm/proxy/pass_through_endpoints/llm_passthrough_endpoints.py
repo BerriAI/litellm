@@ -15,11 +15,11 @@ import os
 import posixpath
 import re
 import sys
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
 
 import httpx
 import openai
@@ -90,6 +90,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     get_bearer_token,
     is_no_auth_dev_mode,
     user_api_key_auth,
+    user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_websocket,
     user_api_key_auth_websocket_for_model,
 )
@@ -3933,20 +3934,26 @@ def _deployment_named(model_name: str, deployments: Sequence[DeploymentTypedDict
 VERTEX_LIVE_PROVIDERS: Final = frozenset({LlmProviders.VERTEX_AI.value, LlmProviders.VERTEX_AI_BETA.value})
 
 
-def _vertex_upstream_model(deployment: DeploymentTypedDict) -> str | None:
-    """
-    The publisher model a Vertex AI deployment runs, or ``None`` for any other provider's deployment, since this
-    route runs every session on the proxy's Vertex credentials whatever provider a group was configured with
-    """
+def _upstream_model_and_provider(deployment: DeploymentTypedDict) -> tuple[str, str | None] | None:
     litellm_params: Final = deployment["litellm_params"]
     if "model" not in litellm_params:
         return None
     upstream: Final = litellm_params["model"]
     declared: Final = declared_provider(upstream, litellm_params.get("custom_llm_provider"))
     provider: Final = declared or inferred_provider(upstream)
-    if provider is None:
-        return upstream
-    return upstream.removeprefix(f"{provider}/") if provider in VERTEX_LIVE_PROVIDERS else None
+    return (upstream if provider is None else upstream.removeprefix(f"{provider}/"), provider)
+
+
+def _vertex_upstream_model(deployment: DeploymentTypedDict) -> str | None:
+    """
+    The publisher model a Vertex AI deployment runs, or ``None`` for any other provider's deployment, since a
+    group another provider serves grants nothing on the proxy's Vertex credentials
+    """
+    resolved: Final = _upstream_model_and_provider(deployment)
+    if resolved is None:
+        return None
+    upstream, provider = resolved
+    return upstream if provider is None or provider in VERTEX_LIVE_PROVIDERS else None
 
 
 def _vertex_deployments(llm_router: Router | None) -> tuple[DeploymentTypedDict, ...]:
@@ -3955,33 +3962,35 @@ def _vertex_deployments(llm_router: Router | None) -> tuple[DeploymentTypedDict,
     return tuple(deployment for deployment in (llm_router.get_model_list() or ()) if _vertex_upstream_model(deployment))
 
 
-def _vertex_live_deployment(setup_model: str, llm_router: Router | None) -> DeploymentTypedDict | None:
+def _live_deployment(setup_model: str, llm_router: Router | None) -> DeploymentTypedDict | None:
     """
-    The Vertex AI deployment whose group a ``setup`` frame's model names, whichever addressing the client used.
+    The deployment whose group a ``setup`` frame's model names, whichever addressing the client used.
 
     The Live SDK wraps whatever the caller typed as ``models/<name>``, and clients also send LiteLLM ids and
     full Vertex resource paths, so the group is read from the last segment when the whole string names none
     """
-    deployments: Final = _vertex_deployments(llm_router)
+    if setup_model.startswith("projects/") or llm_router is None:
+        return None
+    deployments: Final = tuple(llm_router.get_model_list() or ())
     exact: Final = _deployment_named(setup_model, deployments)
     return exact if exact is not None else _deployment_named(setup_model.rsplit("/", 1)[-1], deployments)
 
 
 def _vertex_live_model_names(setup_model: str, llm_router: Router | None) -> tuple[str, ...]:
     """
-    The names a key can hold for the model a ``setup`` frame runs: the router group the setup rewriter sends it
-    through, else every group serving the publisher model Vertex runs, and that model's id bare or under LiteLLM's
-    ``vertex_ai/`` prefix unless a group holds that name for another model.
+    The names a key can hold for the model a ``setup`` frame runs: the Vertex AI group the setup rewriter sends it
+    through, else every Vertex AI group serving the publisher model Vertex runs, and that model's id bare or under
+    LiteLLM's ``vertex_ai/`` prefix unless a group holds that name for another model.
 
     A full resource path skips the rewriter and reaches Vertex as sent, so only its publisher model counts, and
     a wildcard is matched against that id alone so addressing in front of it cannot satisfy the pattern
     """
-    deployment: Final = (
-        None if setup_model.startswith("projects/") else _vertex_live_deployment(setup_model, llm_router)
-    )
-    if deployment is not None:
-        return (deployment["model_name"],)
-    publisher_model: Final = _vertex_publisher_model_suffix(setup_model)
+    deployment: Final = _live_deployment(setup_model, llm_router)
+    if deployment is not None and _vertex_upstream_model(deployment) is not None:
+        alias_target: Final = None if llm_router is None else llm_router.get_model_from_alias(deployment["model_name"])
+        return (alias_target or deployment["model_name"],)
+    opened_model: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
+    publisher_model: Final = _vertex_publisher_model_suffix(opened_model)
     serving_groups: Final = tuple(
         dict.fromkeys(
             candidate["model_name"]
@@ -3992,7 +4001,7 @@ def _vertex_live_model_names(setup_model: str, llm_router: Router | None) -> tup
     group_names: Final = frozenset(
         candidate["model_name"] for candidate in (() if llm_router is None else llm_router.get_model_list() or ())
     )
-    publisher_model_id: Final = setup_model.rsplit("/", 1)[-1]
+    publisher_model_id: Final = opened_model.rsplit("/", 1)[-1]
     return (
         *serving_groups,
         *(name for name in (publisher_model_id, f"vertex_ai/{publisher_model_id}") if name not in group_names),
@@ -4006,6 +4015,19 @@ def _is_model_alias(name: str, valid_token: UserAPIKeyAuth, llm_router: Router |
         or name in litellm.model_alias_map
         or (llm_router is not None and name in llm_router.model_group_alias)
     )
+
+
+def _as_model_denial(refusal: ProxyException | HTTPException) -> ProxyException:
+    match refusal:
+        case ProxyException():
+            return refusal
+        case HTTPException():
+            return ProxyException(
+                message=str(refusal.detail),
+                type=ProxyErrorTypes.auth_error,
+                param="model",
+                code=refusal.status_code,
+            )
 
 
 async def _model_access_denial(
@@ -4022,23 +4044,47 @@ async def _model_access_denial(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except ProxyException as denial:
-        return denial
-    except HTTPException as refusal:
-        return ProxyException(
-            message=str(refusal.detail),
-            type=ProxyErrorTypes.auth_error,
-            param="model",
-            code=refusal.status_code,
-        )
+    except (ProxyException, HTTPException) as refusal:
+        return _as_model_denial(refusal)
     return None
 
 
+VertexLiveModelAuthorizer: TypeAlias = Callable[[str], Awaitable[UserAPIKeyAuth]]
+
+
+async def _model_reauthorization_denial(
+    model: str, authorize_model: VertexLiveModelAuthorizer
+) -> ProxyException | None:
+    from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
+
+    try:
+        model_auth: Final = await authorize_model(model)
+    except (ProxyException, HTTPException) as refusal:
+        return _as_model_denial(refusal)
+    await release_or_invalidate_budget_reservation(budget_reservation=model_auth.budget_reservation)
+    return None
+
+
+async def _first_reauthorization_denial(
+    model_names: tuple[str, ...], authorize_model: VertexLiveModelAuthorizer
+) -> ProxyException | None:
+    denial: Final = await _model_reauthorization_denial(model_names[0], authorize_model)
+    if denial is None or len(model_names) == 1:
+        return denial
+    later_denial: Final = await _first_reauthorization_denial(model_names[1:], authorize_model)
+    return None if later_denial is None else denial
+
+
 async def _vertex_live_model_denial(
-    setup_model: str, valid_token: UserAPIKeyAuth, llm_router: Router | None
+    setup_model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router | None,
+    authorize_model: VertexLiveModelAuthorizer,
 ) -> ProxyException | None:
     """
-    The setup rewriter forwards a name as sent, so a name an alias maps to another model grants nothing here
+    The setup rewriter forwards an alias name as sent unless it is a listed router alias, which already resolved to
+    its target group, so an alias name grants nothing here. A name the key may call is then authorized the way a
+    request naming it at connect time is
     """
     model_names: Final = tuple(
         name
@@ -4058,7 +4104,10 @@ async def _vertex_live_model_denial(
             else None
         )
     denials: Final = tuple([await _model_access_denial(name, valid_token, llm_router) for name in model_names])
-    return None if None in denials else denials[0]
+    callable_names: Final = tuple(name for name, denial in zip(model_names, denials, strict=True) if denial is None)
+    if not callable_names:
+        return denials[0]
+    return await _first_reauthorization_denial(callable_names, authorize_model)
 
 
 async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
@@ -4073,11 +4122,14 @@ async def _caller_has_model_limits(valid_token: UserAPIKeyAuth) -> bool:
 
 
 async def _vertex_live_setup_denial(
-    setup_model: str | _UnreadableVertexLiveFrame, valid_token: UserAPIKeyAuth, llm_router: Router | None
+    setup_model: str | _UnreadableVertexLiveFrame,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Router | None,
+    authorize_model: VertexLiveModelAuthorizer,
 ) -> ProxyException | None:
     match setup_model:
         case str():
-            denial: Final = await _vertex_live_model_denial(setup_model, valid_token, llm_router)
+            denial: Final = await _vertex_live_model_denial(setup_model, valid_token, llm_router, authorize_model)
             if denial is not None:
                 log_model_access_denial(denial)
             return denial
@@ -4094,7 +4146,9 @@ async def _vertex_live_setup_denial(
             )
 
 
-def _build_vertex_live_client_frame_gate(llm_router: Router | None) -> WebsocketClientFrameGate:
+def _build_vertex_live_client_frame_gate(
+    llm_router: Router | None, authorize_model: VertexLiveModelAuthorizer
+) -> WebsocketClientFrameGate:
     """
     Apply the checks a model named at auth time gets to the model a client's ``setup`` frame names.
 
@@ -4111,7 +4165,7 @@ def _build_vertex_live_client_frame_gate(llm_router: Router | None) -> Websocket
         if model is None:
             return None
         try:
-            return await _vertex_live_setup_denial(model, valid_token, llm_router)
+            return await _vertex_live_setup_denial(model, valid_token, llm_router, authorize_model)
         except Exception:  # noqa: BLE001  # fail closed: a gate that cannot answer refuses, and says so in band
             verbose_proxy_logger.exception("Vertex AI Live passthrough: model access check failed for %s", model)
             return ProxyException(
@@ -4182,9 +4236,9 @@ def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None
     """
     The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
     """
-    deployment: Final = _vertex_live_deployment(setup_model, llm_router)
-    upstream: Final = None if deployment is None else _vertex_upstream_model(deployment)
-    return setup_model if upstream is None else upstream
+    deployment: Final = _live_deployment(setup_model, llm_router)
+    resolved: Final = None if deployment is None else _upstream_model_and_provider(deployment)
+    return setup_model if resolved is None else resolved[0]
 
 
 async def vertex_ai_live_websocket_passthrough(
@@ -4193,6 +4247,7 @@ async def vertex_ai_live_websocket_passthrough(
     vertex_project: str | None = None,
     vertex_location: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    authorize_model: VertexLiveModelAuthorizer | None = None,
 ):
     """
     Vertex AI Live API WebSocket Pass-through Function
@@ -4291,7 +4346,10 @@ async def vertex_ai_live_websocket_passthrough(
             vertex_location=resolved_location,
             llm_router=_get_llm_router(),
         ),
-        client_frame_gate=_build_vertex_live_client_frame_gate(llm_router=_get_llm_router()),
+        client_frame_gate=_build_vertex_live_client_frame_gate(
+            llm_router=_get_llm_router(),
+            authorize_model=authorize_model or partial(user_api_key_auth_accepted_websocket_for_model, websocket),
+        ),
     )
 
 
