@@ -833,6 +833,7 @@ class LLMCachingHandler:
         if logging_obj.defer_async_logging and not logging_obj.stream:
             from litellm.utils import dispatch_success_logging
 
+            logging_obj.model_call_details["cache_hit"] = cache_hit
             dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
             return
 

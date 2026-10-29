@@ -1747,7 +1747,7 @@ def _get_cost_breakdown_from_logging_obj(
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
         return CostBreakdownHeaderValues()
-    if _is_cache_hit(litellm_logging_obj):
+    if litellm_logging_obj.finalized_cost is None and _is_cache_hit(litellm_logging_obj):
         return _ZERO_COST_BREAKDOWN
 
     cost_breakdown: Final = (

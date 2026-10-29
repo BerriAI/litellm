@@ -375,3 +375,21 @@ async def test_finalization_failure_leaves_the_request_and_callback_billing_inta
     assert await finalize_response_cost(logging_obj, response(), counter, NOW) is None
     assert logging_obj.finalized_cost is None
     assert counter.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_params(logging_obj: Logging) -> None:
+    from litellm import completion
+    from litellm.caching.caching_handler import LLMCachingHandler
+
+    logging_obj.defer_async_logging = True
+    cached_result: Final = response().model_dump()
+    LLMCachingHandler(
+        original_function=completion, request_kwargs={}, start_time=datetime.now()
+    )._async_log_cache_hit_on_callbacks(
+        logging_obj=logging_obj, cached_result=cached_result, start_time=NOW, end_time=NOW, cache_hit=True
+    )
+    counter: Final = Counter()
+    finalized: Final = await finalize_response_cost(logging_obj, cached_result, counter, NOW)
+    assert finalized is not None and finalized.amount == 0.0
+    assert counter.calls == 0

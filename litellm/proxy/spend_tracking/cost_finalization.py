@@ -43,7 +43,7 @@ async def _finalize_response_cost(
             result=deferred[0] if deferred is not None else response,
             start_time=deferred[1] if deferred is not None else logging_obj.start_time,
             end_time=deferred[2] if deferred is not None else now.replace(tzinfo=None),
-            cache_hit=None,
+            cache_hit=_recorded_cache_hit(logging_obj),
             standard_logging_object=None,
             build_logging_payload=True,
             publish_logging_payload=False,
@@ -89,6 +89,12 @@ async def _finish_finalization(
     finalized: Final = finalize_cost(amount, breakdown, allocation.discount if allocation is not None else 0.0)
     logging_obj.finalized_cost = finalized
     return finalized
+
+
+def _recorded_cache_hit(logging_obj: Logging) -> bool | None:
+    """The cache hit the caching handler recorded before deferring, so a cached dict result is not priced."""
+    recorded: Final[object] = logging_obj.model_call_details.get("cache_hit")
+    return recorded if isinstance(recorded, bool) else None
 
 
 async def finalize_proxy_response_cost(
