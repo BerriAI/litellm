@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     MaskedHTTPStatusError,
     get_async_httpx_client,
     get_httpx_client,
+    mask_sensitive_info,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
@@ -83,10 +84,11 @@ def _vertex_batch_list_payload(response: _VertexBatchListJsonSource) -> dict[str
 
 
 def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> MaskedHTTPStatusError:
+    body: Final = mask_sensitive_info(error.response.text)
     return MaskedHTTPStatusError(
-        httpx.HTTPStatusError(
-            f"Vertex AI batch create failed: {error.response.text}", request=error.request, response=error.response
-        )
+        httpx.HTTPStatusError(f"Vertex AI batch create failed: {body}", request=error.request, response=error.response),
+        message=body,
+        text=body,
     )
 
 

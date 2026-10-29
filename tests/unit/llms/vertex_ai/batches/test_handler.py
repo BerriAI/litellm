@@ -398,6 +398,7 @@ def test_create_batch_sync_httpstatuserror_carries_vertex_status_body_and_header
     assert exc_info.value.response.status_code == 429
     assert exc_info.value.response.headers["retry-after"] == "30"
     assert handle_exception_on_proxy(exc_info.value).code == "429"
+    assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -837,6 +838,7 @@ def test_create_batch_async_httpstatuserror_carries_vertex_status_body_and_heade
     assert exc_info.value.response.status_code == 429
     assert exc_info.value.response.headers["retry-after"] == "30"
     assert handle_exception_on_proxy(exc_info.value).code == "429"
+    assert (getattr(exc_info.value, "message", None), getattr(exc_info.value, "text", None)) == ("boom", "boom")
 
 
 def test_async_retrieve_batch_non_200_raises():

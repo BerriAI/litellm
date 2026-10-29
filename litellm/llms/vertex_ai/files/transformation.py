@@ -771,6 +771,8 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     Transforms an OpenAI chat batch entry into the Anthropic Messages row Vertex batches Claude with,
     `{"custom_id": ..., "request": {"messages": [...], "anthropic_version": "vertex-2023-10-16", "max_tokens": ...}}`
     """
+    if custom_id is None:
+        raise ValueError("custom_id is required on Claude lines, since Claude output rows are matched back only by it")
     config: Final = VertexAIAnthropicConfig()
     bare_model: Final = model.rsplit("/", 1)[-1]
     params: Final = {**deployment_params, **request_params}
@@ -821,8 +823,6 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
             ),
         }
     )
-    if custom_id is None:
-        return {"request": request}
     return {"custom_id": str(custom_id), "request": request}
 
 

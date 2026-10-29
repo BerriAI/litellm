@@ -2381,13 +2381,15 @@ class TestVertexClaudeBatch:
         assert bad_row["response"] is None
         assert bad_row["error"]["code"] == "transformation_error"
 
-    def test_claude_row_without_custom_id_has_no_custom_id_field(self, config):
-        entry: Final = _claude_chat_entry(None, "hi", max_tokens=10)
+    def test_claude_line_without_custom_id_is_a_400_at_upload(self, config):
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
 
-        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+        with pytest.raises(VertexAIError, match=r"line 2 .*custom_id") as exc_info:
+            _uploaded_rows(
+                config, CLAUDE_DEPLOYMENT, [_claude_chat_entry("r1", "hi", max_tokens=10), _claude_chat_entry(None, "hi")]
+            )
 
-        assert set(row) == {"request"}
-        assert row["request"]["anthropic_version"] == "vertex-2023-10-16"
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_streamed_claude_output_is_transformed(self, config):
