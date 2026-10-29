@@ -355,6 +355,100 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
         )
 
 
+def _anthropic_web_fetch_stream_events() -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01Fetch",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Fetch", "name": "web_fetch"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"url": "https://example.com/"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_01Fetch",
+                "content": {"type": "web_fetch_result", "url": "https://example.com/"},
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Fetched."}},
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "content_block_start",
+            "index": 3,
+            "content_block": {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 3,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+        },
+        {"type": "content_block_stop", "index": 3},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 20},
+        },
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_anthropic_web_fetch_is_a_hosted_open_page_call(sync_mode: bool) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    chunks: Final = [parser.chunk_parser(event) for event in _anthropic_web_fetch_stream_events()]
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="Fetch example.com and check the weather in Paris.",
+        responses_api_request={
+            "tools": [
+                {"type": "web_fetch_20250910", "name": "web_fetch"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [
+        (item.id, item.status, item.action.model_dump())
+        for item in completed.response.output
+        if item.type == "web_search_call"
+    ] == [("ws_srvtoolu_01Fetch", "completed", {"type": "open_page", "url": "https://example.com/"})]
+    assert [item.name for item in completed.response.output if item.type == "function_call"] == ["get_weather"]
+    assert not any(
+        event.item.name == "web_fetch"
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        and event.item.type == "function_call"
+    )
+
+
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",

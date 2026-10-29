@@ -94,6 +94,7 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
 )
 from litellm.types.responses.main import (
+    HOSTED_WEB_TOOL_NAMES,
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
     build_web_search_call,
@@ -249,6 +250,19 @@ def _validated_defer_loading(value: object) -> bool:
         return _DEFER_LOADING_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
         raise ValueError("defer_loading must be a boolean") from exc
+
+
+def _hosted_web_tool_use(block: object) -> tuple[str, str, object] | None:
+    match block:
+        case {
+            "type": "server_tool_use",
+            "name": str() as name,
+            "id": str() as call_id,
+            "input": object() as tool_input,
+        } if name in HOSTED_WEB_TOOL_NAMES:
+            return call_id, name, tool_input
+        case _:
+            return None
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -2902,26 +2916,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> list[object]:
         content: Final = completion_response.get("content")
         blocks: Final = content if isinstance(content, Sequence) else ()
-        inputs: Final = {
-            call_id: tool_input
-            for block in blocks
-            if isinstance(block, Mapping)
-            and block.get("type") == "server_tool_use"
-            and block.get("name") == "web_search"
-            and isinstance((call_id := block.get("id")), str)
-            and isinstance((tool_input := block.get("input")), Mapping)
+        server_tool_uses: Final = {
+            call_id: (tool_name, tool_input)
+            for call_id, tool_name, tool_input in filter(None, map(_hosted_web_tool_use, blocks))
         }
         return [
             build_web_search_call(
                 tool_id=tool_use_id,
-                tool_input=inputs.get(tool_use_id, {}),
+                tool_input=server_tool_uses[tool_use_id][1],
                 result=result,
+                tool_name=server_tool_uses[tool_use_id][0],
             )
             for result in web_search_results
             if isinstance(result, dict)
-            and result.get("type") == "web_search_tool_result"
             and isinstance((tool_use_id := result.get("tool_use_id")), str)
-            and tool_use_id in inputs
+            and tool_use_id in server_tool_uses
+            and result.get("type") == f"{server_tool_uses[tool_use_id][0]}_tool_result"
         ]
 
     def _build_provider_specific_fields(

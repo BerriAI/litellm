@@ -53,6 +53,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import (
+    HOSTED_WEB_TOOL_NAMES,
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
     build_web_search_call,
@@ -918,7 +919,7 @@ class ModelResponseIterator:
     def _web_search_call_snapshot(self) -> dict[str, object]:
         return dict(self._web_search_calls)
 
-    def _complete_web_search_call(self, result: dict[str, object]) -> None:
+    def _complete_web_search_call(self, result: dict[str, object], tool_name: str) -> None:
         tool_use_id: Final = result.get("tool_use_id")
         if not isinstance(tool_use_id, str) or tool_use_id not in self._web_search_calls:
             return
@@ -926,6 +927,7 @@ class ModelResponseIterator:
             tool_id=tool_use_id,
             tool_input=self._server_tool_inputs.get(tool_use_id, {}),
             result=result,
+            tool_name=tool_name,
         )
 
     def _build_code_interpreter_results(self) -> list:
@@ -1033,12 +1035,13 @@ class ModelResponseIterator:
                         self._current_server_tool_name = _stream_tool_name
                         tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
-                        if _stream_tool_name == "web_search":
+                        if _stream_tool_name in HOSTED_WEB_TOOL_NAMES:
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,
                                 {"content": []},
                                 status="in_progress",
+                                tool_name=_stream_tool_name,
                             )
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     # Include caller information if present (for programmatic tool calling)
@@ -1075,7 +1078,7 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # See: https://github.com/BerriAI/litellm/issues/17737
                         self.web_search_results.append(content_block_start["content_block"])
-                        self._complete_web_search_call(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"], "web_search")
                         provider_specific_fields["web_search_results"] = self.web_search_results
                         provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     elif content_type == "web_fetch_tool_result":
@@ -1083,7 +1086,9 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
                         self.web_search_results.append(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"], "web_fetch")
                         provider_specific_fields["web_search_results"] = self.web_search_results
+                        provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results

@@ -4952,6 +4952,79 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     assert convert(openai)["id"] == "call_tokyo"
 
 
+_FETCHED_URL: Final = "https://example.com/"
+_BLOCKED_URL: Final = "https://blocked.invalid/"
+_ANTHROPIC_WEB_FETCH_TURN: Final[tuple[dict[str, object], ...]] = (
+    {"type": "server_tool_use", "id": "srvtoolu_01Fetch", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_01Fetch",
+        "content": {
+            "type": "web_fetch_result",
+            "url": _FETCHED_URL,
+            "content": {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "Example"}},
+        },
+    },
+    {"type": "server_tool_use", "id": "srvtoolu_02Fetch", "name": "web_fetch", "input": {"url": _BLOCKED_URL}},
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_02Fetch",
+        "content": {"type": "web_fetch_tool_result_error", "error_code": "url_not_allowed"},
+    },
+    {"type": "text", "text": "The page is titled Example."},
+    {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+)
+
+
+def test_anthropic_web_fetch_is_a_hosted_open_page_call_on_responses() -> None:
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    anthropic_response: Final = {
+        "id": "msg_01Fetch",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": list(_ANTHROPIC_WEB_FETCH_TURN),
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 50, "server_tool_use": {"web_fetch_requests": 2}},
+    }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.json.return_value = anthropic_response
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    chat_response: Final = AnthropicConfig().transform_parsed_response(
+        completion_response=anthropic_response,
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Fetch two pages and check the weather in Paris.",
+        responses_api_request={
+            "tools": [
+                {"type": "web_fetch_20250910", "name": "web_fetch"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            ]
+        },
+        chat_completion_response=chat_response,
+    )
+
+    assert [
+        (item.id, item.status, item.action.model_dump()) for item in response.output if item.type == "web_search_call"
+    ] == [
+        ("ws_srvtoolu_01Fetch", "completed", {"type": "open_page", "url": _FETCHED_URL}),
+        ("ws_srvtoolu_02Fetch", "failed", {"type": "open_page", "url": _BLOCKED_URL}),
+    ]
+    assert [item.name for item in response.output if item.type == "function_call"] == ["get_weather"]
+
+
 class TestHostedWebSearchReplay:
     def test_emitted_hosted_search_output_round_trips_with_client_tool_result(self) -> None:
         search_result: Final = {

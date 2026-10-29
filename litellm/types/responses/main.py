@@ -3,7 +3,12 @@ from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
+from openai.types.responses.response_function_web_search import (
+    ActionOpenPage,
+    ActionSearch,
+    ActionSearchSource,
+    ResponseFunctionWebSearch,
+)
 from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import TypedDict
 
@@ -42,14 +47,11 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     phase: Phase = None
 
 
-def build_web_search_call(
-    tool_id: str,
-    tool_input: object,
-    result: object,
-    status: Literal["in_progress", "searching", "completed", "failed"] | None = None,
-) -> ResponseFunctionWebSearch:
+HOSTED_WEB_TOOL_NAMES: Final = frozenset({"web_search", "web_fetch"})
+
+
+def _web_search_action(tool_input: object, content: object) -> ActionSearch:
     query: Final = tool_input.get("query", "") if isinstance(tool_input, Mapping) else ""
-    content: Final = result.get("content") if isinstance(result, Mapping) else None
     result_items: Final = content if isinstance(content, Sequence) and not isinstance(content, (str, bytes)) else ()
     sources: Final = [
         ActionSearchSource(type="url", url=url)
@@ -58,17 +60,51 @@ def build_web_search_call(
         and item.get("type") == "web_search_result"
         and isinstance((url := item.get("url")), str)
     ]
-    failed: Final = isinstance(content, Mapping) and content.get("type") == "web_search_tool_result_error"
+    return ActionSearch(
+        type="search",
+        query=query if isinstance(query, str) else "",
+        queries=[query] if isinstance(query, str) and query else [],
+        sources=sources,
+    )
+
+
+def _web_fetch_action(tool_input: object) -> ActionOpenPage:
+    match tool_input:
+        case {"url": str() as url}:
+            return ActionOpenPage(type="open_page", url=url)
+        case _:
+            return ActionOpenPage(type="open_page", url=None)
+
+
+def _result_content(result: object) -> object:
+    match result:
+        case {"content": object() as content}:
+            return content
+        case _:
+            return None
+
+
+def _is_tool_result_error(content: object, tool_name: str) -> bool:
+    match content:
+        case {"type": str() as content_type}:
+            return content_type == f"{tool_name}_tool_result_error"
+        case _:
+            return False
+
+
+def build_web_search_call(
+    tool_id: str,
+    tool_input: object,
+    result: object,
+    status: Literal["in_progress", "searching", "completed", "failed"] | None = None,
+    tool_name: str = "web_search",
+) -> ResponseFunctionWebSearch:
+    content: Final = _result_content(result)
     return ResponseFunctionWebSearch(
         id=f"ws_{tool_id}",
         type="web_search_call",
-        status=status or ("failed" if failed else "completed"),
-        action={
-            "type": "search",
-            "query": query if isinstance(query, str) else "",
-            "queries": [query] if isinstance(query, str) and query else [],
-            "sources": sources,
-        },
+        status=status or ("failed" if _is_tool_result_error(content, tool_name) else "completed"),
+        action=_web_fetch_action(tool_input) if tool_name == "web_fetch" else _web_search_action(tool_input, content),
     )
 
 
