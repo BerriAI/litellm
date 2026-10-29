@@ -195,20 +195,35 @@ def test_handle_exception_on_proxy_sends_no_call_id_header_when_the_request_has_
     assert handle_exception_on_proxy(ValueError("provider boom")).headers == {}
 
 
-@pytest.mark.asyncio
-async def test_handle_exception_on_proxy_read_only_transaction_forces_writer_recreate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    prisma_client = MagicMock()
-    prisma_client.recreate_read_only_writer = AsyncMock(return_value=True)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-    exc = DataError(
+def _read_only_transaction_error() -> DataError:
+    return DataError(
         data={
             "user_facing_error": {
                 "message": 'PostgresError { code: "25006", message: "cannot execute UPDATE in a read-only transaction" }'
             }
         }
     )
+
+
+def _proxy_error_raised_from(cause: Exception) -> ProxyException:
+    try:
+        raise ProxyException(message="could not save", type="internal_server_error", param=None, code=500) from cause
+    except ProxyException as wrapped:
+        return wrapped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [_read_only_transaction_error(), _proxy_error_raised_from(_read_only_transaction_error())],
+    ids=["raw", "wrapped-in-proxy-exception"],
+)
+async def test_handle_exception_on_proxy_read_only_transaction_forces_writer_recreate(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    prisma_client = MagicMock()
+    prisma_client.recreate_read_only_writer = AsyncMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
 
     result = handle_exception_on_proxy(exc)
     await asyncio.sleep(0)

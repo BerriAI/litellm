@@ -9177,6 +9177,14 @@ def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | Non
     asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
 
 
+def _caused_by_read_only_transaction(error: object) -> bool:
+    return (
+        isinstance(error, BaseException)
+        and isinstance(error.__cause__, Exception)
+        and PrismaDBExceptionHandler.is_read_only_transaction_error(error.__cause__)
+    )
+
+
 def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
@@ -9184,7 +9192,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
     from fastapi import status
 
     verbose_proxy_logger.exception("Exception: %s", e)
-    if PrismaDBExceptionHandler.is_read_only_transaction_error(e):
+    if PrismaDBExceptionHandler.is_read_only_transaction_error(e) or _caused_by_read_only_transaction(e):
         from litellm.proxy.proxy_server import prisma_client
 
         _recreate_writer_on_read_only_transaction(prisma_client)

@@ -91,7 +91,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     validate_file_list_purpose,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
-    request_tags_from_metadata,
+    request_tags_from_request_data,
 )
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -235,6 +235,58 @@ def _proxy_llm_router() -> Router | None:
     import litellm.proxy.proxy_server as proxy_server_module
 
     return cast(Router | None, getattr(proxy_server_module, "llm_router", None))
+
+
+_UNSAVED_BATCH_CANCELLED_MESSAGE: Final = (
+    "LiteLLM could not save the batch, so it cancelled it at the provider. Retry the request."
+)
+_UNSAVED_BATCH_NOT_CANCELLED_MESSAGE: Final = (
+    "LiteLLM could not save the batch and could not cancel it at the provider, so it may still run and bill. "
+    "Ask your proxy admin to cancel it."
+)
+
+
+def _provider_batch_route(llm_router: Router, batch_id: str, model_id: str | None) -> tuple[str, str] | None:
+    encoded_model: Final = decode_model_from_file_id(batch_id)
+    if encoded_model is None:
+        return None if model_id is None else (model_id, batch_id)
+    deployment: Final = llm_router.get_credential_deployment(model_id=encoded_model)
+    deployment_id: Final = None if deployment is None else deployment.model_info.id
+    return None if deployment_id is None else (deployment_id, get_original_file_id(batch_id))
+
+
+async def _cancel_provider_batch(llm_router: Router, deployment_id: str, provider_batch_id: str) -> str | None:
+    try:
+        await llm_router.acancel_batch(model=deployment_id, batch_id=provider_batch_id)
+    except Exception as error:
+        return str(error)
+    return None
+
+
+async def _unsaved_batch_error(batch_id: str, model_id: str | None, error: Exception) -> ProxyException:
+    llm_router: Final = _proxy_llm_router()
+    route: Final = None if llm_router is None else _provider_batch_route(llm_router, batch_id, model_id)
+    cancel_failure: Final = (
+        "no deployment to send the cancel to"
+        if llm_router is None or route is None
+        else await _cancel_provider_batch(llm_router, *route)
+    )
+    deployment_id, provider_batch_id = route or (model_id, batch_id)
+    verbose_logger.error(
+        f"LiteLLM could not save batch {sanitize_for_log(provider_batch_id)} of deployment "
+        f"{sanitize_for_log(deployment_id)} after the provider created it: {sanitize_for_log(error)}. "
+        + (
+            "It cancelled the batch at the provider."
+            if cancel_failure is None
+            else f"It could not cancel the batch at the provider, so cancel it there: {sanitize_for_log(cancel_failure)}"
+        )
+    )
+    return ProxyException(
+        message=_UNSAVED_BATCH_CANCELLED_MESSAGE if cancel_failure is None else _UNSAVED_BATCH_NOT_CANCELLED_MESSAGE,
+        type="internal_server_error",
+        param=None,
+        code=500,
+    )
 
 
 def _provider_file_retrieve_credentials(
@@ -2105,6 +2157,75 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             raise ValueError(f"Unified id does not contain {marker!r}: {file_id[:80]!r}")
         return file_id.split(marker, 1)[1].split(";")[0]
 
+    async def _store_batch(
+        self,
+        request_tags: tuple[str, ...] | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: LiteLLMBatch,
+        response_hidden_params: Mapping[str, object],
+    ) -> None:
+        unified_file_id = response_hidden_params.get("unified_file_id")
+        unified_batch_id = response_hidden_params.get("unified_batch_id")
+        is_batch_create: Final = response_hidden_params.get(BATCH_CREATE_HIDDEN_PARAM) is True
+        model_id = cast(str | None, response_hidden_params.get("model_id"))
+        model_name = cast(str | None, response_hidden_params.get("model_name"))
+
+        resolved_model_name = resolve_managed_output_file_model_name(
+            unified_input_file_id=unified_file_id if isinstance(unified_file_id, str) else response.input_file_id,
+            fallback_model_name=model_name,
+        )
+        original_response_id = response.id
+
+        if (unified_batch_id or unified_file_id) and model_id:
+            response.id = self.get_unified_batch_id(batch_id=response.id, model_id=model_id)
+
+            # Handle both output_file_id and error_file_id
+            for file_attr in ["output_file_id", "error_file_id"]:
+                file_id_value: str | None = getattr(response, file_attr, None)
+                if file_id_value and model_id:
+                    decoded_output_file_id = _is_base64_encoded_unified_file_id(file_id_value)
+                    if decoded_output_file_id and "llm_output_file_id," in decoded_output_file_id:
+                        provider_file_id = self.get_output_file_id_from_unified_file_id(decoded_output_file_id)
+                        unified_file_id = file_id_value
+                    elif decoded_output_file_id:
+                        verbose_logger.warning(
+                            f"Skipping {file_attr}={file_id_value!r}: unified id is not a managed file output id"
+                        )
+                        continue
+                    else:
+                        provider_file_id = file_id_value
+                        unified_file_id = self.get_unified_output_file_id(
+                            output_file_id=provider_file_id,
+                            model_id=model_id,
+                            model_name=resolved_model_name,
+                        )
+                        setattr(response, file_attr, unified_file_id)
+
+                    await self.store_batch_output_file(
+                        unified_file_id=unified_file_id,
+                        provider_file_id=provider_file_id,
+                        model_id=model_id,
+                        model_name=resolved_model_name,
+                        owner=user_api_key_dict,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    )
+        await self.store_unified_object_id(
+            unified_object_id=response.id,
+            file_object=response,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            model_object_id=original_response_id,
+            file_purpose="batch",
+            user_api_key_dict=user_api_key_dict,
+            request_tags=request_tags,
+            persist_attribution=is_batch_create,
+            create_if_missing=is_batch_create,
+        )
+        if not is_batch_create:
+            await self.store_batch_output_file_ownership(
+                response=response,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> LLMResponseTypes:
@@ -2112,92 +2233,40 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             decoded_batch_id: Final = _is_base64_encoded_unified_file_id(response.id)
             if decoded_batch_id and is_litellm_executed_batch(decoded_batch_id):
                 return response
-            ## Check if unified_file_id is in the response
             response_hidden_params: Final = cast(dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR))
-            unified_file_id = response_hidden_params.get("unified_file_id")
-            unified_batch_id = response_hidden_params.get("unified_batch_id")
             is_batch_create: Final = response_hidden_params.get(BATCH_CREATE_HIDDEN_PARAM) is True
+            request_tags: Final = request_tags_from_request_data(data)
+            if not is_batch_create:
+                await self._store_batch(request_tags, user_api_key_dict, response, response_hidden_params)
+                return response
             model_id = cast(Optional[str], response_hidden_params.get("model_id"))
             model_name = cast(Optional[str], response_hidden_params.get("model_name"))
+            provider_batch_id: Final = response.id
+            try:
+                await self._store_batch(request_tags, user_api_key_dict, response, response_hidden_params)
+            except Exception as error:
+                raise await _unsaved_batch_error(provider_batch_id, model_id, error) from error
 
-            resolved_model_name = resolve_managed_output_file_model_name(
-                unified_input_file_id=unified_file_id if isinstance(unified_file_id, str) else response.input_file_id,
-                fallback_model_name=model_name,
-            )
-            original_response_id = response.id
-
-            if (unified_batch_id or unified_file_id) and model_id:
-                response.id = self.get_unified_batch_id(batch_id=response.id, model_id=model_id)
-
-                # Handle both output_file_id and error_file_id
-                for file_attr in ["output_file_id", "error_file_id"]:
-                    file_id_value: str | None = getattr(response, file_attr, None)
-                    if file_id_value and model_id:
-                        decoded_output_file_id = _is_base64_encoded_unified_file_id(file_id_value)
-                        if decoded_output_file_id and "llm_output_file_id," in decoded_output_file_id:
-                            provider_file_id = self.get_output_file_id_from_unified_file_id(decoded_output_file_id)
-                            unified_file_id = file_id_value
-                        elif decoded_output_file_id:
-                            verbose_logger.warning(
-                                f"Skipping {file_attr}={file_id_value!r}: unified id is not a managed file output id"
-                            )
-                            continue
-                        else:
-                            provider_file_id = file_id_value
-                            unified_file_id = self.get_unified_output_file_id(
-                                output_file_id=provider_file_id,
-                                model_id=model_id,
-                                model_name=resolved_model_name,
-                            )
-                            setattr(response, file_attr, unified_file_id)
-
-                        await self.store_batch_output_file(
-                            unified_file_id=unified_file_id,
-                            provider_file_id=provider_file_id,
-                            model_id=model_id,
-                            model_name=resolved_model_name,
-                            owner=user_api_key_dict,
-                            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            prom_logger = self._get_prometheus_logger()
+            if prom_logger:
+                batch_provider = ""
+                if model_name:
+                    try:
+                        from litellm.litellm_core_utils.get_llm_provider_logic import (
+                            get_llm_provider,
                         )
-            request_metadata: Final = data.get("litellm_metadata")
-            await self.store_unified_object_id(
-                unified_object_id=response.id,
-                file_object=response,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                model_object_id=original_response_id,
-                file_purpose="batch",
-                user_api_key_dict=user_api_key_dict,
-                request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
-                persist_attribution=is_batch_create,
-                create_if_missing=is_batch_create,
-            )
-            if not is_batch_create:
-                await self.store_batch_output_file_ownership(
-                    response=response,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+
+                        _, batch_provider, _, _ = get_llm_provider(model=model_name)
+                    except Exception:
+                        if "/" in model_name:
+                            batch_provider = model_name.split("/")[0]
+                prom_logger.record_managed_batch_created(
+                    model=model_name or "",
+                    api_provider=batch_provider,
+                    user=user_api_key_dict.user_id or "",
+                    user_email=getattr(user_api_key_dict, "user_email", None) or "",
+                    api_key_alias=user_api_key_dict.key_alias or "",
                 )
-
-            if is_batch_create:
-                prom_logger = self._get_prometheus_logger()
-                if prom_logger:
-                    batch_provider = ""
-                    if model_name:
-                        try:
-                            from litellm.litellm_core_utils.get_llm_provider_logic import (
-                                get_llm_provider,
-                            )
-
-                            _, batch_provider, _, _ = get_llm_provider(model=model_name)
-                        except Exception:
-                            if "/" in model_name:
-                                batch_provider = model_name.split("/")[0]
-                    prom_logger.record_managed_batch_created(
-                        model=model_name or "",
-                        api_provider=batch_provider,
-                        user=user_api_key_dict.user_id or "",
-                        user_email=getattr(user_api_key_dict, "user_email", None) or "",
-                        api_key_alias=user_api_key_dict.key_alias or "",
-                    )
 
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response

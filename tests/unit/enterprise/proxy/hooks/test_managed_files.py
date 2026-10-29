@@ -5693,6 +5693,162 @@ async def test_post_call_batch_create_stores_ownership_row(batch_id):
     prisma_client.db.litellm_managedobjecttable.update_many.assert_not_awaited()
 
 
+_OTHER_API_BASE: Final = "https://other-provider.example.com/v1"
+_BATCH_DEPLOYMENT_ID: Final = "batch-deployment-123"
+_UNSAVED_BATCH_DB_ERROR: Final = "simulated DB write failure on LiteLLM_ManagedObjectTable"
+
+
+def _two_deployment_batch_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-team-alias",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test-key", "api_base": _OPENAI_API_BASE},
+                "model_info": {"id": _BATCH_DEPLOYMENT_ID},
+            },
+            {
+                "model_name": "other-batch-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-other-key", "api_base": _OTHER_API_BASE},
+                "model_info": {"id": "other-deployment-456"},
+            },
+        ],
+    )
+
+
+def _managed_files_whose_batch_writes_fail() -> PROXY_LiteLLMManagedFiles:
+    from prisma.errors import DataError
+
+    prisma_client: Final = AsyncMock()
+    db_error: Final = DataError(data={"user_facing_error": {"message": _UNSAVED_BATCH_DB_ERROR}})
+    prisma_client.db.litellm_managedobjecttable.upsert.side_effect = db_error
+    prisma_client.db.litellm_managedobjecttable.update_many.side_effect = db_error
+    return PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+
+
+def _created_batch(batch_id: str, hidden_params: Mapping[str, object]) -> "LiteLLMBatch":
+    batch: Final = _batch_response(batch_id, is_create=True)
+    batch._hidden_params.update(hidden_params)
+    return batch
+
+
+def _provider_batch_cancel_route(status_code: int) -> respx.Route:
+    return respx.post(f"{_OPENAI_API_BASE}/batches/{RAW_PROVIDER_BATCH_ID}/cancel").respond(
+        status_code,
+        json=(
+            {
+                "id": RAW_PROVIDER_BATCH_ID,
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-input789",
+                "completion_window": "24h",
+                "status": "cancelling",
+                "created_at": 1700000000,
+            }
+            if status_code == 200
+            else {"error": {"message": "Batch cannot be cancelled", "type": "invalid_request_error"}}
+        ),
+    )
+
+
+async def _create_batch_through_hook(
+    llm_router: object, batch_id: str, hidden_params: Mapping[str, object]
+) -> object:
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    with patch.object(proxy_server_module, "llm_router", llm_router):
+        return await _managed_files_whose_batch_writes_fail().async_post_call_success_hook(
+            data={"input_file_id": "file-input789", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a"),
+            response=_created_batch(batch_id, hidden_params),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@pytest.mark.parametrize(
+    ("batch_id", "hidden_params"),
+    [
+        (RAW_PROVIDER_BATCH_ID, {"unified_file_id": "managed-input-file", "model_id": _BATCH_DEPLOYMENT_ID}),
+        (MODEL_ENCODED_BATCH_ID, {}),
+    ],
+    ids=["managed-input-file", "model-encoded-id"],
+)
+@respx.mock
+async def test_post_call_batch_create_cancels_the_provider_batch_when_its_row_cannot_be_saved(
+    batch_id: str, hidden_params: Mapping[str, object]
+):
+    from litellm.proxy._types import ProxyException
+
+    cancel_route: Final = _provider_batch_cancel_route(200)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _create_batch_through_hook(_two_deployment_batch_router(), batch_id, hidden_params)
+
+    assert cancel_route.call_count == 1
+    assert (exc_info.value.code, exc_info.value.message) == (
+        "500",
+        "LiteLLM could not save the batch, so it cancelled it at the provider. Retry the request.",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@pytest.mark.parametrize(
+    ("has_router", "hidden_params", "expected_cancel_calls"),
+    [
+        (True, {"unified_file_id": "managed-input-file", "model_id": _BATCH_DEPLOYMENT_ID}, 1),
+        (True, {}, 0),
+        (False, {"unified_file_id": "managed-input-file", "model_id": _BATCH_DEPLOYMENT_ID}, 0),
+    ],
+    ids=["provider-rejects-cancel", "no-deployment-for-batch", "no-router"],
+)
+@respx.mock
+async def test_post_call_batch_create_says_the_batch_may_still_run_when_it_cannot_be_cancelled(
+    has_router: bool, hidden_params: Mapping[str, object], expected_cancel_calls: int
+):
+    from litellm.proxy._types import ProxyException
+
+    cancel_route: Final = _provider_batch_cancel_route(400)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _create_batch_through_hook(
+            _two_deployment_batch_router() if has_router else None, RAW_PROVIDER_BATCH_ID, hidden_params
+        )
+
+    assert cancel_route.call_count == expected_cancel_calls
+    assert (exc_info.value.code, exc_info.value.message) == (
+        "500",
+        "LiteLLM could not save the batch and could not cancel it at the provider, so it may still run and bill. "
+        "Ask your proxy admin to cancel it.",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@respx.mock
+async def test_post_call_batch_retrieve_write_failure_propagates_without_cancelling():
+    import litellm.proxy.proxy_server as proxy_server_module
+    from prisma.errors import DataError
+
+    cancel_route: Final = _provider_batch_cancel_route(200)
+    retrieved_batch: Final = _batch_response(RAW_PROVIDER_BATCH_ID)
+    retrieved_batch._hidden_params.update({"unified_batch_id": "managed-batch", "model_id": _BATCH_DEPLOYMENT_ID})
+
+    with (
+        patch.object(proxy_server_module, "llm_router", _two_deployment_batch_router()),
+        pytest.raises(DataError, match=_UNSAVED_BATCH_DB_ERROR),
+    ):
+        await _managed_files_whose_batch_writes_fail().async_post_call_success_hook(
+            data={"batch_id": "managed-batch"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a"),
+            response=retrieved_batch,
+        )
+
+    assert cancel_route.call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_post_call_batch_sync_does_not_claim_ownership():
     """
