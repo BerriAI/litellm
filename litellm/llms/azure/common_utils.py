@@ -5,7 +5,6 @@ import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
-from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
 from urllib.parse import SplitResult, parse_qsl, urlsplit, urlunsplit
@@ -19,15 +18,18 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
+    single_flight_bearer_token_provider,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.secret_managers.get_azure_ad_token_provider import AzureCredentialType
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
@@ -51,6 +53,17 @@ class _AsyncAzureClientParams(TypedDict, total=False, extra_items=object):
 
 
 _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AsyncAzureClientParams)
+
+
+@with_config(ConfigDict(extra="allow"))
+class _AzureSdkClientParams(TypedDict, total=False, extra_items=object):
+    api_key: ReadOnly[str | None]
+    azure_ad_token: ReadOnly[str | None]
+    azure_ad_token_provider: ReadOnly[Callable[[], str] | None]
+    default_headers: ReadOnly[Mapping[str, str]]
+
+
+_AZURE_SDK_CLIENT_PARAMS_ADAPTER: Final = TypeAdapter(_AzureSdkClientParams)
 
 
 class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
@@ -95,7 +108,7 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_entra_id_token_provider(
     tenant_id: str,
     client_id: str,
@@ -108,31 +121,36 @@ def _cached_entra_id_token_provider(
     to expiry, so reusing the provider keeps one AAD round trip per token lifetime instead of one
     per request.
     """
-    from azure.identity import ClientSecretCredential, get_bearer_token_provider
+    from azure.identity import ClientSecretCredential
 
-    return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
+    return single_flight_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_username_password_token_provider(
     client_id: str,
     azure_username: str,
     azure_password: str,
     scope: str,
 ) -> Callable[[], str]:
-    from azure.identity import UsernamePasswordCredential, get_bearer_token_provider
+    from azure.identity import UsernamePasswordCredential
 
     credential: Final = UsernamePasswordCredential(
         client_id=client_id,
         username=azure_username,
         password=azure_password,
     )
-    return get_bearer_token_provider(credential, scope)
+    return single_flight_bearer_token_provider(credential, scope)
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
+
+
+@single_flight_lru_cache
+def _cached_default_azure_credential_provider(scope: str) -> Callable[[], str]:
+    return get_azure_ad_token_provider(azure_scope=scope, azure_credential=AzureCredentialType.DefaultAzureCredential)
 
 
 def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
@@ -241,6 +259,58 @@ def get_azure_ad_token_from_username_password(
     return token_provider
 
 
+@single_flight_lru_cache
+def _oidc_token_exchange(cache_key: str) -> SingleFlight[str]:
+    return SingleFlight()
+
+
+def _cached_oidc_token(cache_key: str) -> str | None:
+    cached: Final = azure_ad_cache.get_cache(cache_key)
+    return cached if isinstance(cached, str) else None
+
+
+def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: str, oidc_token: str) -> str:
+    cached_access_token: Final = _cached_oidc_token(cache_key)
+    if cached_access_token is not None:
+        return cached_access_token
+
+    with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
+        req_token: Final = client.post(
+            token_url,
+            data={
+                "client_id": client_id,
+                "grant_type": "client_credentials",
+                "scope": scope,
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": oidc_token,
+            },
+        )
+
+    if req_token.status_code != 200:
+        raise AzureOpenAIError(
+            status_code=req_token.status_code,
+            message=req_token.text,
+        )
+
+    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
+    azure_ad_token_access_token: Final = azure_ad_token_json.get("access_token", None)
+    azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
+
+    if azure_ad_token_access_token is None:
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
+
+    if azure_ad_token_expires_in is None:
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
+
+    azure_ad_cache.set_cache(
+        key=cache_key,
+        value=azure_ad_token_access_token,
+        ttl=azure_ad_token_expires_in,
+    )
+
+    return azure_ad_token_access_token
+
+
 def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
     azure_client_id: str | None = None,
@@ -283,53 +353,28 @@ def get_azure_ad_token_from_oidc(
             "azure_client_id": azure_client_id,
             "azure_tenant_id": azure_tenant_id,
             "azure_authority_host": azure_authority_host,
+            "scope": scope,
             "oidc_token": oidc_token,
         }
     )
 
-    azure_ad_token_access_token = azure_ad_cache.get_cache(azure_ad_token_cache_key)
-    if azure_ad_token_access_token is not None:
-        return azure_ad_token_access_token
+    cached_access_token: Final = _cached_oidc_token(azure_ad_token_cache_key)
+    if cached_access_token is not None:
+        return cached_access_token
 
-    with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
-        req_token: Final = client.post(
-            f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
-            data={
-                "client_id": azure_client_id,
-                "grant_type": "client_credentials",
-                "scope": scope,
-                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                "client_assertion": oidc_token,
-            },
+    return _oidc_token_exchange(azure_ad_token_cache_key).run(
+        lambda: _exchange_oidc_token(
+            azure_ad_token_cache_key,
+            token_url=f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
+            client_id=azure_client_id,
+            scope=scope,
+            oidc_token=oidc_token,
         )
-
-    if req_token.status_code != 200:
-        raise AzureOpenAIError(
-            status_code=req_token.status_code,
-            message=req_token.text,
-        )
-
-    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
-    azure_ad_token_access_token = azure_ad_token_json.get("access_token", None)
-    azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
-
-    if azure_ad_token_access_token is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
-
-    if azure_ad_token_expires_in is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
-
-    azure_ad_cache.set_cache(
-        key=azure_ad_token_cache_key,
-        value=azure_ad_token_access_token,
-        ttl=azure_ad_token_expires_in,
     )
-
-    return azure_ad_token_access_token
 
 
 _DEPLOYMENT_OPERATION_PATH: Final = re.compile(
-    r"(?P<deployment>.*/openai/deployments/[^/]+)"
+    r"(?P<deployment>.*/openai/deployments/[^/]+(?:/extensions)?)"
     r"/(?:chat/completions|completions|embeddings|audio/(?:transcriptions|translations|speech)|images/(?:generations|edits))/?"
 )
 
@@ -341,7 +386,9 @@ def _azure_deployment_base_url(deployment_url: SplitResult) -> str:
 
 
 def _azure_deployment_extra_query(deployment_url: SplitResult) -> Mapping[str, str]:
-    return {name: value for name, value in parse_qsl(deployment_url.query) if name != "api-version"}
+    return {
+        name: value for name, value in parse_qsl(deployment_url.query, keep_blank_values=True) if name != "api-version"
+    }
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: Mapping[str, object]):
@@ -477,6 +524,25 @@ _AZURE_AUTH_HEADER_NAMES: Final = frozenset(("api-key", "authorization"))
 _REDACTED_AZURE_HEADER_VALUE: Final = "***REDACTED***"
 
 
+_AZURE_SDK_AUTH_PARAMS: Final = ("azure_ad_token", "azure_ad_token_provider", "api_key")
+
+
+def with_one_azure_sdk_credential(azure_client_params: Mapping[str, object]) -> _AzureSdkClientParams:
+    without_auth: Final = {
+        name: value for name, value in azure_client_params.items() if name not in _AZURE_SDK_AUTH_PARAMS
+    }
+    chosen: Final = next(
+        (name for name in _AZURE_SDK_AUTH_PARAMS[:-1] if azure_client_params.get(name) is not None), "api_key"
+    )
+    credential: Final = azure_client_params.get(chosen)
+    bearer_for_api_key: Final = (
+        {"default_headers": {"Authorization": f"Bearer {credential}"}}
+        if chosen == "api_key" and isinstance(credential, str) and credential
+        else {}
+    )
+    return _AZURE_SDK_CLIENT_PARAMS_ADAPTER.validate_python({**without_auth, chosen: credential, **bearer_for_api_key})
+
+
 def _resolve_azure_ad_token(azure_client_params: Mapping[str, object]) -> str | None:
     azure_ad_token: Final = azure_client_params.get("azure_ad_token")
     if isinstance(azure_ad_token, str) and azure_ad_token:
@@ -522,17 +588,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         Returns:
             Token provider callable if DefaultAzureCredential is enabled and available, None otherwise
         """
-        from litellm.types.secret_managers.get_azure_ad_token_provider import (
-            AzureCredentialType,
-        )
-
         verbose_logger.debug("Attempting to use DefaultAzureCredential for Azure Auth")
 
         try:
-            azure_ad_token_provider: Final = get_azure_ad_token_provider(
-                azure_scope=scope,
-                azure_credential=AzureCredentialType.DefaultAzureCredential,
-            )
+            azure_ad_token_provider: Final = _cached_default_azure_credential_provider(scope)
             verbose_logger.debug("Successfully obtained Azure AD token provider using DefaultAzureCredential")
             return azure_ad_token_provider
         except Exception as e:
@@ -655,7 +714,9 @@ class BaseAzureLLM(BaseOpenAILLM):
             # Traditional Azure API uses AzureOpenAI client
             if _is_async is True:
                 async_azure_client_params: Final[_AsyncAzureClientParams] = (
-                    _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER.validate_python(azure_client_params)
+                    _ASYNC_AZURE_CLIENT_PARAMS_ADAPTER.validate_python(
+                        with_one_azure_sdk_credential(azure_client_params)
+                    )
                 )
                 async_token_provider_candidate: Final = async_azure_client_params.get("azure_ad_token_provider")
                 async_azure_client_params_with_threaded_provider: Final[_AsyncAzureClientParams] = (
@@ -668,7 +729,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 )
                 openai_client = AsyncAzureOpenAI(**async_azure_client_params_with_threaded_provider)
             else:
-                openai_client = AzureOpenAI(**azure_client_params)
+                openai_client = AzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
 
         # save client in-memory cache
         self.set_cached_openai_client(
@@ -828,9 +889,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
             if acompletion is True:
-                client = AsyncAzureOpenAI(**azure_client_params)
+                client = AsyncAzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
             else:
-                client = AzureOpenAI(**azure_client_params)
+                client = AzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
         return client
 
     @staticmethod

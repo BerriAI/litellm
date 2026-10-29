@@ -152,8 +152,8 @@ async fn failed_or_missing_reads_are_not_cached(
             assert!(matches!(result, Err(Error::MissingPayload)));
         }
         ExpectedReadFailure::Base64 => assert!(matches!(result, Err(Error::Base64(_)))),
-        ExpectedReadFailure::Utf8 => assert!(matches!(result, Err(Error::Utf8))),
-        ExpectedReadFailure::Checksum => assert!(matches!(result, Err(Error::Checksum))),
+        ExpectedReadFailure::Utf8 => assert!(matches!(result, Err(Error::Utf8(_)))),
+        ExpectedReadFailure::Checksum => assert!(matches!(result, Err(Error::Checksum(None)))),
     }
     drop(failing);
     Mock::given(path(
@@ -245,7 +245,7 @@ fn google_manager_rejects_invalid_refresh_intervals(#[case] variable: &'static s
 
     assert!(matches!(
         GoogleSecretManager::new(litellm_http::Client::for_test(), environment, true),
-        Err(Error::RefreshInterval)
+        Err(Error::RefreshInterval(_))
     ));
 }
 

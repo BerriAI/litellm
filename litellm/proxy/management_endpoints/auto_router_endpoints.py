@@ -49,6 +49,8 @@ from litellm.proxy.management_endpoints.common_daily_activity import daily_activ
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
+    auto_router_environment_reference_error,
+    raise_auto_router_environment_reference_error,
     validate_member_auto_router_config,
 )
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
@@ -229,9 +231,12 @@ def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTa
     return _ShadowEvalAttemptRepository(prisma_client).table
 
 
+_RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(strict=True))
+
+
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
     async with db_span("auto_router_report_query", sql_relation(query)):
-        return await prisma_client.db.query_raw(query, *args)
+        return _RAW_ROWS.validate_python(await prisma_client.db.query_raw(query, *args))
 
 
 async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
@@ -402,6 +407,10 @@ async def validate_complexity_router_config(
     """
     member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
+    raise_auto_router_environment_reference_error(
+        auto_router_environment_reference_error(data.complexity_router_config, user_api_key_dict)
+    )
+
     from litellm.router_utils.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
@@ -560,6 +569,12 @@ async def preview_auto_router_routing(
             detail={"error": CommonProxyErrors.no_llm_router.value},
         )
     resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
+    if data.saved_model_id is None:
+        raise_auto_router_environment_reference_error(
+            auto_router_environment_reference_error(
+                data.complexity_router_config.model_dump(exclude_none=True), user_api_key_dict
+            )
+        )
     actor: Final = (
         await _authorize_member_dry_run_config(
             config=resolved.complexity_router_config.model_dump(exclude_none=True),

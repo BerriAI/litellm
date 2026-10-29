@@ -13,7 +13,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import service_target
@@ -356,7 +356,7 @@ def _should_run_cooldown_logic(
         )
         return False
 
-    if isinstance(original_exception, litellm.MalformedRequestFieldError):
+    if isinstance(original_exception, (litellm.MalformedRequestFieldError, litellm.UnsupportedEndpointError)):
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )
@@ -417,17 +417,35 @@ def _should_run_cooldown_logic(
     return True
 
 
-_FALLBACK_ENTRIES_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, list[str | Mapping[str, object]]] | str, ...])
+_FALLBACK_ENTRIES_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_FALLBACK_ENTRY_ADAPTER: Final = TypeAdapter(Mapping[str, list[str | Mapping[str, object]] | str])
 
 
 def _fallback_target_name(target: str | Mapping[str, object]) -> str:
     return target if isinstance(target, str) else str(target.get("model", ""))
 
 
+def _fallback_target_names(
+    targets: Sequence[str | Mapping[str, object]] | str,
+) -> list[str]:  # mutable-ok: mirrors get_fallback_model_group's fallbacks shape
+    return [targets] if isinstance(targets, str) else [_fallback_target_name(target) for target in targets]
+
+
 def _fallback_chain_names(
-    entry: Mapping[str, Sequence[str | Mapping[str, object]]],
-) -> Mapping[str, list[str]]:  # mutable-ok: mirrors get_fallback_model_group's fallbacks shape
-    return {key: [_fallback_target_name(target) for target in targets] for key, targets in entry.items()}
+    entry: object,
+) -> Mapping[str, list[str]] | None:  # mutable-ok: mirrors get_fallback_model_group's fallbacks shape
+    try:
+        validated: Final = _FALLBACK_ENTRY_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+    return {key: _fallback_target_names(targets) for key, targets in validated.items()}
+
+
+def _fallback_entries(configured: object) -> tuple[object, ...]:
+    try:
+        return _FALLBACK_ENTRIES_ADAPTER.validate_python(configured)
+    except ValidationError:
+        return ()
 
 
 def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_group: str | None) -> bool:
@@ -437,9 +455,7 @@ def _has_fallback_group(litellm_router_instance: LitellmRouter, requested_model_
     if requested_model_group is None or not configured:
         return False
     chains: Final = tuple(
-        _fallback_chain_names(entry)
-        for entry in _FALLBACK_ENTRIES_ADAPTER.validate_python(configured)
-        if isinstance(entry, Mapping)
+        chain for chain in map(_fallback_chain_names, _fallback_entries(configured)) if chain is not None
     )
     fallback_group, _ = get_fallback_model_group(fallbacks=chains, model_group=requested_model_group)
     return bool(fallback_group)
