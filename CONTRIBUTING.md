@@ -8,6 +8,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
 - [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+- [ ] **Prove it works end to end** - If your change affects what the proxy or SDK does, paste the commands you ran against a live proxy and their output in the PR - [see details](#proving-your-change-works-end-to-end)
 
 #### Proxy (Backend) PRs
 
@@ -247,6 +248,41 @@ If `make test-unit` fails:
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path
 - **Update documentation**: If you change APIs, update docs
+
+## Proving Your Change Works End to End
+
+Tests are required, but they do not prove that your change works for a user. A PR that changes what the proxy or SDK does shows a real run in its "Screenshots / Proof of Fix" section, meaning the exact commands you sent to a live proxy and the output that came back, against real provider APIs and not mocks. `pytest` output does not count as proof, because a passing test only shows that the code does what its mocks expect. A PR that changes only docs or CI shows the rendered page or the CI run instead
+
+A good proof looks like this:
+
+1. Install the proxy dependencies with `make install-proxy-dev`, then start the proxy from your branch with a config that has the model you changed, `uv run litellm --config your_config.yaml --detailed_debug`
+2. Send the request a user would send with `curl`, and paste both the command and the response. When cost or routing is involved, include the response headers, since `x-litellm-response-cost` is what the user sees
+3. For a bug fix, do this twice, once at the merge base with BerriAI/litellm's main (`git merge-base origin/main HEAD`, with your remote for BerriAI/litellm in place of `origin` in a fork clone) to show the bug and once at your branch's latest commit to show the fix. Name both commit hashes
+4. If your change is reachable from more than one endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`), show each one
+5. If the request can stream, show a `"stream": true` run too, because streaming builds usage and cost on a different path. A stream sends its headers before its usage exists, so show the `usage.cost` on the last chunk, which `/v1/chat/completions` sends when the request has `"stream_options": {"include_usage": true}` and other endpoints send with `include_cost_in_streaming_usage: true` under `litellm_settings`, or, when the proxy has a database, the request's row on the Admin UI's Logs page or `GET /spend/logs`
+6. For UI changes, add before and after screenshots and name the page
+7. If users reach your change through a coding tool such as Claude Code or Codex, drive that tool the way a user does and add before and after screenshots of it, because a `curl` or a headless run alone does not show what the user sees
+
+```bash
+curl -sD - http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "your-model", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+When the provider reports its own usage or spend numbers, compare the proxy's numbers against them in the proof
+
+## Contributing an LLM Provider Integration
+
+Provider work (a new provider, a new parameter, a new usage or cost field) is the most common kind of contribution, and it is where PRs get reworked most often. Follow these rules
+
+**Find the existing machinery before you add plumbing.** LiteLLM already has generic paths that move data between the endpoints, the provider transformations, and cost tracking. A second, hand-rolled path for the same data is a common reason a provider PR gets rewritten before merge. [`ARCHITECTURE.md`](ARCHITECTURE.md) shows where the layers live, and the decision records in [`docs/adrs/`](docs/adrs/AGENTS.md) explain why they are shaped that way. For example, [the ADR on provider usage fields](docs/adrs/adr_001_provider_usage_fields_ride_as_usage_extras.md) covers how provider-specific usage fields reach cost tracking. If you cannot find a mechanism for what you need, say so in the PR or ask in [#pr-review on Slack](https://join.slack.com/t/litellmossslack/shared_invite/zt-3o7nkuyfr-p_kbNJj8taRfXGgQI1~YyA) before you build one
+
+**Bill a new provider usage field from the usage object.** Leave the field on the usage object as an extra and read it in that provider's `cost_calculator.py`. A provider without one gets a new `cost_calculator.py` and an arm for it in `cost_per_token` (`litellm/cost_calculator.py`), which picks the calculator by provider. If the provider's transform builds `Usage` from named fields, as the Anthropic, Gemini, and Bedrock Converse ones do, pass the new field there too. Streamed requests rebuild usage in `ChunkProcessor.calculate_usage` (`litellm/litellm_core_utils/streaming_chunk_builder_utils.py`), which does not copy extras yet the way the Responses-to-chat bridge does (minus a short exclusion list), so until it does, bill the field on streams by naming it there, as Anthropic's `inference_geo` is. A provider that reports its own charge for the request, as OpenRouter does in `usage.cost`, is billed at that charge from `_hidden_params` before any calculator runs, unless the deployment sets its own prices. When the field counts a built-in tool such as web search, add the provider to `get_cost_for_web_search_request` in `litellm/llms/__init__.py`, and add a gate to `litellm/litellm_core_utils/llm_cost_calc/tool_call_cost_tracking.py` only when no existing gate fires. Then show the field's cost in your proof on every endpoint it reaches, streaming included
+
+**Do not change what a caller sees to make internals easier.** Each endpoint keeps the schema of the API it emulates. A `/v1/responses` caller gets `input_tokens` and a `/v1/chat/completions` caller gets `prompt_tokens`, whatever the provider sent and whatever cost tracking needs. A provider usage field that shows up as an extra key is fine, since it only adds a key, but renaming, removing, or reshaping a key the endpoint defines is not. Reshaping a public response to feed an internal consumer breaks every user of that endpoint
+
+If your change makes an architecture decision, such as a new cross-cutting mechanism or a deliberate difference from a provider's API shape, add an ADR to [`docs/adrs/`](docs/adrs/AGENTS.md) in the same PR
 
 ## Building and Running Locally
 

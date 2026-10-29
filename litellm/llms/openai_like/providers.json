@@ -58,6 +58,12 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "zerogpu": {
+    "base_url": "https://api.zerogpu.ai/v1",
+    "api_key_env": "ZEROGPU_API_KEY",
+    "api_base_env": "ZEROGPU_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "chutes": {
     "base_url": "https://llm.chutes.ai/v1/",
     "api_key_env": "CHUTES_API_KEY",
@@ -106,6 +112,12 @@
     "base_url": "https://aihubmix.com/v1",
     "api_key_env": "AIHUBMIX_API_KEY",
     "api_base_env": "AIHUBMIX_API_BASE"
+  },
+  "aiand": {
+    "base_url": "https://api.aiand.com/v1",
+    "api_key_env": "AIAND_API_KEY",
+    "api_base_env": "AIAND_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
   "crusoe": {
     "base_url": "https://api.inference.crusoecloud.com/v1",
@@ -257,5 +269,21 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "streamlake": {
+    "base_url": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+    "api_key_env": "STREAMLAKE_API_KEY",
+    "api_base_env": "STREAMLAKE_API_BASE",
+    "param_mappings": {
+      "max_tokens": "max_completion_tokens"
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "special_handling": {
+      "preserve_cache_control": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
