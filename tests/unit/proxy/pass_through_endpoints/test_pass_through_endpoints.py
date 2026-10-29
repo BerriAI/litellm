@@ -2979,6 +2979,56 @@ async def test_update_pass_through_endpoint_preserves_auth_false():
 
 
 @pytest.mark.asyncio
+async def test_update_pass_through_endpoint_keeps_serving_the_old_route_until_the_new_one_is_registered():
+    from litellm.proxy._types import ConfigFieldInfo, PassThroughGenericEndpoint, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        update_pass_through_endpoints,
+    )
+
+    def registered_target() -> object:
+        registered = InitPassThroughEndpointHelpers.get_registered_pass_through_route(route="/operator") or {}
+        return registered.get("passthrough_params", {}).get("target")
+
+    targets_during_db_write: list[object] = []
+
+    async def record_registered_target(**_: object) -> None:
+        targets_during_db_write.append(registered_target())
+
+    with (
+        patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings", side_effect=record_registered_target),
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes", {}),
+    ):
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=FastAPI(),
+            path="/operator",
+            target="http://old.example/api",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="operator-route",
+            methods=["POST"],
+        )
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints",
+            field_value=[
+                {"id": "operator-route", "path": "/operator", "target": "http://old.example/api", "methods": ["POST"]}
+            ],
+        )
+        await update_pass_through_endpoints(
+            endpoint_id="operator-route",
+            data=PassThroughGenericEndpoint(path="/operator", target="http://new.example/api", methods=["POST"]),
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert (targets_during_db_write, registered_target()) == (["http://old.example/api"], "http://new.example/api")
+
+
+@pytest.mark.asyncio
 async def test_update_pass_through_endpoint_not_found():
     """
     Test updating a non-existent pass-through endpoint raises HTTPException

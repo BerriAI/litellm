@@ -8803,6 +8803,57 @@ class TestEuJevPassthroughRoute:
         assert (response.status_code, response.json()) == (200, {"operator": True})
         assert route.calls.last.request.headers["x-operator"] == "on"
 
+    @pytest.mark.parametrize("method", ["GET", "PUT"])
+    def test_a_pass_through_configured_with_a_trailing_slash_still_gets_other_methods_without_one(
+        self, operator_app: Callable[[list[str], str], FastAPI], method: str
+    ) -> None:
+        with (
+            respx.mock(assert_all_called=True) as upstream,
+            TestClient(operator_app(["GET", "POST", "PUT"], "/eu_jev/v1/systemone/")) as client,
+        ):
+            route: Final = upstream.route(method=method, url="https://operator.example/decide").respond(
+                200, json={"operator": True}
+            )
+            response: Final = client.request(method, "/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert (response.status_code, response.json()) == (200, {"operator": True})
+        assert route.calls.last.request.headers["x-operator"] == "on"
+
+    def test_a_request_the_built_in_route_took_is_not_forwarded_with_a_pass_through_added_meanwhile(
+        self, operator_app: Callable[[list[str], str], FastAPI], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+        monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base")
+        app: Final = operator_app(["POST"], "/eu_jev/v1/systemone")
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("operator-eu-jev")
+
+        def add_the_pass_through_after_routing() -> UserAPIKeyAuth:
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=app,
+                path="/eu_jev/v1/systemone",
+                target="https://operator.example/decide",
+                custom_headers={"x-operator": "on"},
+                forward_headers=None,
+                merge_query_params=None,
+                dependencies=None,
+                cost_per_request=None,
+                endpoint_id="operator-eu-jev",
+                methods=["POST"],
+            )
+            return UserAPIKeyAuth(api_key="sk-virtual")
+
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, add_the_pass_through_after_routing)
+        with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
+            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x"})
+
+        assert (response.status_code, response.json()) == (200, {"answers": {}})
+        assert built_in.calls.last.request.headers["authorization"] == "Bearer eu-jev-test-key"
+        assert not operator.called
+
     def test_a_deleted_pass_through_at_the_same_path_stops_forwarding_when_built_in_routes_come_first(
         self, operator_app: Callable[[list[str], str], FastAPI], monkeypatch: pytest.MonkeyPatch
     ) -> None:

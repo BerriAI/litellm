@@ -2252,11 +2252,15 @@ def create_pass_through_route(
                     detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
                 )
 
-            passthrough_params: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                route=path, method=request.method
+            serves_configured_route: Final = custom_llm_provider != "eu_jev"
+            passthrough_params: Final = (
+                InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=path, method=request.method)
+                if serves_configured_route
+                else None
             )
             if (
-                passthrough_params is None
+                serves_configured_route
+                and passthrough_params is None
                 and InitPassThroughEndpointHelpers.get_registered_pass_through_route(route=path) is not None
             ):
                 raise HTTPException(
@@ -3532,7 +3536,7 @@ class InitPassThroughEndpointHelpers:
 class YieldsToConfiguredPassThroughRoute(APIRoute):
     def matches(self, scope: Scope) -> tuple[Match, Scope]:
         match, child_scope = super().matches(scope)
-        if match is not Match.FULL:
+        if match is Match.NONE:
             return match, child_scope
         configured: Final = InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(
             route=get_request_route(Request(scope))
@@ -3999,9 +4003,6 @@ async def update_pass_through_endpoints(
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
 
-    # Remove old routes from registry before they get re-registered
-    InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
-
     ## Update db
     updated_data: Final = ConfigFieldUpdate(
         field_name="pass_through_endpoints",
@@ -4016,6 +4017,7 @@ async def update_pass_through_endpoints(
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)
+    InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
     if updated_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=route_app,
