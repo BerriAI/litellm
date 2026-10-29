@@ -1839,6 +1839,7 @@ def _assert_one_stream_row_bills_both_rounds_once(
     assert row["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 32 + 64
     assert row["response_cost"] == pytest.approx(charged_once)
     assert row["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
+    assert row["metadata"]["usage_object"]["cost"] == pytest.approx(row["response_cost"])
     usage: Final = _streamed_usage(chunks)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (71 + 149, 19 + 5, 90 + 154)
     assert usage.cost == pytest.approx(row["response_cost"])
@@ -1848,6 +1849,22 @@ def _assert_one_row_bills_round_one(logged: Sequence[StandardLoggingPayload]) ->
     assert len(logged) == 1
     assert (logged[0]["prompt_tokens"], logged[0]["completion_tokens"]) == (71, 19)
     assert logged[0]["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE))
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_read_to_the_end_logs_one_row_whose_usage_cost_counts_the_fixed_margin_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), _streamed(_CHAT_ROUND_TWO)))
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-read-to-the-end", stream=True)
+
+    with _echo_tool_served():
+        chunks: Final = await _read_all(await _open_chat_echo_stream(logging_obj))
+    await recorder.settled(logged=1)
+
+    _assert_one_stream_row_bills_both_rounds_once(recorder.logged, chunks)
 
 
 @pytest.mark.asyncio

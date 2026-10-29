@@ -190,7 +190,11 @@ class ChatStreamRoundBilling:
         first_breakdown: Final = first.price.cost_breakdown
         final_breakdown: Final = final.price.cost_breakdown
         rounds: Final = billed_for_every_round(first.response, first_breakdown, final.response, final_breakdown)
-        billed: Final = rounds.model_copy(update=MappingProxyType({"id": first.response.id}))
+        usage: Final[object] = getattr(rounds, "usage", None)
+        charged_usage: Final = (
+            usage.model_copy(update=MappingProxyType({"cost": _cost(rounds)})) if isinstance(usage, Usage) else usage
+        )
+        billed: Final = rounds.model_copy(update=MappingProxyType({"id": first.response.id, "usage": charged_usage}))
         cache_hit: Final = first.cache_hit and final.cache_hit
         set_hidden_params(billed, {**(get_hidden_params(rounds) or {}), "cache_hit": cache_hit})
         self._logging_obj.cost_breakdown = summed_cost_breakdown(
