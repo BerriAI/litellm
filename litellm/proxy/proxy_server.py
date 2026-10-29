@@ -5400,6 +5400,11 @@ def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
     return adopt_model_cost_map(new_model_cost_map)
 
 
+def _exception_reason(error: Exception) -> str:
+    message: Final = str(error)
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
 def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]:
     """
     Translate stored web search interception settings into handler kwargs.
@@ -21108,9 +21113,22 @@ async def reload_model_cost_map(
 
         # Publish a new revision so every other pod reloads on its next poll; this pod has
         # already served it, so adopt it here rather than reloading again a tick later
-        proxy_config.model_cost_map_applied_revision = await record_manual_reload(
-            prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time
-        )
+        try:
+            proxy_config.model_cost_map_applied_revision = await record_manual_reload(
+                prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Model cost map reloaded in this worker but the reload was not recorded: %s", e
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Failed to record the model cost map reload in the database ({_exception_reason(e)}). "
+                    "The proxy worker that handled this request now serves the new pricing data, but other workers "
+                    "and pods may keep their current pricing data until the next successful reload."
+                ),
+            ) from e
 
         verbose_proxy_logger.info("Model cost map reloaded successfully in current pod. Models count: %s", models_count)
 
@@ -21125,7 +21143,7 @@ async def reload_model_cost_map(
         raise
     except Exception as e:
         verbose_proxy_logger.exception("Failed to reload model cost map: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to reload model cost map: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload model cost map: {_exception_reason(e)}")
 
 
 @router.post(

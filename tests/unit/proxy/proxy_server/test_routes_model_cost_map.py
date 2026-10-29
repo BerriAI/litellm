@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_provenance
 
@@ -205,6 +207,67 @@ def test_reload_model_cost_map_no_db_500(client, auth_as, monkeypatch):
         response = client.post("/reload/model_cost_map")
     assert response.status_code == 500
     assert "Database connection not available" in response.json().get("detail", "")
+
+
+def test_reload_model_cost_map_db_write_failure_names_the_error_and_the_pricing_this_pod_serves(
+    client, auth_as, monkeypatch, mock_prisma
+):
+    """A revision write that times out with an empty message used to answer a blank reason."""
+    import httpx
+
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _attach_litellm_config(mock_prisma)
+    table.upsert = AsyncMock(side_effect=httpx.ReadTimeout(""))
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "model_cost_map_applied_revision", 7, raising=False)
+
+    fetched_map = {"gpt-4": {"input_cost": 0.03}}
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+        AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=fetched_map)),
+    )
+    monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
+    monkeypatch.setattr("litellm.model_cost", {"existing-model": {"input_cost": 0.01}}, raising=False)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post("/reload/model_cost_map")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Failed to record the model cost map reload in the database (ReadTimeout). "
+        "The proxy worker that handled this request now serves the new pricing data, but other workers "
+        "and pods may keep their current pricing data until the next successful reload."
+    )
+    assert litellm.model_cost is fetched_map
+    assert ps.proxy_config.model_cost_map_applied_revision == 7
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [(RuntimeError(), "RuntimeError"), (RuntimeError("engine restarting"), "RuntimeError: engine restarting")],
+)
+def test_reload_model_cost_map_unexpected_error_names_its_class(
+    client, auth_as, monkeypatch, mock_prisma, error, reason
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _attach_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
+        AsyncMock(side_effect=error),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post("/reload/model_cost_map")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == f"Failed to reload model cost map: {reason}"
 
 
 # ---------------------------------------------------------------------------
