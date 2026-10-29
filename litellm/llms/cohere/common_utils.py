@@ -1,5 +1,5 @@
 import json
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -236,12 +236,12 @@ class CohereV2ModelResponseIterator:
 
     def _parse_tool_call_delta(self, chunk: dict, index: int) -> ChatCompletionToolCallChunk | None:
         """Parse tool-call-start and tool-call-delta chunks to extract tool calls."""
-        tool_call: Final = chunk.get("delta", {}).get("message", {}).get("tool_calls") or {}
-        if isinstance(tool_call, list):
-            tool_call = tool_call[0] if tool_call else {}
-        function: Final = tool_call.get("function") or {}
+        delta: Final = cast("dict[str, dict[str, object]]", chunk.get("delta") or {})
+        raw: Final = delta.get("message", {}).get("tool_calls") or {}
+        tool_call: Final = cast("dict[str, object]", (raw[0] if raw else {}) if isinstance(raw, list) else raw)
+        function: Final = cast("dict[str, str]", tool_call.get("function") or {})
         return {
-            "id": tool_call.get("id"),
+            "id": cast("str", tool_call.get("id")),
             "type": "function",
             "function": {
                 "name": function.get("name"),
