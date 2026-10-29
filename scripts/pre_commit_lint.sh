@@ -110,10 +110,7 @@ e2e_py_files=$(scope_match "$e2e_py_pattern")
 test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
-# test-linting.yml triggers on any file under litellm/ or enterprise/ (Prisma
-# schema and configs included, not just Python), the Python dependency pins, and
-# the generator and its lockfiles, so match that whole trigger set rather than a
-# Python subset.
+# Keep spec_pattern in step with the ui-api-types change filter in .github/workflows/test-linting.yml.
 spec_files=$(scope_match "$spec_pattern")
 # CI's ui job runs prettier over a wider extension set than eslint; keep that
 # split so this flags exactly what the job would.
