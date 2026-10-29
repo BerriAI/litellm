@@ -10130,10 +10130,11 @@ def _fast_serialize_simple_model_response_stream(
     if content is not None:
         delta_dict["content"] = content
 
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict}
-    finish_reason: Final = getattr(choice, "finish_reason", None)
-    if finish_reason is not None:
-        choice_dict["finish_reason"] = finish_reason
+    choice_dict: Final = {
+        "index": getattr(choice, "index", 0),
+        "delta": delta_dict,
+        "finish_reason": getattr(choice, "finish_reason", None),
+    }
 
     # Match the canonical ``model_dump_json(exclude_none=True)`` shape — if a
     # field is None, omit it entirely rather than emitting ``"key": null``.
@@ -10159,13 +10160,23 @@ def _fast_serialize_simple_model_response_stream(
     return orjson.dumps(payload)
 
 
-def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
-    if isinstance(chunk, ModelResponseStream):
-        serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
-        if serialized_chunk is not None:
-            return serialized_chunk
+_STREAMING_CHOICE_PAYLOADS: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+
+def _serialize_model_response_stream(chunk: ModelResponseStream) -> bytes:
+    payload: Final[Mapping[str, object]] = BaseModel.model_dump(
+        chunk, mode="json", exclude_none=True, exclude_unset=True
+    )
+    choices: Final = _STREAMING_CHOICE_PAYLOADS.validate_python(payload["choices"])
+    return _SSE_EVENT_OBJECT.dump_json(
+        {**payload, "choices": tuple({**choice, "finish_reason": choice.get("finish_reason")} for choice in choices)}
+    )
+
+
+def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
+    if not isinstance(chunk, ModelResponseStream):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    return _fast_serialize_simple_model_response_stream(chunk) or _serialize_model_response_stream(chunk)
 
 
 def _is_injected_stream_usage_artifact(chunk: object) -> bool:

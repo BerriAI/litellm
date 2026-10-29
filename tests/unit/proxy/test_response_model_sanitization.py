@@ -64,6 +64,11 @@ def _make_model_response_stream_chunk(model: str) -> litellm.ModelResponseStream
     return litellm.ModelResponseStream(**chunk_dict)
 
 
+def _canonical_dump_with_null_finish_reason(chunk: litellm.ModelResponseStream) -> dict[str, object]:
+    canonical = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+    return {**canonical, "choices": [{**choice, "finish_reason": None} for choice in canonical["choices"]]}
+
+
 def _decode_sse_chunk(chunk) -> str:
     return chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
 
@@ -98,14 +103,12 @@ def test_restamp_streaming_chunk_skips_matching_model():
     assert model_mismatch_logged is False
 
 
-def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json():
+def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json_with_a_null_finish_reason():
     from litellm.proxy.proxy_server import _serialize_streaming_chunk
 
     chunk = _make_model_response_stream_chunk("client-model")
 
-    assert json.loads(_serialize_streaming_chunk(chunk)) == json.loads(
-        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
-    )
+    assert json.loads(_serialize_streaming_chunk(chunk)) == _canonical_dump_with_null_finish_reason(chunk)
 
 
 def test_fast_serialize_returns_none_when_model_field_is_missing():
@@ -133,7 +136,7 @@ def test_fast_serialize_returns_none_when_model_field_is_missing():
     payload_str = serialized.decode("utf-8") if isinstance(serialized, bytes) else serialized
     assert '"model": null' not in payload_str
     assert '"model":null' not in payload_str
-    assert json.loads(payload_str) == json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+    assert json.loads(payload_str) == _canonical_dump_with_null_finish_reason(chunk)
 
 
 def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path, monkeypatch):
