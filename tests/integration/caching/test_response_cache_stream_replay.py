@@ -1,4 +1,4 @@
-"""A chat stream served from the response cache carries the reasoning, citations and audio the first stream had.
+"""A chat stream served from the response cache carries the reasoning, citations, audio and tool calls it first had.
 
 Every cell scripts one chat stream for its own deployment, streams it once through the OpenAI SDK so the proxy
 assembles and caches it, then streams the identical request again until an answer arrives without an upstream call
@@ -53,6 +53,22 @@ AUDIO_STREAM: Final = SseResponse(
         CHAT_CHUNK + '[{"index":0,"delta":{"audio":{"data":"UklGRg=="}},"finish_reason":null}]}',
         CHAT_CHUNK + '[{"index":0,"delta":{"audio":{"expires_at":1700000600}},"finish_reason":null}]}',
         STOP,
+        "data: [DONE]",
+    ),
+)
+
+TOOL_CALL: Final = (
+    '{"index":0,"id":"call_$UNIQUE_ID","type":"function","function":{"name":"count_apples","arguments":"{}"}}'
+)
+TOOL_STREAM: Final = SseResponse(
+    content_type="text/event-stream",
+    frames=(
+        CHAT_CHUNK + '[{"index":0,"delta":{"role":"assistant","reasoning_content":"I need the basket totals"},'
+        '"finish_reason":null}]}',
+        CHAT_CHUNK + '[{"index":0,"delta":{"content":"Let me count "},"finish_reason":null}]}',
+        CHAT_CHUNK + '[{"index":0,"delta":{"content":"the apples"},"finish_reason":null}]}',
+        CHAT_CHUNK + '[{"index":0,"delta":{"tool_calls":[' + TOOL_CALL + ']},"finish_reason":null}]}',
+        CHAT_CHUNK + '[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
         "data: [DONE]",
     ),
 )
@@ -136,3 +152,14 @@ def test_a_replayed_chat_stream_without_text_sends_its_role_and_audio(gateway: G
     assert len(audio) == 1, deltas
     assert isinstance(audio[0], dict) and audio[0]["data"] == "UklGRg==" and audio[0]["transcript"] == "Hello", deltas
     assert deltas[-1]["finish_reason"] == "stop", deltas
+
+
+def test_a_replayed_chat_stream_sends_the_tool_call_after_the_reasoning_and_the_text(gateway: Gateway) -> None:
+    deltas: Final = _replayed(gateway, TOOL_STREAM)
+    reasoning: Final = [index for index, delta in enumerate(deltas) if delta.get("reasoning_content")]
+    text: Final = [index for index, delta in enumerate(deltas) if delta.get("content")]
+    called: Final = [index for index, delta in enumerate(deltas) if delta.get("tool_calls")]
+    assert _joined(deltas, "content") == "Let me count the apples", deltas
+    assert reasoning and text and max(reasoning) < min(text), deltas
+    assert called == [max(text) + 1], deltas
+    assert deltas[-1]["finish_reason"] == "tool_calls", deltas

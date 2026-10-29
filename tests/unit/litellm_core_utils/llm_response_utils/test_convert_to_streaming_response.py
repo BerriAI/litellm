@@ -283,10 +283,7 @@ async def test_async_empty_content_yields_the_role_then_a_separate_finish_frame(
 
 
 @pytest.mark.asyncio
-async def test_async_tool_calls_and_function_call_only_on_first_chunk():
-    # A cached response combining multi-word content with tool_calls must not
-    # repeat the tool_calls on every slice — downstream handlers accumulate
-    # tool-call deltas and would collect them N times.
+async def test_async_tool_calls_arrive_once_after_the_last_content_slice():
     payload = _async_payload(content="I'll look that up for you")
     payload["choices"][0]["message"]["tool_calls"] = [
         {
@@ -297,13 +294,13 @@ async def test_async_tool_calls_and_function_call_only_on_first_chunk():
         }
     ]
     chunks = await _collect_async(payload)
-    assert len(chunks) > 1
-    first_tool_calls = chunks[0].choices[0].delta.tool_calls
-    assert first_tool_calls is not None and len(first_tool_calls) == 1
-    assert first_tool_calls[0].function.name == "lookup"
-    for c in chunks[1:]:
-        assert c.choices[0].delta.tool_calls is None
-        assert c.choices[0].delta.function_call is None
+    called: Final = [i for i, c in enumerate(chunks) if c.choices[0].delta.tool_calls]
+    last_content: Final = max(i for i, c in enumerate(chunks) if c.choices[0].delta.content)
+    assert called == [last_content + 1] and last_content > 0
+    assert chunks[called[0]].choices[0].delta.tool_calls[0].function.name == "lookup"
+    assert chunks[called[0]].choices[0].delta.content is None
+    assert all(c.choices[0].delta.function_call is None for c in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop" and len(chunks) == called[0] + 2
 
 
 @pytest.mark.asyncio
@@ -388,7 +385,7 @@ def test_sync_multi_chunk_and_lossless_join():
     assert chunks[-1].usage.total_tokens == 12
 
 
-def test_sync_delta_and_choice_metadata_only_on_first_chunk():
+def test_sync_reasoning_leads_and_choice_metadata_rides_the_first_content_slice():
     thinking_blocks = [{"type": "thinking", "thinking": "cached thinking", "signature": "sig"}]
     payload = {
         "id": "chatcmpl-test-sync",
@@ -411,18 +408,19 @@ def test_sync_delta_and_choice_metadata_only_on_first_chunk():
         ],
     }
     chunks = list(convert_to_streaming_response(payload))
-    assert len(chunks) > 1
-    first_choice = chunks[0].choices[0]
-    assert getattr(first_choice.delta, "reasoning_content", None) == "cached reasoning"
-    assert getattr(first_choice.delta, "thinking_blocks", None) == thinking_blocks
-    assert first_choice.logprobs is not None
-    assert first_choice.enhancements == {"source": "cache"}
-    for c in chunks[1:]:
+    lead: Final = chunks[0].choices[0]
+    assert getattr(lead.delta, "reasoning_content", None) == "cached reasoning"
+    assert getattr(lead.delta, "thinking_blocks", None) == thinking_blocks
+    assert lead.delta.content is None
+    first_text: Final = chunks[1].choices[0]
+    assert first_text.delta.content and first_text.logprobs is not None
+    assert first_text.enhancements == {"source": "cache"}
+    for index, c in enumerate(chunks):
         choice = c.choices[0]
-        assert getattr(choice.delta, "reasoning_content", None) is None
-        assert getattr(choice.delta, "thinking_blocks", None) is None
-        assert choice.logprobs is None
-        assert getattr(choice, "enhancements", None) is None
+        assert index == 0 or getattr(choice.delta, "reasoning_content", None) is None
+        assert index == 0 or getattr(choice.delta, "thinking_blocks", None) is None
+        assert index == 1 or choice.logprobs is None
+        assert index == 1 or getattr(choice, "enhancements", None) is None
 
 
 def test_sync_annotations_arrive_once_with_the_last_content_slice():
@@ -536,4 +534,33 @@ async def test_a_cached_answer_streams_reasoning_before_the_text_and_citations_a
     assert "".join(str(deltas[i]["content"]) for i in text) == "The answer is 14 apples"
     assert max(reasoning) < min(text)
     assert cited == [max(text)] and deltas[max(text)]["annotations"] == annotations
+    assert deltas[-1]["finish"] == "stop"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", ["async", "sync"])
+async def test_a_cached_answer_streams_its_tool_call_after_the_reasoning_and_the_text(
+    replay: Literal["async", "sync"],
+) -> None:
+    tool_call: Final[JsonValue] = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "count_apples", "arguments": '{"basket": "all"}'},
+        "index": 0,
+    }
+    deltas: Final = await _client_stream(
+        {
+            "content": "Let me count the apples",
+            "reasoning_content": "I need the basket totals",
+            "tool_calls": [tool_call],
+        },
+        replay,
+    )
+    reasoning: Final = [i for i, delta in enumerate(deltas) if "reasoning_content" in delta]
+    text: Final = [i for i, delta in enumerate(deltas) if delta.get("content")]
+    called: Final = [i for i, delta in enumerate(deltas) if delta.get("tool_calls")]
+    assert "".join(str(deltas[i]["content"]) for i in text) == "Let me count the apples"
+    assert reasoning and max(reasoning) < min(text)
+    assert called == [max(text) + 1]
+    assert deltas[called[0]]["tool_calls"] == [tool_call]
     assert deltas[-1]["finish"] == "stop"

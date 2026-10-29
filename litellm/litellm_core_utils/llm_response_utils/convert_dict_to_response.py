@@ -145,7 +145,13 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
 
 
 _REPLAY_REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks", "reasoning_items"})
-_REPLAY_TRAILING_FIELDS: Final = frozenset({"content", "annotations"})
+_REPLAY_LEAD_FIELDS: Final = _REPLAY_REASONING_FIELDS | {"role", "provider_specific_fields"}
+_REPLAY_TOOL_FIELDS: Final = frozenset({"tool_calls", "function_call"})
+_REPLAY_TEXT_FIELDS: Final = frozenset({"content", "annotations"})
+
+
+def _fields_in(fields: Mapping[str, object], keys: frozenset[str]) -> dict[str, object]:
+    return {key: value for key, value in fields.items() if key in keys}
 
 
 def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
@@ -153,20 +159,25 @@ def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
     if not pieces:
         return (delta,)
     fields: Final[dict[str, object]] = delta.model_dump(exclude_none=True)
-    metadata: Final = {key: value for key, value in fields.items() if key not in _REPLAY_TRAILING_FIELDS}
-    annotations: Final = {key: value for key, value in fields.items() if key == "annotations"}
-    reasoning_lead: Final = (Delta.model_validate(metadata),) if _REPLAY_REASONING_FIELDS.intersection(fields) else ()
-    first_slice_metadata: Final = {} if reasoning_lead else metadata
+    lead: Final = _fields_in(fields, _REPLAY_LEAD_FIELDS) if _REPLAY_REASONING_FIELDS.intersection(fields) else {}
+    tools: Final = _fields_in(fields, _REPLAY_TOOL_FIELDS)
+    annotations: Final = _fields_in(fields, frozenset({"annotations"}))
+    moved: Final = lead.keys() | _REPLAY_TOOL_FIELDS | _REPLAY_TEXT_FIELDS
+    first_slice: Final = {key: value for key, value in fields.items() if key not in moved}
     last_index: Final = len(pieces) - 1
-    return reasoning_lead + tuple(
-        Delta.model_validate(
-            {
-                **(first_slice_metadata if index == 0 else {}),
-                "content": piece,
-                **(annotations if index == last_index else {}),
-            }
+    return (
+        ((Delta.model_validate(lead),) if lead else ())
+        + tuple(
+            Delta.model_validate(
+                {
+                    **(first_slice if index == 0 else {}),
+                    "content": piece,
+                    **(annotations if index == last_index else {}),
+                }
+            )
+            for index, piece in enumerate(pieces)
         )
-        for index, piece in enumerate(pieces)
+        + ((Delta.model_validate(tools),) if tools else ())
     )
 
 
@@ -192,8 +203,10 @@ def _replay_frames(response: ModelResponseStream) -> Iterator[ModelResponseStrea
     if usage is not None:
         delattr(response, "usage")
     choice: Final = response.choices[0]
-    for index, delta in enumerate(_replay_deltas(choice.delta)):
-        yield _replay_frame(response, delta, finish_reason=None, keeps_choice_metadata=index == 0)
+    deltas: Final = _replay_deltas(choice.delta)
+    first_text: Final = next((index for index, delta in enumerate(deltas) if delta.content), 0)
+    for index, delta in enumerate(deltas):
+        yield _replay_frame(response, delta, finish_reason=None, keeps_choice_metadata=index == first_text)
     finish_frame: Final = _replay_frame(
         response, Delta(), finish_reason=choice.finish_reason, keeps_choice_metadata=False
     )
