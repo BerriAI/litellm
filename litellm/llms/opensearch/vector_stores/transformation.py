@@ -9,6 +9,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -47,6 +48,7 @@ _AWS_HOSTS: Final = (
 )
 _ACCOUNT_ID_LABEL: Final = re.compile(r"\A\d{12}\.")
 _QUERY_VECTOR: Final = TypeAdapter(tuple[float, ...])
+_ATTRIBUTE_VALUE_TYPES: Final = (str, int, float, bool)
 _SEARCH_ONLY_MESSAGE: Final = (
     "The OpenSearch vector store is search-only. Create the k-NN index in OpenSearch, "
     "then register it here with the index name as vector_store_id."
@@ -194,7 +196,9 @@ def _search_result(hit: _Hit, params: _OpenSearchParams) -> VectorStoreSearchRes
         file_id=hit.id,
         filename=filename if isinstance(filename, str) else None,
         attributes={
-            key: value for key, value in hit.source.items() if key not in (params.text_field, params.embedding_field)
+            key: value
+            for key, value in hit.source.items()
+            if key not in (params.text_field, params.embedding_field) and isinstance(value, _ATTRIBUTE_VALUE_TYPES)
         },
     )
 
@@ -236,7 +240,10 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
 
         try:
             return _usable_credentials(self._aws.resolve_credentials(auth, region))
-        except (CredentialRetrievalError, NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:
+        except CredentialRetrievalError as error:
+            verbose_logger.warning("OpenSearch vector store AWS credential source failed: %s", error)
+            raise _unauthenticated("the AWS credential source failed, see the LiteLLM logs") from None
+        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:
             raise _unauthenticated(str(error)) from None
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:

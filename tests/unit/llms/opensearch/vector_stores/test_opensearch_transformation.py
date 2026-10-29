@@ -27,6 +27,7 @@ ACCESS_KEY: Final = "AKIDOPENSEARCHTEST"
 SECRET_KEY: Final = "opensearch-test-secret"
 QUERY: Final = "How many days a year can I work abroad?"
 QUERY_VECTOR: Final = [0.1, 0.2, 0.3]
+CREDENTIAL_SOURCE_OUTPUT: Final = "credential-process-stderr-detail"
 SERVERLESS: Final = "https://abc123.us-east-1.aoss.amazonaws.com"
 BASE_PARAMS: Final = {
     "api_base": SERVERLESS,
@@ -92,8 +93,14 @@ def _opensearch_hits(text_field: str, embedding_field: str) -> Mapping[str, obje
                     "_source": {
                         text_field: "Employees may work abroad for at most 37 calendar days per year.",
                         embedding_field: [0.5, 0.5, 0.5],
+                        "embedding_ada002": [0.25, 0.75],
                         "filename": "hr-remote-work-policy.md",
                         "category": "hr",
+                        "revision": 7,
+                        "published": True,
+                        "tags": ["hr", "travel"],
+                        "owner": {"team": "people-ops"},
+                        "reviewed_by": None,
                     },
                 },
                 {"_index": "litellm-qa-docs", "_id": "doc-2", "_score": 0.42, "_source": {"category": "facilities"}},
@@ -108,7 +115,7 @@ EXPECTED_RESULTS: Final = [
         "content": [{"type": "text", "text": "Employees may work abroad for at most 37 calendar days per year."}],
         "file_id": "1%3A0%3Aw6ftW6EB",
         "filename": "hr-remote-work-policy.md",
-        "attributes": {"filename": "hr-remote-work-policy.md", "category": "hr"},
+        "attributes": {"filename": "hr-remote-work-policy.md", "category": "hr", "revision": 7, "published": True},
     },
     {"score": 0.42, "content": [], "file_id": "doc-2", "filename": None, "attributes": {"category": "facilities"}},
 ]
@@ -276,20 +283,29 @@ _AMBIENT_AWS_ENV: Final = (
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
-    "credentials,env",
+    "credentials,env,aws_config",
     [
-        pytest.param({"aws_session_name": "opensearch-no-credentials"}, {}, id="none-anywhere"),
-        pytest.param({"aws_profile_name": "opensearch-missing-profile"}, {}, id="missing-profile"),
-        pytest.param({}, {"AWS_ACCESS_KEY_ID": "AKIDPARTIAL"}, id="key-without-secret"),
+        pytest.param({"aws_session_name": "opensearch-no-credentials"}, {}, "", id="none-anywhere"),
+        pytest.param({"aws_profile_name": "opensearch-missing-profile"}, {}, "", id="missing-profile"),
+        pytest.param({}, {"AWS_ACCESS_KEY_ID": "AKIDPARTIAL"}, "", id="key-without-secret"),
         pytest.param(
             {"aws_access_key_id": "AKIDSTOREONLY"},
             {"AWS_ACCESS_KEY_ID": "AKIDAMBIENT", "AWS_SECRET_ACCESS_KEY": "ambient-secret"},
+            "",
             id="store-key-without-secret-beside-ambient-credentials",
         ),
         pytest.param(
             {"aws_secret_access_key": "store-secret-only"},
             {"AWS_ACCESS_KEY_ID": "AKIDAMBIENT", "AWS_SECRET_ACCESS_KEY": "ambient-secret"},
+            "",
             id="store-secret-without-key-beside-ambient-credentials",
+        ),
+        pytest.param(
+            {"aws_profile_name": "opensearch-failing-process"},
+            {},
+            "[profile opensearch-failing-process]\n"
+            f"credential_process = sh -c 'echo {CREDENTIAL_SOURCE_OUTPUT} >&2; exit 1'\n",
+            id="failing-credential-source",
         ),
     ],
 )
@@ -298,15 +314,16 @@ async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request
     asynchronous: bool,
     credentials: Mapping[str, str],
     env: Mapping[str, str],
+    aws_config: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     for name in _AMBIENT_AWS_ENV:
         monkeypatch.delenv(name, raising=False)
     for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "BOTO_CONFIG"):
-        empty: Path = tmp_path / name
-        empty.write_text("")
-        monkeypatch.setenv(name, str(empty))
+        config_file: Path = tmp_path / name
+        config_file.write_text(aws_config if name == "AWS_CONFIG_FILE" else "")
+        monkeypatch.setenv(name, str(config_file))
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -322,6 +339,7 @@ async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request
         )
 
     assert error.value.status_code == 401
+    assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
     respond.assert_not_called()
     executor.call.assert_not_called()
 
