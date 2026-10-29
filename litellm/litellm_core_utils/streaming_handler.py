@@ -10,14 +10,14 @@ import traceback
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, BeforeValidator, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -41,6 +41,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CacheCreationTokenDetails,
+    ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
     Delta,
     LlmProviders,
@@ -138,6 +139,17 @@ def _delta_from_upstream(upstream_delta: "BaseModel | _UpstreamDeltaLike | None"
         return Delta(**dict(iter(upstream_delta)))
     except Exception:
         return None
+
+
+def _sdk_logprobs_as_dict(logprobs: object) -> object:
+    if isinstance(logprobs, ChoiceLogprobs) or not isinstance(logprobs, BaseModel):
+        return logprobs
+    return logprobs.model_dump()
+
+
+_UPSTREAM_LOGPROBS: Final[TypeAdapter[ChoiceLogprobs]] = TypeAdapter(
+    Annotated[ChoiceLogprobs, BeforeValidator(_sdk_logprobs_as_dict)]
+)
 
 
 def _is_transport_timeout(error: BaseException) -> bool:
@@ -1605,7 +1617,7 @@ class CustomStreamWrapper:
                     model_response.system_fingerprint = response_obj["original_chunk"].system_fingerprint
                     self.system_fingerprint = response_obj["original_chunk"].system_fingerprint
             if response_obj["logprobs"] is not None:
-                model_response.choices[0].logprobs = response_obj["logprobs"]
+                model_response.choices[0].logprobs = _UPSTREAM_LOGPROBS.validate_python(response_obj["logprobs"])
 
             if response_obj["usage"] is not None:
                 if isinstance(response_obj["usage"], dict):
