@@ -4559,3 +4559,54 @@ def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_dro
 )
 def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
     assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+def test_is_official_anthropic_api_base():
+    from litellm.llms.anthropic.common_utils import is_official_anthropic_api_base
+
+    assert is_official_anthropic_api_base(None) is True
+    assert is_official_anthropic_api_base("") is True
+    assert is_official_anthropic_api_base("https://api.anthropic.com") is True
+    assert is_official_anthropic_api_base("https://api.anthropic.com/v1") is True
+    assert is_official_anthropic_api_base("https://staging.api.anthropic.com") is True
+    assert is_official_anthropic_api_base("http://127.0.0.1:8899") is False
+    assert is_official_anthropic_api_base("https://api.moonshot.cn") is False
+    assert is_official_anthropic_api_base("https://custom-proxy.internal.corp") is False
+
+
+def test_optionally_handle_anthropic_oauth_suppresses_token_on_custom_api_base():
+    """
+    Issue #42172: When custom third-party api_base is configured,
+    the client's Claude OAuth token must NOT be forwarded to the third party,
+    and the deployment's configured api_key must be preserved.
+    """
+    from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+    headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+    deploy_key = "sk-backend-configured-key"
+
+    updated_headers, resolved_key = optionally_handle_anthropic_oauth(
+        headers=dict(headers),
+        api_key=deploy_key,
+        api_base="http://127.0.0.1:8899",
+    )
+    assert resolved_key == deploy_key
+    assert "authorization" not in updated_headers
+
+
+def test_optionally_handle_anthropic_oauth_forwards_token_on_official_anthropic():
+    """
+    When targeting official Anthropic (or default api_base), OAuth token is used as intended.
+    """
+    from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+
+    headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+    deploy_key = "sk-backend-configured-key"
+
+    updated_headers, resolved_key = optionally_handle_anthropic_oauth(
+        headers=dict(headers),
+        api_key=deploy_key,
+        api_base="https://api.anthropic.com",
+    )
+    assert resolved_key == FAKE_OAUTH_TOKEN
+    assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"

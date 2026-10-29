@@ -354,8 +354,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
         # Check for Anthropic OAuth token in Authorization header
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key, api_base=api_base)
 
         if not _carries_caller_credential(headers):
             self._apply_env_auth_header(
@@ -395,7 +397,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 api_key=api_key,
                 api_base=api_base,
             )
-        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
+        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(
+            headers=headers, api_key=api_key, api_base=api_base
+        )
 
         if not _carries_caller_credential(oauth_headers):
             self._apply_env_auth_header(
