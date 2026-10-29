@@ -1051,13 +1051,16 @@ async def test_a_finished_read_or_cancel_bills_usage_only_the_configured_deploym
     assert row.status == "completed"
 
 
-def _complexity_router_over(model_group: str, return_raw_model_name: bool) -> dict[str, object]:
+def _complexity_router_over(
+    model_group: str, return_raw_model_name: bool, default_model: str | None = None
+) -> dict[str, object]:
     return {
         "model_name": "auto",
         "litellm_params": {
             "model": "auto_router/complexity_router",
             "complexity_router_config": {
-                "tiers": {tier: model_group for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
+                "tiers": {tier: [model_group] for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
+                "default_model": default_model,
                 "return_raw_model_name": return_raw_model_name,
             },
         },
@@ -1090,6 +1093,14 @@ def _complexity_router_over(model_group: str, return_raw_model_name: bool) -> di
             "gpt-5.4-mini-2026-03-17",
         ),
         ("oai-alias", {}, (_complexity_router_over("oai-alias", return_raw_model_name=False),), False, "oai-alias"),
+        ("oai-alias", {}, (_complexity_router_over("gpt-mini", return_raw_model_name=True),), False, "oai-alias"),
+        (
+            "oai-alias",
+            {},
+            (_complexity_router_over("gpt-mini", return_raw_model_name=True, default_model="oai-alias"),),
+            False,
+            "gpt-5.4-mini-2026-03-17",
+        ),
     ],
 )
 async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_logs_the_provider_model(

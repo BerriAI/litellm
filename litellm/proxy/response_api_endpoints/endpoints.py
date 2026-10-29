@@ -90,6 +90,7 @@ from litellm.responses.litellm_completion_transformation.count_request import MO
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router import Router
+from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -876,20 +877,31 @@ def _with_deployment_model_name(
 ) -> object:
     if return_raw_model_name or llm_router is None or not isinstance(response, ResponsesAPIResponse):
         return response
-    if _routes_with_raw_model_names(llm_router):
-        return response
     model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(decrypted_response_id(response_id))
     deployment: Final = None if model_id is None else llm_router.get_deployment(model_id=model_id)
     if deployment is None or "*" in deployment.model_name:
         return response
+    if deployment.model_name in _model_groups_routed_with_raw_names(llm_router):
+        return response
     return response.model_copy(update={"model": deployment.model_info.team_public_model_name or deployment.model_name})
 
 
-def _routes_with_raw_model_names(llm_router: Router) -> bool:
-    return any(
-        tagged.strategy.config.return_raw_model_name
-        for tagged in itertools.chain.from_iterable(llm_router.complexity_routers.values())
+def _model_groups_routed_with_raw_names(llm_router: Router) -> frozenset[str]:
+    configs: Final = (
+        tagged.strategy.config for tagged in itertools.chain.from_iterable(llm_router.complexity_routers.values())
     )
+    return frozenset(
+        itertools.chain.from_iterable(
+            _model_groups_routed_by(config) for config in configs if config.return_raw_model_name
+        )
+    )
+
+
+def _model_groups_routed_by(config: ComplexityRouterConfig) -> tuple[str, ...]:
+    tier_models: Final = itertools.chain.from_iterable(
+        (models,) if isinstance(models, str) else models for models in config.tiers.values()
+    )
+    return (*tier_models, *((config.default_model,) if config.default_model else ()))
 
 
 def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
