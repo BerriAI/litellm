@@ -115,13 +115,17 @@ class AzureAIStudioConfig(OpenAIConfig):
                 model=model,
                 drop_params=drop_params,
             )
-        return azureAIGPT5Config.map_openai_params(
+        mapped: Final = azureAIGPT5Config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
             declared_reasoning_efforts=declared_reasoning_efforts,
         )
+        tool_choice: Final = non_default_params.get("tool_choice")
+        if tool_choice is None or "tool_choice" in mapped:
+            return mapped
+        return {**mapped, "tool_choice": tool_choice}
 
     def _supports_stop_reason(self, model: str) -> bool:
         """

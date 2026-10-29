@@ -5870,6 +5870,10 @@ def _mock_chat_completion(respx_mock: respx.MockRouter) -> respx.Route:
             "azure_ai/my-luna-deployment",
             {"api_base": "http://localhost:12346/models", "base_model": "azure_ai/gpt-4.1-mini"},
         ),
+        (
+            "azure_ai/gpt-5-my-deployment",
+            {"api_base": "http://localhost:12346/models", "base_model": "gpt-5.4"},
+        ),
         ("azure/gpt-4.1-mini", {"api_base": "http://localhost:12346", "api_version": "2025-04-01-preview"}),
     ],
 )
