@@ -215,6 +215,23 @@ class TestProxyInitializationHelpers:
         )
         assert args["timeout_worker_healthcheck"] == 30
 
+    def test_an_old_uvicorn_drops_worker_healthcheck_and_warns_with_startup_output_suppressed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class _UvicornConfigWithoutWorkerHealthcheck:
+            def __init__(self, app=None):
+                pass
+
+        monkeypatch.setattr(litellm, "suppress_startup_output", True)
+        monkeypatch.setattr(litellm, "json_logs", False)
+        with patch("uvicorn.Config", _UvicornConfigWithoutWorkerHealthcheck):
+            args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000, timeout_worker_healthcheck=15
+            )
+
+        assert "timeout_worker_healthcheck" not in args
+        assert "--timeout_worker_healthcheck requires uvicorn>=0.37.0" in capsys.readouterr().out
+
     def test_get_reload_options_no_config_still_watches_env(self):
         opts = ProxyInitializationHelpers._get_reload_options(None)
         assert opts["reload"] is True
@@ -2816,6 +2833,49 @@ class TestRunServerDbSetup:
 
         mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
         assert "--use_v2_migration_resolver is deprecated" not in capsys.readouterr().out
+
+    @patch("subprocess.run", return_value=MagicMock(returncode=0))
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
+    def test_the_deprecated_v2_resolver_flag_warns_with_startup_output_suppressed(
+        self,
+        mock_build_indexes,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER", "DISABLE_SCHEMA_UPDATE")
+        }
+        monkeypatch.setattr(litellm, "suppress_startup_output", True)
+        monkeypatch.setattr(litellm, "json_logs", False)
+
+        with (
+            patch.dict(
+                os.environ, {**clean_env, "DATABASE_URL": "postgresql://test:test@localhost:5432/test"}, clear=True
+            ),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+        ):
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_v2_migration_resolver"], standalone_mode=False
+            )
+
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+        assert "--use_v2_migration_resolver is deprecated and has no effect" in capsys.readouterr().out
 
     @pytest.mark.parametrize(
         ("arguments", "environment", "warned"),
