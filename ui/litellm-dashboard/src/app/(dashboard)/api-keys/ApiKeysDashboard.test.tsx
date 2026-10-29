@@ -94,6 +94,19 @@ describe("ApiKeysDashboard", () => {
     );
   });
 
+  it("accepts the AI APIs + Key Info type as URL prefill data", () => {
+    renderWithProviders(<ApiKeysDashboard />, {
+      searchParams: "?create=true&key_type=llm_api_key_info",
+    });
+
+    expect(createKeyProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        autoOpenCreate: true,
+        prefillData: expect.objectContaining({ key_type: "llm_api_key_info" }),
+      }),
+    );
+  });
+
   it("hides Create Key for view-only roles", () => {
     authorizedSession.mockReturnValue(session({ isViewOnly: true }));
     renderWithProviders(<ApiKeysDashboard />);

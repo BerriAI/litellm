@@ -1283,6 +1283,20 @@ describe("CreateKey", () => {
       expect(payload.key_type).toBe("management");
       expect(payload.models).toStrictEqual([]);
     });
+
+    it("keeps models enabled for an AI APIs + Key Info key", async () => {
+      await openModal();
+      await nameTheKey();
+
+      const modelsControl = await screen.findByLabelText("Models");
+      await userEvent.click(await screen.findByLabelText("Key Type"));
+      await userEvent.click(await screen.findByRole("option", { name: /^AI APIs \+ Key Info/ }));
+
+      expect(modelsControl).toBeEnabled();
+
+      await submit();
+      expect((await createdPayload()).key_type).toBe("llm_api_key_info");
+    });
   });
 
   describe("mount-gate liveness", () => {

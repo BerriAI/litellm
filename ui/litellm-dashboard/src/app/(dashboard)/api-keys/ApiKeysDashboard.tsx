@@ -15,7 +15,7 @@ const CREATE_KEY_URL_PARAMS = {
   team_id: parseAsString,
   key_alias: parseAsString,
   models: parseAsArrayOf(parseAsString),
-  key_type: parseAsStringLiteral(["default", "llm_api", "management"] as const),
+  key_type: parseAsStringLiteral(["default", "llm_api", "llm_api_key_info", "management"] as const),
 };
 
 export default function ApiKeysDashboard() {

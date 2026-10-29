@@ -49,6 +49,7 @@ class LiteLLMKeyType(str, enum.Enum):
     """
 
     LLM_API = "llm_api"  # Can call LLM API routes (chat/completions, embeddings, etc.)
+    LLM_API_KEY_INFO = "llm_api_key_info"
     MANAGEMENT = "management"  # Can call management routes (user/team/key management)
     READ_ONLY = "read_only"  # Can only call info/read routes
     DEFAULT = "default"  # Uses default allowed routes

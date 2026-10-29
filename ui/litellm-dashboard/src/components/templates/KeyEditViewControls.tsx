@@ -27,6 +27,11 @@ export const labelWithHint = (label: React.ReactNode, hint: string): React.React
 const KEY_TYPE_OPTIONS = [
   { value: "default", label: "Full Access", hint: "Can call all routes (AI APIs, Management, and read-only)" },
   { value: "llm_api", label: "AI APIs", hint: "Can call only AI API routes (chat/completions, embeddings, etc.)" },
+  {
+    value: "llm_api_key_info",
+    label: "AI APIs + Key Info",
+    hint: "Can call AI API routes and read this key's own info and spend (/key/info)",
+  },
   { value: "management", label: "Management", hint: "Can call only management routes (user/team/key management)" },
 ];
 
@@ -40,7 +45,12 @@ export const KeyTypeSelect = ({
   onChange: (value: string) => void;
 }) => {
   const term = useTerminology();
-  const keyTypeOptions = KEY_TYPE_OPTIONS.map((option) => ({
+  const keyTypeOptions = [
+    ...KEY_TYPE_OPTIONS,
+    ...(value === "custom"
+      ? [{ value: "custom", label: "Custom routes", hint: "Allowed Routes has a custom list. Pick a key type to replace it" }]
+      : []),
+  ].map((option) => ({
     ...option,
     label: term(option.label),
     hint: term(option.hint),

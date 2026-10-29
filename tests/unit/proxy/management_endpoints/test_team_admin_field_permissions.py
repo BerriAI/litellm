@@ -570,7 +570,10 @@ _MEMBER_KEYS_ON = {"team_admin_editable_team_fields": ["create_member_keys"]}
 
 class TestTeamAdminMemberKeyCreationVerdict:
     @pytest.mark.parametrize("owner_role", ["internal_user", "internal_user_viewer"])
-    @pytest.mark.parametrize("key_type", [None, LiteLLMKeyType.DEFAULT, LiteLLMKeyType.LLM_API])
+    @pytest.mark.parametrize(
+        "key_type",
+        [None, LiteLLMKeyType.DEFAULT, LiteLLMKeyType.LLM_API, LiteLLMKeyType.LLM_API_KEY_INFO],
+    )
     def test_an_ordinary_member_and_an_llm_key_are_allowed(self, owner_role, key_type):
         verdict = team_admin_member_key_creation_verdict(_MEMBER_KEYS_ON, key_type=key_type, owner_role=owner_role)
         assert verdict == TeamAdminMemberKeyCreationAllowed()

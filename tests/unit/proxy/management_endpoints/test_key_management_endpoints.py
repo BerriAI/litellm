@@ -63,6 +63,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _enforce_upperbound_key_params,
     _execute_virtual_key_regeneration,
     _get_and_validate_existing_key,
+    _is_safe_preset_route_transition,
     _is_team_key,
     _key_generation_required_param_check,
     _member_key_request,
@@ -12428,6 +12429,26 @@ class TestLIT4891SafePresetKeyTypeTransition:
         assert exc.status_code == 403
         assert "Only proxy admins can set" in str(exc.detail)
 
+    @pytest.mark.parametrize(
+        ("incoming", "existing", "expected"),
+        [
+            pytest.param(["llm_api_routes", "/key/info"], ["llm_api_routes"], True, id="llm-to-key-info"),
+            pytest.param(["llm_api_routes"], ["llm_api_routes", "/key/info"], True, id="key-info-to-llm"),
+            pytest.param(["/key/info"], ["/key/info"], True, id="key-info-unchanged"),
+            pytest.param([], ["/key/info"], False, id="key-info-cannot-be-cleared"),
+            pytest.param(["info_routes"], ["info_routes"], True, id="info-routes-unchanged"),
+            pytest.param([], ["info_routes"], False, id="info-routes-cannot-be-cleared"),
+            pytest.param(
+                ["info_routes", "/key/info"],
+                ["info_routes", "/key/info"],
+                True,
+                id="read-tokens-unchanged",
+            ),
+        ],
+    )
+    def test_safe_preset_route_transition(self, incoming: list[str], existing: list[str], expected: bool) -> None:
+        assert _is_safe_preset_route_transition(incoming, existing) is expected
+
     @pytest.mark.asyncio
     async def test_non_admin_owner_can_clear_safe_preset_to_full_access(self):
         assert (
@@ -14520,10 +14541,17 @@ class TestAllowedRoutesCallerPermission:
     """
 
     @pytest.mark.asyncio
-    async def test_non_admin_generate_key_with_allowed_routes_rejected(self):
+    @pytest.mark.parametrize(
+        "allowed_routes",
+        [
+            pytest.param(["/*"], id="wildcard"),
+            pytest.param(["llm_api_routes", "/key/info"], id="key-info-preset"),
+        ],
+    )
+    async def test_non_admin_generate_key_with_allowed_routes_rejected(self, allowed_routes: list[str]) -> None:
         data = GenerateKeyRequest(
             key_alias="escalate",
-            allowed_routes=["/*"],
+            allowed_routes=allowed_routes,
         )
         user_api_key_dict = UserAPIKeyAuth(
             user_id="internal-user-123",
@@ -14549,6 +14577,41 @@ class TestAllowedRoutesCallerPermission:
                 )
         assert str(exc_info.value.code) == "403"
         assert "allowed_routes" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_non_admin_generate_key_with_key_info_type_is_allowed(self) -> None:
+        data: Final = GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API_KEY_INFO)
+        user_api_key_dict: Final = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        mock_prisma_client: Final = MagicMock()
+        generate_key: Final = AsyncMock(return_value={"key": "sk-key-info", "user_id": "internal-user-123"})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+            patch("litellm.proxy.proxy_server.llm_router", None),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+                generate_key,
+            ),
+        ):
+            result: Final = await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+
+        saved: Final = generate_key.await_args.kwargs
+        assert (saved["key_type"], saved["allowed_routes"]) == (
+            "llm_api_key_info",
+            ["llm_api_routes", "/key/info"],
+        )
+        assert result.user_id == "internal-user-123"
 
     @pytest.mark.asyncio
     async def test_admin_generate_key_with_allowed_routes_allowed(self):
@@ -15531,6 +15594,7 @@ def test_handle_key_type_persists_key_type_and_derives_routes():
         LiteLLMKeyType.MANAGEMENT: ("management", ["management_routes"]),
         LiteLLMKeyType.READ_ONLY: ("read_only", ["info_routes"]),
         LiteLLMKeyType.LLM_API: ("llm_api", ["llm_api_routes"]),
+        LiteLLMKeyType.LLM_API_KEY_INFO: ("llm_api_key_info", ["llm_api_routes", "/key/info"]),
     }
     for key_type, (expected_type, expected_routes) in cases.items():
         data = GenerateKeyRequest(key_type=key_type)
@@ -22891,6 +22955,7 @@ async def _team_admin_generates_member_key(
     find_owner: AsyncMock,
     generate_key: AsyncMock,
     editable_fields: tuple[str, ...] = ("create_member_keys",),
+    key_type: LiteLLMKeyType | None = None,
 ) -> GenerateKeyResponse:
     prisma_client: Final = MagicMock()
     prisma_client.writer_db.litellm_usertable.find_unique = find_owner
@@ -22909,7 +22974,7 @@ async def _team_admin_generates_member_key(
         ),
     ):
         return await _common_key_generation_helper(
-            data=GenerateKeyRequest(user_id="member-1", team_id="team-1"),
+            data=GenerateKeyRequest(user_id="member-1", team_id="team-1", key_type=key_type),
             user_api_key_dict=UserAPIKeyAuth(user_id="team-admin-1", user_role=LitellmUserRoles.INTERNAL_USER),
             litellm_changed_by=None,
             team_table=_MEMBER_KEY_TEAM,
@@ -22917,16 +22982,34 @@ async def _team_admin_generates_member_key(
 
 
 @pytest.mark.asyncio
-async def test_team_admin_creates_an_llm_api_key_owned_by_an_internal_user_teammate():
+@pytest.mark.parametrize(
+    ("key_type", "expected_key_type", "expected_routes"),
+    [
+        pytest.param(None, "llm_api", ["llm_api_routes"], id="default-llm-api"),
+        pytest.param(
+            LiteLLMKeyType.LLM_API_KEY_INFO,
+            "llm_api_key_info",
+            ["llm_api_routes", "/key/info"],
+            id="key-info",
+        ),
+    ],
+)
+async def test_team_admin_creates_a_supported_key_owned_by_an_internal_user_teammate(
+    key_type: LiteLLMKeyType | None,
+    expected_key_type: str,
+    expected_routes: list[str],
+) -> None:
     generate_key: Final = AsyncMock(return_value={"key": "sk-member", "user_id": "member-1", "team_id": "team-1"})
 
     await _team_admin_generates_member_key(
-        AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.INTERNAL_USER.value)), generate_key
+        AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.INTERNAL_USER.value)),
+        generate_key,
+        key_type=key_type,
     )
 
     saved: Final = generate_key.await_args.kwargs
     assert (saved["user_id"], saved["team_id"]) == ("member-1", "team-1")
-    assert (saved["key_type"], saved["allowed_routes"]) == ("llm_api", ["llm_api_routes"])
+    assert (saved["key_type"], saved["allowed_routes"]) == (expected_key_type, expected_routes)
 
 
 @pytest.mark.asyncio

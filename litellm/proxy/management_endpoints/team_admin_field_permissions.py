@@ -60,6 +60,9 @@ TEAM_ADMIN_MEMBER_KEY_OWNER_ROLES: Final[frozenset[str]] = frozenset(
     {LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value}
 )
 TEAM_ADMIN_MEMBER_KEY_TYPE: Final = LiteLLMKeyType.LLM_API
+TEAM_ADMIN_MEMBER_KEY_TYPES: Final[frozenset[LiteLLMKeyType]] = frozenset(
+    {TEAM_ADMIN_MEMBER_KEY_TYPE, LiteLLMKeyType.LLM_API_KEY_INFO}
+)
 SUPPORTED_TEAM_ADMIN_PERMISSIONS: Final[frozenset[str]] = SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS | {
     TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
     TEAM_ADMIN_PROJECTS_PERMISSION,
@@ -246,7 +249,7 @@ def team_admin_member_key_creation_verdict(
         return TeamAdminMemberKeyCreationDisabled()
     if owner_role not in TEAM_ADMIN_MEMBER_KEY_OWNER_ROLES:
         return TeamAdminMemberKeyOwnerNotPermitted(owner_role=owner_role)
-    if key_type not in (None, LiteLLMKeyType.DEFAULT, TEAM_ADMIN_MEMBER_KEY_TYPE):
+    if key_type not in (None, LiteLLMKeyType.DEFAULT) and key_type not in TEAM_ADMIN_MEMBER_KEY_TYPES:
         return TeamAdminMemberKeyTypeNotPermitted(key_type=key_type)
     return TeamAdminMemberKeyCreationAllowed()
 

@@ -944,6 +944,29 @@ def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
     assert result2 is True
 
 
+@pytest.mark.parametrize("route", ["/key/info", "/chat/completions"])
+def test_llm_api_key_info_routes_allow_key_info_and_llm_api(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes", "/key/info"],
+    )
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token) is True
+
+
+@pytest.mark.parametrize("route", ["/key/generate", "/spend/logs", "/key/list"])
+def test_llm_api_key_info_routes_deny_other_key_and_spend_routes(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes", "/key/info"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+
+
 def test_virtual_key_allowed_routes_with_mixed_member_names_and_explicit_routes():
     """Test that virtual key works with both LiteLLMRoutes member names and explicit routes"""
 

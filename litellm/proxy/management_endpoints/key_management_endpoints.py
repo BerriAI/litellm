@@ -962,6 +962,7 @@ router: Final = APIRouter()
 _KEY_TYPE_PRESET_ROUTES: Final = MappingProxyType(
     {
         LiteLLMKeyType.LLM_API: ("llm_api_routes",),
+        LiteLLMKeyType.LLM_API_KEY_INFO: ("llm_api_routes", "/key/info"),
         LiteLLMKeyType.MANAGEMENT: ("management_routes",),
         LiteLLMKeyType.READ_ONLY: ("info_routes",),
     }
@@ -1018,7 +1019,7 @@ def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object)
             return None
 
 
-_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS: Final = frozenset({"llm_api_routes", "info_routes"})
+_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS: Final = frozenset({"llm_api_routes", "info_routes", "/key/info"})
 
 
 def _validate_caller_can_change_key_ownership(
@@ -1110,7 +1111,7 @@ def _check_allowed_routes_caller_permission(
     )
 
 
-_READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
+_READ_ONLY_ALLOWED_ROUTES_PRESETS: Final = frozenset(("info_routes", "/key/info"))
 
 
 def _is_safe_preset_route_transition(
@@ -1120,16 +1121,16 @@ def _is_safe_preset_route_transition(
     """
     True when every route on BOTH sides is a safe `key_type` preset bucket
     (empty = full access, which non-admins already get from a default
-    `/key/generate`), with one carve-out: a read-only (`info_routes`) key
-    stays read-only, so widening it needs an admin. Requiring the existing
-    side to be a safe preset keeps an owner from clearing an admin-set
-    custom route restriction (LIT-4139).
+    `/key/generate`), with one carve-out: a key whose routes are only read
+    tokens stays unchanged, so widening it needs an admin. Requiring the
+    existing side to be a safe preset keeps an owner from clearing an
+    admin-set custom route restriction (LIT-4139).
     """
     incoming: Final = frozenset(incoming_allowed_routes or ())
     existing: Final = frozenset(existing_allowed_routes or ())
     if not (incoming | existing) <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
         return False
-    return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
+    return not existing or not existing <= _READ_ONLY_ALLOWED_ROUTES_PRESETS or incoming == existing
 
 
 def _resends_stored_routes(
@@ -1418,7 +1419,12 @@ def _team_admin_requests_member_key(
 def _member_key_request(data: GenerateKeyRequest, acting_as_team_admin: bool) -> GenerateKeyRequest:
     if not acting_as_team_admin:
         return data
-    return data.model_copy(update={"key_type": TEAM_ADMIN_MEMBER_KEY_TYPE})
+    member_key_type: Final = (
+        data.key_type
+        if data.key_type == LiteLLMKeyType.LLM_API_KEY_INFO
+        else TEAM_ADMIN_MEMBER_KEY_TYPE
+    )
+    return data.model_copy(update={"key_type": member_key_type})
 
 
 async def _stored_user_role(prisma_client: PrismaClient | None, user_id: str | None) -> str | None:
@@ -2349,11 +2355,11 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Route group names such as `llm_api_routes`, `info_routes`, and `management_routes` can be mixed with literal routes. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
-    - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (Full Access in the Admin UI, skips `default_key_generate_params.allowed_routes`). When omitted, the key gets `default_key_generate_params.allowed_routes` if that is set and the request has no `allowed_routes`, else it works like "default".
+    - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "llm_api_key_info" (can call LLM API routes and read its own key info and spend through `/key/info`), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (Full Access in the Admin UI, skips `default_key_generate_params.allowed_routes`). When omitted, the key gets `default_key_generate_params.allowed_routes` if that is set and the request has no `allowed_routes`, else it works like "default". The `allowed_routes` field accepts route group names such as `llm_api_routes`, `info_routes`, and `management_routes`, mixed with literal routes.
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
@@ -2556,7 +2562,7 @@ async def generate_service_account_key_fn(
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
-    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Route group names such as `llm_api_routes`, `info_routes`, and `management_routes` can be mixed with literal routes. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     Examples:
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
@@ -3888,7 +3894,7 @@ async def update_key_fn(
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
-    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Route group names such as `llm_api_routes`, `info_routes`, and `management_routes` can be mixed with literal routes. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.

@@ -423,6 +423,9 @@ function KeyEditSession({
                   case "llm_api":
                     form.setValue("allowed_routes", "llm_api_routes", { shouldDirty: true });
                     break;
+                  case "llm_api_key_info":
+                    form.setValue("allowed_routes", "llm_api_routes, /key/info", { shouldDirty: true });
+                    break;
                   case "management":
                     form.setValue("allowed_routes", "management_routes", { shouldDirty: true });
                     form.setValue("models", [], { shouldDirty: true });

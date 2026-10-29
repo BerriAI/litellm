@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
+import { keyTypeFromRoutes, moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
+
+describe("keyTypeFromRoutes", () => {
+  it.each([
+    { routes: undefined, expected: "default" },
+    { routes: null, expected: "default" },
+    { routes: [], expected: "default" },
+    { routes: ["llm_api_routes"], expected: "llm_api" },
+    { routes: ["/key/info", "llm_api_routes"], expected: "llm_api_key_info" },
+    { routes: ["management_routes"], expected: "management" },
+    { routes: ["info_routes"], expected: "read_only" },
+    { routes: ["llm_api_routes", "/key/info", "/key/list"], expected: "custom" },
+  ])("maps $routes to $expected", ({ routes, expected }) => {
+    expect(keyTypeFromRoutes(routes)).toBe(expected);
+  });
+});
 
 describe("moveTagsOutOfMetadataJson", () => {
   it("moves a tags array out of the JSON and appends it to the current tags", () => {

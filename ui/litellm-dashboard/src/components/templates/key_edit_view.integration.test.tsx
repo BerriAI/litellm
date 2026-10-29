@@ -846,6 +846,34 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should recognize and preserve AI APIs + Key Info routes when saving without changing the key type", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyInfoKeyData = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes", "/key/info"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyInfoKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const keyTypeSelect = await screen.findByLabelText("Key Type");
+    expect(keyTypeSelect).toHaveTextContent("AI APIs + Key Info");
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      expect("allowed_routes" in onSubmitMock.mock.calls[0][0]).toBe(false);
+    });
+  });
+
   it("should omit allowed_routes from submit when keyData.allowed_routes is null and form is untouched", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataNullRoutes = {
@@ -1559,7 +1587,30 @@ describe("KeyEditView", () => {
       // Verify old "LLM API" label does NOT appear
       const hasLLMAPI = optionTexts.some((text) => text?.includes("LLM API"));
       expect(hasLLMAPI).toBe(false);
+      expect(screen.queryByRole("option", { name: /^Custom routes/ })).not.toBeInTheDocument();
     });
+  });
+
+  it("offers Custom routes for a custom route set", async () => {
+    const customKeyData = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes", "/custom/route"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={customKeyData}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await userEvent.click(await screen.findByLabelText("Key Type"));
+
+    expect(await screen.findByRole("option", { name: /^Custom routes/ })).toBeInTheDocument();
   });
 
   it("should display cancel button during submission", async () => {

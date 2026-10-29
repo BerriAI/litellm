@@ -14,11 +14,13 @@ export const keyOrganizationId = (key: { organization_id?: string | null; org_id
 
 // Determine the key_type display value from allowed_routes
 export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
-  if (!allowedRoutes || allowedRoutes.length === 0) return "default";
-  if (allowedRoutes.includes("llm_api_routes")) return "llm_api";
-  if (allowedRoutes.includes("management_routes")) return "management";
-  if (allowedRoutes.includes("info_routes")) return "read_only";
-  return "default";
+  const routes = new Set(allowedRoutes ?? []);
+  if (routes.size === 0) return "default";
+  if (routes.size === 1 && routes.has("llm_api_routes")) return "llm_api";
+  if (routes.size === 2 && routes.has("llm_api_routes") && routes.has("/key/info")) return "llm_api_key_info";
+  if (routes.size === 1 && routes.has("management_routes")) return "management";
+  if (routes.size === 1 && routes.has("info_routes")) return "read_only";
+  return "custom";
 };
 
 export const parseAllowedRoutes = (value: unknown): string[] =>
