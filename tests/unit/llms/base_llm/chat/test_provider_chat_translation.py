@@ -751,6 +751,42 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
 
 
 @pytest.mark.parametrize(
+    ("case", "expected_system"),
+    [
+        pytest.param(
+            _BY_ID["anthropic_sonnet45"],
+            [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}],
+            id="anthropic_sonnet45",
+        ),
+        pytest.param(
+            _BY_ID["bedrock_invoke_haiku"],
+            [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}],
+            id="bedrock_invoke_haiku",
+        ),
+        pytest.param(
+            _BY_ID["bedrock_converse_haiku"],
+            [{"text": "Be a good bot!"}, {"cachePoint": {"type": "default"}}],
+            id="bedrock_converse_haiku",
+        ),
+    ],
+)
+def test_developer_message_cache_control_survives_the_system_role_translation(
+    case: _Case, expected_system: list[JsonValue], respx_mock: MockRouter
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                {"role": "user", "content": "Hello, how are you?"},
+            ]
+        },
+    )
+    assert _request_body(route)["system"] == expected_system
+
+
+@pytest.mark.parametrize(
     "case",
     _pick(
         "bedrock_converse_gptoss",
