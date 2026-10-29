@@ -3,8 +3,11 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import base64
 import contextvars
+import io
 import logging
+import random
 import sys
 import time
 from collections.abc import AsyncGenerator, Iterator, Sequence
@@ -18,6 +21,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter
+from PIL import Image
 
 import litellm
 from litellm import Router
@@ -64,6 +68,89 @@ from litellm.types.utils import (
     TextCompletionResponse,
     Usage,
 )
+
+
+@pytest.fixture
+def embedding_image_uri() -> str:
+    image: Final = Image.frombytes("RGB", (740, 560), random.Random(11217).randbytes(740 * 560 * 3))
+    buffer: Final = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=85)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
+
+
+@pytest.mark.parametrize("shape", ["string", "list", "file"])
+@pytest.mark.parametrize("precise", [False, True])
+def test_embedding_image_media_estimate(embedding_image_uri: str, shape: str, precise: bool) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    value: Final = (
+        embedding_image_uri
+        if shape == "string"
+        else [embedding_image_uri]
+        if shape == "list"
+        else [{"type": "file", "file": {"file_data": embedding_image_uri}}]
+    )
+    data: Final = {"model": "vertex_ai/gemini-embedding-2", "input": value}
+    estimate: Final = (
+        handler._estimate_precise_input_tokens(data, "vertex_ai/gemini-embedding-2", "aembedding")
+        if precise
+        else handler._estimate_input_and_output_tokens(data, call_type="aembedding")[0]
+    )
+    media_estimate: Final = handler._estimate_media_block_tokens(
+        {"type": "image_url", "image_url": {"url": embedding_image_uri, "detail": "auto"}},
+        ("vertex_ai/gemini-embedding-2",),
+        "vertex_ai/gemini-embedding-2",
+    )
+    assert media_estimate <= estimate < media_estimate + 100 < 75000 < len(embedding_image_uri) // 4
+
+
+@pytest.mark.parametrize("value", ["", "plain embedding text", ["plain", "text"], [1, 2, 3], [[1, 2], [3]]])
+def test_embedding_nonmedia_estimate_preserves_text_and_token_ids(value: object) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    data: Final = {"model": "vertex_ai/gemini-embedding-2", "input": value}
+    legacy: Final = handler._estimate_input_and_output_tokens(data, call_type="aembedding", include_media=False)
+    assert handler._estimate_input_and_output_tokens(data, call_type="aembedding") == legacy
+    token_count: Final = handler._count_pretokenized_embedding_input(value)
+    expected: Final = (
+        token_count
+        if token_count is not None
+        else litellm.token_counter(
+            model="vertex_ai/gemini-embedding-2",
+            text=value,
+        )
+    )
+    assert handler._estimate_precise_input_tokens(data, "vertex_ai/gemini-embedding-2", "aembedding") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["string", "list", "file"])
+async def test_embedding_image_project_tpm_allows_media(embedding_image_uri: str, shape: str) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    value: Final = (
+        embedding_image_uri
+        if shape == "string"
+        else [embedding_image_uri]
+        if shape == "list"
+        else [{"type": "file", "file": {"file_data": embedding_image_uri}}]
+    )
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-embedding-media"),
+        project_id="embedding-media",
+        project_metadata={"model_tpm_limit": {"vertex_ai/gemini-embedding-2": 75000}},
+    )
+    await handler.async_pre_call_hook(
+        user_api_key_dict=caller,
+        cache=cache,
+        data={"model": "vertex_ai/gemini-embedding-2", "input": value},
+        call_type="aembedding",
+    )
+    reserved: Final = await cache.async_get_cache(
+        key=handler.create_rate_limit_keys(
+            "model_per_project", "embedding-media:vertex_ai/gemini-embedding-2", "tokens"
+        ),
+        local_only=True,
+    )
+    assert 0 < reserved < 75000
 
 
 class TimeController:

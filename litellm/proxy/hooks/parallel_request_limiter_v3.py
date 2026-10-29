@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
+    split_embedding_media_for_tpm,
     split_media_for_tpm,
 )
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
@@ -1293,11 +1294,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         media_source: Final = messages if messages is not None else original_input
         projected, media = (
-            split_media_for_tpm(media_source)
+            split_embedding_media_for_tpm(original_input)
+            if include_media and call_type in EMBEDDING_API_CALL_TYPES
+            else split_media_for_tpm(media_source)
             if include_media and (isinstance(messages, list) or call_type in RESPONSES_API_CALL_TYPES)
             else (original_input, ())
         )
-        input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else original_input
+        input_text: Final = (
+            projected
+            if call_type in RESPONSES_API_CALL_TYPES or call_type in EMBEDDING_API_CALL_TYPES
+            else original_input
+        )
         fallback_model: Final = request_model if isinstance(request_model, str) else None
         resolved_models: Final = (
             media_model_resolver(fallback_model or "", team_id)
@@ -3981,12 +3988,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             None if is_responses_request else self._translate_google_genai_native_request(data, call_type)
         )
         is_embedding_request: Final = self._is_embedding_request(data, call_type)
-        embedding_text: Final = data.get("input") if is_embedding_request else None
+        embedding_text: Final = (as_str_mapping(data) or {}).get("input") if is_embedding_request else None
         pretokenized_input_tokens: Final = (
             self._count_pretokenized_embedding_input(embedding_text) if is_embedding_request else None
         )
         if pretokenized_input_tokens is not None:
             return pretokenized_input_tokens
+
+        embedding_projected, embedding_media = (
+            split_embedding_media_for_tpm(embedding_text) if is_embedding_request else (embedding_text, ())
+        )
+        embedding_media_tokens: Final = sum(
+            self._estimate_media_block_tokens(block, self._tokenizer_models_resolver(model or ""), model)
+            for block in embedding_media
+        )
 
         prompt: Final = data.get("prompt")
         fallback_text: Final = prompt if prompt is not None else data.get("input")
@@ -4000,7 +4015,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 translated_request.get("tool_choice"),
             )
             if translated_request is not None
-            else (None, embedding_text, data.get("tools"), data.get("tool_choice"))
+            else (None, embedding_projected, data.get("tools"), data.get("tool_choice"))
             if is_embedding_request
             else (None, self._rerank_input_to_text(data), data.get("tools"), data.get("tool_choice"))
             if call_type in RERANK_API_CALL_TYPES
@@ -4032,12 +4047,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     for tokenizer_model in self._tokenizer_models_resolver(model or "")
                 ),
             )
-            return estimate + audio_token_estimate
+            return estimate + audio_token_estimate + embedding_media_tokens
         except Exception:  # noqa: BLE001  # tokenizer failures degrade to the cheap estimate
             if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
                 return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
             estimated_input_tokens, _ = self._estimate_input_and_output_tokens(
-                data=data, call_type=call_type, include_media=False
+                data=data, call_type=call_type, include_media=is_embedding_request
             )
             return estimated_input_tokens + audio_token_estimate
 

@@ -386,6 +386,22 @@ def _tpm_input_media(value: object) -> _TPMMediaProjection:
     return _tpm_tool_result_media(value)
 
 
+def _tpm_embedding_media_leaf(value: object) -> _TPMMediaProjection:
+    if isinstance(value, str) and value.startswith(("data:image/", "data:audio/")):
+        projection: Final = _tpm_file_media({"type": "file", "file": {"file_data": value}})
+        return _TPMMediaProjection("", projection.media)
+    return _tpm_media_leaf(value)
+
+
+def split_embedding_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
+    projection: Final = (
+        _tpm_embedding_media_leaf(value)
+        if isinstance(value, str) or as_str_mapping(value) is not None
+        else _tpm_media_list(value, _tpm_embedding_media_leaf)
+    )
+    return projection.content, projection.media
+
+
 def split_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
     projection: Final = _tpm_media_list(value, _tpm_input_media)
     return projection.content, projection.media
