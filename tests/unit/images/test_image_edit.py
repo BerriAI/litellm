@@ -50,6 +50,11 @@ _DASHSCOPE_EDIT_RESPONSE: Final = {
     "usage": {"image_count": 1},
 }
 
+_FAL_EDIT_URL: Final = "https://fal.run/fal-ai/flux-2/edit"
+_FAL_EDIT_RESPONSE: Final = {
+    "images": [{"url": "https://example.com/edited.png", "width": 1024, "height": 768, "content_type": "image/png"}]
+}
+
 
 class _LoggedImageEdit(TypedDict):
     model: ReadOnly[str]
@@ -300,3 +305,46 @@ async def test_an_edit_bills_the_deployment_price_at_its_size_on_a_logging_objec
 
     assert isinstance(result, ImageResponse)
     assert result._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_a_fal_edit_bills_the_deployment_price_per_image_on_a_logging_object_made_before_routing(
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FAL_AI_API_BASE", raising=False)
+    respx_mock.post(_FAL_EDIT_URL).mock(return_value=httpx.Response(200, json=_FAL_EDIT_RESPONSE))
+    logging_made_before_routing: Final = Logging(
+        model="flux-edit",
+        messages=[],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=datetime.now(),
+        litellm_call_id="fal-edit-call",
+        function_id="fal-edit-call",
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux-edit",
+                "litellm_params": {
+                    "model": "fal_ai/fal-ai/flux-2/edit",
+                    "api_key": "fake-key",
+                    "output_cost_per_image": 0.0456,
+                },
+            }
+        ]
+    )
+
+    result: Final = await router.aimage_edit(
+        model="flux-edit",
+        image=_FIRST_IMAGE,
+        prompt="Turn the circle into a square",
+        litellm_logging_obj=logging_made_before_routing,
+        litellm_call_id="fal-edit-call",
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert result._hidden_params["response_cost"] == pytest.approx(0.0456)
