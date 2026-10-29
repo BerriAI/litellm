@@ -116,7 +116,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         model: str,
         drop_params: bool,
         *,
-        declared_reasoning_efforts: Collection[str] = (),
+        declared_reasoning_efforts: Collection[str] | None = None,
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
         if not azureAIGPT5Config.is_model_gpt_5_model(model):
             return super().map_openai_params(

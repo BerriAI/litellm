@@ -6,6 +6,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
+from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -29,13 +30,16 @@ from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
 from ...common_utils import (
+    OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
+    is_claude_model_target,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    tools_without_custom_field,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -182,6 +186,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """
         return False
 
+    def hoists_wrapped_defer_loading(self, model: str) -> bool:
+        return is_claude_model_target(self._resolved_provider, model)
+
+    def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
+        return tools_without_custom_field(
+            tools,
+            hoist_defer_loading=self.hoists_wrapped_defer_loading(model),
+            drop_custom=drops_unsupported_params(drop_params),
+        )
+
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
         """
@@ -195,7 +209,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """
         if isinstance(system_param, str):
             # If it's a string and starts with billing header, filter it out
-            if system_param.startswith("x-anthropic-billing-header:"):
+            if system_param.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
                 return None
             return system_param
         elif isinstance(system_param, list):
@@ -206,7 +220,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     text = content_block.get("text", "")
                     content_type = content_block.get("type", "")
                     # Skip text blocks that start with billing header
-                    if content_type == "text" and text.startswith("x-anthropic-billing-header:"):
+                    if content_type == "text" and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
                         continue
                     filtered_list.append(content_block)
                 else:
@@ -703,7 +717,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         # Auto-strip advisor blocks from history if advisor tool is absent.
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
-        _tools: Final = anthropic_messages_optional_request_params.get("tools") or []
+        tools: Final = anthropic_messages_optional_request_params.get("tools")
+        _tools: Final = tools or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
         if not _has_advisor:
             messages = strip_advisor_blocks_from_messages(messages)
@@ -716,7 +731,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             **anthropic_messages_optional_request_params,
         )
-        return dict(anthropic_messages_request)
+        if not isinstance(tools, list):
+            return dict(anthropic_messages_request)
+        return {
+            **anthropic_messages_request,
+            "tools": self.tools_for_upstream(
+                OBJECT_LIST_ADAPTER.validate_python(tools), model, litellm_params.drop_params
+            ),
+        }
 
     def transform_anthropic_messages_response(
         self,

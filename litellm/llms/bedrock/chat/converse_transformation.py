@@ -118,6 +118,7 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
     BedrockModelInfo,
     bedrock_cache_point_ttl_supported,
@@ -1195,11 +1196,7 @@ class AmazonConverseConfig(BaseConfig):
                         ),
                         status_code=400,
                     )
-                verbose_logger.debug(
-                    "Dropping unsupported `reasoning_effort=%s` for Bedrock model=%s.",
-                    value,
-                    model,
-                )
+                verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning_effort", value, model)
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params

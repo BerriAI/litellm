@@ -263,10 +263,10 @@ class AgenticLoopParams(TypedDict, total=False):
     """
 
     model: str
-    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    """The model as the caller requested it, usually with its provider prefix (e.g., 'bedrock/invoke/...')"""
 
     custom_llm_provider: str
-    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+    """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
 
 class OffPeakWindow(TypedDict, total=False):
@@ -2878,7 +2878,7 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: TranscriptionUsageInputTokenDetailsObject
+    input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
 class TranscriptionResponse(OpenAIObject):
@@ -4424,6 +4424,7 @@ class LlmProviders(str, Enum):
     JINA_AI = "jina_ai"
     XAI = "xai"
     ZAI = "zai"
+    BIGMODEL = "bigmodel"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -4593,6 +4594,7 @@ class LlmProviders(str, Enum):
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
+    STREAMLAKE = "streamlake"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

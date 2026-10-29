@@ -165,6 +165,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
+    AgenticLoopParams,
     CachingDetails,
     CallTypes,
     CostBreakdown,
@@ -1130,9 +1131,6 @@ class Logging(LiteLLMLoggingBaseClass):
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
-        if is_debugging_on() or self.litellm_request_debug:
-            verbose_logger.debug("self.optional_params: %s", self.optional_params)
-
         self.model_call_details.update(
             {
                 "model": self.model,
@@ -1160,6 +1158,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
+        self.model_call_details["agentic_loop_params"] = params
 
     def record_applied_timeout(self, timeout: float | Timeout) -> None:
         self.applied_timeout = timeout
@@ -2758,7 +2759,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if entry is None or not is_str_keyed_dict(litellm_params):
             return
         metadata: Final[object] = litellm_params.get("metadata")
-        bucket: Final = metadata if is_str_keyed_dict(metadata) else {}
+        bucket: Final = {**metadata} if is_str_keyed_dict(metadata) else {}
         litellm_params["metadata"] = bucket
         with_guardrail_entry(bucket, entry)
 
@@ -3481,7 +3482,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
-                            level=LogfireLevel.INFO.value,
+                            level=LogfireLevel.INFO,
                         )
 
                     if callback == "lunary" and lunaryLogger is not None:
@@ -4442,7 +4443,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            level=LogfireLevel.ERROR.value,
+                            level=LogfireLevel.ERROR,
                             print_verbose=print_verbose,
                         )
 
@@ -5055,6 +5056,23 @@ class Logging(LiteLLMLoggingBaseClass):
         return result_copy
 
 
+_SENSITIVE_KEYWORDS: Final = (
+    "authorization",
+    "token",
+    "key",
+    "secret",
+    "vertex_credentials",
+    "credentials",
+    "password",
+    "passwd",
+)
+
+
+def has_sensitive_keyword(key: str) -> bool:
+    lowered: Final = key.lower()
+    return any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS)
+
+
 def get_masked_values(
     sensitive_object: Mapping[str, object],
     ignore_sensitive_values: bool = False,
@@ -5073,16 +5091,6 @@ def get_masked_values(
         masked_length: Optional length for the masked portion (number of *). If set, will use exactly this many *
                      regardless of original string length. The total length will be unmasked_length + masked_length.
     """
-    sensitive_keywords: Final = (
-        "authorization",
-        "token",
-        "key",
-        "secret",
-        "vertex_credentials",
-        "credentials",
-        "password",
-        "passwd",
-    )
 
     def _mask_value(v: object) -> object:
         if isinstance(v, dict):
@@ -5109,12 +5117,7 @@ def get_masked_values(
         return v[: unmasked_length // 2] + "*" * (len(v) - unmasked_length) + v[-unmasked_length // 2 :]
 
     return {
-        k: (
-            v
-            if ignore_sensitive_values
-            or not any(sensitive_keyword in k.lower() for sensitive_keyword in sensitive_keywords)
-            else _mask_value(v)
-        )
+        k: (v if ignore_sensitive_values or not has_sensitive_keyword(k) else _mask_value(v))
         for k, v in sensitive_object.items()
     }
 

@@ -556,6 +556,28 @@ def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drop
     ]
 
 
+def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, object]) -> object:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs={**OPENAI_API, "drop_params": drop_params},
+        max_tokens=1024,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}],
+    )
+    return responses_kwargs["input"]
+
+
+def test_a_malformed_raw_marker_beside_cache_control_gives_way_to_it_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    malformed: Final = {"prompt_cache_breakpoint": "yes"}
+
+    assert _gpt_5_6_input_for_a_cached_block(True, malformed) == _gpt_5_6_input_for_a_cached_block(True, {})
+    assert _gpt_5_6_input_for_a_cached_block(False, malformed) == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "look", **malformed}]}
+    ]
+
+
 @pytest.mark.parametrize(
     ("model", "extra_kwargs"),
     [
