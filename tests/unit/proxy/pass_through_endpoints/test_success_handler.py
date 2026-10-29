@@ -648,3 +648,157 @@ def test_vertex_ai_live_route_without_usage_frames_yields_no_logging_response(
 
     assert normalized["standard_logging_response_object"] is None
     assert normalized["kwargs"] == {"model": _LIVE_MODEL}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_mode", ["once", "twice", "scope", "none"])
+@pytest.mark.parametrize("cancel_phase", ["allocation", "lock"])
+async def test_completed_passthrough_cancellation_preserves_accounting(
+    monkeypatch: pytest.MonkeyPatch, cancel_mode: str, cancel_phase: str
+) -> None:
+    from unittest.mock import create_autospec
+
+    import anyio
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.budget_reservation import release_unbound_budget_reservation
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    class AllowanceCounter:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls = 0
+            self.units = 0.0
+
+        async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
+            self.started.set()
+            await self.release.wait()
+            self.calls += 1
+            self.units += value
+            return self.units
+
+    now: Final = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    model: Final = "passthrough-cancellation-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "vertex_ai",
+            "mode": "chat",
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.02,
+            "web_search_billing_unit": "per_query",
+            "search_context_cost_per_query": {"search_context_size_medium": 0.01},
+            "search_free_requests": {"count": 2, "period": "month", "shared_group": "cancelled-pass-through"},
+        },
+    )
+    monkeypatch.setattr(litellm, "apply_search_free_tier", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    counters: Final = DualCache()
+    for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
+        counters.set_cache(key=key, value=1.9)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
+    reservation: Final = {
+        "reserved_cost": 0.4,
+        "callback_bound": False,
+        "entries": [
+            {"counter_key": key, "entity_type": "Key", "entity_id": key, "reserved_cost": 0.4}
+            for key in ("spend:key:pass-through-key", "spend:team:pass-through-team")
+        ],
+    }
+    writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.db_spend_update_writer = writer
+    allowance: Final = AllowanceCounter()
+    monkeypatch.setattr(proxy_logging.internal_usage_cache.dual_cache, "redis_cache", allowance)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=now,
+        litellm_call_id="cancelled-pass-through",
+        function_id="cancelled-pass-through",
+    )
+    logging_obj.add_dynamic_callback(ProxyDBLogger(spend_writer=lambda: writer))
+    logging_obj.update_environment_variables(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        optional_params={},
+        litellm_params={
+            "metadata": {
+                "user_api_key": "pass-through-key",
+                "user_api_key_user_id": "pass-through-user",
+                "user_api_key_team_id": "pass-through-team",
+                "user_api_key_budget_reservation": reservation,
+            }
+        },
+    )
+    result: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3),
+        ),
+    )
+    result._hidden_params["response_cost"] = 0.5
+    scope: Final = anyio.CancelScope()
+    entered: Final = asyncio.Event()
+
+    async def dispatch() -> None:
+        with scope:
+            entered.set()
+            await PassThroughEndpointLogging().handle_logging(
+                logging_obj=logging_obj,
+                standard_logging_response_object=result,
+                result="",
+                start_time=now,
+                end_time=now,
+                cache_hit=False,
+                finalize_before_dispatch=True,
+            )
+
+    if cancel_phase == "lock":
+        await logging_obj.cost_finalization_lock.acquire()
+    pending: Final = asyncio.create_task(dispatch())
+    await entered.wait()
+    if cancel_phase == "allocation":
+        await allowance.started.wait()
+    if cancel_mode == "scope":
+        scope.cancel()
+    elif cancel_mode != "none":
+        pending.cancel()
+        await asyncio.sleep(0)
+        if cancel_mode == "twice":
+            pending.cancel()
+    if cancel_phase == "lock":
+        logging_obj.cost_finalization_lock.release()
+    allowance.release.set()
+    if cancel_mode in ("once", "twice"):
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    else:
+        await pending
+        assert scope.cancelled_caught is (cancel_mode == "scope")
+    assert reservation["callback_bound"] is True
+    await release_unbound_budget_reservation(reservation)
+    await GLOBAL_LOGGING_WORKER.flush()
+    assert allowance.calls == 1
+    assert allowance.units == 3
+    assert writer.update_database.await_count == 1
+    recorded: Final = writer.update_database.call_args.kwargs
+    assert recorded["response_cost"] == pytest.approx(0.48)
+    payload: Final = recorded["kwargs"]["standard_logging_object"]
+    assert payload["cost_finalized"] is True
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
+    assert reservation["finalized"] is True
+    for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
+        assert await counters.async_get_cache(key=key) == pytest.approx(1.98)
