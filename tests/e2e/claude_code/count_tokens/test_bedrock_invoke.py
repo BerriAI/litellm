@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_proxy
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_count_tokens_shape,
     probe_count_tokens,
@@ -54,15 +55,24 @@ BEDROCK_INVOKE_MODELS = [
 
 
 @pytest.mark.covers("llm.messages.bedrock_invoke.count_tokens.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.COUNT_TOKENS,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_INVOKE_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_count_tokens_bedrock_invoke(compat_result):
     """Probe `/v1/messages/count_tokens` for each Bedrock (Invoke) tier and
     assert the response shape."""
-    base_url, api_key = require_proxy(compat_result)
+    client, api_key = require_proxy_client(compat_result)
 
     failures = []
     for model in BEDROCK_INVOKE_MODELS:
         result = probe_count_tokens(
-            base_url=base_url, api_key=api_key, model=model
+            client=client, api_key=api_key, model=model
         )
         shape_error = assert_count_tokens_shape(result)
         if shape_error is not None:

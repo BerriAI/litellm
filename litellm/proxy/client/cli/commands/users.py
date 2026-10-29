@@ -1,29 +1,33 @@
+from typing import Final
+
 import click
 import rich
+
 from ... import UsersManagementClient
+from ._cli_context import cli_context_values
 
 
 @click.group()
 def users():
     """Manage users on your LiteLLM proxy server"""
-    pass
 
 
 @users.command("list")
 @click.pass_context
 def list_users(ctx: click.Context):
     """List all users"""
-    client = UsersManagementClient(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    client: Final = UsersManagementClient(base_url=context["base_url"], api_key=context["api_key"])
     users = client.list_users()
     if isinstance(users, dict) and "users" in users:
         users = users["users"]
     if not users:
         click.echo("No users found.")
         return
-    from rich.table import Table
     from rich.console import Console
+    from rich.table import Table
 
-    table = Table(title="Users")
+    table: Final = Table(title="Users")
     table.add_column("User ID", style="cyan")
     table.add_column("Email", style="green")
     table.add_column("Role", style="magenta")
@@ -35,7 +39,7 @@ def list_users(ctx: click.Context):
             str(user.get("user_role", "")),
             ", ".join(user.get("teams", []) or []),
         )
-    console = Console()
+    console: Final = Console()
     console.print(table)
 
 
@@ -44,8 +48,9 @@ def list_users(ctx: click.Context):
 @click.pass_context
 def get_user(ctx: click.Context, user_id: str):
     """Get information about a specific user"""
-    client = UsersManagementClient(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
-    result = client.get_user(user_id=user_id)
+    context: Final = cli_context_values(ctx)
+    client: Final = UsersManagementClient(base_url=context["base_url"], api_key=context["api_key"])
+    result: Final = client.get_user(user_id=user_id)
     rich.print_json(data=result)
 
 
@@ -58,8 +63,9 @@ def get_user(ctx: click.Context, user_id: str):
 @click.pass_context
 def create_user(ctx: click.Context, email, role, alias, team, max_budget):
     """Create a new user"""
-    client = UsersManagementClient(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
-    user_data = {
+    context: Final = cli_context_values(ctx)
+    client: Final = UsersManagementClient(base_url=context["base_url"], api_key=context["api_key"])
+    user_data: Final = {
         "user_email": email,
         "user_role": role,
     }
@@ -69,7 +75,7 @@ def create_user(ctx: click.Context, email, role, alias, team, max_budget):
         user_data["teams"] = list(team)
     if max_budget is not None:
         user_data["max_budget"] = max_budget
-    result = client.create_user(user_data)
+    result: Final = client.create_user(user_data)
     rich.print_json(data=result)
 
 
@@ -78,6 +84,7 @@ def create_user(ctx: click.Context, email, role, alias, team, max_budget):
 @click.pass_context
 def delete_user(ctx: click.Context, user_ids):
     """Delete one or more users by user_id"""
-    client = UsersManagementClient(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
-    result = client.delete_user(list(user_ids))
+    context: Final = cli_context_values(ctx)
+    client: Final = UsersManagementClient(base_url=context["base_url"], api_key=context["api_key"])
+    result: Final = client.delete_user(list(user_ids))
     rich.print_json(data=result)

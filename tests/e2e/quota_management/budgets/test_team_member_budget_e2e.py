@@ -21,6 +21,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import Success, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage
 
@@ -46,7 +47,7 @@ def member(client: BudgetClient) -> Iterator[_Member]:
     Cleanups register progressively and run LIFO best-effort through ResourceManager,
     so a partial-setup failure still releases what came before and one failed delete
     never strands the rest on the shared proxy."""
-    resources = ResourceManager(client=client.gateway)
+    resources = ResourceManager(client=client.proxy)
     try:
         marker = unique_marker()
         team_id = client.create_team(alias=f"e2e-team-member-{marker}", max_budget=TEAM_BUDGET)
@@ -64,7 +65,7 @@ def member(client: BudgetClient) -> Iterator[_Member]:
 def _send(client: BudgetClient, key: str) -> str | None:
     """One member call; its response id (== the spend-log request_id) if it went
     through, else None."""
-    match client.gateway.chat(
+    match client.proxy.chat(
         key,
         ChatBody(
             model=MODEL,
@@ -79,11 +80,19 @@ def _send(client: BudgetClient, key: str) -> str | None:
 
 
 class TestTeamMemberBudget:
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_member_spend_attributed_to_team_and_user(self, client: BudgetClient, member: _Member) -> None:
         sent = frozenset(rid for rid in (_send(client, member.key) for _ in range(BURST)) if rid)
         assert sent, "no member call went through; cannot check attribution"
 
-        rows = client.gateway.poll_logs_for_key(
+        rows = client.proxy.poll_logs_for_key(
             member.key, predicate=lambda rs: bool(sent & {r.request_id for r in rs})
         )
         logged = [row for row in rows if row.request_id in sent]
@@ -98,6 +107,14 @@ class TestTeamMemberBudget:
             )
 
     @pytest.mark.covers("quota_management.budget.team_member.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_member_spend_over_budget_is_blocked(self, client: BudgetClient, member: _Member) -> None:
         for _ in range(40):
             result = client.chat(member.key, MODEL, f"spend {unique_marker()}", max_tokens=16)

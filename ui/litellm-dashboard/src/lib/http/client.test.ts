@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { createApiClient, ApiError, deriveErrorMessage } from "./client";
+import {
+  createApiClient,
+  ApiError,
+  deriveErrorMessage,
+  extractProxyErrorMessage,
+  unwrapProxyErrorMessage,
+} from "./client";
 
 const okResponse = (data: unknown): Response =>
   ({ ok: true, status: 200, text: async () => JSON.stringify(data) }) as unknown as Response;
@@ -29,10 +35,20 @@ describe("createApiClient", () => {
     expect(url).toBe("https://proxy.example/models?team=t1&page=2");
     expect(init).toMatchObject({ method: "GET" });
     expect(init.headers).toEqual({
+      Accept: "application/json",
       "Content-Type": "application/json",
       "x-litellm-key": "Bearer sk-123",
     });
     expect(init.body).toBeUndefined();
+  });
+
+  it("forwards the browser credential policy", async () => {
+    const fetchImpl = vi.fn(async () => okResponse({}));
+    const client = createApiClient({ getBaseUrl: () => "https://proxy.example", fetchImpl });
+
+    await client.get("/authorize/flow", { credentials: "include" });
+
+    expect(fetchImpl.mock.calls[0][1].credentials).toBe("include");
   });
 
   it("JSON-serializes the body for writes", async () => {
@@ -46,6 +62,16 @@ describe("createApiClient", () => {
     expect(init.body).toBe(JSON.stringify({ model_name: "gpt" }));
   });
 
+  it("reports a non-JSON success body as an ApiError naming the path instead of a parse error", async () => {
+    const html = new Response("<!DOCTYPE html><html></html>", { headers: { "Content-Type": "text/html" } });
+    const client = createApiClient({ getBaseUrl: () => "", fetchImpl: vi.fn(async () => html) });
+
+    const error = await client.get("/lens").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).message).toBe("Expected JSON from /lens but the server returned text/html");
+  });
+
   it("throws ApiError with the derived message and invokes onError on a non-2xx response", async () => {
     const fetchImpl = vi.fn(async () => errorResponse(403, { error: { message: "no access" } }));
     const onError = vi.fn();
@@ -56,6 +82,18 @@ describe("createApiClient", () => {
     await expect(promise).rejects.toBeInstanceOf(ApiError);
     await expect(promise).rejects.toMatchObject({ message: "no access", status: 403 });
     expect(onError).toHaveBeenCalledWith("no access");
+  });
+
+  it("unwraps an object-shaped detail ({detail:{error}}) rather than dumping the JSON envelope (FastAPI HTTPException shape)", async () => {
+    const conflict = "A skill named 'gitlab' already exists. Update the existing skill instead of adding it again.";
+    const fetchImpl = vi.fn(async () => errorResponse(409, { detail: { error: conflict } }));
+    const onError = vi.fn();
+    const client = createApiClient({ getBaseUrl: () => "", onError, fetchImpl });
+
+    const promise = client.get("/claude-code/plugins", { accessToken: "sk" });
+
+    await expect(promise).rejects.toMatchObject({ message: conflict, status: 409 });
+    expect(onError).toHaveBeenCalledWith(conflict);
   });
 
   it("falls back to the raw text body when a non-2xx response is not JSON (e.g. an HTML 502)", async () => {
@@ -83,7 +121,26 @@ describe("createApiClient", () => {
     await client.get("/public/info");
 
     const [, init] = fetchImpl.mock.calls[0];
-    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(init.headers).toEqual({ Accept: "application/json", "Content-Type": "application/json" });
+  });
+
+  it("getBlob returns the response body as a Blob on success", async () => {
+    const blob = new Blob(["csv,data"], { type: "text/csv" });
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, blob: async () => blob }) as unknown as Response);
+    const client = createApiClient({ getBaseUrl: () => "https://proxy.example", fetchImpl });
+
+    const result = await client.getBlob("/user/daily/activity/export", { accessToken: "sk" });
+
+    expect(result).toBe(blob);
+    const [, blobInit] = fetchImpl.mock.calls[0] as unknown as [unknown, RequestInit];
+    expect(blobInit.method).toBe("GET");
+  });
+
+  it("getBlob throws ApiError on a non-2xx response", async () => {
+    const fetchImpl = vi.fn(async () => errorResponse(500, { error: "export failed" }));
+    const client = createApiClient({ getBaseUrl: () => "", fetchImpl });
+
+    await expect(client.getBlob("/user/daily/activity/export", { accessToken: "sk" })).rejects.toBeInstanceOf(ApiError);
   });
 
   it("resolves the global fetch per call, so a swap after construction takes effect", async () => {
@@ -118,5 +175,49 @@ describe("deriveErrorMessage", () => {
 
   it("falls back to a string detail field", () => {
     expect(deriveErrorMessage({ detail: "detail text" })).toBe("detail text");
+  });
+
+  it("unwraps the HTTPException detail.error shape management endpoints raise", () => {
+    expect(deriveErrorMessage({ detail: { error: "Team(s) not found: ghost-team" } })).toBe(
+      "Team(s) not found: ghost-team",
+    );
+  });
+});
+
+describe("unwrapProxyErrorMessage", () => {
+  it("should unwrap the proxy's stringified python dict message", () => {
+    expect(
+      unwrapProxyErrorMessage("{'error': 'Cost center CC-9999 is not recognized. Contact the FinOps team.'}"),
+    ).toBe("Cost center CC-9999 is not recognized. Contact the FinOps team.");
+  });
+
+  it("should unwrap the full JSON error envelope down to the inner message", () => {
+    const envelope = JSON.stringify({
+      error: {
+        message: "{'error': 'cost_center is required in team metadata. Contact the FinOps team.'}",
+        type: "internal_server_error",
+        param: "None",
+        code: "400",
+      },
+    });
+    expect(unwrapProxyErrorMessage(envelope)).toBe(
+      "cost_center is required in team metadata. Contact the FinOps team.",
+    );
+  });
+
+  it("should return plain messages and unparseable input unchanged", () => {
+    expect(unwrapProxyErrorMessage("Failed to fetch")).toBe("Failed to fetch");
+    expect(unwrapProxyErrorMessage("{}")).toBe("{}");
+  });
+});
+
+describe("extractProxyErrorMessage", () => {
+  it("should unwrap an Error's message without the error name prefix", () => {
+    const error = new ApiError("{'error': 'Cost center CC-9999 is not recognized.'}", 400, {});
+    expect(extractProxyErrorMessage(error)).toBe("Cost center CC-9999 is not recognized.");
+  });
+
+  it("should stringify non-Error inputs", () => {
+    expect(extractProxyErrorMessage("plain failure")).toBe("plain failure");
   });
 });

@@ -1,18 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Union
+from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.files.types import FileContentStreamingResult
 from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     FileContentRequest,
+    FileListPage,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
-    OpenAIFilesPurpose,
 )
 from litellm.types.utils import LlmProviders, ModelResponse
 
@@ -20,16 +22,37 @@ from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from litellm.types.proxy.auth.user_api_key_auth import Span as _Span
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth as _UserAPIKeyAuth
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    Span = Any
+    Span = _Span
     Router = _Router
+    UserAPIKeyAuth = _UserAPIKeyAuth
 else:
     LiteLLMLoggingObj = Any
     Span = Any
     Router = Any
+    UserAPIKeyAuth = Any
+
+
+def _routes_nowhere(_model_name: str) -> bool:
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class FileListModelScope:
+    model_mapping_keys: frozenset[str]
+    routes_stored_model_name: Callable[[str], bool] = _routes_nowhere
+
+    def holds(self, model_mapping_keys: Iterable[str], stored: bool) -> bool:
+        mapped_keys: Final = frozenset(model_mapping_keys)
+        return not self.model_mapping_keys.isdisjoint(mapped_keys) or (
+            stored and any(map(self.routes_stored_model_name, mapped_keys))
+        )
 
 
 class BaseFileUploadStream(ABC):
@@ -65,13 +88,13 @@ class BaseFilesConfig(BaseConfig):
         return "POST"
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         pass
 
     def get_complete_file_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
@@ -101,12 +124,11 @@ class BaseFilesConfig(BaseConfig):
             - str/bytes: For traditional file uploads
             - TwoStepFileUploadConfig: For two-step upload process (e.g., Manus, GCS)
         """
-        pass
 
     @abstractmethod
     def transform_create_file_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
@@ -121,7 +143,6 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Transform file retrieve request into provider-specific format."""
-        pass
 
     @abstractmethod
     def transform_retrieve_file_response(
@@ -131,7 +152,9 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> OpenAIFileObject:
         """Transform file retrieve response into OpenAI format."""
-        pass
+
+    def is_retrieve_file_response_successful(self, response: httpx.Response) -> bool:
+        return not httpx.codes.is_error(response.status_code)
 
     @abstractmethod
     def transform_delete_file_request(
@@ -141,7 +164,6 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Transform file delete request into provider-specific format."""
-        pass
 
     @abstractmethod
     def transform_delete_file_response(
@@ -151,17 +173,24 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> "FileDeleted":
         """Transform file delete response into OpenAI format."""
-        pass
 
     @abstractmethod
     def transform_list_files_request(
         self,
-        purpose: Optional[str],
+        purpose: str | None,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Transform file list request into provider-specific format."""
-        pass
+
+    def transform_list_files_next_request(
+        self,
+        raw_response: httpx.Response,
+        optional_params: Mapping[str, object],
+        litellm_params: dict,  # mutable-ok: carries provider stashes from the request transform to the response one
+    ) -> tuple[str, dict[str, str]] | None:
+        """Request for the page after `raw_response`, or None once the listing is complete."""
+        return None
 
     @abstractmethod
     def transform_list_files_response(
@@ -169,9 +198,8 @@ class BaseFilesConfig(BaseConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-    ) -> List[OpenAIFileObject]:
+    ) -> list[OpenAIFileObject]:
         """Transform file list response into OpenAI format."""
-        pass
 
     @abstractmethod
     def transform_file_content_request(
@@ -181,7 +209,6 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         """Transform file content request into provider-specific format."""
-        pass
 
     @abstractmethod
     def transform_file_content_response(
@@ -191,12 +218,23 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> "HttpxBinaryResponseContent":
         """Transform file content response into OpenAI format."""
-        pass
+
+    async def transform_file_content_stream(
+        self,
+        *,
+        stream_iterator: AsyncGenerator[bytes, None],
+        headers: Mapping[str, str],
+        request_url: str,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> FileContentStreamingResult:
+        """Transform a streamed file content body. Passes the upstream bytes and headers through by default."""
+        return FileContentStreamingResult(stream_iterator=stream_iterator, headers=headers)
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -212,12 +250,12 @@ class BaseFilesConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
@@ -230,7 +268,7 @@ class BaseFileEndpoints(ABC):
         self,
         create_file_request: CreateFileRequest,
         llm_router: Router,
-        target_model_names_list: List[str],
+        target_model_names_list: list[str],
         litellm_parent_otel_span: Span,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
@@ -240,36 +278,41 @@ class BaseFileEndpoints(ABC):
     async def afile_retrieve(
         self,
         file_id: str,
-        litellm_parent_otel_span: Optional[Span],
-        llm_router: Optional[Router] = None,
+        litellm_parent_otel_span: Span | None,
+        llm_router: Router | None = None,
     ) -> OpenAIFileObject:
         pass
 
     @abstractmethod
     async def afile_list(
         self,
-        purpose: Optional[OpenAIFilesPurpose],
-        litellm_parent_otel_span: Optional[Span],
-        **data: Dict,
-    ) -> List[OpenAIFileObject]:
+        purpose: str | None,
+        litellm_parent_otel_span: Span | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: int | None = None,
+        after: str | None = None,
+        model_scope: FileListModelScope | None = None,
+        before: str | None = None,
+        **data: dict,
+    ) -> FileListPage:
         pass
 
     @abstractmethod
     async def afile_delete(
         self,
         file_id: str,
-        litellm_parent_otel_span: Optional[Span],
+        litellm_parent_otel_span: Span | None,
         llm_router: Router,
-        **data: Dict,
-    ) -> OpenAIFileObject:
+        **data: dict,
+    ) -> FileDeleted:
         pass
 
     @abstractmethod
     async def afile_content(
         self,
         file_id: str,
-        litellm_parent_otel_span: Optional[Span],
+        litellm_parent_otel_span: Span | None,
         llm_router: Router,
-        **data: Dict,
+        **data: dict,
     ) -> "HttpxBinaryResponseContent":
         pass

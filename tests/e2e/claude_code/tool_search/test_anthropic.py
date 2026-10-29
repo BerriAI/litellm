@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_proxy
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
+from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_tool_search_shape,
     probe_tool_search,
@@ -60,15 +62,25 @@ ANTHROPIC_MODELS = [
 
 
 @pytest.mark.covers("llm.messages.anthropic.tool_search.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.ANTHROPIC,),
+        models=tuple(ANTHROPIC_MODELS),
+        capabilities=(Capability.TOOL_SEARCH,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_search_anthropic(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Anthropic
     tier."""
-    base_url, api_key = require_proxy(compat_result)
+    client, api_key = require_proxy_client(compat_result)
 
     failures = []
     for model in ANTHROPIC_MODELS:
-        result = probe_tool_search(base_url=base_url, api_key=api_key, model=model)
+        result = probe_tool_search(client=client, api_key=api_key, model=model)
         shape_error = assert_tool_search_shape(result)
         if shape_error is not None:
             error = f"[{model}] tool_search probe failed: {shape_error}"

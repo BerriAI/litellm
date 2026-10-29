@@ -1,25 +1,13 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchToolTester } from "./SearchToolTester";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   searchToolQueryCall: vi.fn(),
 }));
-
-vi.mock("antd", async () => {
-  const actual = await vi.importActual("antd");
-  return {
-    ...actual,
-    message: {
-      warning: vi.fn(),
-      success: vi.fn(),
-      error: vi.fn(),
-    },
-  };
-});
 
 const mockSearchResults = {
   results: [
@@ -82,7 +70,7 @@ describe("SearchToolTester", () => {
     const input = screen.getByPlaceholderText("Enter your search query...");
     await user.type(input, "test query");
     const searchButton = screen.getByRole("button", { name: /search/i });
-    expect(searchButton).not.toBeDisabled();
+    expect(searchButton).toBeEnabled();
   });
 
   it("should call searchToolQueryCall when search button is clicked", async () => {
@@ -123,6 +111,8 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     expect(screen.getByText("Searching...")).toBeInTheDocument();
+
+    expect(await screen.findByText("Test Result 1")).toBeInTheDocument();
   });
 
   it("should display search results after successful search", async () => {
@@ -281,7 +271,15 @@ describe("SearchToolTester", () => {
   });
 
   it("should handle search errors and show notification", async () => {
-    const error = new Error("Search failed");
+    const error = new Error(
+      JSON.stringify({
+        error: {
+          message: "User not allowed to access search tool: exa-search-2",
+          type: "user_search_tool_access_denied",
+          code: "403",
+        },
+      }),
+    );
     vi.mocked(networking.searchToolQueryCall).mockRejectedValue(error);
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const user = userEvent.setup();
@@ -291,8 +289,26 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to query search tool");
+      expect(toast.fromError).toHaveBeenCalledWith(error);
     });
+    consoleSpy.mockRestore();
+  });
+
+  it("should not show empty results or add history when search fails", async () => {
+    vi.mocked(networking.searchToolQueryCall).mockRejectedValue(new Error("Search failed"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<SearchToolTester {...defaultProps} />);
+    const input = screen.getByPlaceholderText("Enter your search query...");
+    fireEvent.change(input, { target: { value: "test query" } });
+    await user.click(screen.getByRole("button", { name: /search/i }));
+
+    await waitFor(() => {
+      expect(toast.fromError).toHaveBeenCalled();
+    });
+    expect(screen.queryByText("No results found")).not.toBeInTheDocument();
+    expect(screen.queryByText("test query")).not.toBeInTheDocument();
+    expect(screen.getByText("Test your search tool")).toBeInTheDocument();
     consoleSpy.mockRestore();
   });
 
@@ -358,7 +374,7 @@ describe("SearchToolTester", () => {
     });
     const clearButton = screen.getByRole("button", { name: /clear all/i });
     await user.click(clearButton);
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Search history cleared");
+    expect(toast.success).toHaveBeenCalledWith("Search history cleared");
     expect(screen.queryByText("Previous Searches")).not.toBeInTheDocument();
   });
 
@@ -407,6 +423,8 @@ describe("SearchToolTester", () => {
     await user.click(searchButton);
     expect(input).toBeDisabled();
     expect(searchButton).toBeDisabled();
+
+    await waitFor(() => expect(searchButton).toBeEnabled());
   });
 
   it("should display result links that open in new tab", async () => {
@@ -416,11 +434,9 @@ describe("SearchToolTester", () => {
     await user.type(input, "test query");
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
-    await waitFor(() => {
-      const link = screen.getByRole("link", { name: "Test Result 1" });
-      expect(link).toHaveAttribute("href", "https://example.com/result1");
-      expect(link).toHaveAttribute("target", "_blank");
-      expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    });
+    const link = await screen.findByRole("link", { name: "Test Result 1" });
+    expect(link).toHaveAttribute("href", "https://example.com/result1");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(link).toHaveAttribute("target", "_blank");
   });
 });

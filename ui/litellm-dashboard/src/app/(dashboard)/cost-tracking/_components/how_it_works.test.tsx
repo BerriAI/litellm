@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import HowItWorks from "./how_it_works";
@@ -32,7 +32,7 @@ describe("HowItWorks", () => {
   it("should render the code block with a curl example", () => {
     renderWithProviders(<HowItWorks />);
     expect(screen.getByTestId("code-block")).toBeInTheDocument();
-    expect(screen.getByTestId("code-block").textContent).toContain("curl");
+    expect(screen.getByTestId("code-block")).toHaveTextContent(/curl/);
   });
 
   it("should show the response header names for discount verification", () => {
@@ -52,7 +52,7 @@ describe("HowItWorks", () => {
     renderWithProviders(<HowItWorks />);
 
     const responseCostInput = screen.getByPlaceholderText("0.0171938125");
-    await user.type(responseCostInput, "0.01");
+    fireEvent.change(responseCostInput, { target: { value: "0.01" } });
 
     expect(screen.queryByText("Calculated Results")).not.toBeInTheDocument();
   });
@@ -62,7 +62,7 @@ describe("HowItWorks", () => {
     renderWithProviders(<HowItWorks />);
 
     const discountAmountInput = screen.getByPlaceholderText("0.0009049375");
-    await user.type(discountAmountInput, "0.001");
+    fireEvent.change(discountAmountInput, { target: { value: "0.001" } });
 
     expect(screen.queryByText("Calculated Results")).not.toBeInTheDocument();
   });
@@ -74,8 +74,8 @@ describe("HowItWorks", () => {
     const responseCostInput = screen.getByPlaceholderText("0.0171938125");
     const discountAmountInput = screen.getByPlaceholderText("0.0009049375");
 
-    await user.type(responseCostInput, "0.0171938125");
-    await user.type(discountAmountInput, "0.0009049375");
+    fireEvent.change(responseCostInput, { target: { value: "0.0171938125" } });
+    fireEvent.change(discountAmountInput, { target: { value: "0.0009049375" } });
 
     expect(await screen.findByText("Calculated Results")).toBeInTheDocument();
   });
@@ -84,8 +84,8 @@ describe("HowItWorks", () => {
     const user = userEvent.setup();
     renderWithProviders(<HowItWorks />);
 
-    await user.type(screen.getByPlaceholderText("0.0171938125"), "0.0171938125");
-    await user.type(screen.getByPlaceholderText("0.0009049375"), "0.0009049375");
+    fireEvent.change(screen.getByPlaceholderText("0.0171938125"), { target: { value: "0.0171938125" } });
+    fireEvent.change(screen.getByPlaceholderText("0.0009049375"), { target: { value: "0.0009049375" } });
 
     expect(await screen.findByText("Original Cost:")).toBeInTheDocument();
     expect(screen.getByText("Final Cost:")).toBeInTheDocument();

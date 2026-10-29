@@ -1,6 +1,8 @@
 import React from "react";
-import { Tag } from "antd";
-import { GlobalOutlined } from "@ant-design/icons";
+import { Globe2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/cva.config";
 
 interface GuardrailSettingsViewProps {
   globalGuardrailNames: Set<string>;
@@ -26,40 +28,36 @@ export function GuardrailSettingsView({
   const isEmpty = !killSwitchOn && globalsRunning.length === 0 && nonGlobalOptIns.length === 0;
 
   const content = isEmpty ? (
-    <span className="block text-gray-500">No guardrails configured</span>
+    <span className="block text-muted-foreground">No guardrails configured</span>
   ) : (
     <div className="flex flex-col gap-4">
       <div>
-        <span className="block text-sm font-medium text-gray-700 mb-2">
-          <GlobalOutlined style={{ marginInlineEnd: 4 }} aria-label="Global guardrail" />
+        <span className="mb-2 flex items-center gap-1 text-sm font-medium text-foreground">
+          <Globe2 className="size-4" aria-label="Global guardrail" />
           Global
         </span>
         {killSwitchOn ? (
-          <Tag color="gold">Bypassed for this team</Tag>
+          <Badge variant="outline">Bypassed for this team</Badge>
         ) : globalsRunning.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {globalsRunning.map((name) => (
-              <Tag key={name} color="blue">
-                {name}
-              </Tag>
+              <Badge key={name}>{name}</Badge>
             ))}
           </div>
         ) : (
-          <span className="block text-sm text-gray-500">None configured</span>
+          <span className="block text-sm text-muted-foreground">None configured</span>
         )}
       </div>
       <div>
-        <span className="block text-sm font-medium text-gray-700 mb-2">Team-specific</span>
+        <span className="mb-2 block text-sm font-medium text-foreground">Team-specific</span>
         {nonGlobalOptIns.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {nonGlobalOptIns.map((name) => (
-              <Tag key={name} color="blue">
-                {name}
-              </Tag>
+              <Badge key={name}>{name}</Badge>
             ))}
           </div>
         ) : (
-          <span className="block text-sm text-gray-500">None configured</span>
+          <span className="block text-sm text-muted-foreground">None configured</span>
         )}
       </div>
     </div>
@@ -67,23 +65,19 @@ export function GuardrailSettingsView({
 
   if (variant === "card") {
     return (
-      <div className={`bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
-        <div className="flex items-center gap-2 mb-6">
-          <div>
-            <span className="block font-semibold text-gray-900">Guardrails Settings</span>
-            <span className="block text-xs text-gray-500">
-              Global and team-specific guardrails applied to this team
-            </span>
-          </div>
-        </div>
-        {content}
-      </div>
+      <Card className={className}>
+        <CardHeader>
+          <CardTitle>Guardrails Settings</CardTitle>
+          <CardDescription>Global and team-specific guardrails applied to this team</CardDescription>
+        </CardHeader>
+        <CardContent>{content}</CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className={`${className}`}>
-      <span className="block font-medium text-gray-900 mb-3">Guardrails Settings</span>
+    <div className={cn(className)}>
+      <span className="mb-3 block font-medium text-foreground">Guardrails Settings</span>
       {content}
     </div>
   );

@@ -4,13 +4,17 @@ Endpoints for managing callbacks
 
 import json
 import os
+from typing import Final
 
 from fastapi import APIRouter, Depends
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.logging_callback_manager import CallbacksByType
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-router = APIRouter()
+router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @router.get(
@@ -26,7 +30,7 @@ async def list_callbacks():
     from litellm import logging_callback_manager
 
     # Get callbacks organized by type using the callback manager utility
-    callbacks_by_type = logging_callback_manager.get_callbacks_by_type()
+    callbacks_by_type: Final = logging_callback_manager.get_callbacks_by_type()
 
     return callbacks_by_type
 
@@ -43,13 +47,13 @@ async def get_callback_configs():
     Returns the configuration details for all available logging callbacks,
     including supported parameters, field types, and descriptions.
     """
-    config_path = os.path.join(
+    config_path: Final = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "integrations",
         "callback_configs.json",
     )
 
     with open(config_path, "r") as f:
-        configs = json.load(f)
+        configs: Final = _DECODED_JSON.validate_python(json.load(f))
 
     return configs

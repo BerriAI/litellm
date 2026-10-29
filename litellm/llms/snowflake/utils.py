@@ -1,9 +1,10 @@
 import re
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Final
 
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -16,11 +17,9 @@ else:
 class SnowflakeException(BaseLLMException):
     """Snowflake AI Endpoints exception handling class"""
 
-    pass
-
 
 class SnowflakeBaseConfig:
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "temperature",
             "max_tokens",
@@ -49,13 +48,13 @@ class SnowflakeBaseConfig:
         Returns:
             dict: Updated optional_params with supported non-default parameters.
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
 
-    def _get_api_base(self, api_base, optional_params):
+    def _get_api_base(self, api_base: str | None, optional_params) -> str:
         if not api_base:
             if "account_id" in optional_params:
                 account_id = optional_params.pop("account_id")
@@ -67,20 +66,17 @@ class SnowflakeBaseConfig:
                 raise ValueError("Invalid account_id format")
             api_base = f"https://{account_id}.snowflakecomputing.com/api/v2"
 
-        api_base = api_base.rstrip("/")
-        if not api_base.endswith("/api/v2"):
-            api_base += "/api/v2"
-        return api_base
+        return ensure_api_route(api_base, "api/v2")
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Return headers to use for Snowflake completion request
@@ -100,7 +96,7 @@ class SnowflakeBaseConfig:
         if api_key is None:
             raise ValueError("Missing Snowflake JWT key")
         else:
-            pat_key_prefix = "pat/"
+            pat_key_prefix: Final = "pat/"
             if api_key.startswith(pat_key_prefix):
                 api_key = api_key[len(pat_key_prefix) :]
                 auth_type = "PROGRAMMATIC_ACCESS_TOKEN"
@@ -116,7 +112,14 @@ class SnowflakeBaseConfig:
         return headers
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
+        dynamic_api_key: Final = api_key or get_secret_str("SNOWFLAKE_JWT")
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)

@@ -1,6 +1,8 @@
+import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import openai from "openai";
-import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { getGatewayBaseUrl } from "@/components/networking";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
+import { toast } from "@/lib/toast";
 
 export async function makeOpenAIImageEditsRequest(
   imageFiles: File | File[],
@@ -11,19 +13,22 @@ export async function makeOpenAIImageEditsRequest(
   tags?: string[],
   signal?: AbortSignal,
   customBaseUrl?: string,
+  customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal !== true) {
     console.log = function () {};
   }
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
 
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: tags && tags.length > 0 ? { "x-litellm-tags": tags.join(",") } : undefined,
+    defaultHeaders: buildPlaygroundHeaders(tags, customHeaders),
+    ...(onResponseHeaders ? { fetch: observeResponseHeaders(onResponseHeaders) } : {}),
   });
 
   try {
@@ -63,7 +68,7 @@ export async function makeOpenAIImageEditsRequest(
     }
 
     if (results.length > 1) {
-      NotificationManager.success(`Successfully processed ${results.length} images`);
+      toast.success(`Successfully processed ${results.length} images`);
     }
   } catch (error: any) {
     console.error("Error making image edit request:", error);
@@ -78,7 +83,7 @@ export async function makeOpenAIImageEditsRequest(
         errorMessage = error.message;
       }
 
-      NotificationManager.fromBackend(`Image edit failed: ${errorMessage}`);
+      toast.fromError(`Image edit failed: ${errorMessage}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

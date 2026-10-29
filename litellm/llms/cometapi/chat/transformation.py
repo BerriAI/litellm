@@ -5,10 +5,12 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -36,10 +38,10 @@ class CometAPIConfig(OpenAIGPTConfig):
         """
         Map OpenAI format parameters to CometAPI format
         """
-        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # CometAPI-specific parameters (if any)
-        extra_body: dict[str, Any] = {}
+        extra_body: Final[dict[str, object]] = {}
         # TODO: Add CometAPI-specific parameter handling here
         # Example:
         # custom_param = non_default_params.pop("custom_param", None)
@@ -54,9 +56,9 @@ class CometAPIConfig(OpenAIGPTConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        messages: list[AllMessageValues],
+        tools: list["ChatCompletionToolParam"] | None = None,
+    ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
         """
         Remove cache control flags from messages and tools if not supported
         """
@@ -66,7 +68,7 @@ class CometAPIConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -77,19 +79,19 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        extra_body: Final = optional_params.pop("extra_body", {})
+        response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
         return response
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the CometAPI call.
@@ -100,7 +102,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         # Default base
         if api_base is None:
             api_base = "https://api.cometapi.com/v1"
-        endpoint = "chat/completions"
+        endpoint: Final = "chat/completions"
 
         # Normalize
         api_base = api_base.rstrip("/")
@@ -111,20 +113,16 @@ class CometAPIConfig(OpenAIGPTConfig):
 
         # Ensure we include /v1 prefix when missing
         if api_base.endswith("/v1"):
-            return f"{api_base}/{endpoint}"
-        if api_base.endswith("/v1/"):
-            return f"{api_base}{endpoint}"
+            return join_api_base(api_base, endpoint)
         # If user provided https://api.cometapi.com, add /v1
         if api_base == "https://api.cometapi.com":
-            return f"{api_base}/v1/{endpoint}"
+            return join_api_base(api_base, f"v1/{endpoint}")
         # Generic fallback: if '/v1' not in path, add it
         if "/v1" not in api_base.split("//", 1)[-1]:
-            return f"{api_base}/v1/{endpoint}"
-        return f"{api_base}/{endpoint}"
+            return join_api_base(api_base, f"v1/{endpoint}")
+        return join_api_base(api_base, endpoint)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Return CometAPI-specific error class
         """
@@ -136,10 +134,10 @@ class CometAPIConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
-    ) -> Any:
+        json_mode: bool | None = False,
+    ) -> "CometAPIChatCompletionStreamingHandler":
         """
         Get model response iterator for streaming responses
         """
@@ -162,8 +160,8 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
         try:
             # Handle error in chunk
             if "error" in chunk:
-                error_chunk = chunk["error"]
-                error_message = "CometAPI Error: {}".format(error_chunk.get("message", "Unknown error"))
+                error_chunk: Final = chunk["error"]
+                error_message: Final = "CometAPI Error: {}".format(error_chunk.get("message", "Unknown error"))
                 raise CometAPIException(
                     message=error_message,
                     status_code=error_chunk.get("code", 400),
@@ -171,7 +169,7 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 )
 
             # Process choices
-            new_choices = []
+            new_choices: Final = []
             for choice in chunk["choices"]:
                 # Handle reasoning content if present
                 if "delta" in choice and "reasoning" in choice["delta"]:

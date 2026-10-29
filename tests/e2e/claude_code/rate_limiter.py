@@ -24,6 +24,9 @@ edits:
     LITELLM_COMPAT_RATE_VERTEX_AI          (req/s, default 5.0)
     LITELLM_COMPAT_RATE_BEDROCK_CONVERSE   (req/s, default 5.0)
     LITELLM_COMPAT_RATE_BEDROCK_INVOKE     (req/s, default 5.0)
+    LITELLM_COMPAT_RATE_OPENAI             (req/s, default 5.0)
+    LITELLM_COMPAT_RATE_AZURE_OPENAI       (req/s, default 5.0)
+    LITELLM_COMPAT_RATE_BEDROCK_MANTLE     (req/s, default 5.0)
     LITELLM_COMPAT_RATE_BURST              (per-bucket burst override;
                                             default = rate)
     LITELLM_COMPAT_RATE_STATE_DIR          (state file directory;
@@ -36,7 +39,10 @@ network.
 
 The provider id is inferred from the model id by `infer_provider`,
 mirroring the matrix's column layout (`anthropic`, `azure`,
-`vertex_ai`, `bedrock_converse`, `bedrock_invoke`).
+`vertex_ai`, `bedrock_converse`, `bedrock_invoke`, `openai`,
+`azure_openai`, `bedrock_mantle`). The `vertex_ai_gpt` matrix column
+has no bucket: its cells are static not_applicable stubs that never
+reach the network.
 """
 
 from __future__ import annotations
@@ -62,6 +68,9 @@ PROVIDER_AZURE = "azure"
 PROVIDER_VERTEX_AI = "vertex_ai"
 PROVIDER_BEDROCK_CONVERSE = "bedrock_converse"
 PROVIDER_BEDROCK_INVOKE = "bedrock_invoke"
+PROVIDER_OPENAI = "openai"
+PROVIDER_AZURE_OPENAI = "azure_openai"
+PROVIDER_BEDROCK_MANTLE = "bedrock_mantle"
 
 ALL_PROVIDERS = (
     PROVIDER_ANTHROPIC,
@@ -69,6 +78,9 @@ ALL_PROVIDERS = (
     PROVIDER_VERTEX_AI,
     PROVIDER_BEDROCK_CONVERSE,
     PROVIDER_BEDROCK_INVOKE,
+    PROVIDER_OPENAI,
+    PROVIDER_AZURE_OPENAI,
+    PROVIDER_BEDROCK_MANTLE,
 )
 
 DEFAULT_RATE = 5.0  # req/s per provider, conservative starting point
@@ -83,13 +95,21 @@ def infer_provider(model: str) -> str:
 
     The matrix column layout is fixed; aliases registered in the proxy
     encode the provider via a suffix (`-bedrock-converse`,
-    `-bedrock-invoke`, `-azure`, `-vertex`) or its absence (Anthropic).
-    Order matters: the bedrock suffixes both contain `bedrock`, so we
-    test the more-specific ones first.
+    `-bedrock-invoke`, `-azure`, `-vertex`, `-openai`, `-azure-openai`,
+    `-bedrock-mantle`) or its absence (Anthropic). Order matters:
+    `-azure-openai` also ends with `-openai`, and the bedrock suffixes
+    all contain `bedrock`, so the more-specific suffixes are tested
+    first.
     """
     if not model:
         raise ValueError("model must be a non-empty string")
     lower = model.lower()
+    if lower.endswith("-azure-openai"):
+        return PROVIDER_AZURE_OPENAI
+    if lower.endswith("-openai"):
+        return PROVIDER_OPENAI
+    if lower.endswith("-bedrock-mantle"):
+        return PROVIDER_BEDROCK_MANTLE
     if lower.endswith("-bedrock-converse"):
         return PROVIDER_BEDROCK_CONVERSE
     if lower.endswith("-bedrock-invoke"):
