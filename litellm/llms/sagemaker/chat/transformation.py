@@ -14,6 +14,7 @@ import httpx
 from httpx._models import Headers
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -28,7 +29,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import AWSEventStreamDecoder, SagemakerError
+from ..common_utils import STR_KEYED_MAPPING, AWSEventStreamDecoder, SagemakerError, inference_component_name
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -56,10 +57,15 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        inference_component_name: Final = optional_params.get("model_id")
-        if not isinstance(inference_component_name, str):
+        component_name: Final = inference_component_name(
+            STR_KEYED_MAPPING.validate_python(optional_params),
+            drops_unsupported_params(STR_KEYED_MAPPING.validate_python(litellm_params).get("drop_params")),
+        )
+        if isinstance(component_name, SagemakerError):
+            raise component_name
+        if component_name is None:
             return headers
-        return {**headers, "X-Amzn-SageMaker-Inference-Component": inference_component_name}
+        return {**headers, "X-Amzn-SageMaker-Inference-Component": component_name}
 
     def transform_request(
         self,

@@ -351,6 +351,16 @@ class TestSagemakerOpenAIEmbeddingSdkCalls:
         assert json.loads(kwargs["Body"]) == EXPECTED_BODY
         assert len(result.data) == 2
 
+    def test_non_string_model_id_is_dropped_under_drop_params(self):
+        session, client = fake_sagemaker_session(OPENAI_RESPONSE)
+        with patch("boto3.Session", return_value=session):
+            result = litellm.embedding(**{**SDK_KWARGS, "model_id": ["my-component"], "drop_params": True})
+
+        kwargs = invoke_kwargs(client)
+        assert "InferenceComponentName" not in kwargs
+        assert json.loads(kwargs["Body"]) == EXPECTED_BODY
+        assert len(result.data) == 2
+
     def test_router_deployment_with_model_id(self):
         router = Router(
             model_list=[

@@ -7345,6 +7345,7 @@ def embedding(
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
                 print_verbose=print_verbose,
+                drop_params=drop_unsupported_params,
             )
         elif custom_llm_provider == "mistral":
             api_key = api_key or litellm.api_key or get_secret_str("MISTRAL_API_KEY")

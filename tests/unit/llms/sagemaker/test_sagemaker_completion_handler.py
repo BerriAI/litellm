@@ -618,3 +618,114 @@ async def test_completion_sagemaker_streaming_bad_request(
     assert route.called
     assert exc_info.value.status_code == 400
     assert exc_info.value.llm_provider == "sagemaker"
+
+
+_ENDPOINT_URL: Final = "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/my-endpoint/invocations"
+_INFERENCE_COMPONENT_HEADER: Final = "X-Amzn-SageMaker-Inference-Component"
+
+
+async def _complete_sagemaker(sync_mode: bool, **extra_params: object) -> litellm.ModelResponse:
+    params: Final = {
+        "model": "sagemaker/my-endpoint",
+        "messages": [{"role": "user", "content": "hi"}],
+        "aws_region_name": "us-east-1",
+        "num_retries": 0,
+        **extra_params,
+    }
+    return litellm.completion(**params) if sync_mode else await litellm.acompletion(**params)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("status", "sagemaker_message", "error_class"),
+    [
+        (400, "The request payload failed validation.", litellm.BadRequestError),
+        (403, "User is not authorized to perform: sagemaker:InvokeEndpoint", litellm.PermissionDeniedError),
+    ],
+)
+async def test_completion_sagemaker_non_200_keeps_sagemaker_status_and_message(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+    status: int,
+    sagemaker_message: str,
+    error_class: type[litellm.APIError],
+) -> None:
+    respx_mock.post(_ENDPOINT_URL).mock(return_value=httpx.Response(status, json={"message": sagemaker_message}))
+
+    with pytest.raises(error_class) as exc_info:
+        await _complete_sagemaker(sync_mode)
+
+    assert exc_info.value.status_code == status
+    assert exc_info.value.llm_provider == "sagemaker"
+    assert sagemaker_message in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_sagemaker_names_model_id_when_the_endpoint_needs_an_inference_component(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+) -> None:
+    respx_mock.post(_ENDPOINT_URL).mock(
+        return_value=httpx.Response(
+            400,
+            json={"message": "Inference Component Name header is required for endpoints with inference components."},
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await _complete_sagemaker(sync_mode)
+
+    assert "pass in via `litellm.completion(..., model_id={InferenceComponentName})`" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("model_id", [["component-a", "component-b"], 123])
+async def test_completion_sagemaker_rejects_a_non_string_model_id(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+    model_id: object,
+) -> None:
+    route: Final = respx_mock.post(_ENDPOINT_URL).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await _complete_sagemaker(sync_mode, model_id=model_id)
+
+    assert exc_info.value.status_code == 400
+    assert "model_id must be the inference component name as a string" in exc_info.value.message
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("model_id", "drop_params", "expected_header"),
+    [("my-component", False, "my-component"), (["my-component"], True, None)],
+)
+async def test_completion_sagemaker_inference_component_header(
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+    model_id: object,
+    drop_params: bool,
+    expected_header: str | None,
+) -> None:
+    route: Final = respx_mock.post(_ENDPOINT_URL).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+
+    response: Final = await _complete_sagemaker(sync_mode, model_id=model_id, drop_params=drop_params)
+
+    assert route.calls[0].request.headers.get(_INFERENCE_COMPONENT_HEADER) == expected_header
+    assert response.choices[0].message.content == "SageMaker reply"

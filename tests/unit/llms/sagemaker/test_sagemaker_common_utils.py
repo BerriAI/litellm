@@ -11,6 +11,7 @@ import pytest
 
 from botocore.exceptions import ClientError, ConnectionClosedError
 
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder, SagemakerError, client_error_details
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -706,6 +707,8 @@ DROPPED_CONNECTION_ERROR = ConnectionClosedError(endpoint_url="https://runtime.s
 HTTPX_STATUS_ERROR = httpx.HTTPStatusError(
     "boom", request=httpx.Request("POST", "https://runtime.sagemaker.test/x"), response=httpx.Response(400)
 )
+MASKED_STATUS_ERROR = MaskedHTTPStatusError(HTTPX_STATUS_ERROR, message="masked body", text='{"message": "bad input"}')
+EMPTY_MASKED_STATUS_ERROR = MaskedHTTPStatusError(HTTPX_STATUS_ERROR, message="", text="")
 PLAIN_ERROR = RuntimeError("plain failure")
 
 
@@ -725,7 +728,9 @@ PLAIN_ERROR = RuntimeError("plain failure")
         ),
         (NULL_MESSAGE_ERROR, 500, str(NULL_MESSAGE_ERROR)),
         (DROPPED_CONNECTION_ERROR, 500, str(DROPPED_CONNECTION_ERROR)),
-        (HTTPX_STATUS_ERROR, 500, str(HTTPX_STATUS_ERROR)),
+        (HTTPX_STATUS_ERROR, 400, str(HTTPX_STATUS_ERROR)),
+        (MASKED_STATUS_ERROR, 400, '{"message": "bad input"}'),
+        (EMPTY_MASKED_STATUS_ERROR, 400, str(EMPTY_MASKED_STATUS_ERROR)),
         (PLAIN_ERROR, 500, str(PLAIN_ERROR)),
     ],
 )

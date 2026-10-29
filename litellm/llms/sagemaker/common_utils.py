@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, with_config
@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
 
@@ -167,9 +168,9 @@ def get_sagemaker_response_stream_shape():
     return _load_sagemaker_response_stream_shape()
 
 
-def with_inference_component_hint(error_message: str) -> str:
+def with_inference_component_hint(error_message: str, call: Literal["completion", "embedding"]) -> str:
     if "Inference Component Name header is required" in error_message:
-        return f"{error_message}\n pass in via `litellm.embedding(..., model_id={{InferenceComponentName}})`"
+        return f"{error_message}\n pass in via `litellm.{call}(..., model_id={{InferenceComponentName}})`"
     if "Inference Component Name header is not allowed" in error_message:
         return f"{error_message}\n remove `model_id` from this deployment, the endpoint has no inference components"
     return error_message
@@ -192,6 +193,16 @@ class _ClientErrorResponse(BaseModel):
 
 
 def client_error_details(error: Exception) -> tuple[int, str]:
+    match error:
+        case MaskedHTTPStatusError(text=str() as masked_body) if masked_body:
+            return error.response.status_code, masked_body
+        case httpx.HTTPStatusError():
+            return error.response.status_code, str(error)
+        case _:
+            return _boto_client_error_details(error)
+
+
+def _boto_client_error_details(error: Exception) -> tuple[int, str]:
     try:
         response: Final = _ClientErrorResponse.model_validate(getattr(error, "response", None))
     except ValidationError:
@@ -211,6 +222,15 @@ class SagemakerError(BaseLLMException):
         headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
+
+
+def inference_component_name(params: Mapping[str, object], drop_params: bool) -> str | None | SagemakerError:
+    model_id: Final = params.get("model_id")
+    if model_id is None or isinstance(model_id, str):
+        return model_id
+    if drop_params:
+        return None
+    return SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
 
 
 class _StreamExceptionBody(BaseModel):

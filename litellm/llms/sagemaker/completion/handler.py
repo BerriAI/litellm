@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
@@ -32,6 +33,7 @@ from ..common_utils import (
     AWSEventStreamDecoder,
     SagemakerError,
     client_error_details,
+    inference_component_name,
     with_inference_component_hint,
 )
 from ..embedding.transformation import SagemakerEmbeddingConfig
@@ -152,7 +154,12 @@ class SagemakerLLM(BaseAWSLLM):
         credentials, aws_region_name = self._load_credentials(optional_params)
         inference_params: Final = deepcopy(optional_params)
         stream: Final = inference_params.pop("stream", None)
-        model_id: Final = optional_params.get("model_id", None)
+        model_id: Final = inference_component_name(
+            STR_KEYED_MAPPING.validate_python(optional_params),
+            drops_unsupported_params(STR_KEYED_MAPPING.validate_python(litellm_params).get("drop_params")),
+        )
+        if isinstance(model_id, SagemakerError):
+            raise model_id
 
         ## Load Config
         config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.SagemakerConfig.get_config())
@@ -307,7 +314,9 @@ class SagemakerLLM(BaseAWSLLM):
         except Exception as e:
             verbose_logger.error("Sagemaker error %s", str(e))
             status_code, error_message = client_error_details(e)
-            raise SagemakerError(status_code=status_code, message=error_message)
+            raise SagemakerError(
+                status_code=status_code, message=with_inference_component_hint(error_message, "completion")
+            )
 
         return sagemaker_config.transform_response(
             model=model,
@@ -527,7 +536,10 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 raise e
         except Exception as e:
-            raise SagemakerError(status_code=500, message=str(e))
+            status_code, error_message = client_error_details(e)
+            raise SagemakerError(
+                status_code=status_code, message=with_inference_component_hint(error_message, "completion")
+            )
         return sagemaker_config.transform_response(
             model=model,
             raw_response=response,
@@ -552,6 +564,7 @@ class SagemakerLLM(BaseAWSLLM):
         custom_prompt_dict={},
         litellm_params=None,
         logger_fn=None,
+        drop_params: bool = False,
     ):
         """
         Supports Hugging Face (TGI), Voyage, and Cohere embedding endpoints
@@ -588,9 +601,9 @@ class SagemakerLLM(BaseAWSLLM):
         provider_config: Final = SagemakerEmbeddingConfig.get_model_config(model)
         endpoint_name: Final = SagemakerEmbeddingConfig.get_endpoint_name(model)
         embedding_params: Final = STR_KEYED_MAPPING.validate_python(optional_params)
-        inference_component_name: Final = embedding_params.get("model_id")
-        if inference_component_name is not None and not isinstance(inference_component_name, str):
-            raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
+        component_name: Final = inference_component_name(embedding_params, drop_params)
+        if isinstance(component_name, SagemakerError):
+            raise component_name
         body_params: Final = {k: v for k, v in embedding_params.items() if k != "model_id"}
         request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
         data: Final = json.dumps(request_data).encode("utf-8")
@@ -608,7 +621,7 @@ class SagemakerLLM(BaseAWSLLM):
             ContentType="application/json",
             Body=f"{data!r}",  # Use !r for safe representation
             CustomAttributes="accept_eula=true",
-            InferenceComponentName={inference_component_name},
+            InferenceComponentName={component_name},
         )"""
         logging_obj.pre_call(
             input=input,
@@ -618,13 +631,15 @@ class SagemakerLLM(BaseAWSLLM):
         ## EMBEDDING CALL
         try:
             response = (
-                client.invoke_endpoint(**invoke_args, InferenceComponentName=inference_component_name)
-                if inference_component_name
+                client.invoke_endpoint(**invoke_args, InferenceComponentName=component_name)
+                if component_name
                 else client.invoke_endpoint(**invoke_args)
             )
         except Exception as e:
             status_code, error_message = client_error_details(e)
-            raise SagemakerError(status_code=status_code, message=with_inference_component_hint(error_message))
+            raise SagemakerError(
+                status_code=status_code, message=with_inference_component_hint(error_message, "embedding")
+            )
 
         response = _DECODED_JSON.validate_python(json.loads(response["Body"].read().decode("utf8")))
         ## LOGGING
