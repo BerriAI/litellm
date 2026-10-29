@@ -1186,7 +1186,7 @@ async def test_set_response_headers_passes_through_post_increment_counters(model
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 958,
             "x-ratelimit-limit-tokens": 1000,
@@ -1567,7 +1567,7 @@ async def test_get_remaining_model_group_usage_merges_io_and_tpm_headers(model_l
         )
     )
     router.get_model_group_io_token_usage = AsyncMock(return_value=(100, 40))
-    router.get_model_group_usage = AsyncMock(return_value=(500, 5))
+    router._core_get_model_group_usage = AsyncMock(return_value=(500, 5))
 
     headers = await router.get_remaining_model_group_usage("gpt-3.5-turbo")
 
@@ -1594,7 +1594,7 @@ async def test_set_response_headers_native_input_token_header_does_not_suppress_
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1624,7 +1624,7 @@ async def test_set_response_headers_native_token_header_does_not_suppress_io_hea
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1656,7 +1656,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
         _hidden_params: dict = {}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-remaining-tokens": 1000,
             "x-ratelimit-remaining-requests": 100,
@@ -1676,7 +1676,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
 async def test_set_response_headers_dict_anthropic_messages_response(model_list):
     """Anthropic /v1/messages returns a dict; IO rate-limit headers must attach."""
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-limit-input-tokens": 25,
             "x-ratelimit-remaining-input-tokens": 20,
@@ -1716,7 +1716,7 @@ async def test_set_response_headers_wraps_bare_async_generator(model_list):
         yield {"type": "message_stop"}
 
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
+    router._core_get_remaining_model_group_usage = AsyncMock(
         return_value={
             "x-ratelimit-limit-input-tokens": 25,
             "x-ratelimit-remaining-input-tokens": 20,

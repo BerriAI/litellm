@@ -551,7 +551,7 @@ def test_a_pick_stays_reserved_while_other_router_keys_fill_its_cache() -> None:
 
     first: Final = _router_pick(router)
     for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
-        router.cache.set_cache(f"deployment-usage-{index}", 1, local_only=True, ttl=60)
+        router.health().store.set_cache(f"deployment-usage-{index}", 1, local_only=True, ttl=60)
 
     assert _router_pick(router) != first
 

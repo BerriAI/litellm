@@ -1902,11 +1902,20 @@ def test_messages_pre_call_denial_streams_message(gateway: Gateway, tmp_path: Pa
         )
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream"), response.text
-        lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
-        assert len(lines) == 1, response.text
-        body: Final = json.loads(lines[0].removeprefix("data: "))
-        assert body["type"] == "message" and body["role"] == "assistant", body
-        assert body["content"] == [{"type": "text", "text": _RESPONSES_DENIAL}], body
+        events: Final = tuple(
+            json.loads(line.removeprefix("data: ")) for line in response.text.split("\n") if line.startswith("data: ")
+        )
+        assert [event["type"] for event in events] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ], response.text
+        assert events[0]["message"]["role"] == "assistant", events[0]
+        assert events[2]["delta"] == {"type": "text_delta", "text": _RESPONSES_DENIAL}, events[2]
+        assert events[4]["delta"]["stop_reason"] == "end_turn", events[4]
 
 
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_writes_zero_spend_row")

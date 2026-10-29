@@ -92,7 +92,7 @@ def policy_for_model(
     """
     if llm_router is None:
         return None
-    deployments: Final = llm_router.deployments_for_request(model_alias, request_kwargs)
+    deployments: Final = llm_router.registry().deployments(model_alias, source="for_request", request=request_kwargs)
     markers: Final = tuple(
         litellm_params
         for deployment in deployments
