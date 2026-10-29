@@ -15,11 +15,16 @@ from .transformation import GoogleGenAIAdapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
 
 
-def _mark_failure_logged_by_inner_completion(adapter_kwargs: Mapping[str, object]) -> None:
-    outer_logging_obj: Final = adapter_kwargs.get("litellm_logging_obj")
-    if isinstance(outer_logging_obj, LiteLLMLoggingObj):
-        outer_logging_obj.mark_logging_complete(event_type="sync_failure")
-        outer_logging_obj.mark_logging_complete(event_type="async_failure")
+_FORWARDED_REQUEST_KEYS: Final = (
+    "metadata",
+    "litellm_metadata",
+    "proxy_server_request",
+    "extra_headers",
+    "litellm_logging_obj",
+    "litellm_call_id",
+    "litellm_session_id",
+    "no-log",
+)
 
 
 def _adapter_stream_options(requested: object) -> ChatCompletionStreamOptionsParam | None:
@@ -46,35 +51,24 @@ class GenerateContentToCompletionHandler:
     ) -> GenerateContentCompletionKwargs:
         """Prepare kwargs for litellm.completion/acompletion"""
 
-        # Transform generate_content request to completion format
+        request_kwargs: Final = extra_kwargs or {}
         completion_request: Final = GOOGLE_GENAI_ADAPTER.translate_generate_content_to_completion(
             model=model,
             contents=contents,
             config=config,
             litellm_params=litellm_params,
-            **(extra_kwargs or {}),
+            **request_kwargs,
         )
-
-        completion_kwargs: Final = dict(completion_request)
-
-        # Forward extra_kwargs that should be passed to completion call
-        if extra_kwargs is not None:
-            # Forward metadata for custom callback
-            if "metadata" in extra_kwargs:
-                completion_kwargs["metadata"] = extra_kwargs["metadata"]
-            # Forward extra_headers for providers that require custom headers (e.g., github_copilot)
-            if "extra_headers" in extra_kwargs:
-                completion_kwargs["extra_headers"] = extra_kwargs["extra_headers"]
-            if "proxy_server_request" in extra_kwargs:
-                completion_kwargs["proxy_server_request"] = extra_kwargs["proxy_server_request"]
-            if "litellm_metadata" in extra_kwargs:
-                completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
-
-        if stream:
-            completion_kwargs["stream"] = stream
-            stream_options: Final = _adapter_stream_options((extra_kwargs or {}).get("stream_options"))
-            if stream_options is not None:
-                completion_kwargs["stream_options"] = stream_options
+        stream_options: Final = _adapter_stream_options(request_kwargs.get("stream_options")) if stream else None
+        logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+        if stream and isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.stream_options = stream_options
+        completion_kwargs: Final = dict(
+            completion_request,
+            **{key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs},
+            **({"stream": True} if stream else {}),
+            **({"stream_options": stream_options} if stream_options is not None else {}),
+        )
 
         return GenerateContentCompletionKwargs(**completion_kwargs)
 
@@ -98,11 +92,7 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
-        try:
-            completion_response: Final = await litellm.acompletion(**completion_kwargs)
-        except Exception:
-            _mark_failure_logged_by_inner_completion(kwargs)
-            raise
+        completion_response: Final = await litellm.acompletion(**completion_kwargs)
 
         if stream:
             # Check if completion_response is actually a stream or a ModelResponse
@@ -159,11 +149,7 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
-        try:
-            completion_response: Final = litellm.completion(**completion_kwargs)
-        except Exception:
-            _mark_failure_logged_by_inner_completion(kwargs)
-            raise
+        completion_response: Final = litellm.completion(**completion_kwargs)
 
         if stream:
             # Check if completion_response is actually a stream or a ModelResponse
