@@ -293,7 +293,7 @@ def _await_rig(rig: ChainRig) -> None:
     tail_id: Final = _deployment_id(rig.tail_free)
     for candidate in rig.candidates:
         _await_served_by(candidate, rig.mid_free, paid_id)
-        _await_served_by(candidate, rig.failing_free, paid_id)
+        _await_served_by(candidate, rig.failing_free, _deployment_id(rig.failing_free))
         _await_served_by(candidate, rig.mid_paid, tail_id)
         _await_served_by(candidate, rig.unpriced, tail_id)
 
@@ -331,11 +331,14 @@ def _chain_rig() -> Generator[ChainRig]:
             ghost_entry=f"chain-ghost-entry-{suffix}",
             failing_entry=f"chain-failing-entry-{suffix}",
         )
+        free_middle: Final = f"{rig.entry}-middle"
+        failing_middle: Final = f"{rig.failing_entry}-middle"
         aliases: Final[Mapping[str, JsonValue]] = {
-            rig.entry: rig.mid_free,
-            rig.hidden_entry: hidden(rig.mid_free),
-            rig.shown_entry: {"model": rig.mid_free, "hidden": False},
-            rig.null_entry: {"model": rig.mid_free, "hidden": None},
+            rig.entry: free_middle,
+            rig.hidden_entry: hidden(free_middle),
+            rig.shown_entry: {"model": free_middle, "hidden": False},
+            rig.null_entry: {"model": free_middle, "hidden": None},
+            free_middle: rig.tail_free,
             rig.mid_free: rig.paid,
             rig.reverse_entry: rig.mid_paid,
             rig.mid_paid: rig.tail_free,
@@ -343,8 +346,8 @@ def _chain_rig() -> Generator[ChainRig]:
             rig.unpriced: rig.tail_free,
             rig.ghost_entry: rig.ghost_mid,
             rig.ghost_mid: rig.paid,
-            rig.failing_entry: rig.failing_free,
-            rig.failing_free: rig.paid,
+            rig.failing_entry: failing_middle,
+            failing_middle: rig.failing_free,
         }
         install_aliases(gateway, aliases)
         scenario.cleanups.callback(remove_aliases, gateway, frozenset(aliases))
@@ -524,46 +527,47 @@ def test_chain_middle_by_name_is_judged_by_its_own_alias(rig: ChainRig) -> None:
         assert row["model_group"] == rig.mid_free, row
 
 
-def test_reverse_chain_is_priced_by_the_middle_it_is_served_from(rig: ChainRig) -> None:
+def test_chain_through_a_paid_middle_is_priced_by_its_free_target(rig: ChainRig) -> None:
     free_marker: Final = "reverse-free-" + uuid.uuid4().hex
-    billed_marker: Final = "reverse-billed-" + uuid.uuid4().hex
+    entry_marker: Final = "reverse-entry-" + uuid.uuid4().hex
     with rig.gateway.scenario() as scenario:
         exhausted: Final = _exhausted_key(rig, scenario)
         for candidate in rig.candidates:
-            _assert_refused_on_every_route(rig, candidate, exhausted, rig.reverse_entry)
+            _assert_raw_chat_served(rig, candidate, rig.reverse_entry, exhausted, "reverse-chain")
         served: Final = fresh_chat(rig.gateway, rig.mid_paid, exhausted, free_marker)
         assert served.status_code == 200, served.text
         assert served.headers["x-litellm-model-id"] == _deployment_id(rig.tail_free), dict(served.headers)
         assert_free_row(landed_once(exhausted, free_marker), rig.mid_paid)
-        budgeted: Final = scenario.key(max_budget=HEADROOM)
-        billed: Final = fresh_chat(rig.gateway, rig.reverse_entry, budgeted, billed_marker)
-        assert billed.status_code == 200, billed.text
-        assert billed.headers["x-litellm-model-id"] == _deployment_id(rig.mid_paid), dict(billed.headers)
-        row: Final = landed_once(budgeted, billed_marker)
-        assert math.isclose(float(str(row["spend"])), PAID_REPLY_COST), row
-        assert row["model_group"] == rig.reverse_entry, row
+        entry_response: Final = fresh_chat(rig.gateway, rig.reverse_entry, exhausted, entry_marker)
+        assert entry_response.status_code == 200, entry_response.text
+        assert entry_response.headers["x-litellm-model-id"] == _deployment_id(rig.tail_free), dict(
+            entry_response.headers
+        )
+        assert_free_row(landed_once(exhausted, entry_marker), rig.reverse_entry)
 
 
-def test_chain_through_a_cost_map_priced_middle_stays_budgeted(rig: ChainRig) -> None:
+def test_chain_through_a_cost_map_priced_middle_uses_the_free_targets_budget_waiver(rig: ChainRig) -> None:
     with rig.gateway.scenario() as scenario:
         key: Final = _exhausted_key(rig, scenario)
         for candidate in rig.candidates:
-            _assert_refused_on_every_route(rig, candidate, key, rig.unpriced_entry)
+            _assert_raw_chat_served(rig, candidate, rig.unpriced_entry, key, "unpriced-middle")
 
 
 def _assert_ghost_chain(rig: ChainRig, candidate: Gateway, key: str) -> None:
-    assert _group_rows(candidate, rig.ghost_entry) == ()
-    assert rig.ghost_entry not in _listed_input_prices(candidate)
+    _assert_price(
+        _price_of(candidate, rig.ghost_entry), PAID_INPUT_COST_PER_TOKEN, PAID_OUTPUT_COST_PER_TOKEN, ("openai",)
+    )
+    assert _listed_input_prices(candidate)[rig.ghost_entry] == PAID_INPUT_COST_PER_TOKEN
     refused: Final = fresh_chat(candidate, rig.ghost_entry, key, "ghost-exhausted-" + uuid.uuid4().hex)
     assert refused.status_code == BUDGET_EXCEEDED, refused.text
-    unroutable: Final = fresh_chat(candidate, rig.ghost_entry, rig.gateway.key, "ghost-admin-" + uuid.uuid4().hex)
-    assert unroutable.status_code == 400, unroutable.text
-    assert "no healthy deployments" in unroutable.text, unroutable.text
+    served: Final = fresh_chat(candidate, rig.ghost_entry, rig.gateway.key, "ghost-admin-" + uuid.uuid4().hex)
+    assert served.status_code == 200, served.text
+    assert served.headers["x-litellm-model-id"] == _deployment_id(rig.paid), dict(served.headers)
     for path in ("/health/liveliness", "/model/info", "/v1/models"):
         assert candidate.request("GET", path).status_code == 200, path
 
 
-def test_ghost_chain_reports_no_group_and_stays_unroutable(rig: ChainRig) -> None:
+def test_chain_through_an_alias_without_deployments_routes_to_its_paid_target(rig: ChainRig) -> None:
     with rig.gateway.scenario() as scenario:
         key: Final = _exhausted_key(rig, scenario)
         for candidate in rig.candidates:
@@ -590,7 +594,7 @@ def test_provider_failure_behind_a_chain_entry_reaches_the_caller(rig: ChainRig)
         _assert_no_served_row(key, failed_marker)
 
 
-def test_chain_through_a_free_wildcard_route_is_priced_by_that_route(rig: ChainRig) -> None:
+def test_chain_to_a_paid_target_does_not_inherit_a_free_wildcards_budget_waiver(rig: ChainRig) -> None:
     prefix: Final = "wc" + uuid.uuid4().hex[:8]
     middle: Final = f"{prefix}/gpt-4o-mini"
     other: Final = f"{prefix}/gpt-4o"
@@ -601,7 +605,7 @@ def test_chain_through_a_free_wildcard_route_is_priced_by_that_route(rig: ChainR
         scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({entry, middle}))
         paid_id: Final = _deployment_id(rig.paid)
         for candidate in rig.candidates:
-            _await_served_by(candidate, entry, route)
+            _await_served_by(candidate, entry, paid_id)
             _await_served_by(candidate, middle, paid_id)
         key: Final = _exhausted_key(rig, scenario)
         for candidate in rig.candidates:
@@ -610,7 +614,7 @@ def test_chain_through_a_free_wildcard_route_is_priced_by_that_route(rig: ChainR
             _assert_price(
                 _price_of(candidate, middle), PAID_INPUT_COST_PER_TOKEN, PAID_OUTPUT_COST_PER_TOKEN, ("openai",)
             )
-            _assert_served_by_route(candidate, entry, key, route, "wildcard-served")
+            _assert_refused_on_every_route(rig, candidate, key, entry)
             _assert_refused(rig, candidate, key, middle, "wildcard-middle")
 
 
@@ -622,21 +626,21 @@ def _assert_served_by_route(candidate: Gateway, model: str, key: str, route: str
     assert_free_row(landed_once(key, marker), model)
 
 
-def test_chain_through_a_priced_wildcard_route_stays_budgeted(rig: ChainRig) -> None:
+def test_chain_to_a_free_target_takes_precedence_over_a_priced_wildcard_route(rig: ChainRig) -> None:
     prefix: Final = "pwc" + uuid.uuid4().hex[:8]
     middle: Final = f"{prefix}/gpt-4o-mini"
     entry: Final = "priced-wildcard-entry-" + uuid.uuid4().hex
     with rig.gateway.scenario() as scenario:
-        route: Final = _wildcard_route(rig, scenario, prefix, PAID_INPUT_COST_PER_TOKEN, PAID_OUTPUT_COST_PER_TOKEN)
+        _wildcard_route(rig, scenario, prefix, PAID_INPUT_COST_PER_TOKEN, PAID_OUTPUT_COST_PER_TOKEN)
         install_aliases(rig.gateway, {entry: middle, middle: rig.tail_free})
         scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({entry, middle}))
         tail_id: Final = _deployment_id(rig.tail_free)
         for candidate in rig.candidates:
-            _await_served_by(candidate, entry, route)
+            _await_served_by(candidate, entry, tail_id)
             _await_served_by(candidate, middle, tail_id)
         key: Final = _exhausted_key(rig, scenario)
         for candidate in rig.candidates:
-            _assert_refused_on_every_route(rig, candidate, key, entry)
+            _assert_raw_chat_served(rig, candidate, entry, key, "priced-wildcard-free-target")
 
 
 def _assert_hostile_group_queries_answered(rig: ChainRig, candidate: Gateway) -> None:
@@ -738,7 +742,7 @@ def test_duplicate_model_field_is_judged_by_its_last_value(rig: ChainRig) -> Non
 def test_key_restricted_to_the_chain_entry_keeps_the_waiver(rig: ChainRig) -> None:
     marker: Final = "restricted-served-" + uuid.uuid4().hex
     with rig.gateway.scenario() as scenario:
-        outsider: Final = scenario.key(models=[rig.tail_free, rig.paid], max_budget=BUDGET)
+        outsider: Final = scenario.key(models=[rig.paid], max_budget=BUDGET)
         denied: Final = fresh_chat(rig.gateway, rig.entry, outsider, "restricted-denied-" + uuid.uuid4().hex)
         assert _refusal(denied) == (403, "key_model_access_denied"), denied.text
         insider: Final = scenario.key(models=[rig.entry, rig.paid], max_budget=BUDGET)
@@ -753,16 +757,21 @@ def test_key_restricted_to_the_chain_entry_keeps_the_waiver(rig: ChainRig) -> No
 def test_repointing_the_chain_middle_follows_the_served_deployment(rig: ChainRig) -> None:
     with rig.gateway.scenario() as scenario:
         key: Final = _exhausted_key(rig, scenario)
-        scenario.cleanups.callback(install_aliases, rig.gateway, {rig.entry: rig.mid_free, rig.mid_free: rig.paid})
+        scenario.cleanups.callback(
+            install_aliases, rig.gateway, {rig.entry: f"{rig.entry}-middle", rig.mid_free: rig.paid}
+        )
+        install_aliases(rig.gateway, {rig.entry: rig.mid_free})
         install_aliases(rig.gateway, {rig.mid_free: rig.tail_free})
         _settle_both(rig, rig.mid_free, key, 200)
         _settle_both(rig, rig.entry, key, 200)
         install_aliases(rig.gateway, {rig.mid_free: rig.paid})
         _settle_both(rig, rig.mid_free, key, BUDGET_EXCEEDED)
-        _settle_both(rig, rig.entry, key, 200)
+        _settle_both(rig, rig.entry, key, BUDGET_EXCEEDED)
         install_aliases(rig.gateway, {rig.entry: rig.paid})
         _settle_both(rig, rig.entry, key, BUDGET_EXCEEDED)
         install_aliases(rig.gateway, {rig.entry: rig.mid_free})
+        _settle_both(rig, rig.entry, key, BUDGET_EXCEEDED)
+        install_aliases(rig.gateway, {rig.entry: f"{rig.entry}-middle"})
         _settle_both(rig, rig.entry, key, 200)
 
 
@@ -942,8 +951,9 @@ def test_killing_one_worker_mid_burst_keeps_the_chain_entry_served(rig: ChainRig
             input_cost_per_token=0,
             output_cost_per_token=0,
         )
-        install_aliases(rig.gateway, {entry: chaos_free, chaos_free: rig.paid})
-        scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({entry, chaos_free}))
+        middle: Final = f"{entry}-middle"
+        install_aliases(rig.gateway, {entry: middle, middle: chaos_free})
+        scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({entry, middle}))
         key: Final = _exhausted_key(rig, scenario)
         with owned_proxy_process(rig.gateway, tmp_path, {}, workers=2) as owned:
             candidate: Final = owned.gateway
