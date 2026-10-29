@@ -10452,7 +10452,6 @@ class Router(DeprecatedRouterMembers):
         model_group: str,
         opened_on: Mapping[str, object],
         request_kwargs: Mapping[str, object],
-        held_reservation: Mapping[str, object] = MappingProxyType({}),
     ) -> Mapping[str, object]:
         deployment: Final = self._deployment_as_configured_now(opened_on)
         rate_limit_check: Final = next(
@@ -10461,9 +10460,7 @@ class Router(DeprecatedRouterMembers):
         io_token_admission: Final = (
             MappingProxyType({})
             if rate_limit_check is None
-            else await async_admit_io_token_turn(
-                rate_limit_check.dual_cache, deployment, held_reservation, get_utc_datetime()
-            )
+            else await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment, get_utc_datetime())
         )
         budget_limiter: Final = self._core_get_router_deployment_budget_limiter()
         if budget_limiter is not None:

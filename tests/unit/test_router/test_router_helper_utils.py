@@ -538,14 +538,14 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
     assert await router.cache.async_get_cache(key=tpm_key) == 17
 
 
-async def _kwargs_routed_to(router: Router, model: str, function_name: str) -> dict[str, object]:
+async def _kwargs_routed_to(router: Router, model: str, function_name: str, **request: object) -> dict[str, object]:
     routed: Final[dict[str, object]] = {}
 
     async def call(**kwargs: object) -> None:
         routed.update(kwargs)
 
     call.__name__ = function_name
-    await router._ageneric_api_call_with_fallbacks_helper(model=model, original_generic_function=call)
+    await router._ageneric_api_call_with_fallbacks_helper(model=model, original_generic_function=call, **request)
     return routed
 
 
@@ -733,12 +733,74 @@ def _io_limited_router(kind: str, **litellm_params: object) -> Router:
     )
 
 
-async def _count_minutes_tokens(router: Router, kind: str, tokens: int, minute: datetime) -> None:
-    await router.cache.async_increment_cache(
-        key=f"global_router:ws-io-dep:openai/ws-io-unpriced:{kind}:{minute.strftime('%H-%M')}",
-        value=tokens,
-        ttl=120,
+def _minutes_counter_key(kind: str, minute: datetime, model: str = "openai/ws-io-unpriced") -> str:
+    return f"global_router:ws-io-dep:{model}:{kind}:{minute.strftime('%H-%M')}"
+
+
+async def _count_minutes_tokens(
+    router: Router, kind: str, tokens: int, minute: datetime, model: str = "openai/ws-io-unpriced"
+) -> None:
+    await router.cache.async_increment_cache(key=_minutes_counter_key(kind, minute, model), value=tokens, ttl=120)
+
+
+_LONG_OUTPUT_MODEL: Final = "openai/gpt-5.4-mini"
+
+
+def _long_output_router() -> tuple[Router, Mapping[str, int]]:
+    max_output: Final = litellm.get_model_info(_LONG_OUTPUT_MODEL)["max_output_tokens"]
+    assert isinstance(max_output, int)
+    limits: Final = {"itpm": 10_000, "otpm": max_output // 2}
+    return _io_limited_router("itpm", model=_LONG_OUTPUT_MODEL, otpm=limits["otpm"]), limits
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["itpm", "otpm"])
+async def test_responses_websocket_opens_without_counting_tokens_until_the_minute_reaches_deployment_io_limit(
+    kind: str, router_minute_pinned: datetime
+):
+    router, limits = _long_output_router()
+
+    await _kwargs_routed_to(router, "ws-io", "_aresponses_websocket", websocket=object())
+
+    assert [
+        await router.cache.async_get_cache(key=_minutes_counter_key(counted, router_minute_pinned, _LONG_OUTPUT_MODEL))
+        for counted in ("itpm", "otpm")
+    ] == [None, None]
+    await _count_minutes_tokens(router, kind, limits[kind], router_minute_pinned, _LONG_OUTPUT_MODEL)
+    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit={limits[kind]}, current usage="):
+        await _kwargs_routed_to(router, "ws-io", "_aresponses_websocket", websocket=object())
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_first_turn_counts_its_actual_tokens_on_the_minute_it_opened(
+    router_minute_pinned: datetime,
+):
+    from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+    router, _ = _long_output_router()
+    socket_metadata: Final = (await _kwargs_routed_to(router, "ws-io", "_aresponses_websocket", websocket=object()))[
+        "litellm_metadata"
+    ]
+    assert isinstance(socket_metadata, dict)
+    rate_limits: Final = next(
+        check for check in router.optional_callbacks or () if isinstance(check, ModelRateLimitingCheck)
     )
+
+    await rate_limits.async_log_success_event(
+        {"litellm_params": get_litellm_params(litellm_metadata=socket_metadata)},
+        ResponsesWebSocketTokenUsageProcessor.create_logging_object(
+            [{"type": "response.completed", "response": {"usage": {"input_tokens": 20, "output_tokens": 15}}}]
+        ),
+        None,
+        None,
+    )
+
+    assert [
+        await router.cache.async_get_cache(key=_minutes_counter_key(counted, router_minute_pinned, _LONG_OUTPUT_MODEL))
+        for counted in ("itpm", "otpm")
+    ] == [20, 15]
 
 
 @pytest.mark.asyncio
@@ -1257,6 +1319,9 @@ def _rpm_tpm_router(model_id: str) -> Router:
 def router_minute_pinned(monkeypatch: pytest.MonkeyPatch) -> datetime:
     pinned: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
     monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+    monkeypatch.setattr(
+        "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: pinned
+    )
     return pinned
 
 

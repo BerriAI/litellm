@@ -46,11 +46,9 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import (
-    io_token_reservation,
     is_background_response,
     requests_background,
     without_budget_reservation,
-    without_io_token_reservation,
 )
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2156,17 +2154,17 @@ class _RefusedTurn:
     rejection: Exception
 
 
-ResponsesWsTurnAdmission: TypeAlias = Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]
+ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
 
 
 async def _admit_frame_turn(
-    turn_admission: ResponsesWsTurnAdmission | None, raw_message: str, held_reservation: Mapping[str, object]
+    turn_admission: ResponsesWsTurnAdmission | None, raw_message: str
 ) -> _AdmittedTurn | _RefusedTurn:
     frame: Final = _json_object_or_none(raw_message)
     if turn_admission is None or frame is None or frame.get("type") != "response.create":
         return _AdmittedTurn()
     try:
-        return _AdmittedTurn(await turn_admission(held_reservation))
+        return _AdmittedTurn(await turn_admission())
     except RateLimitError as refusal:
         return _RefusedTurn(refusal)
     except Exception as e:
@@ -2519,32 +2517,22 @@ class ResponsesWebSocketStreaming:
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
             litellm_call_id=str(uuid.uuid4()), start_time=start_time
         )
-        self._detach_admission_reservations()
+        self._detach_budget_reservation()
         _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         _set_turn_io_token_reservation(turn_logging_obj, io_token_reservation)
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 
-    def _held_admission_reservation(self) -> Mapping[str, object]:
-        litellm_params: Final = _json_object_or_none(
-            self.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
-        )
-        buckets: Final = (
-            () if litellm_params is None else (litellm_params.get(key) for key in ("metadata", "litellm_metadata"))
-        )
-        held: Final = (io_token_reservation(bucket) for bucket in buckets if _is_json_object(bucket))
-        return next((reservation for reservation in held if reservation), _NO_IO_TOKEN_RESERVATION)
-
-    def _detach_admission_reservations(self) -> None:
-        """Only the first turn settles the connection's admission reservations; later turns charge their own usage."""
+    def _detach_budget_reservation(self) -> None:
+        """Only the first turn settles the connection's admission reservation; later turns charge their cost directly."""
         litellm_params: Final = _json_object_or_none(
             self.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
         )
         if litellm_params is None:
             return
         self.logging_obj.litellm_params = {
-            key: without_io_token_reservation(without_budget_reservation(value))
+            key: without_budget_reservation(value)
             if key in _PER_TURN_METADATA_KEYS and _is_json_object(value)
             else value
             for key, value in litellm_params.items()
@@ -2990,7 +2978,7 @@ class ResponsesWebSocketStreaming:
     async def _admit_or_reject_turn(
         self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: ResponsesWsTurnAdmission | None
     ) -> _AdmittedTurn | None:
-        verdict: Final = await _admit_frame_turn(turn_admission, message, self._held_admission_reservation())
+        verdict: Final = await _admit_frame_turn(turn_admission, message)
         match verdict:
             case _AdmittedTurn():
                 return verdict
@@ -3419,21 +3407,6 @@ class ManagedResponsesWebSocketHandler:
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
-    def _held_io_token_reservation(self) -> Mapping[str, object]:
-        connection_metadata: Final = self.extra_kwargs.get("metadata")
-        held_on_connection: Final = (
-            io_token_reservation(connection_metadata)
-            if _is_json_object(connection_metadata)
-            else _NO_IO_TOKEN_RESERVATION
-        )
-        return held_on_connection or io_token_reservation(self.litellm_metadata)
-
-    def _detach_io_token_reservation(self) -> None:
-        connection_metadata: Final = self.extra_kwargs.get("metadata")
-        self.litellm_metadata = without_io_token_reservation(self.litellm_metadata)
-        if _is_json_object(connection_metadata):
-            self.extra_kwargs = {**self.extra_kwargs, "metadata": without_io_token_reservation(connection_metadata)}
-
     async def _guard_frame(self, raw_message: str) -> GuardedResponsesWsFrame | None:
         """Same per-frame pre_call guardrail walk as the native socket: a rejected frame errors and is not sent."""
         if self.frame_guard is None:
@@ -3584,7 +3557,7 @@ class ManagedResponsesWebSocketHandler:
         guarded: Final = await self._guard_frame(raw_message)
         if guarded is None:
             return
-        verdict: Final = await _admit_frame_turn(turn_admission, raw_message, self._held_io_token_reservation())
+        verdict: Final = await _admit_frame_turn(turn_admission, raw_message)
         if isinstance(verdict, _RefusedTurn):
             if self._failure is None:
                 self._failure = verdict.rejection
@@ -3617,15 +3590,15 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["litellm_metadata"] = self._metadata_with_turn_guardrails(
                 call_kwargs.get("litellm_metadata"), guarded.guardrail_information
             )
-        if verdict.reservation:
-            existing_metadata: Final = call_kwargs.get("litellm_metadata")
-            call_kwargs["litellm_metadata"] = {
-                **(existing_metadata if _is_json_object(existing_metadata) else {}),
-                **verdict.reservation,
-            }
         self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
         call_kwargs.update(self.extra_kwargs)
-        self._detach_io_token_reservation()
+        call_kwargs.update(
+            {
+                channel: {**bucket, **verdict.reservation}
+                for channel, bucket in call_kwargs.items()
+                if channel in _PER_TURN_METADATA_KEYS and _is_json_object(bucket)
+            }
+        )
 
         try:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)

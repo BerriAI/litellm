@@ -26,7 +26,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
-    async_current_usage,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
@@ -290,7 +289,14 @@ class ModelRateLimitingCheck(CustomLogger):
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def _async_get_current_tpm(self, tpm_key: str, tpm_limit: int, parent_otel_span: Span | None) -> int | None:
-        return await async_current_usage(self.dual_cache, tpm_key, tpm_limit, parent_otel_span)
+        local_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
+            return local_tpm
+        try:
+            return await redis_cache.async_get_cache(key=tpm_key, parent_otel_span=parent_otel_span)
+        except RedisCircuitBreakerOpenError:
+            return local_tpm
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def pre_call_check(self, deployment: dict) -> dict | None:

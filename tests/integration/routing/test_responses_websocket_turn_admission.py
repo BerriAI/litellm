@@ -518,9 +518,7 @@ def test_a_tpm_limit_lowered_while_the_socket_is_open_applies_to_its_next_turn(
         assert deployment.forwarded_turns() == 1
 
 
-def test_a_socket_on_an_otpm_limited_deployment_reserves_once_and_serves_every_turn(
-    limited: Gateway, cert: tuple[Path, Path]
-) -> None:
+def test_a_socket_on_an_otpm_limited_deployment_serves_every_turn(limited: Gateway, cert: tuple[Path, Path]) -> None:
     with responses_peer(cert) as peer, limited.scenario() as scenario:
         deployment: Final = _native(scenario, peer, otpm=10_000)
         key: Final = scenario.key(models=[deployment.name])
