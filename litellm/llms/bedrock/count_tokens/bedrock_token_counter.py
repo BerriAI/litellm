@@ -187,6 +187,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 counted_model,
                 LlmProviders.BEDROCK_MANTLE if use_mantle else LlmProviders.BEDROCK,
                 sent_messages,
+                tools if translated is None else translated.tools,
                 request_options,
                 context_management,
                 deployment,

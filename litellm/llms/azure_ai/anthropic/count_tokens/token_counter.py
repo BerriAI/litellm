@@ -110,7 +110,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 pass
 
         claude_options: Final = claude_count_options(
-            model_to_use, LlmProviders.AZURE_AI, messages, request_options, context_management, deployment
+            model_to_use, LlmProviders.AZURE_AI, messages, tools, request_options, context_management, deployment
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, "azure_ai_anthropic_api")

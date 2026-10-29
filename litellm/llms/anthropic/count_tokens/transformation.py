@@ -348,6 +348,7 @@ def claude_count_options(
     model: str,
     provider: LlmProviders,
     messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
     request_options: Mapping[str, JsonValue],
     context_management: CountContextManagement | None,
     deployment: Mapping[str, object] | None,
@@ -371,12 +372,14 @@ def claude_count_options(
     deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
     leading_system, conversation = split_leading_system_run(messages)
     sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
+    sent_tools: Final = copy.deepcopy([dict(tool) for tool in tools or ()])
     try:
         request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts
             model=model,
             messages=sent_conversation,
             anthropic_messages_optional_request_params={
                 **copy.deepcopy(sent),
+                **({"tools": sent_tools} if sent_tools else {}),
                 "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET,
             },
             litellm_params=GenericLiteLLMParams.model_validate(

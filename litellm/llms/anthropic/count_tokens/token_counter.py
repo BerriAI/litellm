@@ -96,7 +96,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 pass
 
         claude_options: Final = claude_count_options(
-            model_to_use, LlmProviders.ANTHROPIC, messages, request_options, context_management, deployment
+            model_to_use, LlmProviders.ANTHROPIC, messages, tools, request_options, context_management, deployment
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, "anthropic_api")

@@ -27,7 +27,7 @@ from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAn
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE, ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 
@@ -997,6 +997,65 @@ async def test_counter_sending_options_still_counts_the_leading_system_run_as_sy
     assert {name: body.get(name) for name in ("system", "messages")} == {
         "system": [{"type": "text", "text": "Be terse."}],
         "messages": [{"role": "user", "content": "Weather in SF?"}],
+    }
+
+
+_ADVISOR_TOOL: Final[dict[str, JsonValue]] = {
+    "type": ANTHROPIC_ADVISOR_TOOL_TYPE,
+    "name": "advisor",
+    "model": "claude-opus-5-5",
+}
+_ADVISOR_CALL: Final[dict[str, JsonValue]] = {"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}}
+_ADVISOR_RESULT: Final[dict[str, JsonValue]] = {
+    "type": "advisor_tool_result",
+    "tool_use_id": "srvtoolu_1",
+    "content": {"type": "advisor_result", "text": "Check the forecast first."},
+}
+_ADVISED_ANSWER: Final[dict[str, JsonValue]] = {"type": "text", "text": "It is sunny."}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    ("tools", "counted_reply"),
+    [
+        pytest.param(
+            [_ADVISOR_TOOL, _WEATHER_TOOL],
+            [_ADVISOR_CALL, _ADVISOR_RESULT, _ADVISED_ANSWER],
+            id="advisor_tool_sent",
+        ),
+        pytest.param([_WEATHER_TOOL], [_ADVISED_ANSWER], id="advisor_tool_not_sent"),
+    ],
+)
+async def test_counter_sending_options_keeps_advisor_blocks_only_when_the_advisor_tool_is_sent(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    tools: list[dict[str, JsonValue]],
+    counted_reply: list[JsonValue],
+) -> None:
+    _, (count,) = await _counted_requests(
+        counter_type,
+        count_endpoint,
+        [
+            {"role": "user", "content": "Weather in SF?"},
+            {"role": "assistant", "content": [_ADVISOR_CALL, _ADVISOR_RESULT, _ADVISED_ANSWER]},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        tools,
+        "anthropic",
+        request_options={"thinking": _ENABLED_THINKING},
+        model="claude-haiku-5-5",
+    )
+
+    body: Final = _JSON_BODY.validate_json(count.content)
+    assert {name: body.get(name) for name in ("messages", "tools")} == {
+        "messages": [
+            {"role": "user", "content": "Weather in SF?"},
+            {"role": "assistant", "content": counted_reply},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        "tools": tools,
     }
 
 
