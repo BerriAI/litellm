@@ -91,7 +91,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, GetModelCostMap
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
@@ -3518,8 +3518,15 @@ def _replace_cost_map_entry(
     registered_fields: Final = previous_fields | frozenset(
         name for name, value in registration.items() if value is not None
     )
-    sharing_names: Final = tuple(name for name in names if cost_map.get(name) is current)
-    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, names, registered_fields)))
+    cost_map.update(
+        dict.fromkeys((key, *_names_sharing_entry(cost_map, key)), AliasedCostEntry(merged, names, registered_fields))
+    )
+
+
+def _names_sharing_entry(cost_map: Mapping[str, Mapping[str, object]], key: str) -> tuple[str, ...]:
+    current: Final = cost_map.get(key)
+    names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
+    return tuple(name for name in names if cost_map.get(name) is current)
 
 
 def _without_synthesized_costs(
@@ -3756,14 +3763,58 @@ class _RegistrationWrite:
     entry: Mapping[str, object]
 
 
+def _provider_registration_base(key: str, provider: object) -> _RegistrationWrite:
+    return _registration_base(key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None)
+
+
+def model_cost_registration_key(key: str, provider: object) -> str:
+    """The ``litellm.model_cost`` key a ``register_model`` write of a ``key`` entry with this ``litellm_provider``
+    lands on, the row ``model_cost_registration_row`` reads."""
+    return _provider_registration_base(key, provider).key
+
+
 def model_cost_registration_row(key: str, provider: object) -> Mapping[str, object]:
     """The row a ``register_model`` write of a ``key`` entry with this ``litellm_provider`` merges onto: the
     ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
     with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
-    base: Final = _registration_base(
-        key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
-    )
+    base: Final = _provider_registration_base(key, provider)
     return _builtin_cost_map().get(base.key) or base.entry
+
+
+def _carries_registered_fields(entry: Mapping[str, object] | None) -> bool:
+    return isinstance(entry, AliasedCostEntry) and bool(entry.registered_fields)
+
+
+def model_cost_rows_off_catalog(rows: Iterable[str]) -> frozenset[str]:
+    """Every name among ``rows`` whose ``litellm.model_cost`` entry registrations moved off the loaded catalog (a row
+    the catalog lacks, or a catalog row carrying registered fields), with each alias sharing that entry."""
+    cost_map: Final = _builtin_cost_map()
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    off_catalog: Final = (row for row in rows if row not in catalog or _carries_registered_fields(cost_map.get(row)))
+    return frozenset(itertools.chain.from_iterable((row, *_names_sharing_entry(cost_map, row)) for row in off_catalog))
+
+
+def restore_model_cost_rows_to_catalog(rows: Iterable[str]) -> None:
+    """Put each of ``rows`` back to its loaded catalog entry with no registered fields, keeping every alias on the
+    one shared entry, and drop a row the catalog lacks, so registrations replayed onto them start where a fresh boot
+    does."""
+    cost_map: Final = _builtin_cost_map()
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    for row in rows:
+        if row in catalog:
+            cost_map.update(_catalog_entry_on_row_and_aliases(cost_map, row, catalog[row]))
+        else:
+            cost_map.pop(row, None)
+    _invalidate_model_cost_lowercase_map()
+
+
+def _catalog_entry_on_row_and_aliases(
+    cost_map: Mapping[str, Mapping[str, object]], row: str, catalog_entry: Mapping[str, object]
+) -> Mapping[str, AliasedCostEntry]:
+    current: Final = cost_map.get(row)
+    names: Final = current.names if isinstance(current, AliasedCostEntry) else ()
+    restored: Final = AliasedCostEntry(catalog_entry, names)
+    return MappingProxyType(dict.fromkeys((row, *_names_sharing_entry(cost_map, row)), restored))
 
 
 def _registration_base(
@@ -3919,6 +3970,17 @@ def reapply_runtime_model_cost_registrations() -> None:
         _LiveDeploymentReplay.callback()
     if _runtime_registered_model_cost:
         register_model(model_cost=dict(_runtime_registered_model_cost))
+
+
+def runtime_model_cost_registrations_on(rows: Collection[str]) -> Mapping[str, Mapping[str, object]]:
+    """The ``register_model`` entries replayed on every reload whose write lands on one of ``rows``."""
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in tuple(_runtime_registered_model_cost.items())
+            if model_cost_registration_key(key, value.get("litellm_provider")) in rows
+        }
+    )
 
 
 def cost_map_omits_token_price(*keys: object) -> bool:

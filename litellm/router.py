@@ -485,9 +485,13 @@ from litellm.utils import (
     is_generalized_model_info,
     is_region_allowed,
     lookup_model_info_for_registration,
+    model_cost_registration_key,
+    model_cost_rows_off_catalog,
     model_info_with_pricing_overrides,
     provider_rejectable_params,
     resolve_api_key_secret_reference,
+    restore_model_cost_rows_to_catalog,
+    runtime_model_cost_registrations_on,
     set_live_deployment_replay,
     token_counter,
 )
@@ -11584,6 +11588,7 @@ class Router:
                 # Free the outgoing deployment's pre-routing strategy slot (keyed by the
                 # OLD model_name/tags) before the re-add below re-registers it.
                 self._unregister_pre_routing_strategy_for_deployment(deployment=_deployment_on_router)
+                Router._withdraw_deployment_model_cost(_deployment_model_id, lambda: _deployment_on_router)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -11785,24 +11790,81 @@ class Router:
         self._provider_unresolved_deployments = ()
         for create_deployment in provider_unresolved:
             create_deployment()
-        for entry in tuple(self.model_list):
-            try:
-                deployment = entry if isinstance(entry, Deployment) else Deployment(**entry)
-            except Exception:  # noqa: BLE001  # a malformed entry must not abort the rest of the rebuild
-                verbose_router_logger.exception(
-                    "Router: could not rebuild cost-map entry for a deployment during a price data reload"
-                )
-                continue
-            Router._register_deployment_in_model_cost(
-                model_id=deployment.model_info.id,
-                model_info=Router._deployment_model_cost_payload(deployment),
-                model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-                pricing_provider=deployment.model_info.pricing_provider,
-            )
+        for deployment in self._served_deployments():
+            Router._register_deployment_pricing(deployment)
         self._invalidate_model_group_info_cache()
 
     _replay_model_cost_registrations = replay_model_cost_registrations
+
+    def _served_deployments(self) -> Iterator[Deployment]:
+        """Every deployment in ``model_list``, skipping an entry that cannot be rebuilt into a ``Deployment``."""
+        for entry in tuple(self.model_list):
+            try:
+                yield entry if isinstance(entry, Deployment) else Deployment(**entry)
+            except Exception:  # noqa: BLE001  # a malformed entry must not abort the rest of the rebuild
+                verbose_router_logger.exception("Router: could not rebuild the cost-map entry of a deployment")
+
+    @staticmethod
+    def _shared_cost_registrations(deployment: Deployment) -> tuple[tuple[str, str], ...]:
+        """The ``(key, litellm_provider)`` pairs of a deployment's shared backend write, which decide its rows."""
+        model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
+            deployment.model_info.model_dump(include={"litellm_provider"})
+        )
+        provider: Final = str(model_info.get("litellm_provider") or "")
+        backend_keys: Final = Router._backend_cost_map_keys(
+            model=deployment.litellm_params.model, custom_llm_provider=deployment.litellm_params.custom_llm_provider
+        )
+        return tuple((key, provider) for key in backend_keys)
+
+    @staticmethod
+    def _withdraw_deployment_model_cost(model_id: str, removed: Callable[[], Deployment]) -> None:
+        """Rebuild the shared cost-map rows of a deployment that already left its router's ``model_list``, logging a
+        failure instead of raising it, since the delete or edit that removed it has already happened. ``removed``
+        builds the deployment under that guard, so a ``model_list`` entry that cannot be rebuilt is logged too."""
+        try:
+            Router._rebuild_cost_rows_without(removed())
+        except Exception:  # noqa: BLE001  # the deployment is already out of model_list, so the delete or edit stands
+            verbose_router_logger.exception(
+                "Router: could not withdraw model_id=%s from the shared cost-map rows; they keep its model_info until "
+                "a reload",
+                model_id,
+            )
+
+    @staticmethod
+    def _rebuild_cost_rows_without(removed: Deployment) -> None:
+        """Rebuild the shared cost-map rows a deployment that left its router's ``model_list`` wrote, the way a reload
+        rebuilds the map: the loaded catalog row, then every live deployment writing it in ``model_list`` order, then
+        the ``register_model`` registrations replayed on every reload. Each distinct registration is resolved once,
+        against the map the deployments wrote into."""
+        stale: Final = model_cost_rows_off_catalog(
+            model_cost_registration_key(key, provider) for key, provider in Router._shared_cost_registrations(removed)
+        )
+        if not stale:
+            return
+        routers: Final = tuple(_live_routers)
+        served: Final = tuple(
+            (deployment, Router._shared_cost_registrations(deployment))
+            for deployment in chain.from_iterable(router._served_deployments() for router in routers)
+        )
+        rows: Final = MappingProxyType(
+            {
+                registration: model_cost_registration_key(*registration)
+                for registration in dict.fromkeys(chain.from_iterable(registrations for _, registrations in served))
+            }
+        )
+        contributors: Final = tuple(
+            deployment
+            for deployment, registrations in served
+            if deployment.model_info.id in stale or any(rows[registration] in stale for registration in registrations)
+        )
+        persisted: Final = runtime_model_cost_registrations_on(stale)
+        restore_model_cost_rows_to_catalog(stale)
+        for deployment in contributors:
+            Router._register_deployment_pricing(deployment)
+        if persisted:
+            litellm.register_model(model_cost=dict(persisted), persist_across_reloads=False)
+        for router in routers:
+            router._invalidate_model_group_info_cache()
 
     def delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -11826,16 +11888,19 @@ class Router:
             _budget_limiter: Final = self.get_router_deployment_budget_limiter()
             if _budget_limiter is not None:
                 _budget_limiter.unregister_deployment_budget(model_id=id)
+
+            def removed_deployment() -> Deployment:
+                return item if isinstance(item, Deployment) else Deployment(**item)
+
             try:
-                self._unregister_pre_routing_strategy_for_deployment(
-                    deployment=item if isinstance(item, Deployment) else Deployment(**item)
-                )
+                self._unregister_pre_routing_strategy_for_deployment(deployment=removed_deployment())
             except Exception:
                 verbose_router_logger.exception(
                     "delete_deployment: could not release pre-routing strategies for model_id=%s; "
                     "the deployment is out of the model_list and its indices are repaired",
                     id,
                 )
+            Router._withdraw_deployment_model_cost(id, removed_deployment)
         except Exception:
             return None
         return item
