@@ -30,7 +30,7 @@ def test_jwt_teams_array_claim_creates_and_joins_every_team_only_when_team_id_up
     gateway: Gateway, tmp_path: Path, team_id_upsert: bool
 ) -> None:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_jwk: Final = jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())
+    public_jwk: Final[str] = jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())
 
     def respond(request: Request) -> Reply:
         assert request.method == "GET", request

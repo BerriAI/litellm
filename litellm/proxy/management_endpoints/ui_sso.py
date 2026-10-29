@@ -1241,7 +1241,7 @@ def generic_response_convertor(
     )
 
     token: Final = cast(dict[str, object], response)  # cast-ok: the IdP userinfo JSON object fastapi-sso hands back
-    all_teams: Final = []
+    all_teams: Final = list[str]()
     if sso_jwt_handler is not None:
         team_ids = sso_jwt_handler.get_all_jwt_team_ids(token)
         all_teams.extend(team_ids)
@@ -1274,9 +1274,7 @@ def generic_response_convertor(
         if not isinstance(scalar_team_id, str) or scalar_team_id in all_teams
         else [*all_teams, scalar_team_id]
     )
-    team_ids_to_join: Final = [
-        team_id for team_id in team_ids_with_scalar if not (isinstance(team_id, str) and not team_id.strip())
-    ]
+    team_ids_to_join: Final = [team_id for team_id in team_ids_with_scalar if team_id.strip()]
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
