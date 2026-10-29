@@ -49,7 +49,7 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
+from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -1111,8 +1111,8 @@ def should_auto_drop_params_for_agentic_cli(
         return False
     if caller_set_drop_params:
         return False
-    litellm_settings: Final = proxy_config.config.get("litellm_settings")
-    return not (isinstance(litellm_settings, Mapping) and "drop_params" in litellm_settings)
+    litellm_settings: Final = _request_fields(proxy_config.config.get("litellm_settings"))
+    return normalize_drop_params(litellm_settings.get("drop_params")) is not False
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
