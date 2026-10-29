@@ -219,6 +219,8 @@ def register(
     name: str,
     url: str,
     litellm_params: Mapping[str, JsonValue] | None,
+    *,
+    database_url: str | None = None,
 ) -> str:
     body: dict[str, JsonValue] = {
         "agent_name": name,
@@ -243,7 +245,14 @@ def register(
     def delete() -> None:
         deleted: Final = gateway.request("DELETE", f"/v1/agents/{identity}")
         assert deleted.status_code == 200, deleted.text
-        assert read_rows('SELECT agent_id FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (identity,)) == []
+        assert (
+            read_rows(
+                'SELECT agent_id FROM "LiteLLM_AgentsTable" WHERE agent_id=%s',
+                (identity,),
+                database_url=database_url,
+            )
+            == []
+        )
 
     cleanups(delete)
     return identity
@@ -277,7 +286,9 @@ def sse_frames(text: str) -> tuple[dict[str, JsonValue], ...]:
     )
 
 
-def spend_rows(request_id: str) -> list[dict[str, JsonValue]]:
+def spend_rows(request_id: str, *, database_url: str | None = None) -> list[dict[str, JsonValue]]:
     return read_rows(
-        'SELECT request_id, model, call_type, status FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,)
+        'SELECT request_id, model, call_type, status FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+        (request_id,),
+        database_url=database_url,
     )
