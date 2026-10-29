@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_images_from_message,
     extract_reasoning_content,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -38,6 +39,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_THINK_ON_EFFORTS: Final = frozenset({"low", "medium", "high"})
+_THINK_OFF_REASON: Final = "Ollama takes think only as on or off, and litellm maps this level to off."
 
 
 class OllamaChatConfig(BaseConfig):
@@ -175,7 +179,11 @@ class OllamaChatConfig(BaseConfig):
                 if model.startswith("gpt-oss"):
                     optional_params["think"] = value
                 else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                    optional_params["think"] = value in _THINK_ON_EFFORTS
+                    if isinstance(value, str) and value not in _THINK_ON_EFFORTS and value != "none":
+                        warn_dropped_reasoning(
+                            "reasoning_effort", value, model, _THINK_OFF_REASON, drop_params_gated=False
+                        )
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection

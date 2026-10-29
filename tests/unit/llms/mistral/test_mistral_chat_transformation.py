@@ -1,8 +1,10 @@
+import logging
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
@@ -1665,3 +1667,42 @@ def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_
     )
 
     assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize(
+    "param, value", (("reasoning_effort", "none"), ("thinking", {"type": "enabled", "budget_tokens": 1024}))
+)
+def test_magistral_reasoning_request_replaced_by_prompt_warns_once(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    warnings: Final = _warnings_naming(caplog, param)
+    assert result["_add_reasoning_prompt"] is True
+    assert len(warnings) == 1
+    assert "magistral-medium-latest" in warnings[0]
+
+
+def test_non_magistral_reasoning_effort_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["reasoning_effort"] == "high"
+    assert _warnings_naming(caplog, "reasoning_effort") == ()

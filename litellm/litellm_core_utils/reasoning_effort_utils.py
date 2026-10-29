@@ -3,6 +3,8 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -19,6 +21,7 @@ _DROP_WARNING: Final = "Dropping %s=%s for model=%r because %s"
 _DROP_PARAMS_DROP_WARNING: Final = "Dropping %s=%s for model=%r (drop_params=True) because %s"
 _NON_NUMERIC_BUDGET_REASON: Final = "it is not a number. Send budget_tokens as an integer to set a reasoning level."
 _REASONING_PARAMS: Final = ("reasoning", "reasoning_effort", "thinking")
+OPAQUE_VALUE: Final = TypeAdapter(object)
 
 
 def warn_dropped_reasoning(

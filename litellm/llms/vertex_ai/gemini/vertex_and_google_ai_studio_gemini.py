@@ -204,6 +204,10 @@ _SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model m
 _NON_INTEGER_BUDGET_REASON: Final = (
     "Gemini takes budget_tokens only as an integer, so it uses its default thinking budget."
 )
+_LEVEL_ONLY_BUDGET_REASON: Final = (
+    "Gemini 3 and later set reasoning by thinking level, not budget, so it uses its default level. "
+    "Send reasoning_effort to pick a level."
+)
 _sampling_deprecation_lock: Final = threading.Lock()
 
 
@@ -1469,6 +1473,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = sends_thoughts
+                    if thinking_budget is not None:
+                        warn_dropped_reasoning(
+                            "thinking.budget_tokens",
+                            thinking_budget,
+                            model,
+                            _LEVEL_ONLY_BUDGET_REASON,
+                            drop_params_gated=False,
+                        )
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         params["thinkingLevel"] = (

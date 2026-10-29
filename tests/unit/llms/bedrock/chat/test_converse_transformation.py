@@ -1,6 +1,7 @@
 import base64
 import copy
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -12,6 +13,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm import ModelResponse, Router, completion
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
@@ -10789,3 +10791,49 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
 
     assert response.choices[0].message.content == "ok"
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+_DEEPSEEK_R1_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.deepseek.r1-v1:0"
+
+
+@pytest.mark.parametrize(
+    "param, value", (("thinking", {"type": "enabled", "budget_tokens": 1024}), ("reasoning_effort", "high"))
+)
+def test_bedrock_deepseek_arn_reasoning_drop_warns_once(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        optional_params: Final = AmazonConverseConfig().map_openai_params(
+            non_default_params={param: value, "max_tokens": 100},
+            optional_params={},
+            model=_DEEPSEEK_R1_PROFILE_ARN,
+            drop_params=False,
+        )
+
+    warnings: Final = _warnings_naming(caplog, param)
+    assert param not in optional_params
+    assert len(warnings) == 1
+    assert _DEEPSEEK_R1_PROFILE_ARN in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "param, value", (("thinking", {"type": "enabled", "budget_tokens": 1024}), ("reasoning_effort", "high"))
+)
+def test_bedrock_deepseek_r1_drop_of_an_unadvertised_param_does_not_warn(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        AmazonConverseConfig().map_openai_params(
+            non_default_params={param: value, "max_tokens": 100},
+            optional_params={},
+            model="us.deepseek.r1-v1:0",
+            drop_params=False,
+        )
+
+    assert _warnings_naming(caplog, param) == ()

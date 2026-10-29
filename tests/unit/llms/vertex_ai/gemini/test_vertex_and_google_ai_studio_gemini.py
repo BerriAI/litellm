@@ -1730,6 +1730,40 @@ def test_gemini_integer_thinking_budget_is_sent_without_warning(caplog: pytest.L
     assert _budget_drop_warnings(caplog) == ()
 
 
+def test_gemini_3_thinking_budget_drop_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert "thinking.budget_tokens=2048" in warnings[0]
+    assert "gemini-3-pro-preview" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    ({"type": "enabled"}, {"type": "enabled", "budget_tokens": 0}, {"type": "disabled", "budget_tokens": 2048}),
+)
+def test_gemini_3_thinking_without_a_dropped_budget_does_not_warn(
+    thinking: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": thinking},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    assert _budget_drop_warnings(caplog) == ()
+
+
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}

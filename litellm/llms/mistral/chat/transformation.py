@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -57,6 +58,7 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
+_REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
 
 
 def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
@@ -216,6 +218,9 @@ class MistralConfig(OpenAIGPTConfig):
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
+                warn_dropped_reasoning(
+                    param, OPAQUE_VALUE.validate_python(value), model, _REASONING_PROMPT_REASON, drop_params_gated=False
+                )
             if param == "parallel_tool_calls":
                 optional_params["parallel_tool_calls"] = value
         return optional_params
