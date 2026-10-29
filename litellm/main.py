@@ -234,6 +234,7 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -1133,17 +1134,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 
 _ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
-
-
-def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
-    if custom_llm_provider == "anthropic":
-        return True
-    model_lower: Final = model.lower()
-    if custom_llm_provider == "bedrock":
-        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
-        return "claude" in model_lower
-    return False
 
 
 def _history_without_unanswered_tool_search_calls(
@@ -2672,10 +2662,13 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
+    if custom_llm_provider == "bigmodel" and not api_key:
+        raise litellm.AuthenticationError(
+            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+        )
     organization = (
         organization
-        or litellm.organization
-        or get_secret("OPENAI_ORGANIZATION")
+        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
@@ -5749,7 +5742,7 @@ def completion(
             }
         )
 
-        if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
+        if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:
@@ -6299,6 +6292,7 @@ def completion(
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
+            or custom_llm_provider == "bigmodel"
             or custom_llm_provider in litellm.openai_compatible_providers
             or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
