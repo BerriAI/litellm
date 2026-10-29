@@ -1742,10 +1742,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         continue
                     for c in content:
                         if c.get("type") == "file":
-                            file_object = cast(ChatCompletionFileObject, c)
-                            file_object_file_field = file_object["file"]
+                            file_object_file_field = cast(Dict[str, object], c).get("file")
+                            if not isinstance(file_object_file_field, dict):
+                                continue
                             file_id = file_object_file_field.get("file_id")
-                            if file_id:
+                            if isinstance(file_id, str) and file_id:
                                 file_ids.append(file_id)
         return file_ids
 
