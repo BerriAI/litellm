@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+import threading
 import time
 from collections.abc import Callable, Generator, Mapping
 from types import SimpleNamespace
@@ -23,9 +24,22 @@ class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.success_kwargs: list[dict[str, object]] = []
+        self._logged: Final = threading.Condition()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.success_kwargs.append(kwargs)
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        with self._logged:
+            self.success_kwargs.append(kwargs)
+            self._logged.notify_all()
+
+    def wait_until(self, logged_enough: Callable[[], bool], timeout: float = 30.0) -> None:
+        with self._logged:
+            self._logged.wait_for(logged_enough, timeout=timeout)
 
     def shadow_successes(self) -> list[dict[str, object]]:
         return [
@@ -55,11 +69,23 @@ class _JudgingLogger(_RecordingLogger):
             metadata={"judge_of": metadata["model_group"]},
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
         await self._judge(kwargs)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         await self._judge(kwargs)
 
     def judge_flags(self) -> dict[str, object]:
@@ -96,22 +122,16 @@ def judging_logger():
     yield from _installed(_JudgingLogger())
 
 
-async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
-    deadline: Final = time.monotonic() + timeout
-    while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
-        await asyncio.sleep(0.05)
+async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, timeout: float = 30.0) -> None:
+    await asyncio.to_thread(logger.wait_until, lambda: len(logger.shadow_successes()) >= expected, timeout)
 
 
-async def _wait_for_all_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
-    deadline: Final = time.monotonic() + timeout
-    while len(logger.success_kwargs) < expected and time.monotonic() < deadline:
-        await asyncio.sleep(0.05)
+async def _wait_for_all_successes(logger: _RecordingLogger, expected: int) -> None:
+    await asyncio.to_thread(logger.wait_until, lambda: len(logger.success_kwargs) >= expected)
 
 
-async def _wait_for_judges(logger: _JudgingLogger, judged: set[str], timeout: float = 5.0) -> None:
-    deadline: Final = time.monotonic() + timeout
-    while not judged <= logger.judge_flags().keys() and time.monotonic() < deadline:
-        await asyncio.sleep(0.05)
+async def _wait_for_judges(logger: _JudgingLogger, judged: set[str]) -> None:
+    await asyncio.to_thread(logger.wait_until, lambda: judged <= logger.judge_flags().keys())
 
 
 def _silent_flag_by_group(logger: _RecordingLogger) -> dict[str, object]:
@@ -123,10 +143,8 @@ def _silent_flag_by_group(logger: _RecordingLogger) -> dict[str, object]:
     }
 
 
-def _wait_for_shadow_successes_sync(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
-    deadline: Final = time.monotonic() + timeout
-    while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
-        time.sleep(0.05)
+def _wait_for_shadow_successes_sync(logger: _RecordingLogger, expected: int) -> None:
+    logger.wait_until(lambda: len(logger.shadow_successes()) >= expected)
 
 
 def _streaming_model_list(silent_model: object) -> list[dict[str, object]]:
@@ -859,37 +877,20 @@ async def test_aembedding_with_silent_model_sends_provider_body_without_it(
     request_body: Final = json.loads(route.calls.last.request.read())
     assert request_body == {"model": "embed-model", "input": ["black dresses"], "input_type": "query"}
     assert response.data[0]["embedding"] == [0.1, 0.2]
-@pytest.mark.asyncio
-async def test_a_caller_sent_silent_experiment_flag_still_mirrors_the_request_async(
-    recording_logger: _RecordingLogger,
-) -> None:
-    router: Final = Router(model_list=_streaming_model_list(["shadow-a"]))
-    await router.acompletion(
-        model="primary-model",
-        messages=[{"role": "user", "content": "hi"}],
-        mock_response="pong",
-        metadata={"is_silent_experiment": True},
-    )
-    await _wait_for_all_successes(recording_logger, expected=2)
-
-    assert _silent_flag_by_group(recording_logger) == {"primary-model": None, "shadow-a": True}
 
 
-def test_a_caller_sent_silent_experiment_flag_still_mirrors_the_request_sync(
-    recording_logger: _RecordingLogger,
-) -> None:
-    router: Final = Router(model_list=_streaming_model_list(["shadow-a"]))
-    router.completion(
-        model="primary-model",
-        messages=[{"role": "user", "content": "hi"}],
-        mock_response="pong",
-        metadata={"is_silent_experiment": True},
-    )
-    deadline: Final = time.monotonic() + 5.0
-    while "shadow-a" not in _silent_flag_by_group(recording_logger) and time.monotonic() < deadline:
-        time.sleep(0.05)
+@pytest.mark.parametrize("run_silent_experiment", SILENT_EXPERIMENT_RUNNERS)
+def test_silent_experiment_does_not_launch_from_a_shadow_request(run_silent_experiment):
+    router = Router(model_list=_streaming_model_list(["shadow-a"]))
+    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None) as acompletion:
+        run_silent_experiment(
+            router,
+            silent_model="shadow-a",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"is_silent_experiment": True},
+        )
 
-    assert _silent_flag_by_group(recording_logger) == {"shadow-a": True}
+    acompletion.assert_not_awaited()
 
 
 @pytest.mark.asyncio

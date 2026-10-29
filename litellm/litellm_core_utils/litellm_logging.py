@@ -7716,7 +7716,7 @@ def get_standard_logging_metadata(
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
-        for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
+        for key in (metadata.keys() & StandardLoggingMetadata.__annotations__.keys()) - {"is_silent_experiment"}:
             clean_metadata[key] = metadata[key]
 
         if metadata.get("user_api_key") is not None:
