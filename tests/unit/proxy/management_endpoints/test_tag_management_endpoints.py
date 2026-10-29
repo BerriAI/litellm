@@ -1058,7 +1058,8 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
 
 
 @pytest.mark.asyncio
-async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter():
+@pytest.mark.parametrize("api_key", ["unowned-key", "unattributed", "raw:unattributed", "raw:raw:unattributed"])
+async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter(api_key: str):
     """
     If an internal user filters tag usage by an API key they do not own, the
     endpoint should return an empty scoped filter instead of exposing that key's
@@ -1092,7 +1093,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
-            api_key="unowned-key",
+            api_key=api_key,
             user_api_key_dict=mock_user_auth,
         )
 

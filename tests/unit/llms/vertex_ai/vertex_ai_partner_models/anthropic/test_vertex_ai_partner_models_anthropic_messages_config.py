@@ -289,7 +289,7 @@ def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
     assert "dangerous-tool-use-2026-09-03" not in updated_headers.get("anthropic-beta", "")
 
 
-def _validate_vertex_headers(client_headers, messages):
+def _validate_vertex_headers(client_headers, messages, thinking: Mapping[str, object] | None = None):
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
     litellm_params = {
         "vertex_ai_project": "test-project",
@@ -305,7 +305,7 @@ def _validate_vertex_headers(client_headers, messages):
             headers=client_headers,
             model="claude-opus-5-5",
             messages=messages,
-            optional_params={"max_tokens": 64},
+            optional_params={"max_tokens": 64, **({"thinking": thinking} if thinking is not None else {})},
             litellm_params=litellm_params,
             api_base=None,
         )
@@ -335,6 +335,25 @@ def test_per_message_output_config_reaches_vertex_with_per_turn_control_beta(cli
     )
 
     assert filtered["anthropic-beta"].split(",").count("per-turn-control-2026-07-01") == 1
+
+
+def test_block_binding_reaches_vertex_messages_with_its_beta_under_drop_params(local_beta_headers_config: None) -> None:
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    thinking: Final = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+    messages: Final = [{"role": "user", "content": "Say hi in French"}]
+    headers: Final = update_headers_with_filtered_beta(
+        headers=_validate_vertex_headers({}, messages, thinking=thinking), provider="vertex_ai"
+    )
+    request: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-5-5",
+        messages=[dict(message) for message in messages],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thinking": dict(thinking)},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers=headers,
+    )
+    assert "thinking-binding-controls-2026-08-01" in headers["anthropic-beta"].split(",")
+    assert request["thinking"] == thinking
 
 
 def test_no_per_message_output_config_leaves_per_turn_control_beta_out():
@@ -912,6 +931,20 @@ class TestVertexAnthropicMidConversationSystem:
             {"type": "text", "text": "You are terse."},
             {"type": "text", "text": "Cite sources."},
         ]
+
+    @pytest.mark.parametrize("drop_params", (False, True))
+    def test_unsupported_model_sends_a_non_object_message_on_for_the_provider_to_reject(
+        self, local_model_cost_map, local_beta_headers_config, drop_params
+    ):
+        messages: Final = [{"role": "user", "content": "hi"}, "oops"]
+        result: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-sonnet-4-6",
+            messages=list(messages),
+            anthropic_messages_optional_request_params={"max_tokens": 64},
+            litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+            headers={},
+        )
+        assert result["messages"] == messages
 
     def test_unsupported_model_converts_mid_conversation_system_in_place(self, local_model_cost_map):
         messages = [

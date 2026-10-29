@@ -32,6 +32,7 @@ class TestTryShortCircuitSearch:
             ("github_copilot", "github_copilot/claude-sonnet-5.5"),
             ("databricks", "databricks/databricks-claude-sonnet-5-5"),
             ("databricks", "databricks/system.ai.claude-sonnet-5-5"),
+            ("dashscope", "dashscope/qwen3.7-plus"),
         ],
     )
     async def test_short_circuits_single_web_search_tool(self, provider, model):
