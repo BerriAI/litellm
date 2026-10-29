@@ -2247,7 +2247,9 @@ class JWTAuthManager:
                     team_id_upsert=True,
                 )
             except Exception as e:
-                verbose_proxy_logger.debug("JWT auth could not create team %s, trying to join it anyway: %s", team_id, e)
+                verbose_proxy_logger.debug(
+                    "JWT auth could not create team %s, trying to join it anyway: %s", team_id, e
+                )
 
     @staticmethod
     async def _attach_team_from_header_for_admin(

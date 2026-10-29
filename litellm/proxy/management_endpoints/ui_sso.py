@@ -1270,7 +1270,9 @@ def generic_response_convertor(
         else None
     )
     team_ids_with_scalar: Final = (
-        all_teams if not isinstance(scalar_team_id, str) or scalar_team_id in all_teams else [*all_teams, scalar_team_id]
+        all_teams
+        if not isinstance(scalar_team_id, str) or scalar_team_id in all_teams
+        else [*all_teams, scalar_team_id]
     )
     team_ids_to_join: Final = [
         team_id for team_id in team_ids_with_scalar if not (isinstance(team_id, str) and not team_id.strip())
@@ -1890,10 +1892,7 @@ async def add_missing_team_member(
     """
     missing_teams: Final = sorted(set(sso_teams) - set(user_info.teams or ()))
     results: Final = await asyncio.gather(
-        *(
-            create_team_member_add_task(team_id, user_info, upsert_team)
-            for team_id in missing_teams
-        )
+        *(create_team_member_add_task(team_id, user_info, upsert_team) for team_id in missing_teams)
     )
     failures: Final = tuple(failure for failure in results if failure is not None)
     skipped: Final = tuple(failure.team_id for failure in failures if failure.team_does_not_exist)
