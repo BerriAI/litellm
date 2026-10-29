@@ -1339,6 +1339,39 @@ def test_stream_chunk_builder_rebuilds_each_choice_of_a_multi_choice_text_stream
     ]
 
 
+def test_stream_chunk_builder_gives_a_choice_without_a_finish_chunk_the_finish_reason_its_content_implies():
+    def chunk(choice_index: int, delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=delta, finish_reason=finish_reason)],
+        )
+
+    def tool_call(call_id: str) -> list[ChatCompletionDeltaToolCall]:
+        return [
+            ChatCompletionDeltaToolCall(
+                id=call_id, index=0, type="function", function=Function(name="lookup_fruit", arguments="{}")
+            )
+        ]
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, Delta(tool_calls=tool_call("call_a"))),
+            chunk(1, Delta(tool_calls=tool_call("call_b"))),
+            chunk(2, Delta(content="Kiwis are fuzzy.")),
+            chunk(0, Delta(), finish_reason="tool_calls"),
+        ]
+    )
+
+    assert [(choice.index, choice.finish_reason) for choice in response.choices] == [
+        (0, "tool_calls"),
+        (1, "tool_calls"),
+        (2, "stop"),
+    ]
+
+
 def test_stream_chunk_builder_keeps_each_choices_function_call_annotations_and_images_on_that_choice():
     def chunk(choice_index: int, delta: Delta) -> ModelResponseStream:
         return ModelResponseStream(

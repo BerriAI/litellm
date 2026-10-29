@@ -385,8 +385,8 @@ class ChunkProcessor:
                 return "assistant"
 
     @staticmethod
-    def _finish_reason_of_chunks(chunks: Sequence["_BaseChunk"]) -> object:
-        finish_reason = "stop"
+    def _finish_reason_of_chunks(chunks: Sequence["_BaseChunk"], unreported: str = "stop") -> object:
+        finish_reason = unreported
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
                 chunk_finish_reason = None
@@ -402,7 +402,9 @@ class ChunkProcessor:
     def build_base_choice(index: int, chunks: Sequence["_BaseChunk"]) -> Choices:
         return Choices(
             index=index,
-            finish_reason=ChunkProcessor._finish_reason_of_chunks(chunks),
+            finish_reason=ChunkProcessor._finish_reason_of_chunks(
+                chunks, unreported="tool_calls" if _carries_tool_calls(chunks) else "stop"
+            ),
             message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
         )
 
@@ -1530,6 +1532,13 @@ def _bedrock_trace_fields(chunk: object) -> Mapping[str, object]:
 def _stream_choice_index(choice: object) -> int:
     index: Final = _field_of(choice, "index")
     return index if isinstance(index, int) else 0
+
+
+def _carries_tool_calls(chunks: Sequence[_BaseChunk]) -> bool:
+    return any(
+        "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"]
+        for choice in chain.from_iterable(chunk.get("choices") or () for chunk in chunks)
+    )
 
 
 def _choice_streams(chunks: Sequence[_BaseChunk]) -> tuple[tuple[int, Sequence[_BaseChunk]], ...]:
