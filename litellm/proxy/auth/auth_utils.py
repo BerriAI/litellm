@@ -508,9 +508,7 @@ def _check_banned_params(
             _is_param_allowed(
                 param=param,
                 request_body_value=body[param],
-                configurable_clientside_auth_params=general_settings.get(
-                    "configurable_clientside_auth_params"
-                ),
+                configurable_clientside_auth_params=general_settings.get("configurable_clientside_auth_params"),
             )
             is True
         ):
