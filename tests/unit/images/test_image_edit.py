@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, TypedDict, override
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import FileTypes, ImageResponse
 
 _PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
@@ -32,6 +33,21 @@ _EDIT_RESPONSE: Final = {
         "input_tokens_details": {"image_tokens": _IMAGE_TOKENS, "text_tokens": _TEXT_TOKENS},
         "output_tokens": _OUTPUT_TOKENS,
     },
+}
+
+_DASHSCOPE_IMAGE_URL: Final = (
+    "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+)
+_DASHSCOPE_EDIT_RESPONSE: Final = {
+    "output": {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": [{"image": "https://example.com/edited.png"}]},
+            }
+        ]
+    },
+    "usage": {"width": 1024, "height": 1024, "image_count": 1},
 }
 
 
@@ -229,3 +245,46 @@ async def test_router_image_edit_returns_the_provider_image(
     assert isinstance(result, ImageResponse)
     assert result.data is not None and result.data[0].b64_json == _EDITED_IMAGE_B64
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_edit_bills_the_deployment_price_on_a_logging_object_made_before_routing(
+    respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE_IMAGE", raising=False)
+    respx_mock.post(_DASHSCOPE_IMAGE_URL).mock(return_value=httpx.Response(200, json=_DASHSCOPE_EDIT_RESPONSE))
+    deployment_price: Final = 0.0123
+    logging_made_before_routing: Final = Logging(
+        model="qwen-image-edit",
+        messages=[],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=datetime.now(),
+        litellm_call_id="edit-call",
+        function_id="edit-call",
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qwen-image-edit",
+                "litellm_params": {
+                    "model": "dashscope/qwen-image-2.0",
+                    "api_key": "fake-key",
+                    "input_cost_per_image": deployment_price,
+                },
+            }
+        ]
+    )
+
+    result: Final = await router.aimage_edit(
+        model="qwen-image-edit",
+        image=_FIRST_IMAGE,
+        prompt="Turn the circle into a square",
+        litellm_logging_obj=logging_made_before_routing,
+        litellm_call_id="edit-call",
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert result._hidden_params["response_cost"] == pytest.approx(deployment_price)
