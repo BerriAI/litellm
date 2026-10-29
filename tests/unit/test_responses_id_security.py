@@ -1220,6 +1220,29 @@ class TestComparisonResponseIdIsAuthorized:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("layers", [2, 3])
+    async def test_stacked_routed_reference_cannot_steer_routing_for_a_member_key(
+        self, layers: int, mock_cache: MagicMock, salt_key_env: str
+    ) -> None:
+        from functools import reduce
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        stacked_id: Final = reduce(
+            lambda inner, model_id: ResponsesAPIRequestUtils._build_responses_api_response_id(
+                custom_llm_provider="openai", model_id=model_id, response_id=inner
+            ),
+            ["pair-b"] * layers,
+            _FABRICATED_PROVIDER_RESPONSE_ID,
+        )
+
+        result: Final = await _run_create_hook(_hook(), _auth(), _comparison_request(stacked_id), mock_cache)
+
+        sent_id: Final = result["prompt_cache_options"]["comparison_response_id"]
+        assert sent_id == _FABRICATED_PROVIDER_RESPONSE_ID
+        assert ResponsesAPIRequestUtils.get_model_id_from_response_id(sent_id) is None
+
+    @pytest.mark.asyncio
     async def test_unmanaged_reference_is_sent_as_given(self, mock_cache: MagicMock, salt_key_env: str) -> None:
         result: Final = await _run_create_hook(
             _hook(), _auth(), _comparison_request(_FABRICATED_UNMANAGED_ID), mock_cache

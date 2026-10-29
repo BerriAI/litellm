@@ -1967,7 +1967,7 @@ class _ResponseCreateRoutingHints(LiteLLMBaseModel):
 
     input: str | Sequence[object] | None = None
     previous_response_id: str | None = None
-    prompt_cache_options: Mapping[str, object] | None = None
+    prompt_cache_options: object = None
     response: "_ResponseCreateRoutingHints | None" = None
 
 
@@ -1977,7 +1977,7 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
     except ValidationError:
         return EMPTY_MAPPING
     nested: Final = frame.response or frame
-    cache_options: Final = (
+    cache_options: Final = as_str_mapping(
         frame.prompt_cache_options if nested.prompt_cache_options is None else nested.prompt_cache_options
     )
     comparison_id: Final = None if cache_options is None else cache_options.get("comparison_response_id")

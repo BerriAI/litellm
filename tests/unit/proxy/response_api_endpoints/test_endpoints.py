@@ -2038,15 +2038,24 @@ class TestResponsesWSFirstFrameModelAuth:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
     @pytest.mark.parametrize("query_model", [None, "gpt-4o-mini"])
+    @pytest.mark.parametrize(
+        "cache_options",
+        [{}, {"prompt_cache_options": "comparison"}, {"prompt_cache_options": ["resp_compared"]}],
+    )
     async def test_endpoint_routes_on_first_frame_input_and_previous_response_id(
-        self, nested: bool, query_model: str | None
+        self, nested: bool, query_model: str | None, cache_options: dict[str, object]
     ):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
 
         replayed_input = [{"type": "reasoning", "id": "encitem_abc", "encrypted_content": "litellm_enc:abc;blob"}]
-        payload = {"model": "gpt-4o-mini", "input": replayed_input, "previous_response_id": "resp_prev"}
+        payload = {
+            "model": "gpt-4o-mini",
+            "input": replayed_input,
+            "previous_response_id": "resp_prev",
+            **cache_options,
+        }
         first_frame = (
             {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
         )

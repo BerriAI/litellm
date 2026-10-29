@@ -129,6 +129,11 @@ def _with_comparison_response_id(options: object, comparison_response_id: str) -
     return {**(as_str_mapping(options) or _NOTHING_AUTHORIZED), _COMPARISON_RESPONSE_ID: comparison_response_id}
 
 
+def _innermost_response_id(response_id: str) -> str:
+    decoded: Final = ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(response_id)
+    return response_id if decoded is None else _innermost_response_id(decoded.get("response_id", response_id))
+
+
 def _is_responses_api_create_route(request_route: str | None) -> bool:
     if request_route is None:
         return False
@@ -213,8 +218,7 @@ class ResponsesIDSecurity(CustomLogger):
             return self.authorize_response_id(comparison_id, user_api_key_dict)
         if self._unmanaged_response_ids_allowed(user_api_key_dict):
             return comparison_id
-        decoded: Final = ResponsesAPIRequestUtils.decode_exact_responses_api_response_id(comparison_id)
-        return comparison_id if decoded is None else decoded.get("response_id", comparison_id)
+        return _innermost_response_id(comparison_id)
 
     def authorize_response_id(
         self,
