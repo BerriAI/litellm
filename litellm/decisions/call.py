@@ -716,8 +716,9 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
 
 def _caller_answers(call: DecisionsCall, answers: Sequence[DecisionsIRAnswer]) -> tuple[DecisionsIRAnswer, ...]:
     sent_answers: Final = iter(answers)
+    sent_question_ids: Final = frozenset(map(id, call.ir_request.questions))
     return tuple(
-        next(sent_answers) if question in call.ir_request.questions else DecisionsIRRefusal()
+        next(sent_answers) if id(question) in sent_question_ids else DecisionsIRRefusal()
         for question in call.caller_questions
     )
 

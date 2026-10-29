@@ -20,7 +20,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped upstream
 )
 from litellm.litellm_core_utils.llm_judge import attached_auth, caller_team_for, default_router_provider, judge_target
-from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
+from litellm.types.decisions import OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall, ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
@@ -56,14 +56,10 @@ class _CheckVerdict(TypedDict):
 
 
 def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionModelCheck, ...]:
-    """Enforce the check invariants (non-empty list, unique names, bounded count)
-    that decide what a run sends, wherever the guardrail is built."""
+    """Enforce the check invariants (non-empty list, unique names) that decide
+    what a run sends, wherever the guardrail is built."""
     if not checks:
         raise ValueError("decision_model guardrail requires at least one check")
-    if len(checks) > MAX_DECISION_QUESTIONS:
-        raise ValueError(
-            f"decision_model guardrail supports at most {MAX_DECISION_QUESTIONS} checks, got {len(checks)}"
-        )
     names: Final = [check.name for check in checks]
     if len(set(names)) != len(names):
         raise ValueError("decision_model guardrail check names must be unique")

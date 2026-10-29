@@ -37,7 +37,6 @@ describe("native decisions validation", () => {
   it.each([
     {},
     { "": request.questions.category },
-    Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`q${i}`, request.questions.category])),
     { q: { type: "noul" } },
     { q: { type: "noul", criteria: { unexpected: "value" } } },
     { q: { type: "choice", criteria: {} } },
@@ -49,16 +48,21 @@ describe("native decisions validation", () => {
     expect(validate({ ...request, questions }).isValid).toBe(false);
   });
 
-  it("allows backend boundary values for score levels and question counts", () => {
+  it("allows the backend boundary for score levels", () => {
     expect(
       validate({ ...request, questions: { q: { type: "score", criteria: Array(10).fill("level") } } }).isValid,
     ).toBe(true);
-    expect(
-      validate({
-        ...request,
-        questions: Object.fromEntries(Array.from({ length: 128 }, (_, i) => [`q${i}`, request.questions.category])),
-      }).isValid,
-    ).toBe(true);
+  });
+
+  it.each([129, 1000])("accepts %i questions and leaves the count limit to the provider", (count) => {
+    const questions = Object.fromEntries(
+      Array.from({ length: count }, (_, i) => [`q${i}`, request.questions.category]),
+    );
+    expect(validate({ ...request, questions })).toMatchObject({
+      isValid: true,
+      payload: { ...request, questions },
+      issues: [],
+    });
   });
 
   it("does not loosen legacy TypeSafe request validation", () => {
@@ -125,6 +129,18 @@ describe("/v1/decisions validation", () => {
     { ...example, questions: [{ type: "score", instructions: "Test", levels: [{ label: "Low" }] }] },
   ])("rejects the wrong endpoint's shape and invalid question definitions %#", (payload) => {
     expect(validateOpenAI(payload).isValid).toBe(false);
+  });
+
+  it.each([129, 1000])("accepts %i questions and leaves the count limit to the provider", (count) => {
+    const payload = {
+      ...example,
+      questions: Array.from({ length: count }, (_, i) => ({
+        type: "predicate",
+        name: `q${i}`,
+        instructions: `Question ${i}?`,
+      })),
+    };
+    expect(validateOpenAI(payload)).toEqual({ isValid: true, payload, issues: [] });
   });
 
   it("rejects blank and malformed JSON without throwing", () => {

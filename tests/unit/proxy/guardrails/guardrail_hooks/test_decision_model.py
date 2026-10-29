@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -978,13 +979,28 @@ async def test_sdk_path_forwards_configured_timeout(mock_sdk_decisions):
     assert mock_sdk_decisions.await_args.kwargs["timeout"] == 3.25
 
 
-def test_more_than_max_questions_checks_rejected_at_init():
+@pytest.mark.asyncio
+async def test_a_guardrail_with_more_than_128_checks_asks_and_enforces_every_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     checks: Final = tuple(
-        DecisionModelCheck(name=f"check_{index}", instructions="Is this true?") for index in range(129)
+        DecisionModelCheck(name=f"check_{index}", instructions=f"Is claim {index} true?") for index in range(1000)
     )
-
-    with pytest.raises(ValueError, match="at most 128 checks"):
-        _make_guardrail(checks=checks)
+    router: Final = Router(model_list=[_decision_deployment("jev-latest", "decision.example", {})])
+    guardrail: Final = _make_guardrail(checks=checks, router_provider=lambda: router)
+    answers: Final = {check.name: {"type": "noul", "noul": 0.9 if check is checks[-1] else 0.0} for check in checks}
+    with respx.mock:
+        upstream: Final = respx.post("https://decision.example/v1/systemone").mock(
+            return_value=httpx.Response(200, json={"model": "jev-latest", "answers": answers})
+        )
+        with pytest.raises(HTTPException) as blocked:
+            await guardrail.apply_guardrail({"texts": ["hi"]}, _request_data(), "request")
+    sent_questions: Final = json.loads(upstream.calls.last.request.content)["questions"]
+    assert cast(dict[str, object], blocked.value.detail)["flagged_checks"] == [checks[-1].name]
+    assert list(sent_questions.items()) == [
+        (check.name, {"type": "noul", "instructions": check.instructions}) for check in checks
+    ]
 
 
 def _flaky_chunk_router(marker: str) -> MagicMock:

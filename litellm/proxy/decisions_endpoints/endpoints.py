@@ -272,7 +272,7 @@ async def decisions(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
-    Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+    Judge an `input` against one or more `questions` and get the answers back in the same order.
 
     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the

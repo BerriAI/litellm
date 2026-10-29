@@ -10,7 +10,6 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
 NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
-MAX_DECISION_QUESTIONS: Final = 128
 MAX_ASSET_REFERENCE_BYTES: Final = 1024
 
 
@@ -395,7 +394,6 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
         Sequence[OpenAIDecisionQuestion],
         Field(
             min_length=1,
-            max_length=MAX_DECISION_QUESTIONS,
             description="Predicate, choice and score questions. Answers come back in the same order",
         ),
     ]
