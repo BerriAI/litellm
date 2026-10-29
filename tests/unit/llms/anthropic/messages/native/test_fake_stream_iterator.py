@@ -2,6 +2,10 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, cast
 
+import anthropic
+import httpx
+import pytest
+
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
@@ -178,3 +182,53 @@ def test_native_search_blocks_keep_indices_aligned_with_text():
         (2, "text"),
     ]
     assert stops == (0, 1, 2)
+
+
+_CALLER: Final = {"type": "code_execution_20260120", "tool_id": "srvtoolu_00"}
+
+_REPLAYED_BLOCKS: Final = (
+    {"type": "thinking", "thinking": "Look up the release page.", "signature": "sig_01"},
+    {"type": "redacted_thinking", "data": "EncryptedThinking=="},
+    {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}, "caller": _CALLER},
+    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_fetch", "input": {"url": "https://example.com/a"}, "caller": _CALLER},
+    _WEB_SEARCH_RESULT_BLOCK,
+    {
+        "type": "text",
+        "text": "Example A is the newest release.",
+        "citations": [
+            {
+                "type": "web_search_result_location",
+                "cited_text": "Example A was released today.",
+                "url": "https://example.com/a",
+                "title": "Example A",
+                "encrypted_index": "idx_01",
+            }
+        ],
+    },
+)
+
+
+def _sdk_rebuilt_content(block: Mapping[str, object]) -> list[dict[str, object]]:
+    response: Final = {
+        "id": "msg_replay",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [block],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    body: Final = b"".join(FakeAnthropicMessagesStreamIterator(response=response))
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+    )
+    client: Final = anthropic.Anthropic(api_key="sk-ant-test", http_client=httpx.Client(transport=transport))
+    with client.messages.stream(
+        model="claude-sonnet-5-5", max_tokens=64, messages=[{"role": "user", "content": "hi"}]
+    ) as stream:
+        return [content_block.model_dump(exclude_none=True) for content_block in stream.get_final_message().content]
+
+
+@pytest.mark.parametrize("block", _REPLAYED_BLOCKS, ids=lambda block: str(block["type"]))
+def test_anthropic_sdk_rebuilds_every_block_field_from_the_stream(block: Mapping[str, object]):
+    assert _sdk_rebuilt_content(block) == [block]

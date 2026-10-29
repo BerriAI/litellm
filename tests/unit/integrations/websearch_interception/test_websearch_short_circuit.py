@@ -76,7 +76,7 @@ class TestTryShortCircuitSearch:
         mock_search.assert_called_once_with("Search for Claude Code releases")
 
     @pytest.mark.asyncio
-    async def test_emits_native_blocks_when_tools_already_converted(self):
+    async def test_emits_native_blocks_when_tools_already_converted(self, perplexity_search: respx.Route):
         """Pre-request/deployment hooks convert the native tool to the LiteLLM
         standard shape before the short-circuit runs and record that in
         WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY; the flag alone must be enough for
@@ -85,42 +85,31 @@ class TestTryShortCircuitSearch:
             WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
         )
 
-        logger = WebSearchInterceptionLogger(enabled_providers=["hosted_vllm"])
+        logger: Final = WebSearchInterceptionLogger(enabled_providers=["hosted_vllm"])
 
-        with patch.object(
-            logger, "_execute_search", new_callable=AsyncMock
-        ) as mock_search:
-            mock_search.return_value = (
-                "Title: Result\nURL: https://example.com\nSnippet: test",
-                None,
-            )
-
-            result = await logger.try_short_circuit_search(
-                model="hosted_vllm/some-model",
-                messages=[{"role": "user", "content": "Search for something"}],
-                tools=[
-                    {
-                        "name": "litellm_web_search",
-                        "description": "Search the web for information.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"query": {"type": "string"}},
-                            "required": ["query"],
-                        },
-                    }
-                ],
-                custom_llm_provider="hosted_vllm",
-                kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
-            )
-
-        assert result is not None
-        block_types = [b["type"] for b in result["content"]]
-        assert "server_tool_use" in block_types
-        assert "web_search_tool_result" in block_types
-        server_tool_use = next(
-            b for b in result["content"] if b["type"] == "server_tool_use"
+        result: Final = await logger.try_short_circuit_search(
+            model="hosted_vllm/some-model",
+            messages=[{"role": "user", "content": "Search for something"}],
+            tools=[
+                {
+                    "name": "litellm_web_search",
+                    "description": "Search the web for information.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            ],
+            custom_llm_provider="hosted_vllm",
+            kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
         )
-        assert server_tool_use["name"] == "web_search"
+
+        assert perplexity_search.call_count == 1
+        assert result is not None
+        assert [b["type"] for b in result["content"]] == ["server_tool_use", "web_search_tool_result", "text"]
+        assert result["content"][0]["name"] == "web_search"
+        assert [r["url"] for r in result["content"][1]["content"]] == ["https://example.com/releases"]
 
     @pytest.mark.asyncio
     async def test_does_not_short_circuit_mixed_tools(self):
