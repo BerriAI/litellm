@@ -475,16 +475,30 @@ class BedrockRealtime(BaseAWSLLM):
     ) -> _BridgeOutcome:
         """Run both forwarding directions until the client leaves or either side fails."""
         logged: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: events forwarded before a failure are still spend
+        input_closing: Final = asyncio.Event()
 
         async def collect_logged_events() -> None:
             async for event in self._forward_bedrock_to_client(
-                bedrock_stream, websocket, transformation_config, model, logging_obj, session_state
+                bedrock_stream,
+                websocket,
+                transformation_config,
+                model,
+                logging_obj,
+                session_state,
+                input_closing=input_closing,
             ):
                 logged.append(event)
 
         client_task: Final = asyncio.create_task(
             self._forward_client_to_bedrock(
-                websocket, bedrock_stream, transformation_config, model, session_state, logging_obj, initial_message
+                websocket,
+                bedrock_stream,
+                transformation_config,
+                model,
+                session_state,
+                logging_obj,
+                initial_message,
+                input_closing=input_closing,
             )
         )
         bedrock_task: Final = asyncio.create_task(collect_logged_events())
@@ -518,6 +532,8 @@ class BedrockRealtime(BaseAWSLLM):
         session_state: RealtimeResponseTransformInput,
         logging_obj: LiteLLMLogging | None = None,
         initial_message: str | None = None,
+        *,
+        input_closing: asyncio.Event,
     ) -> None:
         """Forward messages from client WebSocket to Bedrock stream.
 
@@ -565,6 +581,7 @@ class BedrockRealtime(BaseAWSLLM):
                     client_ws, transformation_config, model, logging_obj, parsed_client_message
                 ):
                     break
+            input_closing.set()
         finally:
 
             async def close_bedrock_input() -> None:
@@ -589,6 +606,8 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         logging_obj: LiteLLMLogging,
         session_state: RealtimeResponseTransformInput,
+        *,
+        input_closing: asyncio.Event,
     ) -> AsyncIterator[OpenAIRealtimeEvents]:
         """Forward messages from Bedrock to the client, yielding the ones to record for spend logging.
 
@@ -609,6 +628,11 @@ class BedrockRealtime(BaseAWSLLM):
             result = await output[1].receive()
 
             if result is None:
+                if not input_closing.is_set():
+                    raise BedrockError(
+                        status_code=503,
+                        message="Bedrock realtime stream ended before the session closed",
+                    )
                 verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
                 with contextlib.suppress(Exception):
                     await client_ws.close()
