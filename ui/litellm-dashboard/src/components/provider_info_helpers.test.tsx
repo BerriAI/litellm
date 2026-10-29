@@ -20,6 +20,18 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 );
 
 describe("provider_info_helpers", () => {
+  it("resolves BigModel metadata, name, logo and model placeholder", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "BIGMODEL");
+    expect(provider_map.BIGMODEL).toBe(metadata?.litellm_provider);
+    expect(getProviderLogoAndName("bigmodel")).toEqual({
+      displayName: "BigModel (Zhipu AI)",
+      logo: providerLogoMap[Providers.BIGMODEL],
+    });
+    expect(getProviderLogoAndName("BIGMODEL")).toEqual(getProviderLogoAndName("bigmodel"));
+    expect(providerLogoMap[Providers.BIGMODEL]).toContain("bigmodel");
+    expect(getPlaceholder(Providers.BIGMODEL)).toMatch(/^bigmodel\//);
+  });
+
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
     expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
     expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");
