@@ -132,6 +132,35 @@ async def test_stop_does_not_replay_a_callback_dequeued_before_its_processor_sta
     await asyncio.wait_for(worker._queue.join(), timeout=1)
 
 
+@pytest.mark.asyncio
+async def test_stop_timeout_keeps_callbacks_observable_until_queue_cleanup_finishes() -> None:
+    worker: Final = LoggingWorker(concurrency=1)
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    completed: Final = asyncio.Event()
+
+    async def running() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def queued() -> None:
+        await release.wait()
+        completed.set()
+
+    worker.ensure_initialized_and_enqueue(running())
+    await started.wait()
+    worker.enqueue(queued())
+    try:
+        await worker.stop(timeout=0)
+        assert not completed.is_set()
+        release.set()
+        await worker.flush()
+        assert completed.is_set(), "Queue cleanup must survive a bounded cancellation wait"
+    finally:
+        release.set()
+        await worker.stop()
+
+
 class TestLoggingWorker:
     """Test cases for LoggingWorker functionality."""
 
