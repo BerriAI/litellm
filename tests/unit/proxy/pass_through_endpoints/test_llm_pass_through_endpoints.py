@@ -36,6 +36,7 @@ from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
@@ -7155,7 +7156,7 @@ class TestNvidiaNimProxyRoute:
                     200, json={"data": [{"index": 0, "bounding_boxes": {}}]}, headers={"x-nim-request": "r1"}
                 )
 
-        return RecordingRouter()
+        return route_entry_points_to_stubs(RecordingRouter())
 
     async def _relay(self, llm_router, endpoint: str, body: dict, user_api_key_dict=None) -> Response:
         return await relay_nvidia_nim_request(
@@ -7226,7 +7227,7 @@ class TestNvidiaNimProxyRoute:
                 captured.append(kwargs)
                 return httpx.Response(200, json={"data": []})
 
-        await self._relay(ProviderRouter(), "page-elements/v1/infer", NIM_INFER_BODY)
+        await self._relay(route_entry_points_to_stubs(ProviderRouter()), "page-elements/v1/infer", NIM_INFER_BODY)
 
         assert captured[0]["model"] == "page-elements"
 
@@ -7267,7 +7268,7 @@ class TestNvidiaNimProxyRoute:
                 return httpx.Response(200, json={"data": []})
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._relay(MixedRouter(), "detect/v1/infer", NIM_INFER_BODY)
+            await self._relay(route_entry_points_to_stubs(MixedRouter()), "detect/v1/infer", NIM_INFER_BODY)
 
         assert exc_info.value.status_code == 400
         assert captured == []
@@ -7300,7 +7301,9 @@ class TestNvidiaNimProxyRoute:
                 raise httpx.HTTPStatusError("422", request=upstream_request, response=upstream)
 
         result = await self._relay(
-            RejectingRouter(), "nim-page-elements/v1/infer", {"input": [{"type": "image_url", "url": "x"}]}
+            route_entry_points_to_stubs(RejectingRouter()),
+            "nim-page-elements/v1/infer",
+            {"input": [{"type": "image_url", "url": "x"}]},
         )
 
         assert result.status_code == 422
@@ -7526,6 +7529,7 @@ async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_
 class _AzureGroupRouter:
     def __init__(self, captured: list[dict]) -> None:
         self.captured = captured
+        route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
         return ["gpt", "other-group"]
@@ -7619,6 +7623,7 @@ class _AzureBodyModelGroupRouter:
     def __init__(self, captured: list[dict], upstream: _AzureRelayUpstream = _azure_relay_json_upstream) -> None:
         self.captured = captured
         self.upstream = upstream
+        route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
         return ["gpt-5.4", "azure-gpt-5.4"]
