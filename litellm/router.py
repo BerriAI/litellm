@@ -144,7 +144,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
-from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES, billed_rate
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -732,9 +732,38 @@ def _billed_pricing_entry(deployment: Mapping[str, object], model_info: Mapping[
     return model_info if catalog_entry is None else {**catalog_entry, **model_info}
 
 
-def _deployment_prices(deployment: Mapping[str, object], model_info: Mapping[str, object]) -> Mapping[str, float]:
+def _deployment_price_entry(
+    deployment: Mapping[str, object], model_info: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    if model_info is None:
+        return _configured_model_info(deployment)
     token_prices: Final = {key: model_info.get(key) for key in ("input_cost_per_token", "output_cost_per_token")}
-    return model_info_prices({**_billed_pricing_entry(deployment, model_info), **token_prices})
+    return {**_billed_pricing_entry(deployment, model_info), **token_prices}
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupDeployment:
+    model_info: ModelMapInfo | None
+    price_entry: Mapping[str, object]
+    team_may_use: bool
+
+    def listed_prices(self) -> Mapping[str, float]:
+        prices: Final = model_info_prices(self.price_entry)
+        if self.team_may_use:
+            return prices
+        return MappingProxyType({key: price for key, price in prices.items() if key in ModelGroupInfo.model_fields})
+
+
+def _highest_billed_rate(cost_key: str, price_entries: Sequence[Mapping[str, object]]) -> float | None:
+    rates: Final = (price_as_float(billed_rate(entry, cost_key)) for entry in price_entries)
+    return max((rate for rate in rates if rate is not None), default=None)
+
+
+def _highest_billed_prices(
+    listed_keys: Iterable[str], price_entries: Sequence[Mapping[str, object]]
+) -> Mapping[str, float]:
+    rates: Final = ((key, _highest_billed_rate(key, price_entries)) for key in listed_keys)
+    return MappingProxyType({key: rate for key, rate in rates if rate is not None})
 
 
 def _every_deployment_refused(
@@ -12652,17 +12681,12 @@ class Router:
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
         )
-        for model in model_list:
-            is_match = False
-            if (
-                "model_name" in model
-                and model["model_name"] == model_group
-                or "model_name" in model
-                and self.pattern_router.route(model_group) is not None
-            ):  # exact match
-                is_match = True
-
-            if not is_match:
+        group_deployments: Final = tuple(
+            self._group_deployment(model, team_id) if self._is_model_group_member(model, model_group) else None
+            for model in model_list
+        )
+        for model, group_deployment in zip(model_list, group_deployments, strict=True):
+            if group_deployment is None:
                 continue
             # model in model group found #
             litellm_params = LiteLLM_Params(**model["litellm_params"])
@@ -12703,22 +12727,9 @@ class Router:
             if _deployment_otpm is None:
                 _deployment_otpm = model_info_dict.get("otpm", None)
 
-            # get model info
-            try:
-                model_id = model_info_dict.get("id", None)
-                if model_id is not None:
-                    model_info = self.get_deployment_model_info(model_id=model_id, model_name=litellm_params.model)
-                else:
-                    model_info = None
-            except Exception:
-                model_info = None
-
+            model_info = group_deployment.model_info
             deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
-            deployment_prices = (
-                model_info_prices(_configured_model_info(model))
-                if model_info is None
-                else _deployment_prices(model, model_info)
-            )
+            deployment_prices = group_deployment.listed_prices()
 
             # get llm provider
             litellm_model, llm_provider = self._model_group_llm_provider(litellm_params)
@@ -12835,7 +12846,7 @@ class Router:
                                 deployment_supported_endpoints(
                                     model_info.get("supported_endpoints"), model, llm_provider
                                 )
-                                if team_may_use_deployment(_configured_model_info(model).get("team_id"), team_id)
+                                if group_deployment.team_may_use
                                 else ()
                             ),
                         )
@@ -12899,7 +12910,39 @@ class Router:
             if configurable_clientside_auth_params is not None:
                 model_group_info.configurable_clientside_auth_params = configurable_clientside_auth_params
 
-        return model_group_info
+            usable_price_entries: Final = tuple(
+                deployment.price_entry
+                for deployment in group_deployments
+                if deployment is not None and deployment.team_may_use
+            )
+            return model_group_info.with_higher_prices(
+                _highest_billed_prices(model_info_prices(model_group_info.model_dump()), usable_price_entries)
+            )
+
+        return None
+
+    def _is_model_group_member(self, deployment: DeploymentTypedDict, model_group: str) -> bool:
+        return "model_name" in deployment and (
+            deployment["model_name"] == model_group or self.pattern_router.route(model_group) is not None
+        )
+
+    def _deployment_model_info(self, deployment: DeploymentTypedDict) -> ModelMapInfo | None:
+        model_id: Final = _configured_model_info(deployment).get("id")
+        model_name: Final = deployment["litellm_params"].get("model")
+        if not isinstance(model_id, str) or model_name is None:
+            return None
+        try:
+            return self.get_deployment_model_info(model_id=model_id, model_name=model_name)
+        except Exception:
+            return None
+
+    def _group_deployment(self, deployment: DeploymentTypedDict, team_id: str | None) -> _GroupDeployment:
+        model_info: Final = self._deployment_model_info(deployment)
+        return _GroupDeployment(
+            model_info=model_info,
+            price_entry=_deployment_price_entry(deployment, model_info),
+            team_may_use=team_may_use_deployment(_configured_model_info(deployment).get("team_id"), team_id),
+        )
 
     def get_model_group_info(
         self, model_group: str, *, include_hidden: bool = False, team_id: str | None = None

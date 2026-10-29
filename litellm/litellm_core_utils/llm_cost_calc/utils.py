@@ -910,7 +910,9 @@ def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: 
     return 0.0
 
 
-def get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float | None = 0.0) -> float | None:
+def get_cost_per_unit(
+    model_info: Mapping[str, object], cost_key: str, default_value: float | None = 0.0
+) -> float | None:
     # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
     cost_per_unit: Final = model_info.get(cost_key)
     if isinstance(cost_per_unit, float):
@@ -952,6 +954,19 @@ def get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float
 
 
 _get_cost_per_unit = get_cost_per_unit
+
+
+_HALF_PRICED_BATCH_KEYS: Final = frozenset(
+    {f"input_cost_per_token{_BATCH_KEY_SUFFIX}", f"output_cost_per_token{_BATCH_KEY_SUFFIX}"}
+)
+
+
+def billed_rate(model_info: Mapping[str, object], cost_key: str) -> float | None:
+    rate: Final = get_cost_per_unit(model_info, cost_key, default_value=None)
+    if rate is not None or cost_key not in _HALF_PRICED_BATCH_KEYS:
+        return rate
+    standard_rate: Final = get_cost_per_unit(model_info, cost_key.removesuffix(_BATCH_KEY_SUFFIX), default_value=None)
+    return None if standard_rate is None else standard_rate / 2
 
 
 def deployment_pricing(model_info: ModelInfo | None) -> ModelInfo | None:

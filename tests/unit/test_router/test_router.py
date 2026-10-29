@@ -2725,6 +2725,128 @@ def test_model_group_info_lists_a_custom_priced_deployment_only_at_the_rates_it_
     assert "input_cost_per_token_above_200k_tokens" not in listed
 
 
+def test_model_group_info_lists_tier_and_batch_prices_at_the_most_any_deployment_bills(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.cost_calculator import batch_cost_calculator
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    backends: Final = ("made-up-tiered-backend", "made-up-untiered-backend")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            backends[0]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "input_cost_per_token_flex": 5e-07,
+                "output_cost_per_token_flex": 2e-06,
+                "input_cost_per_token_batches": 4e-07,
+                "output_cost_per_token_batches": 2e-06,
+            },
+            backends[1]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.2e-05,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed-backend-group",
+                "litellm_params": {"model": f"openai/{backend}", "api_key": "fake"},
+                "model_info": {"id": backend},
+            }
+            for backend in backends
+        ]
+    )
+    tokens: Final = 1_000_000
+    usage: Final = Usage(prompt_tokens=tokens, completion_tokens=tokens, total_tokens=2 * tokens)
+    flex_bills: Final = tuple(
+        litellm.cost_per_token(
+            model=backend,
+            custom_llm_provider="openai",
+            prompt_tokens=tokens,
+            completion_tokens=tokens,
+            service_tier="flex",
+        )
+        for backend in backends
+    )
+    batch_bills: Final = tuple(
+        batch_cost_calculator(usage, model=backend, custom_llm_provider="openai") for backend in backends
+    )
+    highest_bills: Final = (
+        max(prompt_cost for prompt_cost, _ in flex_bills),
+        max(completion_cost for _, completion_cost in flex_bills),
+        max(prompt_cost for prompt_cost, _ in batch_bills),
+        max(completion_cost for _, completion_cost in batch_bills),
+    )
+
+    info: Final = router.get_model_group_info(model_group="mixed-backend-group")
+
+    assert info is not None
+    listed: Final = info.model_dump()
+    listed_keys: Final = (
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches",
+    )
+    assert tuple(listed[key] * tokens for key in listed_keys) == pytest.approx(highest_bills)
+
+
+@pytest.mark.parametrize(("team_id", "listed_cache_read_cost"), [(None, 1e-07), ("team-b", 1e-07), ("team-a", 9e-06)])
+def test_model_group_info_lists_a_team_deployment_price_only_to_that_team(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, listed_cache_read_cost: float
+):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    cache_read_costs: Final = {"made-up-shared-backend": 1e-07, "made-up-team-backend": 9e-06}
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            **{
+                backend: {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 4e-06,
+                    "cache_read_input_token_cost": cache_read_cost,
+                }
+                for backend, cache_read_cost in cache_read_costs.items()
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-scoped-group",
+                "litellm_params": {"model": "openai/made-up-shared-backend", "api_key": "fake"},
+                "model_info": {"id": "shared-deployment"},
+            },
+            {
+                "model_name": "team-scoped-group",
+                "litellm_params": {"model": "openai/made-up-team-backend", "api_key": "fake"},
+                "model_info": {"id": "team-a-deployment", "team_id": "team-a"},
+            },
+        ]
+    )
+
+    info: Final = router.get_model_group_info(model_group="team-scoped-group", team_id=team_id)
+
+    assert info is not None
+    assert info.model_dump().get("cache_read_input_token_cost") == listed_cache_read_cost
+
+
 def test_model_group_info_still_validates_from_attributes():
     source: Final = SimpleNamespace(model_group="attribute-group", providers=["openai"], input_cost_per_token=1e-06)
 

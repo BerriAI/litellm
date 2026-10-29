@@ -175,8 +175,14 @@ ignored_function_names = [
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
-    "_deployment_prices",  # Read by _set_model_group_info, tested through the cost map model group info test in test_router.py
-    "_billed_pricing_entry",  # Read by _deployment_prices, tested through the custom-priced model group info test in test_router.py
+    "_deployment_price_entry",  # Read by _group_deployment, tested through the cost map model group info test in test_router.py
+    "_billed_pricing_entry",  # Read by _deployment_price_entry, tested through the custom-priced model group info test in test_router.py
+    "listed_prices",  # Read by _set_model_group_info, tested through the team-scoped model group info test in test_router.py
+    "_highest_billed_rate",  # Read by _highest_billed_prices, tested through the tier and batch model group info test in test_router.py
+    "_highest_billed_prices",  # Read by _set_model_group_info, tested through the tier and batch model group info test in test_router.py
+    "_is_model_group_member",  # Read by _set_model_group_info, tested through every model group info test in test_router.py
+    "_deployment_model_info",  # Read by _group_deployment, tested through the cost map model group info test in test_router.py
+    "_group_deployment",  # Read by _set_model_group_info, tested through the team-scoped model group info test in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
     "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
     "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
