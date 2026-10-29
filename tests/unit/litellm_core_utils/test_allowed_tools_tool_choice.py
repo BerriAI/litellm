@@ -1,4 +1,5 @@
 import copy
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -10,7 +11,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     responses_allowed_tools_tool_choice,
 )
 
-_CHAT_LAYOUT: Final = {
+_CHAT_LAYOUT: Final[dict[str, object]] = {
     "type": "allowed_tools",
     "allowed_tools": {
         "mode": "auto",
@@ -24,7 +25,7 @@ _CHAT_LAYOUT: Final = {
 }
 
 
-def _parsed(tool_choice: dict[str, object]) -> ChatAllowedToolsToolChoice:
+def _parsed(tool_choice: Mapping[str, object]) -> ChatAllowedToolsToolChoice:
     parsed: Final = parse_chat_allowed_tools_tool_choice(tool_choice)
     assert parsed is not None
     return parsed
@@ -47,7 +48,7 @@ def test_responses_layout_leaves_the_caller_dict_untouched():
     original: Final = copy.deepcopy(_CHAT_LAYOUT)
     flat: Final = responses_allowed_tools_tool_choice(_parsed(_CHAT_LAYOUT))
     assert flat is not None
-    flat["tools"][0]["name"] = "mutated"
+    next(iter(flat["tools"]))["name"] = "mutated"
     assert _CHAT_LAYOUT == original
 
 
@@ -57,7 +58,10 @@ def test_responses_layout_leaves_the_caller_dict_untouched():
 )
 def test_responses_layout_refuses_to_rewrite_an_entry_without_a_name(tool: dict[str, object]):
     """A half-rewritten restriction could mean something looser, so the caller sends the original instead."""
-    tool_choice: Final = {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": [tool]}}
+    tool_choice: Final[dict[str, object]] = {
+        "type": "allowed_tools",
+        "allowed_tools": {"mode": "required", "tools": [tool]},
+    }
     assert responses_allowed_tools_tool_choice(_parsed(tool_choice)) is None
 
 
@@ -85,5 +89,5 @@ def test_parse_rejects_anything_but_the_chat_layout(tool_choice: dict[str, objec
         (None, False),
     ],
 )
-def test_is_allowed_tools_tool_choice(tool_choice: object, expected: bool):
+def test_is_allowed_tools_tool_choice(tool_choice: Mapping[str, object] | str | None, expected: bool):
     assert is_allowed_tools_tool_choice(tool_choice) is expected
