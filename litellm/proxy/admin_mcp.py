@@ -1,13 +1,13 @@
 import os
 import re
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from fnmatch import fnmatchcase
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
 from starlette.datastructures import Headers
 from starlette.routing import Mount
@@ -71,38 +71,65 @@ def _admin_route_allowed(auth: UserAPIKeyAuth, request: Request, method: str, pa
     return True
 
 
-def _admin_route_intersects(template: str, grant: str) -> bool:
-    template_parts: Final = template.strip("/").split("/")
-    grant_parts: Final = grant.strip("/").split("/")
-    for segment, allowed in zip(template_parts, grant_parts):
-        if allowed == "*":
-            return True
-        if segment.startswith("{") and segment.endswith("}"):
+def _admin_routes(request: Request) -> Iterator[tuple[tuple[str, str], APIRoute]]:
+    app: Final = request.app
+    if not isinstance(app, FastAPI):
+        return
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
             continue
-        if not fnmatchcase(segment, allowed):
-            return False
-    return len(grant_parts) <= len(template_parts)
+        for method in route.methods:
+            yield (method, route.path_format), route
 
 
-def _admin_tool_visible(auth: UserAPIKeyAuth, request: Request, method: str, path: str) -> bool:
-    if _admin_route_allowed(auth, request, method, path):
+def _admin_grant_paths(route: APIRoute, grant: str) -> Iterator[str]:
+    if route.path_regex.fullmatch(grant) is not None:
+        yield grant
+    prefix: Final = grant[:-1] if grant.endswith("*") else grant + "/"
+    representative: Final = re.sub(r"\{[^}]+\}", "_", route.path_format)
+    # A matching suffix supplies the rest of a concrete route for prefix grants,
+    # including grants ending inside a static segment or a path parameter.
+    for candidate in (prefix + representative[offset:] for offset in range(len(representative) + 1)):
+        if route.path_regex.fullmatch(candidate) is not None:
+            yield candidate
+
+
+def _admin_grant_allowed(auth: UserAPIKeyAuth, request: Request, method: str, route: APIRoute, grant: str) -> bool:
+    return any(_admin_route_allowed(auth, request, method, path) for path in _admin_grant_paths(route, grant))
+
+
+def _admin_tool_visible(auth: UserAPIKeyAuth, request: Request, method: str, route: APIRoute) -> bool:
+    try:
+        RouteChecks.check_route_enabled(route.path)
+    except HTTPException:
+        return False
+    if _admin_route_allowed(auth, request, method, route.path):
         return True
     grants: Final = _ROUTE_GRANTS.validate_python(getattr(auth, "allowed_routes", None) or ())
-    return "{" in path and any(_admin_route_intersects(path, grant) for grant in grants if grant.startswith("/"))
+    return bool(route.param_convertors) and any(
+        _admin_grant_allowed(auth, request, method, route, grant) for grant in grants if grant.startswith("/")
+    )
 
 
 def get_admin_mcp_permissions(
     auth: UserAPIKeyAuth, request: Request, tool: str | None = None, path: str | None = None
 ) -> AdminMCPPermissions:
-    from litellm_admin_mcp.catalog import (  # pyright: ignore[reportMissingTypeStubs]  # connector has no py.typed marker
-        BY_NAME,
-        OPERATIONS,
-    )
+    try:
+        from litellm_admin_mcp.catalog import (  # pyright: ignore[reportMissingTypeStubs]  # connector has no py.typed marker
+            BY_NAME,
+            OPERATIONS,
+        )
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503, detail="Admin MCP permissions require the admin-mcp dependency group (Python 3.12+)"
+        ) from exc
 
+    routes: Final = dict(_admin_routes(request))
     allowed: Final = tuple(
         operation.name
         for operation in OPERATIONS
-        if _admin_tool_visible(auth, request, operation.method, operation.path)
+        if (route := routes.get((operation.method, operation.path))) is not None
+        and _admin_tool_visible(auth, request, operation.method, route)
     )
     if tool is None:
         return AdminMCPPermissions(tools=allowed)
@@ -111,8 +138,10 @@ def get_admin_mcp_permissions(
         return AdminMCPPermissions(tools=allowed, action_allowed=False)
     if path is None:
         return AdminMCPPermissions(tools=allowed, action_allowed=True)
-    action_allowed: Final = RouteChecks.check_route_access(path, (operation.path,)) and _admin_route_allowed(
-        auth, request, operation.method, path
+    registered: Final = routes[(operation.method, operation.path)]
+    decoded_path: Final = unquote(path)
+    action_allowed: Final = registered.path_regex.fullmatch(decoded_path) is not None and _admin_route_allowed(
+        auth, request, operation.method, decoded_path
     )
     return AdminMCPPermissions(tools=allowed, action_allowed=action_allowed)
 
