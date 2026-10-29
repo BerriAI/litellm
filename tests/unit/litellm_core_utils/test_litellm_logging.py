@@ -5737,6 +5737,22 @@ def test_get_standard_logging_metadata_merges_recorded_applied_guardrails():
     assert result["applied_guardrails"] == ["guard-a", "blocker"]
 
 
+def test_logging_metadata_leaves_out_the_virtual_key_flag():
+    from litellm.constants import USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup, get_standard_logging_metadata
+
+    metadata: Final = {USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: True, "user_api_key_team_id": "team-a"}
+
+    payload_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        metadata=metadata, litellm_params={}
+    )
+    standalone_metadata: Final = get_standard_logging_metadata(metadata)
+
+    assert USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY not in payload_metadata
+    assert USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY not in standalone_metadata
+    assert payload_metadata["user_api_key_team_id"] == standalone_metadata["user_api_key_team_id"] == "team-a"
+
+
 def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     """
     Test that when BOTH metadata and litellm_metadata are present (e.g., user sets
