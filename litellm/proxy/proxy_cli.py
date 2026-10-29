@@ -239,6 +239,9 @@ class _ConfigStartupOutputSettings(TypedDict, total=False):
 
 
 _CONFIG_STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(_ConfigStartupOutputSettings)
+_LITELLM_SETTINGS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Annotated[Mapping[str, object] | None, BeforeValidator(_empty_as_none)]
+)
 
 
 def _apply_config_suppress_startup_output(litellm_settings: StartupOutputSettings | None) -> None:
@@ -851,7 +854,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
-        litellm_settings: dict | None,
+        litellm_settings: Mapping[str, object] | None,
         prometheus_metrics_port: int | None = None,
     ) -> str | None:
         """
@@ -1424,7 +1427,7 @@ def run_server(
             _config: Final = asyncio.run(proxy_config.get_config(config_file_path=config))
 
             ### LITELLM SETTINGS ###
-            litellm_settings = _config.get("litellm_settings", None)
+            litellm_settings = _LITELLM_SETTINGS.validate_python(_config.get("litellm_settings"))
             _apply_config_logging_settings(
                 _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(_config).get("litellm_settings")
             )
