@@ -3601,6 +3601,33 @@ class TestDeleteTeamModels:
         assert any(e[0] == "delete_many" for e in prisma.events)
 
 
+@pytest.mark.parametrize(
+    ("model_info_patch", "expected_gate"),
+    [
+        pytest.param({"tpm": 5}, True, id="unrelated-field"),
+        pytest.param({"supported_endpoints": ["/v1/embeddings", "/v1/rerank"]}, True, id="endpoint-list-only"),
+        pytest.param({"enforce_supported_endpoints": False}, False, id="explicit-false"),
+    ],
+)
+def test_model_info_patch_changes_the_endpoint_gate_only_when_it_sends_the_flag(
+    model_info_patch: dict[str, object], expected_gate: bool
+):
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    result: Final = update_db_model(
+        db_model=Deployment(
+            model_name="embedding-only",
+            litellm_params=LiteLLM_Params(model="openai/text-embedding-3-small"),
+            model_info=ModelInfo(
+                id="embedding-only", enforce_supported_endpoints=True, supported_endpoints=["/v1/embeddings"]
+            ),
+        ),
+        updated_patch=updateDeployment.model_validate({"model_info": model_info_patch}),
+    )
+
+    assert json.loads(result["model_info"]).get("enforce_supported_endpoints") is expected_gate
+
+
 def _build_db_model_for_blocked_test():
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 

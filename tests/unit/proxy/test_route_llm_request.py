@@ -2240,8 +2240,6 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "model_group_retry_policy" not in call_kwargs
 
 
-
-
 def _router_with_defaults(default_litellm_params: dict[str, object]):
     import litellm
 

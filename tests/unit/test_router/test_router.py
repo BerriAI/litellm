@@ -18242,6 +18242,35 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_same_group_retry_skips_an_embedding_only_deployment():
+    """The retry of a /v1/messages stream dropped before content must not land on an enforced embedding-only
+    deployment of the same group, even when that deployment is the group's preferred order."""
+    router = Router(
+        model_list=[
+            {"model_name": "glm", "litellm_params": {"model": "anthropic/glm-chat", "api_key": "sk-test", "order": 2}},
+            {
+                "model_name": "glm",
+                "litellm_params": {"model": "anthropic/glm-embed", "api_key": "sk-test", "order": 1},
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            },
+        ],
+        num_retries=1,
+    )
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
+    )
+
+    async def anthropic_messages(**kwargs):
+        return await provider(**kwargs)
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, anthropic_messages)
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [model for model, _, _ in provider.calls] == ["anthropic/glm-chat", "anthropic/glm-chat"]
+
+
 class _AnthropicMessagesRetryStashRecorder:
     def __init__(self) -> None:
         self.observed: tuple[Usage | None, ...] = ()

@@ -6767,6 +6767,7 @@ class Router:
         """
         model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
         retry_kwargs: Final = mid_stream_retry_kwargs(initial_kwargs)
+        handler: Final = retry_kwargs.get("original_generic_function")
         healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
             model=model_group,
             parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs),
@@ -6797,7 +6798,10 @@ class Router:
             )
             carry_superseded_attempt_usage(retry_kwargs)
             try:
-                response = await attempt_function(**retry_kwargs)
+                with endpoint_selection(
+                    getattr(handler, "__name__", None), getattr(handler, "__module__", None), model=model_group
+                ):
+                    response = await attempt_function(**retry_kwargs)
             except Exception as retry_error:  # noqa: BLE001  # the fallback chain judges the failed retry
                 wrapped = _stream_fallback_error_for_raised(retry_error, model_group, False, e.llm_provider)
                 if wrapped is None:

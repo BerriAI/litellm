@@ -44,7 +44,7 @@ _REQUEST_SELECTION: Final[ContextVar[tuple[str | None, str | None]]] = ContextVa
 class _EndpointDeclaration(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    enforce_supported_endpoints: bool = False
+    enforce_supported_endpoints: bool | None = None
     supported_endpoints: tuple[str, ...] | None = None
 
 
