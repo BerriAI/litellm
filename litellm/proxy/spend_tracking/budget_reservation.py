@@ -45,7 +45,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncreme
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, ModelGroupInfo
 
 
 @dataclass
@@ -706,14 +706,7 @@ def _model_access_group_counter(group: str, budget: ModelAccessGroupBudget | Non
 
 
 def _dedupe_tags(tags: list[str]) -> list[str]:
-    seen: Final = set()
-    deduped_tags: Final = []
-    for tag in tags:
-        if tag in seen:
-            continue
-        seen.add(tag)
-        deduped_tags.append(tag)
-    return deduped_tags
+    return list(dict.fromkeys(tags))
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -1507,6 +1500,9 @@ def _estimate_image_generation_cost(
     return cost_per_image * max(n, 1)
 
 
+_DECLARED_GROUP_FIELDS: Final = MappingProxyType(dict.fromkeys(ModelGroupInfo.model_fields, True))
+
+
 def _get_model_cost_info(
     model: str,
     llm_router: Router | None,
@@ -1514,7 +1510,7 @@ def _get_model_cost_info(
     if llm_router is not None:
         model_group_info: Final = llm_router.cached_model_group_info(model)
         if model_group_info is not None:
-            return model_group_info.model_dump()
+            return model_group_info.model_dump(include=_DECLARED_GROUP_FIELDS)
     return dict(litellm.get_model_info(model=model))
 
 

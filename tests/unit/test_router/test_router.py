@@ -98,7 +98,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import CallTypes, CredentialItem, Usage
+from litellm.types.utils import CallTypes, CredentialItem, ModelResponse, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -2525,6 +2525,410 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
 
 
+@pytest.mark.parametrize("deployment_order", [(0, 1), (1, 0)])
+def test_model_group_info_reports_every_price_at_the_highest_across_deployments(deployment_order: tuple[int, int]):
+    deployment_prices: Final = (
+        {
+            "output_cost_per_image": 0.5,
+            "output_cost_per_image_token": 2e-05,
+            "input_cost_per_token_priority": 3e-06,
+            "input_cost_per_token_above_272k_tokens": 8e-06,
+        },
+        {
+            "output_cost_per_image": 0.25,
+            "output_cost_per_image_token": 4e-05,
+            "input_cost_per_token_priority": 6e-06,
+            "input_cost_per_token_above_272k_tokens": 4e-06,
+            "input_cost_per_token_batches": 1e-06,
+            "input_cost_per_token_above_999k_tokens": 9e-06,
+        },
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tiered-pricing-group",
+                "litellm_params": {"model": f"openai/made-up-tiered-model-{index}", "api_key": "fake"},
+                "model_info": {
+                    "id": f"tiered-deployment-{index}",
+                    **deployment_prices[index],
+                    "output_cost_per_video_per_second": "free",
+                    "output_cost_per_second": "inf",
+                    "search_context_cost_per_query": {"search_context_size_low": 0.01},
+                    "input_dbu_cost_per_token": 7e-07,
+                    "cost_center": 4021,
+                    "cost_allocation_pct": "30",
+                    "internal_chargeback_cost_per_token": 0.5,
+                    "team_cost_per_seat": 40,
+                    "input_cost_per_tokens": 9e-06,
+                },
+            }
+            for index in deployment_order
+        ]
+    )
+
+    info: Final = router.get_model_group_info(model_group="tiered-pricing-group")
+
+    assert info is not None
+    reported: Final = info.model_dump()
+    assert {key: reported.get(key) for key in deployment_prices[1]} == {
+        "output_cost_per_image": 0.5,
+        "output_cost_per_image_token": 4e-05,
+        "input_cost_per_token_priority": 6e-06,
+        "input_cost_per_token_above_272k_tokens": 8e-06,
+        "input_cost_per_token_batches": 1e-06,
+        "input_cost_per_token_above_999k_tokens": 9e-06,
+    }
+    assert reported.keys().isdisjoint(
+        {
+            "internal_chargeback_cost_per_token",
+            "team_cost_per_seat",
+            "input_cost_per_tokens",
+            "output_cost_per_video_per_second",
+            "output_cost_per_second",
+            "search_context_cost_per_query",
+            "input_dbu_cost_per_token",
+            "cost_center",
+            "cost_allocation_pct",
+            "litellm_provider",
+            "key",
+            "id",
+        }
+    )
+
+
+def test_model_group_info_lists_cost_map_prices_outside_the_typed_model_info(monkeypatch: pytest.MonkeyPatch):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    cost_map_prices: Final = {
+        "output_cost_per_image": 0.08,
+        "output_cost_per_image_0.5K": 0.06,
+        "output_cost_per_image_4K": 0.16,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "made-up-resolution-model": {
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+                **cost_map_prices,
+                "input_dbu_cost_per_token": 0.0002,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "resolution-group",
+                "litellm_params": {"model": "openai/made-up-resolution-model", "api_key": "fake"},
+            }
+        ]
+    )
+
+    info: Final = router.get_model_group_info(model_group="resolution-group")
+
+    assert info is not None
+    reported: Final = info.model_dump()
+    assert {key: reported.get(key) for key in cost_map_prices} == cost_map_prices
+    assert "input_dbu_cost_per_token" not in reported
+
+
+def test_model_group_info_never_takes_prices_from_a_cost_map_entry_named_like_the_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    group_name: Final = "made-up-group-named-like-a-catalog-model"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group_name,
+                "litellm_params": {"model": "gemini/made-up-unmapped-model", "api_key": "fake"},
+                "model_info": {"id": "self-hosted-deployment", "input_cost_per_token": 1e-07},
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            group_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 5e-06,
+                "input_cost_per_token_priority": 1e-05,
+                "output_cost_per_token_batches": 7e-06,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    info: Final = router.get_model_group_info(model_group=group_name)
+
+    assert info is not None
+    reported: Final = info.model_dump()
+    assert reported["input_cost_per_token"] == 1e-07
+    assert reported.keys().isdisjoint({"input_cost_per_token_priority", "output_cost_per_token_batches"})
+
+
+def test_model_group_info_lists_a_custom_priced_deployment_only_at_the_rates_it_bills(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "made-up-long-context-model": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 2e-06,
+                "output_cost_per_token": 8e-06,
+                "input_cost_per_token_above_200k_tokens": 4e-06,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom-priced-group",
+                "litellm_params": {
+                    "model": "openai/made-up-long-context-model",
+                    "api_key": "fake",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 3e-06,
+                },
+                "model_info": {"id": "custom-priced-deployment"},
+            }
+        ]
+    )
+    long_prompt_tokens: Final = 300_000
+
+    response: Final = router.completion(
+        model="custom-priced-group",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response=ModelResponse(
+            model="made-up-long-context-model",
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop", "index": 0}],
+            usage=Usage(prompt_tokens=long_prompt_tokens, completion_tokens=0, total_tokens=long_prompt_tokens),
+        ),
+    )
+    info: Final = router.get_model_group_info(model_group="custom-priced-group")
+
+    assert info is not None
+    listed: Final = info.model_dump()
+    assert response._hidden_params["response_cost"] == pytest.approx(long_prompt_tokens * listed["input_cost_per_token"])
+    assert "input_cost_per_token_above_200k_tokens" not in listed
+
+
+def test_model_group_info_lists_tier_and_batch_prices_at_the_most_any_deployment_bills(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.cost_calculator import batch_cost_calculator
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    backends: Final = ("made-up-tiered-backend", "made-up-untiered-backend")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            backends[0]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "input_cost_per_token_flex": 5e-07,
+                "output_cost_per_token_flex": 2e-06,
+                "input_cost_per_token_batches": 4e-07,
+                "output_cost_per_token_batches": 2e-06,
+            },
+            backends[1]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.2e-05,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed-backend-group",
+                "litellm_params": {"model": f"openai/{backend}", "api_key": "fake"},
+                "model_info": {"id": backend},
+            }
+            for backend in backends
+        ]
+    )
+    tokens: Final = 1_000_000
+    usage: Final = Usage(prompt_tokens=tokens, completion_tokens=tokens, total_tokens=2 * tokens)
+    flex_bills: Final = tuple(
+        litellm.cost_per_token(
+            model=backend,
+            custom_llm_provider="openai",
+            prompt_tokens=tokens,
+            completion_tokens=tokens,
+            service_tier="flex",
+        )
+        for backend in backends
+    )
+    batch_bills: Final = tuple(
+        batch_cost_calculator(usage, model=backend, custom_llm_provider="openai") for backend in backends
+    )
+    highest_bills: Final = (
+        max(prompt_cost for prompt_cost, _ in flex_bills),
+        max(completion_cost for _, completion_cost in flex_bills),
+        max(prompt_cost for prompt_cost, _ in batch_bills),
+        max(completion_cost for _, completion_cost in batch_bills),
+    )
+
+    info: Final = router.get_model_group_info(model_group="mixed-backend-group")
+
+    assert info is not None
+    listed: Final = info.model_dump()
+    listed_keys: Final = (
+        "input_cost_per_token_flex",
+        "output_cost_per_token_flex",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches",
+    )
+    assert tuple(listed[key] * tokens for key in listed_keys) == pytest.approx(highest_bills)
+
+
+def test_model_group_info_lists_cache_prices_at_the_most_any_deployment_bills(monkeypatch: pytest.MonkeyPatch):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    backends: Final = ("made-up-cached-backend", "made-up-uncached-backend")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            backends[0]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "input_cost_per_token_priority": 2e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "cache_read_input_token_cost_priority": 2e-07,
+                "cache_creation_input_token_cost": 1.25e-06,
+            },
+            backends[1]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.2e-05,
+                "input_cost_per_token_priority": 6e-06,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed-cache-group",
+                "litellm_params": {"model": f"openai/{backend}", "api_key": "fake"},
+                "model_info": {"id": backend},
+            }
+            for backend in backends
+        ]
+    )
+    tokens: Final = 1_000_000
+
+    def highest_prompt_bill(cache_read_tokens: int, cache_creation_tokens: int, service_tier: str | None) -> float:
+        return max(
+            litellm.cost_per_token(
+                model=backend,
+                custom_llm_provider="openai",
+                prompt_tokens=tokens,
+                completion_tokens=0,
+                cache_read_input_tokens=cache_read_tokens,
+                cache_creation_input_tokens=cache_creation_tokens,
+                service_tier=service_tier,
+            )[0]
+            for backend in backends
+        )
+
+    highest_bills: Final = (
+        highest_prompt_bill(tokens, 0, None),
+        highest_prompt_bill(tokens, 0, "priority"),
+        highest_prompt_bill(0, tokens, None),
+    )
+
+    info: Final = router.get_model_group_info(model_group="mixed-cache-group")
+
+    assert info is not None
+    listed: Final = info.model_dump()
+    listed_keys: Final = (
+        "cache_read_input_token_cost",
+        "cache_read_input_token_cost_priority",
+        "cache_creation_input_token_cost",
+    )
+    assert tuple(listed[key] * tokens for key in listed_keys) == pytest.approx(highest_bills)
+
+
+@pytest.mark.parametrize(("team_id", "listed_cache_read_cost"), [(None, 1e-07), ("team-b", 1e-07), ("team-a", 9e-06)])
+def test_model_group_info_lists_a_team_deployment_price_only_to_that_team(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, listed_cache_read_cost: float
+):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    cache_read_costs: Final = {"made-up-shared-backend": 1e-07, "made-up-team-backend": 9e-06}
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            **{
+                backend: {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 4e-06,
+                    "cache_read_input_token_cost": cache_read_cost,
+                }
+                for backend, cache_read_cost in cache_read_costs.items()
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-scoped-group",
+                "litellm_params": {"model": "openai/made-up-shared-backend", "api_key": "fake"},
+                "model_info": {"id": "shared-deployment"},
+            },
+            {
+                "model_name": "team-scoped-group",
+                "litellm_params": {"model": "openai/made-up-team-backend", "api_key": "fake"},
+                "model_info": {"id": "team-a-deployment", "team_id": "team-a"},
+            },
+        ]
+    )
+
+    info: Final = router.get_model_group_info(model_group="team-scoped-group", team_id=team_id)
+
+    assert info is not None
+    assert info.model_dump().get("cache_read_input_token_cost") == listed_cache_read_cost
+
+
+def test_model_group_info_still_validates_from_attributes():
+    source: Final = SimpleNamespace(model_group="attribute-group", providers=["openai"], input_cost_per_token=1e-06)
+
+    info: Final = ModelGroupInfo.model_validate(source, from_attributes=True)
+
+    assert (info.model_group, info.providers, info.input_cost_per_token) == ("attribute-group", ["openai"], 1e-06)
+
+
 def test_model_group_info_description_from_model_info():
     """
     model_info.description set in the config should surface on ModelGroupInfo,
@@ -2870,12 +3274,18 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         (5, 5.0),
         (None, None),
         ("not-a-number", None),
+        (True, None),
+        ({"input_cost_per_token": 1e-05}, None),
+        ("Infinity", None),
+        ("-inf", None),
+        (float("nan"), None),
+        (10**400, None),
     ],
 )
-def test_cost_value_as_float(value, expected):
-    from litellm.router import _cost_value_as_float
+def test_price_as_float(value: object, expected: float | None):
+    from litellm.types.router import price_as_float
 
-    assert _cost_value_as_float(value) == expected
+    assert price_as_float(value) == expected
 
 
 def test_model_group_info_with_stringified_cost_values():

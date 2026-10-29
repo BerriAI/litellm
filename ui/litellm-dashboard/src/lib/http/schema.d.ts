@@ -30543,16 +30543,11 @@ export interface components {
             worker_registry?: components["schemas"]["WorkerRegistryEntry"][] | null;
         };
         /** ConfigurableClientsideParamsCustomAuth */
-        "ConfigurableClientsideParamsCustomAuth-Input": {
+        ConfigurableClientsideParamsCustomAuth: {
             /** Api Base */
             api_base: string;
         } & {
             [key: string]: unknown;
-        };
-        /** ConfigurableClientsideParamsCustomAuth */
-        "ConfigurableClientsideParamsCustomAuth-Output": {
-            /** Api Base */
-            api_base: string;
         };
         /** ContainerAuto */
         ContainerAuto: {
@@ -35412,7 +35407,7 @@ export interface components {
             /** Complexity Router Default Model */
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
-            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth"])[] | null;
             /** Cost Per Second */
             cost_per_second?: number | null;
             /** Custom Llm Provider */
@@ -38490,10 +38485,15 @@ export interface components {
              */
             warn_within_days: number;
         };
+        /** ModelGroupClientsideAuthParam */
+        ModelGroupClientsideAuthParam: {
+            /** Api Base */
+            api_base: string;
+        };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
-            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
+            configurable_clientside_auth_params?: (string | components["schemas"]["ModelGroupClientsideAuthParam"])[] | null;
             /** Custom Metadata */
             custom_metadata?: {
                 [key: string]: string | number | boolean;
@@ -38584,6 +38584,8 @@ export interface components {
             supports_web_search: boolean;
             /** Tpm */
             tpm?: number | null;
+        } & {
+            [key: string]: unknown;
         };
         /** ModelInfoDelete */
         ModelInfoDelete: {
@@ -50815,7 +50817,7 @@ export interface components {
             /** Complexity Router Default Model */
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
-            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth"])[] | null;
             /** Cost Per Second */
             cost_per_second?: number | null;
             /** Custom Llm Provider */

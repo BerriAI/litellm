@@ -4,9 +4,12 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+import math
 import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -23,13 +26,24 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
+from pydantic import (
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+    with_config,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap as _GetModelCostMap
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
@@ -59,6 +73,9 @@ from .utils import (
     MirroredPricingParams,
     ModelResponse,
     StandardLoggingRoutingDecision,
+)
+from .utils import (
+    is_server_derived_pricing_key as _is_server_derived_pricing_key,
 )
 from .utils import (
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
@@ -989,7 +1006,51 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return get_type_hints(model_class)
 
 
+_RAW_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def price_as_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        price: Final = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return price if math.isfinite(price) else None
+
+
+def _outprices(price: float, listed: object) -> bool:
+    listed_price: Final = price_as_float(listed)
+    return listed_price is None or price > listed_price
+
+
+@lru_cache(maxsize=4096)
+def _is_usd_price_key_in(key: str, catalog_fields: frozenset[str]) -> bool:
+    return (
+        ("cost_per_" in key or "token_cost" in key)
+        and "_dbu_" not in key
+        and (key in catalog_fields or _is_server_derived_pricing_key(key))
+    )
+
+
+def is_usd_price_key(key: str) -> bool:
+    return _is_usd_price_key_in(key, _GetModelCostMap.loaded_model_cost_map_fields())
+
+
+def model_info_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
+    candidates: Final = ((key, price_as_float(value)) for key, value in model_info.items() if is_usd_price_key(key))
+    return MappingProxyType({key: price for key, price in candidates if price is not None})
+
+
+@with_config(ConfigDict(extra="ignore"))
+class ModelGroupClientsideAuthParam(ConfigurableClientsideParamsCustomAuth):
+    pass
+
+
 class ModelGroupInfo(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="allow", json_schema_extra={"additionalProperties": True})
+    __pydantic_extra__: dict[str, float] = Field(init=False)  # pyright: ignore[reportIncompatibleVariableOverride]  # pydantic's documented way to type extras  # mutable-ok: pydantic only types extras via a dict
+
     model_group: str
     providers: list[str]
     max_input_tokens: float | None = None
@@ -1015,7 +1076,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supports_fast_mode: bool = Field(default=False)
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
-    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    configurable_clientside_auth_params: Sequence[str | ModelGroupClientsideAuthParam] | None = None
     description: str | None = None
     supported_endpoints: tuple[str, ...] | None = None
 
@@ -1024,6 +1085,23 @@ class ModelGroupInfo(LiteLLMBaseModel):
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _keep_only_price_extras(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = _RAW_FIELDS.validate_python(data)
+        field_names: Final = cls.model_fields.keys()
+        declared: Final = {
+            key: value for key, value in fields.items() if key in field_names and not is_usd_price_key(key)
+        }
+        return {**declared, **model_info_prices(fields)}
+
+    def with_higher_prices(self, prices: Mapping[str, float]) -> "ModelGroupInfo":
+        listed: Final[Mapping[str, object]] = {**vars(self), **self.__pydantic_extra__}
+        higher: Final = {key: price for key, price in prices.items() if _outprices(price, listed.get(key))}
+        return self.model_copy(update=higher) if higher else self
 
 
 class AssistantsTypedDict(TypedDict):
