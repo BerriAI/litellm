@@ -571,11 +571,12 @@ def _count_function_call_tokens(
         total = 0
         for tool_call in value:
             if "function" in tool_call:
-                total += count_function(str(tool_call["function"].get("arguments", "")))
+                kind, field = "function", "arguments"
             elif "custom" in tool_call:
-                total += count_function(str(tool_call["custom"].get("input", "")))
+                kind, field = "custom", "input"
             else:
                 raise ValueError(f"Unsupported tool call {tool_call} must contain a function or custom key")
+            total += count_function(str(tool_call[kind].get(field, "")))
         return total
     if key == "function_call":
         if not isinstance(value, Mapping):
