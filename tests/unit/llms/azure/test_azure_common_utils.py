@@ -2625,17 +2625,43 @@ def test_entra_rejection_without_an_aadsts_code_keeps_only_its_first_sentence(no
     assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
 
 
-@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
-def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_key, call):
-    from azure.core.exceptions import ServiceRequestError
+def _azure_identity_wrapped_token_provider(inner_error: Exception) -> Callable[[], str]:
+    from azure.core.exceptions import ClientAuthenticationError
 
-    unreachable: Final = ServiceRequestError("Failed to establish a new connection: [Errno -2] Name or service not known")
+    def token_provider() -> str:
+        try:
+            raise inner_error
+        except Exception as error:
+            raise ClientAuthenticationError(message=f"Authentication failed: {error}") from error
+
+    return token_provider
+
+
+def test_entra_rejecting_an_unknown_authority_host_still_answers_401(no_azure_api_key):
+    unknown_authority: Final = ValueError("The authority provided, https://login.example.invalid, is not well-known.")
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat(_azure_identity_wrapped_token_provider(unknown_authority))
+
+    assert excinfo.value.status_code == 401
+    assert "is not well-known" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize("failed_leg", ["request", "response"])
+def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_key, call, failed_leg):
+    from azure.core.exceptions import ServiceRequestError, ServiceResponseError
+
+    transport_error: Final = {"request": ServiceRequestError, "response": ServiceResponseError}[failed_leg](
+        "('Unable to connect to proxy', NewConnectionError(\"Failed to establish a new connection: "
+        "[Errno 111] Connection refused\"))"
+    )
 
     with pytest.raises(openai.APIError) as excinfo:
-        call(_raising_token_provider(unreachable))
+        call(_azure_identity_wrapped_token_provider(transport_error))
 
     assert not isinstance(excinfo.value, litellm.AuthenticationError)
-    assert excinfo.value.status_code == 500
+    assert excinfo.value.status_code != 401
 
 
 def test_token_provider_error_without_azure_core_installed_keeps_the_generic_token_error(monkeypatch):

@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import closing
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, TypeVar, cast
@@ -93,12 +93,22 @@ def _entra_rejection_reason(message: str) -> str:
     return _GUID.sub("<redacted>", reason.group(0) if reason else message)
 
 
+def _exception_causes(error: BaseException) -> Iterator[BaseException]:
+    cause: Final = error.__cause__ or error.__context__
+    if cause is None:
+        return
+    yield cause
+    yield from _exception_causes(cause)
+
+
 def _entra_rejection_as_auth_error(error: Exception) -> AzureOpenAIError | None:
     try:
-        from azure.core.exceptions import ClientAuthenticationError
+        from azure.core.exceptions import ClientAuthenticationError, ServiceRequestError, ServiceResponseError
     except ImportError:
         return None
     if not isinstance(error, ClientAuthenticationError):
+        return None
+    if any(isinstance(cause, (ServiceRequestError, ServiceResponseError)) for cause in _exception_causes(error)):
         return None
     return AzureOpenAIError(
         status_code=401,
