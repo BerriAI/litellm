@@ -406,24 +406,22 @@ def test_bedrock_cohere_embedding_bills_the_row_of_the_region_it_calls(
 def test_bedrock_embedding_with_a_govcloud_arn_model_id_bills_at_the_arn_region_row(
     respx_mock: respx.MockRouter,
 ) -> None:
-    arn: Final = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0"
     route = respx_mock.post(url__startswith=f"{GOVCLOUD_WEST_RUNTIME}/model/").mock(
-        return_value=httpx.Response(
-            200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]}
-        )
+        return_value=httpx.Response(200, json=titan_embedding_response)
     )
 
     response: Final = litellm.embedding(
-        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        model="bedrock/amazon.titan-embed-text-v2:0",
         input=[test_input],
         api_key="test-bearer-token",
-        model_id=arn,
+        model_id="arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.titan-embed-text-v2:0",
     )
 
     assert route.call_count == 1
+    assert response.usage.prompt_tokens > 0
     assert response._hidden_params["response_cost"] == pytest.approx(
         response.usage.prompt_tokens
-        * litellm.model_cost["bedrock/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0"]["input_cost_per_token"]
+        * litellm.model_cost["bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0"]["input_cost_per_token"]
     )
 
 
