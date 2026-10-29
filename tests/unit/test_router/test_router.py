@@ -2802,6 +2802,79 @@ def test_model_group_info_lists_tier_and_batch_prices_at_the_most_any_deployment
     assert tuple(listed[key] * tokens for key in listed_keys) == pytest.approx(highest_bills)
 
 
+def test_model_group_info_lists_cache_prices_at_the_most_any_deployment_bills(monkeypatch: pytest.MonkeyPatch):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    backends: Final = ("made-up-cached-backend", "made-up-uncached-backend")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            backends[0]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "input_cost_per_token_priority": 2e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "cache_read_input_token_cost_priority": 2e-07,
+                "cache_creation_input_token_cost": 1.25e-06,
+            },
+            backends[1]: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.2e-05,
+                "input_cost_per_token_priority": 6e-06,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed-cache-group",
+                "litellm_params": {"model": f"openai/{backend}", "api_key": "fake"},
+                "model_info": {"id": backend},
+            }
+            for backend in backends
+        ]
+    )
+    tokens: Final = 1_000_000
+
+    def highest_prompt_bill(cache_read_tokens: int, cache_creation_tokens: int, service_tier: str | None) -> float:
+        return max(
+            litellm.cost_per_token(
+                model=backend,
+                custom_llm_provider="openai",
+                prompt_tokens=tokens,
+                completion_tokens=0,
+                cache_read_input_tokens=cache_read_tokens,
+                cache_creation_input_tokens=cache_creation_tokens,
+                service_tier=service_tier,
+            )[0]
+            for backend in backends
+        )
+
+    highest_bills: Final = (
+        highest_prompt_bill(tokens, 0, None),
+        highest_prompt_bill(tokens, 0, "priority"),
+        highest_prompt_bill(0, tokens, None),
+    )
+
+    info: Final = router.get_model_group_info(model_group="mixed-cache-group")
+
+    assert info is not None
+    listed: Final = info.model_dump()
+    listed_keys: Final = (
+        "cache_read_input_token_cost",
+        "cache_read_input_token_cost_priority",
+        "cache_creation_input_token_cost",
+    )
+    assert tuple(listed[key] * tokens for key in listed_keys) == pytest.approx(highest_bills)
+
+
 @pytest.mark.parametrize(("team_id", "listed_cache_read_cost"), [(None, 1e-07), ("team-b", 1e-07), ("team-a", 9e-06)])
 def test_model_group_info_lists_a_team_deployment_price_only_to_that_team(
     monkeypatch: pytest.MonkeyPatch, team_id: str | None, listed_cache_read_cost: float

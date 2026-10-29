@@ -959,14 +959,28 @@ _get_cost_per_unit = get_cost_per_unit
 _HALF_PRICED_BATCH_KEYS: Final = frozenset(
     {f"input_cost_per_token{_BATCH_KEY_SUFFIX}", f"output_cost_per_token{_BATCH_KEY_SUFFIX}"}
 )
+_TIER_KEY_SUFFIXES: Final = ("", *SERVICE_TIER_COST_KEY_SUFFIXES)
+_CACHE_KEYS_BILLED_AT_INPUT_RATE: Final = MappingProxyType(
+    {
+        **{f"cache_read_input_token_cost{suffix}": f"input_cost_per_token{suffix}" for suffix in _TIER_KEY_SUFFIXES},
+        **{
+            f"cache_creation_input_token_cost{suffix}": f"input_cost_per_token{suffix}" for suffix in _TIER_KEY_SUFFIXES
+        },
+    }
+)
 
 
 def billed_rate(model_info: Mapping[str, object], cost_key: str) -> float | None:
     rate: Final = get_cost_per_unit(model_info, cost_key, default_value=None)
-    if rate is not None or cost_key not in _HALF_PRICED_BATCH_KEYS:
+    if rate is not None:
         return rate
-    standard_rate: Final = get_cost_per_unit(model_info, cost_key.removesuffix(_BATCH_KEY_SUFFIX), default_value=None)
-    return None if standard_rate is None else standard_rate / 2
+    if cost_key in _HALF_PRICED_BATCH_KEYS:
+        standard_rate: Final = get_cost_per_unit(
+            model_info, cost_key.removesuffix(_BATCH_KEY_SUFFIX), default_value=None
+        )
+        return None if standard_rate is None else standard_rate / 2
+    input_key: Final = _CACHE_KEYS_BILLED_AT_INPUT_RATE.get(cost_key)
+    return None if input_key is None else get_cost_per_unit(model_info, input_key, default_value=None)
 
 
 def deployment_pricing(model_info: ModelInfo | None) -> ModelInfo | None:
