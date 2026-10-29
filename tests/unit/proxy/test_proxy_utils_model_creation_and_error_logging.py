@@ -816,6 +816,47 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         assert payload["model"] == "MCP: deepwiki-ask_question"
         assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
 
+    @pytest.mark.asyncio
+    async def test_failed_speech_spend_row_records_the_route_call_type_over_the_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        rejected: Final = litellm.BadRequestError(
+            message="Voice name nonexistent is not supported", model="gemini-tts", llm_provider="gemini"
+        )
+        request_data: Final = {
+            "model": "gemini-tts",
+            "input": "Hello there",
+            "voice": "nonexistent",
+            "call_type": "acompletion",
+        }
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=rejected,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/audio/speech"),
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "aspeech"
+
 
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     """A non-stream request that failed after dispatch (timeout, provider

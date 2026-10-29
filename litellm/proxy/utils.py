@@ -1588,7 +1588,7 @@ def _failure_fields_to_lift(
     attribution on failed-request spend logs."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
-        return _EMPTY_LIFT
+        return _EMPTY_LIFT if dispatched_call_type is None else MappingProxyType({"call_type": dispatched_call_type})
     _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
     _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
