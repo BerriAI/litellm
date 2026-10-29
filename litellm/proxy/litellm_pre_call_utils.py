@@ -3047,6 +3047,12 @@ async def add_litellm_data_to_request(
         ),
     )
 
+    await _resolve_chatgpt_subscription_logins_for_request(
+        data=cast("dict[str, object]", data),  # cast-ok: data is the untyped request body dict
+        team_id=user_api_key_dict.team_id,
+        key_hash=user_api_key_dict.token,
+    )
+
     if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
         raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
 
@@ -3472,6 +3478,27 @@ async def _resolve_user_provider_credentials_for_request(
         return
     secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
     secret_fields["user_provider_credentials_user_id"] = user_id
+
+
+async def _resolve_chatgpt_subscription_logins_for_request(
+    data: dict[str, object],  # mutable-ok: writes resolved logins into the nested secret_fields dict
+    team_id: str | None,
+    key_hash: str | None,
+) -> None:
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
+
+    from .credential_endpoints.chatgpt_subscription_logins import resolve_chatgpt_subscription_logins
+
+    secret_fields: Final = data.get("secret_fields")
+    if not isinstance(secret_fields, dict):
+        return
+    try:
+        logins: Final = await resolve_chatgpt_subscription_logins(team_id=team_id, key_hash=key_hash)
+    except Exception:  # noqa: BLE001  # a login lookup failure fails only that login's deployments closed, never the request
+        verbose_proxy_logger.exception("Failed to load ChatGPT subscription logins for the request")
+        return
+    if logins:
+        secret_fields["chatgpt_subscription_logins"] = RedactedDict(dict(logins))
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:

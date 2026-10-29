@@ -1,5 +1,6 @@
 """Tests for the credential management endpoints."""
 
+import base64
 import json
 from contextlib import contextmanager
 from functools import reduce
@@ -18,12 +19,27 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.llms.chatgpt.common_utils import (
+    CHATGPT_DEVICE_CODE_URL,
+    CHATGPT_DEVICE_TOKEN_URL,
+    CHATGPT_DEVICE_VERIFY_URL,
+    CHATGPT_OAUTH_TOKEN_URL,
+    OPENAI_AUTH_CLAIM_KEY,
+)
 from litellm.llms.github_copilot.per_user_auth import _SESSION_CACHE, _session_cache_key
 from litellm.models.credentials import CredentialSource, UserConnectionFlowHandle
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.credential_endpoints.endpoints import _decode_flow_handle, get_llm_router
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    V2_GCM_PREFIX,
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
+from litellm.proxy.credential_endpoints.endpoints import (
+    _decode_flow_handle,
+    get_chatgpt_oauth_client,
+    get_llm_router,
+)
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
 
@@ -3275,3 +3291,315 @@ class TestCredentialDisplayName:
         assert (by_name["display_name"], by_name["source"]) == ("Prod OpenAI", "db")
         assert config_by_name["source"] == "config"
         assert listed["openai-prod"]["credential_values"]["api_key"] != "sk-old"
+
+
+_CHATGPT_DEVICE_AUTH_ID: Final = "deviceauth_7Qm2x9Lp4Rt8Vw3Kz"
+_CHATGPT_USER_CODE: Final = "WXYZ-1234"
+_CHATGPT_TOKEN_EXPIRES_AT: Final = 4102444800
+
+
+def _chatgpt_jwt(claims: dict) -> str:
+    def segment(value: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    return f"{segment({'alg': 'RS256', 'typ': 'JWT'})}.{segment(claims)}.c2lnbmF0dXJl"
+
+
+def _chatgpt_tokens(tag: str, account_id: str) -> dict[str, str]:
+    auth_claims: Final = {OPENAI_AUTH_CLAIM_KEY: {"chatgpt_account_id": account_id}}
+    return {
+        "access_token": _chatgpt_jwt({"exp": _CHATGPT_TOKEN_EXPIRES_AT, "jti": tag, **auth_claims}),
+        "refresh_token": f"rt_{tag}_9f8e7d6c5b4a",
+        "id_token": _chatgpt_jwt({"email": f"{tag}@example.com", **auth_claims}),
+    }
+
+
+class _ChatGPTAuthServer:
+    """Stands in for the async HTTP client the sign-in routes reach auth.openai.com through. It answers
+    each URL from ``answers`` and raises ``httpx.HTTPStatusError`` on a non-2xx answer, as litellm's
+    ``AsyncHTTPHandler`` does, with the response body in the error text."""
+
+    def __init__(self) -> None:
+        self.answers: dict[str, tuple[int, dict]] = {
+            CHATGPT_DEVICE_CODE_URL: (
+                200,
+                {"device_auth_id": _CHATGPT_DEVICE_AUTH_ID, "user_code": _CHATGPT_USER_CODE, "interval": "7"},
+            ),
+            CHATGPT_DEVICE_TOKEN_URL: (403, {"error": "deviceauth_authorization_pending"}),
+        }
+        self.requests: list[tuple[str, object]] = []
+
+    def approve(self, tag: str, account_id: str) -> dict[str, str]:
+        tokens: Final = _chatgpt_tokens(tag, account_id)
+        self.answers[CHATGPT_DEVICE_TOKEN_URL] = (
+            200,
+            {"authorization_code": f"code-{tag}", "code_verifier": f"verifier-{tag}"},
+        )
+        self.answers[CHATGPT_OAUTH_TOKEN_URL] = (200, tokens)
+        return tokens
+
+    async def post(self, url, data=None, json=None, params=None, headers=None, timeout=None) -> httpx.Response:
+        self.requests.append((url, json if json is not None else data))
+        status, body = self.answers[url]
+        request: Final = httpx.Request("POST", url)
+        response: Final = httpx.Response(status, json=body, request=request)
+        if response.is_error:
+            raise httpx.HTTPStatusError(f"{status} from {url}: {response.text}", request=request, response=response)
+        return response
+
+
+class _RowsById:
+    def __init__(self, id_field: str, *ids: str) -> None:
+        self._id_field = id_field
+        self._ids = frozenset(ids)
+
+    async def find_unique(self, where: dict) -> dict | None:
+        row_id: Final = where[self._id_field]
+        return {self._id_field: row_id} if row_id in self._ids else None
+
+
+class _CredentialsTable:
+    """The Prisma credentials table: rows as Prisma hands them back, with the JSON columns parsed."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict] = {}
+        self.writes: list[str] = []
+
+    @staticmethod
+    def _as_read(data: dict) -> dict:
+        return {
+            key: json.loads(value) if key in ("credential_values", "credential_info") else value
+            for key, value in data.items()
+        }
+
+    async def find_unique(self, where: dict) -> dict | None:
+        return self.rows.get(where["credential_name"])
+
+    async def create(self, data: dict) -> dict:
+        self.writes.append("create")
+        self.rows[data["credential_name"]] = self._as_read(data)
+        return self.rows[data["credential_name"]]
+
+    async def update(self, where: dict, data: dict) -> dict:
+        self.writes.append("update")
+        name: Final = where["credential_name"]
+        self.rows[name] = {**self.rows[name], **self._as_read(data)}
+        return self.rows[name]
+
+
+@pytest.fixture
+def chatgpt_sign_in(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "chatgpt-sign-in-endpoints-test-salt")
+    monkeypatch.setattr(litellm, "credential_list", [])
+    credentials: Final = _CredentialsTable()
+    auth_server: Final = _ChatGPTAuthServer()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_credentialstable=credentials,
+                litellm_teamtable=_RowsById("team_id", "team-a", "team-b"),
+                litellm_verificationtoken=_RowsById("token", "hash-k"),
+            )
+        ),
+    )
+    app.dependency_overrides[get_chatgpt_oauth_client] = lambda: auth_server
+    yield SimpleNamespace(credentials=credentials, auth_server=auth_server)
+    app.dependency_overrides.pop(get_chatgpt_oauth_client, None)
+
+
+def _start_chatgpt_login(name: str, body: dict, auth=_as_admin):
+    return _call_as("POST", f"/credentials/{name}/chatgpt_login/start", body, auth)
+
+
+def _poll_chatgpt_login(name: str, flow_handle: str, auth=_as_admin):
+    return _call_as("POST", f"/credentials/{name}/chatgpt_login/poll", {"flow_handle": flow_handle}, auth)
+
+
+def _started_chatgpt_login(name: str, owner: dict) -> str:
+    response: Final = _start_chatgpt_login(name, owner)
+    assert response.status_code == 200, response.text
+    return response.json()["flow_handle"]
+
+
+def _stored_login(row: dict) -> dict[str, str | None]:
+    return {key: decrypt_value_helper(value, key) for key, value in row["credential_values"].items()}
+
+
+def _expected_login(tokens: dict[str, str], account_id: str) -> dict[str, str]:
+    return {
+        "chatgpt_access_token": tokens["access_token"],
+        "chatgpt_refresh_token": tokens["refresh_token"],
+        "chatgpt_id_token": tokens["id_token"],
+        "chatgpt_account_id": account_id,
+        "chatgpt_expires_at": str(_CHATGPT_TOKEN_EXPIRES_AT),
+    }
+
+
+def test_chatgpt_sign_in_start_is_proxy_admin_only(chatgpt_sign_in):
+    response = _start_chatgpt_login("login-a", {"owner_team_id": "team-a"}, auth=_as_non_admin)
+
+    assert response.status_code == 403, response.text
+    assert chatgpt_sign_in.auth_server.requests == []
+
+
+def test_chatgpt_sign_in_poll_is_proxy_admin_only(chatgpt_sign_in):
+    flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
+    chatgpt_sign_in.auth_server.approve("first", "acct-a")
+
+    response = _poll_chatgpt_login("login-a", flow_handle, auth=_as_non_admin)
+
+    assert response.status_code == 403, response.text
+    assert [url for url, _ in chatgpt_sign_in.auth_server.requests] == [CHATGPT_DEVICE_CODE_URL]
+    assert chatgpt_sign_in.credentials.rows == {}
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [{"owner_team_id": "team-a", "owner_key_hash": "hash-k"}, {}, {"owner_team_id": "", "owner_key_hash": ""}],
+    ids=["both", "neither", "blank"],
+)
+def test_chatgpt_sign_in_needs_exactly_one_owner(chatgpt_sign_in, owner):
+    response = _start_chatgpt_login("login-a", owner)
+
+    assert response.status_code == 400, response.text
+    assert chatgpt_sign_in.auth_server.requests == []
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [{"owner_team_id": "team-deleted"}, {"owner_key_hash": "hash-of-a-deleted-key"}],
+    ids=["team", "key"],
+)
+def test_chatgpt_sign_in_needs_an_owner_that_exists(chatgpt_sign_in, owner):
+    response = _start_chatgpt_login("login-a", owner)
+
+    assert response.status_code == 400, response.text
+    assert chatgpt_sign_in.auth_server.requests == []
+
+
+@pytest.mark.parametrize("owner", [{"owner_team_id": "team-a"}, {"owner_key_hash": "hash-k"}], ids=["team", "key"])
+def test_chatgpt_sign_in_start_returns_the_device_code_without_the_device_auth_id(chatgpt_sign_in, owner):
+    response = _start_chatgpt_login("login-a", owner)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["user_code"], body["verification_uri"], body["interval"]) == (
+        _CHATGPT_USER_CODE,
+        CHATGPT_DEVICE_VERIFY_URL,
+        7,
+    )
+    flow_handle = body["flow_handle"]
+    assert isinstance(flow_handle, str) and flow_handle
+    assert _CHATGPT_DEVICE_AUTH_ID not in response.text
+    assert _CHATGPT_DEVICE_AUTH_ID not in flow_handle
+    encoded = flow_handle.removeprefix(V2_GCM_PREFIX)
+    assert _CHATGPT_DEVICE_AUTH_ID.encode() not in base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+
+
+def test_chatgpt_sign_in_poll_is_pending_until_the_user_approves(chatgpt_sign_in):
+    flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
+
+    response = _poll_chatgpt_login("login-a", flow_handle)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "pending"
+    assert chatgpt_sign_in.credentials.rows == {}
+
+
+def test_chatgpt_sign_in_saves_an_encrypted_login_and_answers_without_a_token(chatgpt_sign_in):
+    flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a", "display_name": "Team A seat"})
+    tokens = chatgpt_sign_in.auth_server.approve("first", "acct-team-a")
+
+    response = _poll_chatgpt_login("login-a", flow_handle)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "connected", "interval": None, "account_id": "acct-team-a"}
+    for secret in tokens.values():
+        assert secret not in response.text
+    assert chatgpt_sign_in.auth_server.requests[1] == (
+        CHATGPT_DEVICE_TOKEN_URL,
+        {"device_auth_id": _CHATGPT_DEVICE_AUTH_ID, "user_code": _CHATGPT_USER_CODE},
+    )
+    row = chatgpt_sign_in.credentials.rows["login-a"]
+    assert _stored_login(row) == _expected_login(tokens, "acct-team-a")
+    for secret in tokens.values():
+        assert secret not in json.dumps(row)
+    assert row["credential_info"] == {"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"}
+    assert row["display_name"] == "Team A seat"
+    assert CredentialAccessor.get_credential_values("login-a") == _expected_login(tokens, "acct-team-a")
+
+
+def test_signing_in_again_on_the_same_name_updates_that_credential(chatgpt_sign_in):
+    first_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
+    chatgpt_sign_in.auth_server.approve("first", "acct-first")
+    assert _poll_chatgpt_login("login-a", first_handle).json()["status"] == "connected"
+    second_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-b"})
+    second_tokens = chatgpt_sign_in.auth_server.approve("second", "acct-second")
+
+    response = _poll_chatgpt_login("login-a", second_handle)
+
+    assert response.json() == {"status": "connected", "interval": None, "account_id": "acct-second"}
+    assert chatgpt_sign_in.credentials.writes == ["create", "update"]
+    assert list(chatgpt_sign_in.credentials.rows) == ["login-a"]
+    row = chatgpt_sign_in.credentials.rows["login-a"]
+    assert _stored_login(row) == _expected_login(second_tokens, "acct-second")
+    assert row["credential_info"] == {"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-b"}
+
+
+def test_a_flow_handle_minted_for_another_name_is_rejected(chatgpt_sign_in):
+    flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
+    chatgpt_sign_in.auth_server.approve("first", "acct-a")
+
+    response = _poll_chatgpt_login("login-b", flow_handle)
+
+    assert response.status_code == 400, response.text
+    assert [url for url, _ in chatgpt_sign_in.auth_server.requests] == [CHATGPT_DEVICE_CODE_URL]
+    assert chatgpt_sign_in.credentials.rows == {}
+
+
+def _another_providers_row(name: str) -> dict:
+    return {
+        "credential_name": name,
+        "credential_values": {"api_key": encrypt_value_helper("sk-openai-prod")},
+        "credential_info": {"custom_llm_provider": "openai"},
+    }
+
+
+def test_chatgpt_sign_in_start_refuses_a_name_held_by_another_provider(chatgpt_sign_in):
+    existing = _another_providers_row("openai-prod")
+    chatgpt_sign_in.credentials.rows["openai-prod"] = existing
+
+    response = _start_chatgpt_login("openai-prod", {"owner_team_id": "team-a"})
+
+    assert response.status_code == 409, response.text
+    assert chatgpt_sign_in.auth_server.requests == []
+    assert chatgpt_sign_in.credentials.rows == {"openai-prod": existing}
+
+
+def test_chatgpt_sign_in_poll_refuses_a_name_another_provider_took_meanwhile(chatgpt_sign_in):
+    flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
+    existing = _another_providers_row("login-a")
+    chatgpt_sign_in.credentials.rows["login-a"] = existing
+    chatgpt_sign_in.auth_server.approve("first", "acct-a")
+
+    response = _poll_chatgpt_login("login-a", flow_handle)
+
+    assert response.status_code == 409, response.text
+    assert chatgpt_sign_in.credentials.writes == []
+    assert chatgpt_sign_in.credentials.rows == {"login-a": existing}
+
+
+@pytest.mark.parametrize("failing_url", [CHATGPT_DEVICE_TOKEN_URL, CHATGPT_OAUTH_TOKEN_URL], ids=["poll", "exchange"])
+def test_an_upstream_failure_during_poll_is_a_502_without_the_upstream_body(chatgpt_sign_in, failing_url):
+    flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
+    chatgpt_sign_in.auth_server.approve("first", "acct-a")
+    leaked = _chatgpt_jwt({"sub": "token-echoed-in-error-body"})
+    chatgpt_sign_in.auth_server.answers[failing_url] = (500, {"error": "upstream-body-7f3k", "detail": leaked})
+
+    response = _poll_chatgpt_login("login-a", flow_handle)
+
+    assert response.status_code == 502, response.text
+    assert "upstream-body-7f3k" not in response.text
+    assert leaked not in response.text
+    assert chatgpt_sign_in.credentials.rows == {}

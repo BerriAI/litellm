@@ -46,6 +46,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     _match_and_track_policies,
     _promoted_trace_control_fields,
+    _resolve_chatgpt_subscription_logins_for_request,
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
@@ -61,6 +62,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import CredentialItem
 
 
@@ -10704,6 +10706,107 @@ class TestResolveUserProviderCredentials:
         assert _per_user_credential_names_for_groups(router, frozenset({"copilot-chat"}), team_id=None) == (
             "copilot-cred",
         )
+
+
+
+class TestResolveChatGPTSubscriptionLogins:
+    """``_resolve_chatgpt_subscription_logins_for_request`` hands a request only the ChatGPT subscription
+    logins its team or its key owns, inside secret_fields where no log or body snapshot shows them."""
+
+    _LOGIN_NAMES: Final = ("login-team-a", "login-team-b", "login-key-k")
+
+    @staticmethod
+    def _access_token(name: str) -> str:
+        return f"eyJhbGciOiJSUzI1NiJ9.{name}-subscription-access.c2lnbmF0dXJl"
+
+    def _serve_logins(self, monkeypatch) -> None:
+        def login(name: str, **owner: str) -> CredentialItem:
+            return CredentialItem(
+                credential_name=name,
+                credential_values={
+                    "chatgpt_access_token": self._access_token(name),
+                    "chatgpt_refresh_token": f"rt-{name}-refresh",
+                    "chatgpt_account_id": f"acct-{name}",
+                    "chatgpt_expires_at": "4102444800",
+                },
+                credential_info={"custom_llm_provider": "chatgpt", **owner},
+            )
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                login("login-team-a", chatgpt_owner_team_id="team-a"),
+                login("login-team-b", chatgpt_owner_team_id="team-b"),
+                login("login-key-k", chatgpt_owner_key_hash="hash-k"),
+            ],
+        )
+
+    def _assert_no_token_in(self, text: str) -> None:
+        for name in self._LOGIN_NAMES:
+            assert self._access_token(name) not in text
+            assert f"rt-{name}-refresh" not in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("team_id", "key_hash", "owned"),
+        [
+            ("team-a", "hash-unbound", ("login-team-a",)),
+            (None, "hash-k", ("login-key-k",)),
+            ("team-b", "hash-k", ("login-team-b", "login-key-k")),
+        ],
+        ids=["by-team", "by-key", "by-team-and-key"],
+    )
+    async def test_secret_fields_carry_only_the_callers_logins(self, monkeypatch, team_id, key_hash, owned):
+        self._serve_logins(monkeypatch)
+        data = {"model": "chatgpt-seat", "secret_fields": {"raw_headers": {}}}
+
+        await _resolve_chatgpt_subscription_logins_for_request(data=data, team_id=team_id, key_hash=key_hash)
+
+        logins = data["secret_fields"]["chatgpt_subscription_logins"]
+        assert logins == {name: self._access_token(name) for name in owned}
+        assert isinstance(logins, RedactedDict)
+        for shown in (str(logins), repr(logins), str(data), repr(data)):
+            self._assert_no_token_in(shown)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("team_id", "key_hash"), [("team-unbound", "hash-unbound"), (None, None)], ids=["unbound", "no-owner"]
+    )
+    async def test_a_caller_who_owns_no_login_gets_no_logins_entry(self, monkeypatch, team_id, key_hash):
+        self._serve_logins(monkeypatch)
+        data = {"model": "chatgpt-seat", "secret_fields": {"raw_headers": {}}}
+
+        await _resolve_chatgpt_subscription_logins_for_request(data=data, team_id=team_id, key_hash=key_hash)
+
+        assert data["secret_fields"] == {"raw_headers": {}}
+
+    @pytest.mark.asyncio
+    async def test_a_request_gets_its_keys_and_teams_logins_and_nothing_else_shows_them(self, monkeypatch):
+        self._serve_logins(monkeypatch)
+        request = MagicMock(spec=Request)
+        request.url = MagicMock()
+        request.url.__str__.return_value = "http://localhost/v1/responses"
+        request.method = "POST"
+        request.query_params = {}
+        request.headers = {"Content-Type": "application/json", "Authorization": "Bearer sk-caller"}
+        request.client = MagicMock()
+        request.client.host = "127.0.0.1"
+
+        updated = await add_litellm_data_to_request(
+            data={"model": "chatgpt-seat", "input": "hello"},
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(token="hash-k", team_id="team-b", user_id="user-1", metadata={}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated["secret_fields"]["chatgpt_subscription_logins"] == {
+            "login-team-b": self._access_token("login-team-b"),
+            "login-key-k": self._access_token("login-key-k"),
+        }
+        self._assert_no_token_in(json.dumps({k: v for k, v in updated.items() if k != "secret_fields"}, default=str))
 
 
 def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):

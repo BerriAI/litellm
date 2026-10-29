@@ -80,5 +80,19 @@ class CredentialsRepository:
     ) -> "prisma_models.LiteLLM_CredentialsTable | None":
         return await self.table.update(where={"credential_name": credential_name}, data=data)
 
+    async def update_if_value_unchanged(
+        self, credential_name: str, value_key: str, stored_value: str, data: Mapping[str, object]
+    ) -> bool:
+        from prisma import Json
+
+        updated_rows: Final = await self.table.update_many(
+            where={
+                "credential_name": credential_name,
+                "credential_values": {"path": [value_key], "equals": Json(stored_value)},
+            },
+            data=data,
+        )
+        return updated_rows > 0
+
     async def delete_by_name(self, credential_name: str) -> "prisma_models.LiteLLM_CredentialsTable | None":
         return await self.table.delete(where={"credential_name": credential_name})

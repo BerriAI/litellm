@@ -2,17 +2,23 @@ import json
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+from litellm.exceptions import Timeout
 from litellm.litellm_core_utils.asyncify import can_block_current_thread
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
-from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params arg is a bare dict in http_handler
+    get_httpx_client,
+)
 
 from .common_utils import (
     CHATGPT_API_BASE,
@@ -22,6 +28,7 @@ from .common_utils import (
     CHATGPT_DEVICE_TOKEN_URL,
     CHATGPT_DEVICE_VERIFY_URL,
     CHATGPT_OAUTH_TOKEN_URL,
+    ChatGPTAuthError,
     GetAccessTokenError,
     GetDeviceCodeError,
     JsonObject,
@@ -44,6 +51,13 @@ _JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
 
 def _optional_str(value: JsonValue | None) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def access_token_expires_at(token: str) -> int | None:
+    exp: Final = decode_jwt_claims(token).get("exp")
+    if isinstance(exp, (int, float)):
+        return int(exp)
+    return None
 
 
 def get_chatgpt_auth_file(
@@ -171,10 +185,7 @@ class Authenticator:
         return time.time() >= float(derived_expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
 
     def _get_expires_at(self, token: str) -> int | None:
-        exp: Final = decode_jwt_claims(token).get("exp")
-        if isinstance(exp, (int, float)):
-            return int(exp)
-        return None
+        return access_token_expires_at(token)
 
     def _login_device_code(self) -> dict[str, str]:
         cooldown_remaining: Final = self._get_device_code_cooldown_remaining(self._read_auth_file())
@@ -223,7 +234,7 @@ class Authenticator:
         interval: Final = data.get("interval")
         if not device_auth_id or not user_code:
             raise GetDeviceCodeError(
-                message=f"Device code response missing fields: {data}",
+                message="Device code response is missing device_auth_id or user_code",
                 status_code=400,
             )
         return {
@@ -315,7 +326,7 @@ class Authenticator:
         id_token: Final = _optional_str(data.get("id_token"))
         if not access_token or not refresh_token or not id_token:
             raise GetAccessTokenError(
-                message=f"Token exchange response missing fields: {data}",
+                message="Token exchange response is missing access_token, refresh_token, or id_token",
                 status_code=400,
             )
         return {
@@ -354,7 +365,7 @@ class Authenticator:
         id_token: Final = _optional_str(data.get("id_token"))
         if not access_token or not id_token:
             raise RefreshAccessTokenError(
-                message=f"Refresh response missing fields: {data}",
+                message="Refresh response is missing access_token or id_token",
                 status_code=400,
             )
 
@@ -412,3 +423,182 @@ class Authenticator:
                 break
             time.sleep(sleep_for)
         return None
+
+
+class ChatGPTOAuthClient(Protocol):
+    async def post(
+        self,
+        url: str,
+        data: dict[str, str] | str | bytes | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+        json: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+        params: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+        headers: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+        timeout: float | httpx.Timeout | None = None,
+    ) -> httpx.Response: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ChatGPTDeviceLogin:
+    device_auth_id: str
+    user_code: str
+    interval: int
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ChatGPTAuthorizationCode:
+    authorization_code: str
+    code_verifier: str
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ChatGPTTokens:
+    access_token: str
+    refresh_token: str
+    id_token: str
+
+
+def new_chatgpt_oauth_client() -> ChatGPTOAuthClient:
+    return get_async_httpx_client("chatgpt")
+
+
+async def _apost_json_object(
+    client: ChatGPTOAuthClient,
+    url: str,
+    failure: str,
+    error_type: type[ChatGPTAuthError],
+    json: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+    data: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+) -> JsonObject:
+    try:
+        response: Final = await client.post(url, json=json, data=data, timeout=_token_refresh_timeout())
+    except httpx.HTTPStatusError as exc:
+        raise error_type(
+            message=f"{failure} with status {exc.response.status_code}", status_code=exc.response.status_code
+        ) from None
+    except (httpx.HTTPError, Timeout) as exc:
+        raise error_type(message=f"{failure} ({type(exc).__name__})", status_code=502) from None
+    try:
+        return _JSON_OBJECT_ADAPTER.validate_python(response.json())
+    except ValueError:
+        raise error_type(message=f"{failure}: the response was not a JSON object", status_code=502) from None
+
+
+async def astart_chatgpt_device_login(client: ChatGPTOAuthClient) -> ChatGPTDeviceLogin:
+    data: Final = await _apost_json_object(
+        client,
+        CHATGPT_DEVICE_CODE_URL,
+        "ChatGPT device code request failed",
+        GetDeviceCodeError,
+        json={"client_id": CHATGPT_CLIENT_ID},
+    )
+    device_auth_id: Final = _optional_str(data.get("device_auth_id"))
+    user_code: Final = _optional_str(data.get("user_code") or data.get("usercode"))
+    if not device_auth_id or not user_code:
+        raise GetDeviceCodeError(message="Device code response is missing device_auth_id or user_code", status_code=502)
+    return ChatGPTDeviceLogin(
+        device_auth_id=device_auth_id, user_code=user_code, interval=_poll_interval_seconds(data.get("interval"))
+    )
+
+
+def _poll_interval_seconds(raw: JsonValue | None) -> int:
+    try:
+        return max(int(str(raw)), DEVICE_CODE_POLL_SLEEP_SECONDS)
+    except ValueError:
+        return DEVICE_CODE_POLL_SLEEP_SECONDS
+
+
+async def apoll_chatgpt_device_login(
+    client: ChatGPTOAuthClient, device_auth_id: str, user_code: str
+) -> ChatGPTAuthorizationCode | None:
+    try:
+        response: Final = await client.post(
+            CHATGPT_DEVICE_TOKEN_URL,
+            json={"device_auth_id": device_auth_id, "user_code": user_code},
+            timeout=_token_refresh_timeout(),
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (403, 404):
+            return None
+        raise GetAccessTokenError(
+            message=f"ChatGPT device login poll failed with status {exc.response.status_code}",
+            status_code=exc.response.status_code,
+        ) from None
+    except (httpx.HTTPError, Timeout) as exc:
+        raise GetAccessTokenError(
+            message=f"ChatGPT device login poll failed ({type(exc).__name__})", status_code=502
+        ) from None
+    if response.status_code in (403, 404):
+        return None
+    try:
+        data: Final = _JSON_OBJECT_ADAPTER.validate_python(response.json())
+    except ValueError:
+        return None
+    authorization_code: Final = _optional_str(data.get("authorization_code"))
+    code_verifier: Final = _optional_str(data.get("code_verifier"))
+    if not authorization_code or not code_verifier:
+        return None
+    return ChatGPTAuthorizationCode(authorization_code=authorization_code, code_verifier=code_verifier)
+
+
+async def aexchange_chatgpt_authorization_code(
+    client: ChatGPTOAuthClient, code: ChatGPTAuthorizationCode
+) -> ChatGPTTokens:
+    data: Final = await _apost_json_object(
+        client,
+        CHATGPT_OAUTH_TOKEN_URL,
+        "ChatGPT token exchange failed",
+        GetAccessTokenError,
+        data={
+            "grant_type": "authorization_code",
+            "code": code.authorization_code,
+            "redirect_uri": f"{CHATGPT_AUTH_BASE}/deviceauth/callback",
+            "client_id": CHATGPT_CLIENT_ID,
+            "code_verifier": code.code_verifier,
+        },
+    )
+    access_token: Final = _optional_str(data.get("access_token"))
+    refresh_token: Final = _optional_str(data.get("refresh_token"))
+    id_token: Final = _optional_str(data.get("id_token"))
+    if not access_token or not refresh_token or not id_token:
+        raise GetAccessTokenError(
+            message="Token exchange response is missing access_token, refresh_token, or id_token", status_code=502
+        )
+    return ChatGPTTokens(access_token=access_token, refresh_token=refresh_token, id_token=id_token)
+
+
+async def arefresh_chatgpt_tokens(client: ChatGPTOAuthClient, refresh_token: str) -> ChatGPTTokens:
+    data: Final = await _apost_json_object(
+        client,
+        CHATGPT_OAUTH_TOKEN_URL,
+        "ChatGPT token refresh failed",
+        RefreshAccessTokenError,
+        json={
+            "client_id": CHATGPT_CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "openid profile email",
+        },
+    )
+    access_token: Final = _optional_str(data.get("access_token"))
+    id_token: Final = _optional_str(data.get("id_token"))
+    if not access_token or not id_token:
+        raise RefreshAccessTokenError(message="Refresh response is missing access_token or id_token", status_code=502)
+    return ChatGPTTokens(
+        access_token=access_token,
+        refresh_token=_optional_str(data.get("refresh_token")) or refresh_token,
+        id_token=id_token,
+    )
+
+
+def chatgpt_login_values(tokens: ChatGPTTokens) -> Mapping[str, str]:
+    expires_at: Final = access_token_expires_at(tokens.access_token)
+    account_id: Final = extract_chatgpt_account_id(tokens.id_token or tokens.access_token)
+    return MappingProxyType(
+        {
+            "chatgpt_access_token": tokens.access_token,
+            "chatgpt_refresh_token": tokens.refresh_token,
+            "chatgpt_id_token": tokens.id_token,
+            **({"chatgpt_account_id": account_id} if account_id else {}),
+            **({"chatgpt_expires_at": str(expires_at)} if expires_at is not None else {}),
+        }
+    )

@@ -22,6 +22,7 @@ from litellm.constants import (
     GITHUB_COPILOT_AUTH_TYPE_KEY,
     GITHUB_COPILOT_HOST_KEY,
     GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+    LITELLM_PROXY_ADMIN_NAME,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import get_masked_values, has_sensitive_keyword
@@ -31,7 +32,20 @@ from litellm.llms.anthropic.wif import (
     UnbuildableIdentitySource,
     anthropic_internal_issuer_jwks,
 )
+from litellm.llms.chatgpt.authenticator import (
+    DEVICE_CODE_TIMEOUT_SECONDS,
+    ChatGPTOAuthClient,
+    aexchange_chatgpt_authorization_code,
+    apoll_chatgpt_device_login,
+    astart_chatgpt_device_login,
+    chatgpt_login_values,
+    new_chatgpt_oauth_client,
+)
+from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL, ChatGPTAuthError
 from litellm.models.credentials import (
+    ChatGPTLoginFlowHandle,
+    ChatGPTLoginPollResponse,
+    ChatGPTLoginStartRequest,
     CredentialView,
     UpdateCredentialItem,
     UserConnectionDeleteResponse,
@@ -67,6 +81,7 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.router import server_owned_wif_fields_named, server_owned_wif_fields_written
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
+from .chatgpt_subscription_logins import blocks_chatgpt_login, save_chatgpt_login
 from .user_provider_credentials import (
     GithubCopilotUserConnectionPayload,
     decode_user_provider_credential,
@@ -815,6 +830,175 @@ async def delete_user_connection(
         if prior is not None:
             evict_copilot_user_session(user_id, credential_name, prior.github_host)
         return UserConnectionDeleteResponse(status="disconnected")
+    except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
+        raise handle_exception_on_proxy(e)
+
+
+def get_chatgpt_oauth_client() -> ChatGPTOAuthClient:
+    return new_chatgpt_oauth_client()
+
+
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Only a proxy admin can sign in to ChatGPT for a team or key")
+
+
+def _chatgpt_login_owner(body: ChatGPTLoginStartRequest) -> tuple[str | None, str | None]:
+    owner_team_id: Final = body.owner_team_id or None
+    owner_key_hash: Final = body.owner_key_hash or None
+    if (owner_team_id is None) == (owner_key_hash is None):
+        raise HTTPException(status_code=400, detail="Set exactly one of owner_team_id or owner_key_hash")
+    return owner_team_id, owner_key_hash
+
+
+async def _require_chatgpt_login_owner_exists(
+    prisma_client: object, owner_team_id: str | None, owner_key_hash: str | None
+) -> None:
+    from litellm.repositories.team_repository import TeamRepository
+    from litellm.repositories.verification_token_repository import VerificationTokenRepository
+
+    if owner_team_id is not None and await TeamRepository(prisma_client).find_by_id(owner_team_id) is None:
+        raise HTTPException(status_code=400, detail=f"Team '{owner_team_id}' not found")
+    if (
+        owner_key_hash is not None
+        and await VerificationTokenRepository(prisma_client).find_by_id(owner_key_hash) is None
+    ):
+        raise HTTPException(status_code=400, detail="Virtual key not found. Send the key's hashed token (Key ID)")
+
+
+async def _reject_non_chatgpt_credential(credentials_repository: CredentialsRepository, credential_name: str) -> None:
+    _reject_config_defined_name(credential_name)
+    if blocks_chatgpt_login(await credentials_repository.find_by_name(credential_name)):
+        raise ProxyException(
+            message=f"Credential '{credential_name}' belongs to another provider. Pick another name.",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_409_CONFLICT,
+            param="credential_name",
+        )
+
+
+def _decode_chatgpt_flow_handle(flow_handle: str) -> ChatGPTLoginFlowHandle | None:
+    decrypted: Final = decrypt_value_helper(
+        value=flow_handle,
+        key="chatgpt_login_flow_handle",
+        exception_type="debug",
+        return_original_value=False,
+    )
+    if decrypted is None:
+        return None
+    try:
+        return ChatGPTLoginFlowHandle.model_validate_json(decrypted)
+    except ValidationError:
+        return None
+
+
+def _chatgpt_upstream_error(error: ChatGPTAuthError) -> HTTPException:
+    return HTTPException(status_code=502, detail=error.message)
+
+
+@router.post(
+    "/credentials/{credential_name:path}/chatgpt_login/start",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=UserConnectionStartResponse,
+)
+async def start_chatgpt_login(
+    request: Request,
+    fastapi_response: Response,
+    body: ChatGPTLoginStartRequest,
+    oauth_client: Annotated[ChatGPTOAuthClient, Depends(get_chatgpt_oauth_client)],
+    credential_name: str = Path(..., description="The credential name, percent-decoded"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+) -> UserConnectionStartResponse:
+    """Start a ChatGPT device-code sign-in whose login only the given team or virtual key can use. Proxy admin only."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        _require_proxy_admin(user_api_key_dict)
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        owner_team_id, owner_key_hash = _chatgpt_login_owner(body)
+        display_name: Final = _normalized_display_name(body.display_name)
+        await _require_chatgpt_login_owner_exists(prisma_client, owner_team_id, owner_key_hash)
+        await _reject_non_chatgpt_credential(
+            CredentialsRepository(WriterPinnedClient(prisma_client.db)), credential_name
+        )
+        try:
+            login: Final = await astart_chatgpt_device_login(oauth_client)
+        except ChatGPTAuthError as e:
+            raise _chatgpt_upstream_error(e) from None
+        handle: Final = encrypt_value_helper(
+            ChatGPTLoginFlowHandle(
+                credential_name=credential_name,
+                device_auth_id=login.device_auth_id,
+                user_code=login.user_code,
+                owner_team_id=owner_team_id,
+                owner_key_hash=owner_key_hash,
+                display_name=display_name,
+                interval=login.interval,
+                expires_at=time.time() + DEVICE_CODE_TIMEOUT_SECONDS,
+            ).model_dump_json()
+        )
+        return UserConnectionStartResponse(
+            user_code=login.user_code,
+            verification_uri=CHATGPT_DEVICE_VERIFY_URL,
+            expires_in=DEVICE_CODE_TIMEOUT_SECONDS,
+            interval=login.interval,
+            flow_handle=handle,
+        )
+    except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
+        raise handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/credentials/{credential_name:path}/chatgpt_login/poll",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=ChatGPTLoginPollResponse,
+)
+async def poll_chatgpt_login(
+    request: Request,
+    fastapi_response: Response,
+    body: UserConnectionPollRequest,
+    oauth_client: Annotated[ChatGPTOAuthClient, Depends(get_chatgpt_oauth_client)],
+    credential_name: str = Path(..., description="The credential name, percent-decoded"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+) -> ChatGPTLoginPollResponse:
+    """Poll a ChatGPT sign-in once and save the login on the credential when it completes. Proxy admin only."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        _require_proxy_admin(user_api_key_dict)
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        handle: Final = _decode_chatgpt_flow_handle(body.flow_handle)
+        if handle is None or handle.credential_name != credential_name or handle.expires_at <= time.time():
+            raise HTTPException(status_code=400, detail="invalid or expired flow_handle")
+        try:
+            code: Final = await apoll_chatgpt_device_login(oauth_client, handle.device_auth_id, handle.user_code)
+            if code is None:
+                return ChatGPTLoginPollResponse(status="pending", interval=handle.interval)
+            tokens: Final = await aexchange_chatgpt_authorization_code(oauth_client, code)
+        except ChatGPTAuthError as e:
+            raise _chatgpt_upstream_error(e) from None
+        credentials_repository: Final = CredentialsRepository(WriterPinnedClient(prisma_client.db))
+        await _reject_non_chatgpt_credential(credentials_repository, credential_name)
+        login_values: Final = chatgpt_login_values(tokens)
+        await save_chatgpt_login(
+            credentials_repository,
+            credential_name=credential_name,
+            display_name=handle.display_name,
+            login_values=login_values,
+            owner=(handle.owner_team_id, handle.owner_key_hash),
+            actor=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        )
+        return ChatGPTLoginPollResponse(status="connected", account_id=login_values.get("chatgpt_account_id"))
     except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
         raise handle_exception_on_proxy(e)
 
