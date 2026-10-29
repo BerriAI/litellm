@@ -2875,6 +2875,70 @@ def test_model_group_info_lists_cache_prices_at_the_most_any_deployment_bills(mo
     assert tuple(listed[key] * tokens for key in listed_keys) == pytest.approx(highest_bills)
 
 
+def test_model_group_info_lists_a_fireworks_cache_read_price_at_the_rate_fireworks_bills(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    backends: Final = ("fireworks_ai/made-up-cached-backend", "fireworks_ai/made-up-uncached-backend")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            backends[0]: {
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "input_cost_per_token_priority": 2e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "cache_read_input_token_cost_priority": 2e-07,
+            },
+            backends[1]: {
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.2e-05,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "fireworks-cache-group",
+                "litellm_params": {"model": backend, "api_key": "fake"},
+                "model_info": {"id": backend},
+            }
+            for backend in backends
+        ]
+    )
+    tokens: Final = 1_000_000
+
+    def highest_cache_read_bill(service_tier: str | None) -> float:
+        return max(
+            litellm.cost_per_token(
+                model=backend,
+                custom_llm_provider="fireworks_ai",
+                prompt_tokens=tokens,
+                completion_tokens=0,
+                cache_read_input_tokens=tokens,
+                service_tier=service_tier,
+            )[0]
+            for backend in backends
+        )
+
+    info: Final = router.get_model_group_info(model_group="fireworks-cache-group")
+
+    assert info is not None
+    listed: Final = info.model_dump()
+    listed_keys: Final = ("cache_read_input_token_cost", "cache_read_input_token_cost_priority")
+    assert tuple(listed[key] * tokens for key in listed_keys) == pytest.approx(
+        (highest_cache_read_bill(None), highest_cache_read_bill("priority"))
+    )
+
+
 @pytest.mark.parametrize(("team_id", "listed_cache_read_cost"), [(None, 1e-07), ("team-b", 1e-07), ("team-a", 9e-06)])
 def test_model_group_info_lists_a_team_deployment_price_only_to_that_team(
     monkeypatch: pytest.MonkeyPatch, team_id: str | None, listed_cache_read_cost: float

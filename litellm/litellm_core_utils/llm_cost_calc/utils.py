@@ -14,6 +14,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
+from litellm.constants import FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
@@ -970,17 +971,28 @@ _CACHE_KEYS_BILLED_AT_INPUT_RATE: Final = MappingProxyType(
 )
 
 
+def _with_fireworks_cache_read_default(model_info: Mapping[str, object]) -> Mapping[str, object]:
+    if (
+        model_info.get("litellm_provider") != "fireworks_ai"
+        or model_info.get("cache_read_input_token_cost") is not None
+    ):
+        return model_info
+    input_rate: Final = get_cost_per_unit(model_info, "input_cost_per_token", default_value=None)
+    if input_rate is None:
+        return model_info
+    return {**model_info, "cache_read_input_token_cost": input_rate * FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO}
+
+
 def billed_rate(model_info: Mapping[str, object], cost_key: str) -> float | None:
-    rate: Final = get_cost_per_unit(model_info, cost_key, default_value=None)
+    rates: Final = _with_fireworks_cache_read_default(model_info)
+    rate: Final = get_cost_per_unit(rates, cost_key, default_value=None)
     if rate is not None:
         return rate
     if cost_key in _HALF_PRICED_BATCH_KEYS:
-        standard_rate: Final = get_cost_per_unit(
-            model_info, cost_key.removesuffix(_BATCH_KEY_SUFFIX), default_value=None
-        )
+        standard_rate: Final = get_cost_per_unit(rates, cost_key.removesuffix(_BATCH_KEY_SUFFIX), default_value=None)
         return None if standard_rate is None else standard_rate / 2
     input_key: Final = _CACHE_KEYS_BILLED_AT_INPUT_RATE.get(cost_key)
-    return None if input_key is None else get_cost_per_unit(model_info, input_key, default_value=None)
+    return None if input_key is None else get_cost_per_unit(rates, input_key, default_value=None)
 
 
 def deployment_pricing(model_info: ModelInfo | None) -> ModelInfo | None:
