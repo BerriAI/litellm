@@ -214,11 +214,12 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             for k, v in metadata.items():
                 if k in allow and v is not None and not isinstance(v, (dict, list)):
                     self._set_custom_tag(tags, k, str(v))
+            client_allow: Final = allow - {"is_silent_experiment"}
             for nested_key in ("spend_logs_metadata", "requester_metadata"):
                 nested = metadata.get(nested_key)
                 if isinstance(nested, dict):
                     for k, v in nested.items():
-                        if k in allow and v is not None and not isinstance(v, (dict, list)):
+                        if k in client_allow and v is not None and not isinstance(v, (dict, list)):
                             self._set_custom_tag(tags, k, str(v))
 
         return tags

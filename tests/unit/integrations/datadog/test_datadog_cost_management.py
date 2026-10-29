@@ -1,4 +1,5 @@
 import time
+from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
@@ -312,6 +313,34 @@ async def test_extract_tags_nested_metadata_allowlisted(clean_env):
     # overwrite the value sourced from get_datadog_env().
     assert tags["env"] != "prod"
     assert "ignored" not in tags
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected_tag"),
+    [
+        ({"is_silent_experiment": True, "requester_metadata": {"is_silent_experiment": False}}, "true"),
+        (
+            {
+                "requester_metadata": {"is_silent_experiment": True},
+                "spend_logs_metadata": {"is_silent_experiment": "true"},
+            },
+            None,
+        ),
+    ],
+    ids=["mirrored call", "direct call with a client flag"],
+)
+@pytest.mark.asyncio
+async def test_extract_tags_takes_the_silent_experiment_flag_only_from_the_router(clean_env, metadata, expected_tag):
+    logger: Final = DatadogCostManagementLogger(cost_tag_keys=["is_silent_experiment"])
+    log: Final = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4",
+        response_cost=0.01,
+        startTime=time.time(),
+        metadata=metadata,
+    )
+
+    assert logger._extract_tags(log).get("is_silent_experiment") == expected_tag
 
 
 @pytest.mark.asyncio

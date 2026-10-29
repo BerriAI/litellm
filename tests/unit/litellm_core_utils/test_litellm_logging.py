@@ -11979,7 +11979,7 @@ def test_get_standard_logging_metadata(metadata_key, metadata_value):
 def test_module_level_get_standard_logging_metadata_drops_only_a_caller_sent_silent_experiment_flag():
     from litellm.litellm_core_utils.litellm_logging import get_standard_logging_metadata
 
-    caller_metadata = {
+    caller_metadata: Final = {
         "is_silent_experiment": True,
         "user_api_key_alias": "alias",
         "usage_object": {"total_tokens": 3},

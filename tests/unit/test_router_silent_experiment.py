@@ -24,7 +24,13 @@ class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.success_kwargs: list[dict[str, object]] = []
+        self.failure_kwargs: list[dict[str, object]] = []
         self._logged: Final = threading.Condition()
+
+    def _record(self, calls: list[dict[str, object]], kwargs: dict[str, object]) -> None:
+        with self._logged:
+            calls.append(kwargs)
+            self._logged.notify_all()
 
     async def async_log_success_event(
         self,
@@ -33,9 +39,16 @@ class _RecordingLogger(CustomLogger):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        with self._logged:
-            self.success_kwargs.append(kwargs)
-            self._logged.notify_all()
+        self._record(self.success_kwargs, kwargs)
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._record(self.failure_kwargs, kwargs)
 
     def wait_until(self, logged_enough: Callable[[], bool], timeout: float = 30.0) -> None:
         with self._logged:
@@ -47,6 +60,17 @@ class _RecordingLogger(CustomLogger):
             for call in self.success_kwargs
             if call.get("litellm_params", {}).get("metadata", {}).get("is_silent_experiment") is True
         ]
+
+
+class _SyncAndAsyncRecordingLogger(_RecordingLogger):
+    def log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._record(self.success_kwargs, kwargs)
 
 
 async def _settle_shared_logging_worker() -> None:
@@ -115,6 +139,11 @@ def _installed(logger: _RecordingLogger) -> Generator[_RecordingLogger]:
 @pytest.fixture
 def recording_logger():
     yield from _installed(_RecordingLogger())
+
+
+@pytest.fixture
+def sync_and_async_recording_logger():
+    yield from _installed(_SyncAndAsyncRecordingLogger())
 
 
 @pytest.fixture
@@ -354,6 +383,61 @@ async def test_standard_logging_payload_marks_only_the_mirrored_calls_as_silent_
     assert metadata_by_group["shadow-a"]["is_silent_experiment"] is True
     assert metadata_by_group["shadow-b"]["is_silent_experiment"] is True
     assert "is_silent_experiment" not in metadata_by_group["primary-model"]
+
+
+def test_standard_logging_payload_marks_only_the_mirrored_calls_on_the_sync_path(
+    sync_and_async_recording_logger: _SyncAndAsyncRecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    response: Final = router.completion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+    )
+    assert response.choices[0].message.content == "pong"
+    sync_and_async_recording_logger.wait_until(
+        lambda: _silent_flag_by_group(sync_and_async_recording_logger).keys() >= {"primary-model", "shadow-a", "shadow-b"}
+    )
+
+    assert _silent_flag_by_group(sync_and_async_recording_logger) == {
+        "primary-model": None,
+        "shadow-a": True,
+        "shadow-b": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_failed_mirrored_call_reaches_failure_callbacks_marked_as_mirrored(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-key",
+                    "silent_model": "shadow-a",
+                    "mock_response": "pong",
+                },
+            },
+            {
+                "model_name": "shadow-a",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "fake-key",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+        ]
+    )
+    await router.acompletion(model="primary-model", messages=[{"role": "user", "content": "hi"}])
+    await asyncio.to_thread(recording_logger.wait_until, lambda: len(recording_logger.failure_kwargs) >= 1)
+
+    assert {
+        (call["standard_logging_object"]["model_group"], call["standard_logging_object"]["metadata"].get("is_silent_experiment"))
+        for call in recording_logger.failure_kwargs
+    } == {("shadow-a", True)}
 
 
 _SPEND_ROW_TIME: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
