@@ -10,6 +10,7 @@ schema = ["dep:schemars", "litellm-cost/schema"]
 
 [dependencies]
 litellm-cost = { workspace = true, features = ["serde"] }
+litellm-error.workspace = true
 
 indexmap = { version = "2.14.0", features = ["serde"] }
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tzdb-bundle-always"] }
@@ -24,5 +25,4 @@ time.workspace = true
 
 [dev-dependencies]
 jsonschema = { version = "0.55.1", default-features = false }
-litellm-error.workspace = true
 rstest.workspace = true
