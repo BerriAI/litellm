@@ -28071,7 +28071,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": {
         "input_cost_per_token": 1.2e-06,
@@ -28345,7 +28345,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "fireworks_ai/qwen3p7-plus": {
         "cache_read_input_token_cost": 8e-08,
@@ -63655,6 +63655,7 @@
         "output_cost_per_token_priority": 9e-06,
         "source": "https://api.fireworks.ai/v1/serverless/models",
         "supports_function_calling": true,
+        "supports_mid_conversation_system": false,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -63801,6 +63802,7 @@
         "output_cost_per_token_priority": 9e-06,
         "source": "https://api.fireworks.ai/v1/serverless/models",
         "supports_function_calling": true,
+        "supports_mid_conversation_system": false,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -78995,5 +78997,81 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "bigmodel/glm-5.3": {
+        "input_cost_per_token": 1.1428571428571428e-06,
+        "output_cost_per_token": 4e-06,
+        "cache_read_input_token_cost": 2.857142857142857e-07,
+        "litellm_provider": "bigmodel",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "source": "https://docs.bigmodel.cn/cn/guide/start/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "thinking_always_on": true,
+        "metadata": {
+            "comment": "Official API list price checked 2026-10-27: input 8, output 28, cached input 2 CNY per million tokens; converted at 7.0 CNY/USD. Cache storage is temporarily free and is not encoded."
+        },
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_native_streaming": true
+    },
+    "bigmodel/glm-5.3-flash": {
+        "input_cost_per_token": 1.142857142857143e-07,
+        "output_cost_per_token": 4e-07,
+        "cache_read_input_token_cost": 3.2857142857142855e-08,
+        "litellm_provider": "bigmodel",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "source": "https://docs.bigmodel.cn/cn/guide/start/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "thinking_always_on": true,
+        "supports_vision": true,
+        "supports_video_input": true,
+        "metadata": {
+            "comment": "Official API list price checked 2026-10-27: input 0.8, output 2.8, cached input 0.23 CNY per million tokens; converted at 7.0 CNY/USD. Cache storage is temporarily free and is not encoded."
+        },
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_native_streaming": true
+    },
+    "bigmodel/glm-5.3-flashx": {
+        "input_cost_per_token": 2.857142857142857e-07,
+        "output_cost_per_token": 1e-06,
+        "cache_read_input_token_cost": 8.142857142857142e-08,
+        "litellm_provider": "bigmodel",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "source": "https://docs.bigmodel.cn/cn/guide/start/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "thinking_always_on": true,
+        "supports_vision": true,
+        "supports_video_input": true,
+        "metadata": {
+            "comment": "Official API list price checked 2026-10-27: input 2, output 7, cached input 0.57 CNY per million tokens; converted at 7.0 CNY/USD. Cache storage is temporarily free and is not encoded."
+        },
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_native_streaming": true
     }
 }
