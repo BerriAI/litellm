@@ -147,7 +147,8 @@ const TeamTagSpendCard: React.FC<TeamTagSpendCardProps> = (props) => {
   return (
     <Panel icon={Tags} title="Spend Per Tag" testId="team-tag-spend-card">
       <p className="mb-3 text-xs text-muted-foreground">
-        A request with several tags counts once per tag, so the rows can add up to more than the team total
+        Counts requests made with this team&apos;s virtual keys, so JWT and SSO requests are not included. A request
+        with several tags counts once per tag, so the rows can add up to more than the team total
       </p>
       <DataTable
         columns={columns}
