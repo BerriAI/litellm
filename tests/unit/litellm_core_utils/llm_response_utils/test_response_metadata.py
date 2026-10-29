@@ -15,8 +15,6 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
-import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
-import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.cost_calculator import select_model_name_for_cost_calc
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -459,9 +457,9 @@ class TestDetailedTiming:
         logging_obj.message_copy_duration_ms = message_copy_duration_ms
         return logging_obj
 
-    def test_detailed_timing_headers_present_when_enabled(self, monkeypatch):
+    def test_detailed_timing_headers_present_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When LITELLM_DETAILED_TIMING is true, detailed timing keys appear in hidden_params."""
-        monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
+        monkeypatch.setenv("LITELLM_DETAILED_TIMING", "true")
 
         result = ModelResponse()
         start = datetime.datetime(2025, 1, 1, 0, 0, 0)
@@ -485,8 +483,10 @@ class TestDetailedTiming:
         assert hidden.get("timing_post_processing_ms") == 10.0  # 530 - 20 - 500
 
     @pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
-    def test_detailed_timing_pre_processing_uses_receive_anchor(self, monkeypatch, process_timezone: str):
-        monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
+    def test_detailed_timing_pre_processing_uses_receive_anchor(
+        self, monkeypatch: pytest.MonkeyPatch, process_timezone: str
+    ) -> None:
+        monkeypatch.setenv("LITELLM_DETAILED_TIMING", "true")
 
         result = ModelResponse()
         received_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
@@ -507,9 +507,9 @@ class TestDetailedTiming:
         assert hidden.get("timing_pre_processing_ms") == pytest.approx(200.0)
         assert hidden.get("timing_post_processing_ms") == pytest.approx(30.0)
 
-    def test_detailed_timing_absent_when_disabled(self, monkeypatch):
+    def test_detailed_timing_absent_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When LITELLM_DETAILED_TIMING is false, no detailed timing keys."""
-        monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", False)
+        monkeypatch.setenv("LITELLM_DETAILED_TIMING", "false")
 
         result = ModelResponse()
         start = datetime.datetime(2025, 1, 1, 0, 0, 0)
@@ -524,9 +524,9 @@ class TestDetailedTiming:
         assert hidden.get("timing_llm_api_ms") is None
         assert hidden.get("timing_pre_processing_ms") is None
 
-    def test_detailed_timing_headers_in_custom_headers(self, monkeypatch):
+    def test_detailed_timing_headers_in_custom_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When LITELLM_DETAILED_TIMING is true, headers flow to get_custom_headers."""
-        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
+        monkeypatch.setenv("LITELLM_DETAILED_TIMING", "true")
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -547,9 +547,9 @@ class TestDetailedTiming:
         assert headers["x-litellm-timing-post-processing-ms"] == "10.0"
         assert headers["x-litellm-timing-message-copy-ms"] == "2.5"
 
-    def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch):
+    def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When LITELLM_DETAILED_TIMING is false, no timing headers emitted."""
-        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False)
+        monkeypatch.setenv("LITELLM_DETAILED_TIMING", "false")
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {

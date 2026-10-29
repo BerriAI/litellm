@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, Request, Response
 
-import litellm.proxy.common_request_processing as common_request_processing_mod
 import litellm.proxy.proxy_server as proxy_server_mod
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -96,10 +95,10 @@ async def test_rerank_emits_latency_and_cost_headers():
 
 
 @pytest.mark.asyncio
-async def test_rerank_emits_detailed_timing_headers_when_enabled():
+async def test_rerank_emits_detailed_timing_headers_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """LITELLM_DETAILED_TIMING must also work on /rerank, not just /chat/completions."""
-    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
-        fastapi_response = await _call_rerank()
+    monkeypatch.setenv("LITELLM_DETAILED_TIMING", "true")
+    fastapi_response = await _call_rerank()
 
     assert fastapi_response.headers["x-litellm-timing-llm-api-ms"] == "1488.0"
     assert fastapi_response.headers["x-litellm-timing-pre-processing-ms"] == "10.0"
@@ -116,9 +115,9 @@ async def test_rerank_emits_zero_response_cost_header():
 
 
 @pytest.mark.asyncio
-async def test_rerank_omits_detailed_timing_headers_when_disabled():
-    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
-        fastapi_response = await _call_rerank()
+async def test_rerank_omits_detailed_timing_headers_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_DETAILED_TIMING", "false")
+    fastapi_response = await _call_rerank()
 
     assert "x-litellm-timing-llm-api-ms" not in fastapi_response.headers
 
