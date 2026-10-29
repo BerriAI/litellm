@@ -9515,3 +9515,25 @@ async def test_converse_fallback_prices_the_current_attempt(
     else:
         client.close()
     configuration.reset_rust_configuration()
+
+
+@pytest.mark.parametrize("developer_message", [{"role": "developer"}, {"role": "developer", "content": None}])
+@pytest.mark.parametrize(
+    "model", ["openai/gpt-5.6", "fireworks_ai/accounts/fireworks/models/kimi-k3", "anthropic/claude-sonnet-5-5"]
+)
+def test_a_developer_message_without_content_answers_a_400_before_any_provider_call(
+    respx_mock: respx.MockRouter, model: str, developer_message: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=r"Missing required parameter: 'messages\[2\]\.content'\.") as rejected:
+        litellm.completion(
+            model=model,
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": "Paris."},
+                developer_message,
+            ],
+            api_key="fake-key",
+        )
+
+    assert rejected.value.status_code == 400
+    assert not respx_mock.calls

@@ -14,6 +14,7 @@ from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
@@ -443,12 +444,25 @@ def type_to_response_format_param(
     }
 
 
+def _missing_content_error(index: int) -> BadRequestError:
+    return BadRequestError(
+        message=f"Missing required parameter: 'messages[{index}].content'.", model="", llm_provider=""
+    )
+
+
+def _require_developer_message_content(messages: Sequence[AllMessageValues]) -> None:
+    for index, message in enumerate(messages):
+        if message["role"] == "developer" and "content" not in message:
+            raise _missing_content_error(index)
+
+
 def map_developer_role_to_system_role(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
+    _require_developer_message_content(messages)
     new_messages: Final[list[AllMessageValues]] = []
     for m in messages:
         if m["role"] == "developer":
