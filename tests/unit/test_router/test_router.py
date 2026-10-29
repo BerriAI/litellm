@@ -13973,6 +13973,61 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
     assert batch_route.call_count == 20
 
 
+def _ordered(deployment: dict[str, object], order: int) -> dict[str, object]:
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "order": order}}
+
+
+_AZURE_FILE_CREATED: Final = {
+    "id": "file-batch-input",
+    "object": "file",
+    "bytes": 1,
+    "created_at": 0,
+    "filename": "input.jsonl",
+    "purpose": "batch",
+    "status": "processed",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("purpose", "uploaded_to"), [("batch", "batch-deployment"), ("fine-tune", "chat-deployment")]
+)
+async def test_batch_file_upload_reaches_the_batch_deployment_when_the_chat_deployment_has_a_lower_order(
+    monkeypatch: pytest.MonkeyPatch, purpose: str, uploaded_to: str
+):
+    """A managed batch file exists only on the deployments its upload reached, and the batch create can only
+    pick among those. With the chat deployment at a lower order the upload stopped there, so the create
+    that followed reached Azure's 400 invalid_deployment_type."""
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        routes: Final = {
+            deployment_id: respx_mock.post(host=f"{sku_host}.openai.azure.com").mock(
+                return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+            )
+            for deployment_id, sku_host in (("chat-deployment", "chat-sku"), ("batch-deployment", "batch-sku"))
+        }
+        uploaded: Final = await router.acreate_file(
+            model="gpt-mixed", purpose=purpose, file=BytesIO(json.dumps(batch_row).encode())
+        )
+
+    assert {deployment_id: route.call_count for deployment_id, route in routes.items()} == {
+        "chat-deployment": int(uploaded_to == "chat-deployment"),
+        "batch-deployment": int(uploaded_to == "batch-deployment"),
+    }
+    assert uploaded._hidden_params["model_file_id_mapping"] == {uploaded_to: "file-batch-input"}
+
+
 def _azure_wildcard_deployment(sku_host: str, mode: str) -> dict[str, object]:
     return {
         "model_name": "mixed-wild/*",

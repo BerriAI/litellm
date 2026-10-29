@@ -7424,15 +7424,17 @@ class Router:
         try:
             from litellm.router_utils.common_utils import add_model_file_id_mappings
 
-            verbose_router_logger.debug("Inside _atext_completion()- model: %s", model)
+            verbose_router_logger.debug("Inside _acreate_file()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            healthy_deployments: Final = await self.async_get_healthy_deployments(
-                model=model,
-                messages=[{"role": "user", "content": "files-api-fake-text"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-                parent_otel_span=parent_otel_span,
-            )
+            purpose: Final = cast(OpenAIFilesPurpose | None, kwargs.get("purpose"))
+            with batch_create_routing() if purpose == "batch" else contextlib.nullcontext():
+                healthy_deployments: Final = await self.async_get_healthy_deployments(
+                    model=model,
+                    messages=[{"role": "user", "content": "files-api-fake-text"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                    parent_otel_span=parent_otel_span,
+                )
 
             async def create_file_for_deployment(deployment: dict) -> OpenAIFileObject:
                 from litellm.litellm_core_utils.core_helpers import safe_deep_copy
@@ -7463,7 +7465,6 @@ class Router:
                 custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
-                purpose: Final = cast(OpenAIFilesPurpose | None, kwargs.get("purpose"))
                 file = cast(FileTypes | None, kwargs.get("file"))
                 if not file or not purpose:
                     raise Exception("file and file_purpose are required for create_file")
