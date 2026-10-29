@@ -141,36 +141,21 @@ def test_zai_max_completion_tokens_wins_over_max_tokens(respx_mock, zai_response
     assert body["max_tokens"] == 15
 
 
-def test_zai_rejects_json_schema_response_format(respx_mock, monkeypatch):
-    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route = respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions")
-
-    with pytest.raises(litellm.UnsupportedParamsError) as error:
-        completion(
-            model="zai/glm-5v-turbo",
-            messages=[{"role": "user", "content": "Ann is 30"}],
-            response_format=JSON_SCHEMA_RESPONSE_FORMAT,
-        )
-
-    assert error.value.status_code == 400
-    assert not route.called
-
-
-def test_zai_drops_json_schema_response_format_under_drop_params(respx_mock, zai_response, monkeypatch):
+@pytest.mark.parametrize("pass_through", [{}, {"allowed_openai_params": ["response_format"]}])
+def test_zai_forwards_json_schema_response_format_as_sent(respx_mock, zai_response, monkeypatch, pass_through):
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
     completion(
-        model="zai/glm-5v-turbo",
+        model="zai/glm-5.3",
         messages=[{"role": "user", "content": "Ann is 30"}],
         response_format=JSON_SCHEMA_RESPONSE_FORMAT,
-        drop_params=True,
+        **pass_through,
     )
 
     body = json.loads(respx_mock.calls[0].request.content)
-    assert "response_format" not in body
+    assert body["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
 
 
 def test_zai_glm_5v_turbo_bills_cached_input_at_cache_read_price(local_model_cost_map: None) -> None:
