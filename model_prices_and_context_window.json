@@ -81408,14 +81408,12 @@
     "empiriolabs/perplexity-advanced-deep-research": {
         "litellm_provider": "empiriolabs",
         "mode": "chat",
-        "max_input_tokens": null,
         "input_cost_per_token": 1.2e-05,
         "output_cost_per_token": 6e-05,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
-            "/v1/messages",
-            "/v1/search"
+            "/v1/messages"
         ],
         "supports_vision": true,
         "supports_reasoning": true,
@@ -81432,8 +81430,7 @@
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
-            "/v1/messages",
-            "/v1/search"
+            "/v1/messages"
         ],
         "supports_vision": true,
         "supports_reasoning": true,
@@ -81444,14 +81441,12 @@
     "empiriolabs/perplexity-pro-search": {
         "litellm_provider": "empiriolabs",
         "mode": "chat",
-        "max_input_tokens": null,
         "input_cost_per_token": 7.8e-06,
         "output_cost_per_token": 3.9e-05,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
-            "/v1/messages",
-            "/v1/search"
+            "/v1/messages"
         ],
         "supports_vision": true,
         "supports_reasoning": true,
@@ -81468,8 +81463,7 @@
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
-            "/v1/messages",
-            "/v1/search"
+            "/v1/messages"
         ],
         "supports_vision": true,
         "supports_reasoning": true,
@@ -81486,8 +81480,7 @@
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
-            "/v1/messages",
-            "/v1/search"
+            "/v1/messages"
         ],
         "supports_vision": true,
         "supports_reasoning": true,
@@ -81504,8 +81497,7 @@
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses",
-            "/v1/messages",
-            "/v1/search"
+            "/v1/messages"
         ],
         "supports_vision": true,
         "supports_reasoning": true,
@@ -81702,8 +81694,7 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages",
-            "/v1/audio/speech",
-            "/v1/audio/speech:stream"
+            "/v1/audio/speech"
         ],
         "supports_function_calling": true,
         "supports_vision": true,
@@ -81725,8 +81716,7 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages",
-            "/v1/audio/speech",
-            "/v1/audio/speech:stream"
+            "/v1/audio/speech"
         ],
         "supports_function_calling": true,
         "supports_vision": true,
@@ -82189,9 +82179,6 @@
         "mode": "rerank",
         "max_input_tokens": 4000,
         "input_cost_per_token": 1e-07,
-        "supported_endpoints": [
-            "/v1/reranks"
-        ],
         "source": "https://docs.empiriolabs.ai/models/qwen3-rerank"
     },
     "empiriolabs/seed-2-0-code": {
