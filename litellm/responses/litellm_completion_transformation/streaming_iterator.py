@@ -93,7 +93,12 @@ def _tool_call_objects(tool_calls: object) -> tuple[object, ...]:
 
 
 def _tool_call_provider_specific_fields(tool_call: object) -> Mapping[str, object]:
-    fields: Final[object] = getattr(tool_call, "provider_specific_fields", None)
+    mapping: Final = as_str_mapping(tool_call)
+    fields: Final[object] = (
+        mapping.get("provider_specific_fields")
+        if mapping is not None
+        else getattr(tool_call, "provider_specific_fields", None)
+    )
     return {"provider_specific_fields": fields} if fields else {}
 
 

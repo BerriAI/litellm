@@ -4746,6 +4746,29 @@ class TestEnsureOutputItemContentPartAdded:
         assert done.item.name == "spawn_agent"
         assert done.item.namespace == "collaboration"
 
+    def test_streaming_final_only_dict_tool_call_keeps_its_provider_specific_fields(self):
+        from unittest.mock import MagicMock
+
+        iterator = self._make_iterator()
+        iterator.tool_call_provider_fields = True
+        provider_specific_fields = {"thought_signature": "sig-" + "x" * 512}
+        message = MagicMock()
+        message.tool_calls = [
+            {
+                "id": "call_1",
+                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                "provider_specific_fields": provider_specific_fields,
+            }
+        ]
+        complete_response = MagicMock()
+        complete_response.choices = [MagicMock(message=message)]
+
+        iterator._queue_final_tool_call_done_events(complete_response)
+
+        done = iterator._pending_tool_events[-1]
+        assert done.type == "response.output_item.done"
+        assert done.item.provider_specific_fields == provider_specific_fields
+
     def test_streaming_top_level_function_collision_stays_unnamespaced(self):
         iterator = self._make_iterator()
         iterator.responses_api_request = {
