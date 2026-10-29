@@ -246,6 +246,26 @@ def test_audio_transcription_happy_path(client, auth_as, patched_transcription, 
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
+def test_audio_transcription_over_the_file_size_cap_is_rejected_as_a_bad_request(
+    client, auth_as, patched_transcription, monkeypatch, path
+):
+    from litellm.proxy.common_utils.http_parsing_utils import check_file_size_under_limit
+
+    proxy_server.llm_router.get_deployment_by_model_group_name.return_value = MagicMock(
+        litellm_params=MagicMock(max_file_size_mb=0.000001)
+    )
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", check_file_size_under_limit)
+    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    with auth_as():
+        response = client.post(path, files=files, data={"model": "whisper-1"})
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert "File size is too large" in error["message"]
+    assert error["param"] == "file"
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
 def test_audio_transcription_error(client, auth_as, patched_transcription_error, path):
     """Pins ``POST /v1/audio/transcriptions`` / ``POST /audio/transcriptions`` (error)."""
     files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
