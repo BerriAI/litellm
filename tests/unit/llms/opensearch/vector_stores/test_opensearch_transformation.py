@@ -13,12 +13,16 @@ import pytest
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+from botocore.exceptions import CredentialRetrievalError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
+from litellm.types.llms.bedrock import AwsAuthParams
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
 from litellm.vector_stores import main as vector_stores
@@ -283,29 +287,20 @@ _AMBIENT_AWS_ENV: Final = (
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
-    "credentials,env,aws_config",
+    "credentials,env",
     [
-        pytest.param({"aws_session_name": "opensearch-no-credentials"}, {}, "", id="none-anywhere"),
-        pytest.param({"aws_profile_name": "opensearch-missing-profile"}, {}, "", id="missing-profile"),
-        pytest.param({}, {"AWS_ACCESS_KEY_ID": "AKIDPARTIAL"}, "", id="key-without-secret"),
+        pytest.param({"aws_session_name": "opensearch-no-credentials"}, {}, id="none-anywhere"),
+        pytest.param({"aws_profile_name": "opensearch-missing-profile"}, {}, id="missing-profile"),
+        pytest.param({}, {"AWS_ACCESS_KEY_ID": "AKIDPARTIAL"}, id="key-without-secret"),
         pytest.param(
             {"aws_access_key_id": "AKIDSTOREONLY"},
             {"AWS_ACCESS_KEY_ID": "AKIDAMBIENT", "AWS_SECRET_ACCESS_KEY": "ambient-secret"},
-            "",
             id="store-key-without-secret-beside-ambient-credentials",
         ),
         pytest.param(
             {"aws_secret_access_key": "store-secret-only"},
             {"AWS_ACCESS_KEY_ID": "AKIDAMBIENT", "AWS_SECRET_ACCESS_KEY": "ambient-secret"},
-            "",
             id="store-secret-without-key-beside-ambient-credentials",
-        ),
-        pytest.param(
-            {"aws_profile_name": "opensearch-failing-process"},
-            {},
-            "[profile opensearch-failing-process]\n"
-            f"credential_process = sh -c 'echo {CREDENTIAL_SOURCE_OUTPUT} >&2; exit 1'\n",
-            id="failing-credential-source",
         ),
     ],
 )
@@ -314,7 +309,6 @@ async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request
     asynchronous: bool,
     credentials: Mapping[str, str],
     env: Mapping[str, str],
-    aws_config: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -322,7 +316,7 @@ async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request
         monkeypatch.delenv(name, raising=False)
     for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "BOTO_CONFIG"):
         config_file: Path = tmp_path / name
-        config_file.write_text(aws_config if name == "AWS_CONFIG_FILE" else "")
+        config_file.write_text("")
         monkeypatch.setenv(name, str(config_file))
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     for name, value in env.items():
@@ -339,9 +333,23 @@ async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request
         )
 
     assert error.value.status_code == 401
-    assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
     respond.assert_not_called()
     executor.call.assert_not_called()
+
+
+class _FailingCredentialSource(BaseAWSLLM):
+    def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
+        raise CredentialRetrievalError(provider="container-role", error_msg=CREDENTIAL_SOURCE_OUTPUT)
+
+
+def test_failing_credential_source_is_a_401_that_keeps_its_output_out_of_the_reply() -> None:
+    config: Final = OpenSearchVectorStoreConfig(aws=_FailingCredentialSource())
+
+    with pytest.raises(litellm.AuthenticationError, match="the AWS credential source failed") as error:
+        config.validate_environment({}, GenericLiteLLMParams(api_base=SERVERLESS))
+
+    assert error.value.status_code == 401
+    assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
 
 
 @pytest.mark.asyncio
