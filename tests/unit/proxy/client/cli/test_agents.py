@@ -680,7 +680,7 @@ class TestCodexModelSync:
     def _row(model_id, **extra):
         return {"id": model_id, "object": "model", "created": 1, "owned_by": "openai", **extra}
 
-    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None, model_info=None):
+    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None, model_info=None, key_info=None):
         captured = {}
 
         def fake_get(url, headers, timeout):
@@ -690,6 +690,10 @@ class TestCodexModelSync:
                 if isinstance(model_info, Exception):
                     raise model_info
                 return model_info if model_info is not None else _FakeResponse(200, {"data": []})
+            if url.endswith("/key/info"):
+                if isinstance(key_info, Exception):
+                    raise key_info
+                return key_info if key_info is not None else _FakeResponse(404, {"error": "key not found"})
             captured["url"] = url
             captured["headers"] = headers
             return _FakeResponse(200, listing)
@@ -1005,6 +1009,89 @@ class TestCodexModelSync:
         entry = entries[listed]
         assert (entry.get("comp_hash"), entry["display_name"], entry["service_tiers"]) == expected
         assert (entries["plain"]["display_name"], entries["plain"]["service_tiers"]) == ("plain", [])
+
+    @pytest.mark.parametrize(
+        ("owners", "key_info", "expected"),
+        [
+            (
+                (None, "team-1"),
+                _FakeResponse(200, {"key": "hashed", "info": {"team_id": "team-1"}}),
+                ("terra-hash", "Team One Terra", [_STOCK_FAST_TIER]),
+            ),
+            (
+                (None, "team-1"),
+                _FakeResponse(200, {"key": "hashed", "info": {"team_id": "team-2"}}),
+                ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")]),
+            ),
+            (
+                (None, "team-1"),
+                _FakeResponse(200, {"key": "hashed", "info": {"team_id": None}}),
+                ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")]),
+            ),
+            ((None, "team-1"), None, ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")])),
+            (
+                (None, "team-1"),
+                requests.ConnectionError("refused"),
+                ("gpt-5.5-hash", "Shared Terra", [_generic_tier("flex")]),
+            ),
+            (("team-1",), None, ("terra-hash", "Team One Terra", [_STOCK_FAST_TIER])),
+            (
+                ("team-1", "team-2"),
+                _FakeResponse(200, {"key": "hashed", "info": {"team_id": "team-1"}}),
+                ("terra-hash", "Team One Terra", [_STOCK_FAST_TIER]),
+            ),
+        ],
+        ids=[
+            "own_team",
+            "other_team",
+            "key_without_a_team",
+            "key_unknown_to_the_proxy",
+            "key_info_unreachable",
+            "only_a_team_deploys_the_name",
+            "two_teams_deploy_the_name",
+        ],
+    )
+    def test_a_name_a_team_also_deploys_reads_the_deployments_the_key_routes_to(
+        self, tmp_path, owners, key_info, expected
+    ):
+        deployments = {
+            None: {
+                "model_name": "api-terra",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {"service_tiers": ["flex"], "display_name": "Shared Terra"},
+            },
+            "team-1": {
+                "model_name": "model_name_team-1_d1",
+                "litellm_params": {"model": "openai/gpt-5.6-terra"},
+                "model_info": {
+                    "id": "d1",
+                    "team_id": "team-1",
+                    "team_public_model_name": "api-terra",
+                    "service_tiers": ["priority"],
+                    "display_name": "Team One Terra",
+                },
+            },
+            "team-2": {
+                "model_name": "model_name_team-2_d2",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {
+                    "id": "d2",
+                    "team_id": "team-2",
+                    "team_public_model_name": "api-terra",
+                    "service_tiers": ["flex"],
+                    "display_name": "Team Two Terra",
+                },
+            },
+        }
+        self._sync(
+            self._listing(self._row("api-terra")),
+            tmp_path,
+            model_info=_FakeResponse(200, {"data": [deployments[owner] for owner in owners]}),
+            key_info=key_info,
+        )
+
+        entry = self._entries(tmp_path)["api-terra"]
+        assert (entry.get("comp_hash"), entry["display_name"], entry["service_tiers"]) == expected
 
     @pytest.mark.parametrize(
         ("model_infos", "expected"),
