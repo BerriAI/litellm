@@ -168,7 +168,10 @@ from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
+from litellm.proxy.spend_tracking.carried_budget_state import (
+    carry_live_key_and_team_spend,
+    carry_team_and_user_budget_state,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -3572,6 +3575,7 @@ async def run_centralized_common_checks(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        get_current_spend,
         litellm_proxy_admin_name,
         llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
         llm_router,
@@ -3964,6 +3968,12 @@ async def run_centralized_common_checks(
                     user_obj=user_object,
                 )
 
+        if not route_skips_budget_checks(route=route):
+            await carry_live_key_and_team_spend(
+                valid_token=user_api_key_auth_obj,
+                team_object=typed_team_object,
+                read_spend=get_current_spend,
+            )
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,

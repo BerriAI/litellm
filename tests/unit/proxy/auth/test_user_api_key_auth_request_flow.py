@@ -5084,6 +5084,68 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_input_cost", [None, 0.0], ids=["priced_model_reserves_budget", "zero_cost_model"])
+async def test_centralized_common_checks_carry_live_key_and_team_spend_on_a_token_with_stale_cached_spend(
+    model_input_cost: float | None,
+):
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from starlette.datastructures import URL
+
+    from litellm.proxy.utils import ProxyLogging
+
+    zero_cost_router: Final = (
+        None
+        if model_input_cost is None
+        else litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-test",
+                        "input_cost_per_token": model_input_cost,
+                        "output_cost_per_token": model_input_cost,
+                    },
+                }
+            ]
+        )
+    )
+    token: Final = UserAPIKeyAuth(api_key="sk-live-spend", max_budget=10.0, spend=0.0, team_id="t-live", team_spend=0.0)
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        key="team_id:t-live", value=LiteLLM_TeamTableCachedObj(team_id="t-live", max_budget=20.0, spend=0.0)
+    )
+    spend_counter_cache: Final = DualCache()
+    spend_counter_cache.in_memory_cache.set_cache(key=f"spend:key:{token.token}", value=0.37)
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:team:t-live", value=1.25)
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "llm_router": zero_cost_router,
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "spend_counter_cache": spend_counter_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
+    }
+    originals: Final = {attribute: getattr(_proxy_server_mod, attribute, None) for attribute in attrs}
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    try:
+        for attribute, value in attrs.items():
+            setattr(_proxy_server_mod, attribute, value)
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000},
+            route="/chat/completions",
+        )
+    finally:
+        for attribute, value in originals.items():
+            setattr(_proxy_server_mod, attribute, value)
+
+    assert (token.spend, token.team_spend) == (0.37, 1.25)
+
+
 def _end_user_budget_row(budget_id: str, max_budget: float) -> MagicMock:
     row = MagicMock()
     row.dict = lambda: {"budget_id": budget_id, "max_budget": max_budget}

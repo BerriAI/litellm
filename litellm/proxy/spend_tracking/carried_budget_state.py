@@ -1,6 +1,6 @@
 """Pins the budget state auth resolved onto ``UserAPIKeyAuth`` and emits it as request metadata."""
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -31,6 +31,21 @@ def carry_team_and_user_budget_state(
             budget_reset_at=user_object.budget_reset_at,
             max_budget=user_object.max_budget,
             user_alias=user_object.user_alias,
+        )
+
+
+async def carry_live_key_and_team_spend(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    read_spend: Callable[[str, float], Awaitable[float]],
+) -> None:
+    if valid_token.max_budget is not None and valid_token.token is not None:
+        valid_token.spend = await read_spend(  # rebind-ok: the budget gauges and spend header read this token
+            f"spend:key:{valid_token.token}", valid_token.spend or 0.0
+        )
+    if team_object is not None and team_object.max_budget is not None:
+        valid_token.team_spend = await read_spend(  # rebind-ok: the team budget gauge reads this token
+            f"spend:team:{team_object.team_id}", team_object.spend or 0.0
         )
 
 
