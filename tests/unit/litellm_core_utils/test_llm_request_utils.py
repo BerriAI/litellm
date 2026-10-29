@@ -185,3 +185,45 @@ def test_pick_cheapest_chat_models_prefers_provider_routed_ids_and_skips_ids_rou
         "fake-free-chat-without-provider",
     ]
     assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=1) == ["deepseek/fake-cheap-chat"]
+
+
+@pytest.mark.parametrize(
+    "listed_order",
+    [("deepseek/fake-tie-b", "deepseek/fake-tie-a"), ("deepseek/fake-tie-a", "deepseek/fake-tie-b")],
+)
+def test_pick_cheapest_chat_models_breaks_price_ties_by_model_id_whatever_the_provider_listing_order(
+    monkeypatch: pytest.MonkeyPatch, listed_order: tuple[str, str]
+) -> None:
+    for name in listed_order:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            name,
+            {
+                "input_cost_per_token": 1e-12,
+                "output_cost_per_token": 1e-12,
+                "mode": "chat",
+                "litellm_provider": PICKER_PROVIDER,
+            },
+        )
+    monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, listed_order)
+
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=2) == [
+        "deepseek/fake-tie-a",
+        "deepseek/fake-tie-b",
+    ]
+
+
+def test_pick_cheapest_chat_models_skips_a_retired_model_the_provider_lists_without_its_cost_map_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: Final = {
+        "vertex_ai/fake-retired-vertex-chat": {"input_cost_per_token": 1e-14, "deprecation_date": "2000-01-01"},
+        "vertex_ai/fake-live-vertex-chat": {"input_cost_per_token": 1e-12, "deprecation_date": "2999-01-01"},
+    }
+    for name, row in rows.items():
+        monkeypatch.setitem(litellm.model_cost, name, {**row, "mode": "chat", "litellm_provider": "vertex_ai"})
+    monkeypatch.setitem(
+        litellm.models_by_provider, "vertex_ai", tuple(name.removeprefix("vertex_ai/") for name in rows)
+    )
+
+    assert pick_cheapest_chat_models_from_llm_provider("vertex_ai", n=2) == ["fake-live-vertex-chat"]

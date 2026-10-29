@@ -6,7 +6,7 @@ import base64
 import itertools
 import re
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -30,7 +30,7 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
 WILDCARD_HEALTH_CHECK_MODEL_COUNT: Final = 3
-AWS_ARN_PREFIX: Final = "arn:"
+BEDROCK_ANY_MODEL_ROUTES: Final = frozenset({"converse", "invoke"})
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
 )
@@ -103,8 +103,10 @@ def _provider_base_model(custom_llm_provider: str, model: str) -> str | None:
 
 
 def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segment: str) -> bool:
-    if segment.startswith(AWS_ARN_PREFIX):
-        return False
+    if custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.common_utils import get_all_bedrock_regions
+
+        return segment in BEDROCK_ANY_MODEL_ROUTES or segment in get_all_bedrock_regions()
     base_model: Final = _provider_base_model(custom_llm_provider, f"{segment}/{model_after_segment}")
     return base_model is not None and not base_model.startswith(f"{segment}/")
 
@@ -129,11 +131,16 @@ def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tup
     chat_models: Final = STR_TUPLE.validate_python(
         pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=sys.maxsize)
     )
-    model_ids: Final = (chat_model.removeprefix(provider_prefix) for chat_model in chat_models)
-    served_models: Final = dict.fromkeys(
+    model_ids: Final = tuple(chat_model.removeprefix(provider_prefix) for chat_model in chat_models)
+    served_models: Final = _first_distinct(
         f"{provider_prefix}{route_prefix}{model_id}" for model_id in model_ids if model_regex.fullmatch(model_id)
     )
-    return tuple(itertools.islice(served_models, WILDCARD_HEALTH_CHECK_MODEL_COUNT))
+    provider_models: Final = _first_distinct(f"{provider_prefix}{model_id}" for model_id in model_ids)
+    return tuple(dict.fromkeys((*served_models, *provider_models)))
+
+
+def _first_distinct(models: Iterable[str]) -> tuple[str, ...]:
+    return tuple(itertools.islice(dict.fromkeys(models), WILDCARD_HEALTH_CHECK_MODEL_COUNT))
 
 
 class HealthCheckHelpers:
@@ -145,16 +152,8 @@ class HealthCheckHelpers:
         litellm_logging_obj: "Logging",
     ) -> dict:
         from litellm import acompletion
-        from litellm.litellm_core_utils.health_check_utils import STR_TUPLE
-        from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
 
-        probe_models: Final = wildcard_health_check_models(
-            wildcard=model, custom_llm_provider=custom_llm_provider
-        ) or STR_TUPLE.validate_python(
-            pick_cheapest_chat_models_from_llm_provider(
-                custom_llm_provider=custom_llm_provider, n=WILDCARD_HEALTH_CHECK_MODEL_COUNT
-            )
-        )
+        probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
         if len(probe_models) == 0:
             raise Exception(
                 f"Unable to health check wildcard model {model} for provider {custom_llm_provider}: the cost map has "

@@ -1497,52 +1497,68 @@ def wildcard_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setitem(litellm.models_by_provider, provider, list(models))
 
 
+_DATABRICKS_PROVIDER_PROBES: Final = (
+    "databricks/databricks-cheap-chat",
+    "databricks/databricks-claude-fixture-a",
+    "databricks/databricks-claude-fixture-b",
+)
+_BEDROCK_PROVIDER_PROBES: Final = ("bedrock/meta.llama-fixture", "bedrock/anthropic.claude-fixture")
+_DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
+    "databricks/databricks-claude-fixture-a",
+    "databricks/databricks-claude-fixture-b",
+    "databricks/databricks-claude-fixture-c",
+)
+
+
 @pytest.mark.parametrize(
     ("custom_llm_provider", "wildcard", "expected"),
     [
         (
             "databricks",
             "databricks-claude-*",
-            (
-                "databricks/databricks-claude-fixture-a",
-                "databricks/databricks-claude-fixture-b",
-                "databricks/databricks-claude-fixture-c",
-            ),
+            (*_DATABRICKS_SERVED_CLAUDE_PROBES, "databricks/databricks-cheap-chat"),
         ),
         (
             "databricks",
             "databricks/databricks-claude-*",
-            (
-                "databricks/databricks-claude-fixture-a",
-                "databricks/databricks-claude-fixture-b",
-                "databricks/databricks-claude-fixture-c",
-            ),
+            (*_DATABRICKS_SERVED_CLAUDE_PROBES, "databricks/databricks-cheap-chat"),
         ),
+        ("databricks", "*", _DATABRICKS_PROVIDER_PROBES),
+        ("databricks", "databricks-llama-*", _DATABRICKS_PROVIDER_PROBES),
+        ("databricks", "*-fixture", _DATABRICKS_PROVIDER_PROBES),
+        ("databricks", "team-endpoints/*", _DATABRICKS_PROVIDER_PROBES),
+        ("bedrock", "converse/anthropic.*", ("bedrock/converse/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
         (
-            "databricks",
-            "*",
+            "bedrock",
+            "converse/*",
             (
-                "databricks/databricks-cheap-chat",
-                "databricks/databricks-claude-fixture-a",
-                "databricks/databricks-claude-fixture-b",
+                "bedrock/converse/meta.llama-fixture",
+                "bedrock/converse/anthropic.claude-fixture",
+                *_BEDROCK_PROVIDER_PROBES,
             ),
         ),
-        ("databricks", "databricks-llama-*", ()),
-        ("databricks", "*-fixture", ()),
-        ("databricks", "team-endpoints/*", ()),
-        ("bedrock", "converse/anthropic.*", ("bedrock/converse/anthropic.claude-fixture",)),
-        ("bedrock", "converse/*", ("bedrock/converse/meta.llama-fixture", "bedrock/converse/anthropic.claude-fixture")),
-        ("bedrock", "agent/anthropic.*", ()),
-        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*", ()),
-        ("bedrock", "converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*", ()),
+        ("bedrock", "invoke/anthropic.*", ("bedrock/invoke/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
+        ("bedrock", "us-east-1/anthropic.*", ("bedrock/us-east-1/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
+        ("bedrock", "agent/anthropic.*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "nova/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "nova-2/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "mantle/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "openai/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "chat_completions/*", _BEDROCK_PROVIDER_PROBES),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*", _BEDROCK_PROVIDER_PROBES),
+        (
+            "bedrock",
+            "converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/*",
+            _BEDROCK_PROVIDER_PROBES,
+        ),
         ("cloudflare", "@cf/*", ("cloudflare/@cf/meta/fixture-chat",)),
         ("vertex_ai", "claude-*", ("vertex_ai/claude-fixture@default",)),
-        ("vertex_ai", "meta/*", ()),
+        ("vertex_ai", "meta/*", ("vertex_ai/claude-fixture@default",)),
         ("fixture-gateway", "team/*", ()),
     ],
 )
 @pytest.mark.usefixtures("wildcard_catalog")
-def test_wildcard_health_check_models_are_the_cheapest_chat_models_the_wildcard_serves(
+def test_wildcard_health_check_probes_the_cheapest_served_chat_models_before_the_provider_cheapest(
     custom_llm_provider: str, wildcard: str, expected: tuple[str, ...]
 ) -> None:
     assert wildcard_health_check_models(wildcard=wildcard, custom_llm_provider=custom_llm_provider) == expected
@@ -1567,7 +1583,7 @@ def _fail_first_databricks_claude_probe(request: httpx.Request) -> httpx.Respons
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("wildcard_catalog")
-async def test_partial_wildcard_health_check_probes_and_falls_back_only_within_the_wildcard(
+async def test_partial_wildcard_health_check_falls_back_within_the_wildcard_before_any_other_model(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -1590,6 +1606,42 @@ async def test_partial_wildcard_health_check_probes_and_falls_back_only_within_t
     assert probed_models[-1] == "databricks-claude-fixture-b"
     assert all(model.startswith("databricks-claude-") for model in probed_models)
     assert "databricks-claude-fixture-a" not in probed_models[1:]
+    assert response == {}
+
+
+def _answer_only_databricks_cheap_chat(request: httpx.Request) -> httpx.Response:
+    model: Final = json.loads(request.content)["model"]
+    if model != "databricks-cheap-chat":
+        return httpx.Response(404, json={"error_code": "ENDPOINT_NOT_FOUND", "message": f"{model} does not exist"})
+    return _fail_first_databricks_claude_probe(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("wildcard_catalog")
+async def test_partial_wildcard_health_check_whose_served_cost_map_models_are_gone_stays_healthy_on_the_provider_probe(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
+        side_effect=_answer_only_databricks_cheap_chat
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
+        "databricks-claude-fixture-a",
+        "databricks-claude-fixture-b",
+        "databricks-claude-fixture-c",
+        "databricks-cheap-chat",
+    ]
     assert response == {}
 
 

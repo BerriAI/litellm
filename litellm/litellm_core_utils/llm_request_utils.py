@@ -164,7 +164,7 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
         for model, cost in _chat_row_costs(known_models, custom_llm_provider)
         if (route_rank := _route_rank(model, custom_llm_provider)) is not None
     )
-    return [model for _, _, model in sorted(ranked_rows, key=lambda row: row[:2])[:n]]
+    return [model for _, _, model in sorted(ranked_rows)[:n]]
 
 
 class _CostMapDeprecation(TypedDict):
@@ -174,9 +174,9 @@ class _CostMapDeprecation(TypedDict):
 _COST_MAP_DEPRECATION: Final = TypeAdapter(_CostMapDeprecation)
 
 
-def _is_past_deprecation_date(model: str) -> bool:
+def _is_past_deprecation_date(cost_map_key: str) -> bool:
     deprecation_date: Final = _COST_MAP_DEPRECATION.validate_python(
-        litellm.model_cost.get(model) or {}  # pyright: ignore[reportUnknownMemberType]  # the cost map is untyped JSON
+        litellm.model_cost.get(cost_map_key) or {}  # pyright: ignore[reportUnknownMemberType]  # untyped cost map JSON
     ).get("deprecation_date")
     if not isinstance(deprecation_date, str):
         return False
@@ -188,13 +188,11 @@ def _is_past_deprecation_date(model: str) -> bool:
 
 def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float]]:
     for model in models:
-        if _is_past_deprecation_date(model):
-            continue
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
-        if model_info.get("mode") != "chat":
+        if model_info.get("mode") != "chat" or _is_past_deprecation_date(model_info["key"]):
             continue
         yield model, (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
 
