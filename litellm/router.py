@@ -12635,11 +12635,7 @@ class Router:
         serves_team_deployments: Final = team_id is not None and bool(
             self._team_deployments_named(team_id, model_group)
         )
-        model_list: Final = (
-            self.get_all_deployments(model_name=model_group, team_id=team_id)
-            if serves_team_deployments
-            else self.get_model_list_of_routed_group(model_group)
-        )
+        model_list: Final = self.get_model_list_of_routed_group(model_group, team_id)
         model_group_description: Final[str | None] = next(
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
@@ -13997,17 +13993,20 @@ class Router:
             lambda name: self.wildcard_route_deployments(name, team_id),
         )
 
-    def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def get_model_list_of_routed_group(self, model_group: str, team_id: str | None = None) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
-        served from: the ones named model_group, the routing group of that name, or
-        the wildcard route matching it when neither exists.
+        served from: team_id's own deployments under that public name when the team has
+        any, else the ones named model_group, the routing group of that name, or the
+        wildcard route matching it when neither exists.
 
         Unlike get_model_list, model_group's own model_group_alias entry is not
         followed. The router resolves an alias exactly once, so a group reached as
         an alias target is served by its own deployments, never by a second hop:
         in the chain X -> T -> U a request to X is served from T's deployments.
         """
+        if team_id is not None and self._team_deployments_named(team_id, model_group):
+            return self.get_all_deployments(model_name=model_group, team_id=team_id)
         named: Final = [
             *self._get_all_deployments(model_name=model_group),
             *self.get_model_list_from_routing_groups(model_name=model_group),

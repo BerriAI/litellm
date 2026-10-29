@@ -33,13 +33,13 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
-from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
-from litellm.router_utils.reasoning_effort_strength import (
+from litellm.litellm_core_utils.reasoning_effort_strength import (
     REASONING_EFFORT_STRENGTH_RANK,
     ReasoningEffortRounding,
     nearest_declared_reasoning_effort,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
 

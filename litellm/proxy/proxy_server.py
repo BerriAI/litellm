@@ -17986,7 +17986,7 @@ def get_model_group_info(
                         **_model_group_info.model_dump(),
                         **model_group_custom_fields(
                             llm_router.get_model_list_of_routed_group(
-                                resolve_model_group_alias(llm_router.model_group_alias, model) or model
+                                resolve_model_group_alias(llm_router.model_group_alias, model) or model, team_id
                             )
                         ),
                     }

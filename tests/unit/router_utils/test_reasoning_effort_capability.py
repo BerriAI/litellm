@@ -16,7 +16,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     resolve_supported_reasoning_efforts,
     thinking_budget_effort,
 )
-from litellm.router_utils.reasoning_effort_strength import REASONING_EFFORT_STRENGTH_ORDER
+from litellm.litellm_core_utils.reasoning_effort_strength import REASONING_EFFORT_STRENGTH_ORDER
 
 
 class TestDeploymentIsCatalogMapped:

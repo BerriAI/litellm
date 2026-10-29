@@ -221,57 +221,39 @@ def test_deleted_model_params_stay_absent_after_reload_and_another_save(
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
 
     configured: Final = {
-        "model": "openai/test-model",
-        "api_key": "synthetic-runtime-secret",
-        "use_litellm_proxy": True,
-        "use_in_pass_through": True,
-        "use_chat_completions_api": False,
-        "litellm_image_enabled": True,
-        "timeout": 30,
-        "input_cost_per_token": 0.003,
-        "team_id": "param-only-team",
-        "temperature": 0,
-        "metadata": {},
+        "model": "openai/test-model", "api_key": "synthetic-runtime-secret",
+        "use_litellm_proxy": True, "use_in_pass_through": True, "use_chat_completions_api": False,
+        "litellm_image_enabled": True, "timeout": 30, "input_cost_per_token": 0.003,
+        "team_id": "param-only-team", "temperature": 0, "metadata": {},
     }
     original: Final = Deployment(
-        model_name="editor-model",
-        litellm_params=LiteLLM_Params.model_validate(configured),
+        model_name="editor-model", litellm_params=LiteLLM_Params.model_validate(configured),
         model_info=ModelInfo(id="editor-model", team_id="owner-team", access_groups=["retained-group"]),
     )
     removals: Final = ("litellm_image_enabled", "use_litellm_proxy", "input_cost_per_token", "team_id")
     deleted: Final = update_db_model(
         db_model=original,
         updated_patch=PatchModelRequest(
-            litellm_params=updateLiteLLMParams(max_retries=0),
-            litellm_params_to_remove=removals,
+            litellm_params=updateLiteLLMParams(max_retries=0), litellm_params_to_remove=removals,
             model_info=ModelInfo(id="editor-model", input_cost_per_token=0.003),
         ),
     )
     saved_params: Final = json.loads(deleted["litellm_params"])
     saved_info: Final = json.loads(deleted["model_info"])
-    assert saved_params == {
-        **{key: value for key, value in configured.items() if key not in removals},
-        "max_retries": 0,
-    }
+    assert saved_params == {**{key: value for key, value in configured.items() if key not in removals}, "max_retries": 0}
     assert "input_cost_per_token" not in saved_info
     assert saved_info["team_id"] == "owner-team"
     assert saved_info["access_groups"] == ["retained-group"]
     reloaded: Final = Deployment.model_validate(
         {"model_name": original.model_name, "litellm_params": saved_params, "model_info": saved_info}
     )
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "editor-model",
-                "litellm_params": saved_params,
-                "model_info": {"id": "editor-model", "db_model": True},
-            }
-        ]
-    )
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "editor-model", "litellm_params": saved_params,
+        "model_info": {"id": "editor-model", "db_model": True},
+    }])
     stored_params: Final = {**saved_params, "api_key": "synthetic-stored-secret"}
     mock_prisma.db.litellm_proxymodeltable.find_unique.return_value = LiteLLM_ProxyModelTable(
-        model_id="editor-model",
-        model_name="editor-model",
+        model_id="editor-model", model_name="editor-model",
         litellm_params=json.dumps(stored_params) if encoded else stored_params,
         model_info={"id": "editor-model"},
     )
@@ -1049,6 +1031,67 @@ def test_model_group_info_describes_a_team_model_under_the_public_name_its_team_
     assert response.status_code == 200
     groups: Final = {group["model_group"]: group for group in response.json()["data"]}
     assert groups[_BYOK_PUBLIC_NAME]["supported_reasoning_efforts"] == efforts
+
+
+@pytest.mark.parametrize(
+    ("team_id", "providers", "efforts", "custom_tags"),
+    [
+        (_BYOK_TEAM_ID, ["fireworks_ai"], ["low", "high", "max"], ["team-tag"]),
+        ("team-other", ["openai"], [], ["global-tag"]),
+    ],
+)
+def test_model_group_info_describes_the_deployments_a_shared_name_routes_the_team_to(
+    client, auth_as, monkeypatch, team_id: str, providers: list[str], efforts: list[str], custom_tags: list[str]
+):
+    """A team model whose public name is also a global model's name routes the team's requests to the
+    team's deployment, so the team's row must describe that deployment in every field, while another
+    team still sees the global model."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.agent_endpoints import model_list_helpers
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BYOK_PUBLIC_NAME,
+                "litellm_params": {"model": "openai/gpt-4.1-mini"},
+                "model_info": {"supports_reasoning": False, "custom_tags": ["global-tag"]},
+            },
+            {
+                "model_name": _BYOK_INTERNAL_NAME,
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/kimi-k3"},
+                "model_info": {
+                    "team_id": _BYOK_TEAM_ID,
+                    "team_public_model_name": _BYOK_PUBLIC_NAME,
+                    "supports_reasoning": True,
+                    "reasoning_effort_levels": ["low", "high", "max"],
+                    "custom_tags": ["team-tag"],
+                },
+            },
+        ]
+    )
+
+    async def append_agents_to_model_group(*, model_groups, user_api_key_dict):
+        return model_groups
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        model_list_helpers, "append_agents_to_model_group", AsyncMock(side_effect=append_agents_to_model_group)
+    )
+
+    with auth_as(LitellmUserRoles.INTERNAL_USER, user_id=None, team_id=team_id, team_models=[_BYOK_PUBLIC_NAME]):
+        response: Final = client.get("/model_group/info")
+
+    assert response.status_code == 200
+    group: Final = {group["model_group"]: group for group in response.json()["data"]}[_BYOK_PUBLIC_NAME]
+    assert (group["providers"], group["supported_reasoning_efforts"], group["custom_tags"]) == (
+        providers,
+        efforts,
+        custom_tags,
+    )
 
 
 # ---------------------------------------------------------------------------

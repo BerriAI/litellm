@@ -139,7 +139,8 @@ _ABSENT = object()
 @pytest.mark.parametrize(
     ("efforts", "client_version", "levels", "default"),
     [
-        (("low", "high", "max"), "0.165.0", ["low", "high", "max"], "high"),
+        (("low", "high", "max"), "0.165.0", ["low", "high", "max"], "low"),
+        (("high", "xhigh", "max"), "0.165.0", ["high", "xhigh", "max"], "high"),
         (
             ("none", "low", "medium", "high", "xhigh", "max"),
             "0.165.0",
@@ -150,9 +151,9 @@ _ABSENT = object()
         (("none", "low", "max"), "0.137.0", ["none", "low"], "none"),
         (("none",), "0.165.0", ["none"], "none"),
         (("low", "turbo"), "0.165.0", ["low", "turbo"], "low"),
-        (("low", "high", "max"), "0.138.0", ["low", "high", "max"], "high"),
-        (("low", "high", "max"), "0.137.9", ["low", "high"], "high"),
-        (("low", "high", "max"), "0.138.0-alpha.2", ["low", "high"], "high"),
+        (("low", "high", "max"), "0.138.0", ["low", "high", "max"], "low"),
+        (("low", "high", "max"), "0.137.9", ["low", "high"], "low"),
+        (("low", "high", "max"), "0.138.0-alpha.2", ["low", "high"], "low"),
         (("minimal", "max"), "not-a-version", ["minimal"], "minimal"),
         (("low", "turbo"), None, ["low"], "low"),
         (("max",), "0.137.0", [], _ABSENT),
@@ -652,12 +653,12 @@ def test_model_list_body_offers_what_model_group_info_reports_for_each_listed_mo
 
     assert router.get_model_group_info("declared").supported_reasoning_efforts == ("low", "high", "max")
     assert offered("0.165.0") == {
-        "declared": (["low", "high", "max"], "high"),
+        "declared": (["low", "high", "max"], "low"),
         "unknown": ([], None),
         "non-reasoning": ([], None),
-        "hidden-declared": (["low", "high", "max"], "high"),
+        "hidden-declared": (["low", "high", "max"], "low"),
     }
-    assert offered("0.137.0")["declared"] == (["low", "high"], "high")
+    assert offered("0.137.0")["declared"] == (["low", "high"], "low")
 
 
 def test_catalog_rows_without_a_router_carry_only_the_listing():

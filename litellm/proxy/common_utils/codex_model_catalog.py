@@ -31,7 +31,7 @@ from packaging.version import InvalidVersion, Version
 from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.router_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -282,12 +282,13 @@ def codex_reasoning_levels(
     a version that does not parse, only the efforts every release knows are offered. The default is
     set whenever a level is offered, because Codex reads a missing one as `none`: `none` itself when the
     group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
-    nearest stronger declared level, else the first one."""
+    nearest weaker declared level, so picking no level never costs more reasoning than Codex's usual medium,
+    else the weakest declared level, else the first one."""
     parses_any: Final = _parses_custom_efforts(client_version)
     offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
     if not offered:
         return (), None
-    nearest: Final = nearest_declared_reasoning_effort(_PREFERRED_DEFAULT_EFFORT, offered)
+    nearest: Final = nearest_declared_reasoning_effort(_PREFERRED_DEFAULT_EFFORT, offered, "down")
     levels: Final = tuple(
         CodexReasoningLevel(effort=effort, description=f"Sends reasoning_effort={effort} upstream")
         for effort in offered

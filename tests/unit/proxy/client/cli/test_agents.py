@@ -868,7 +868,7 @@ class TestCodexModelSync:
             "effort": "low",
             "description": "Sends reasoning_effort=low upstream",
         }
-        assert entry["default_reasoning_level"] == "high"
+        assert entry["default_reasoning_level"] == "low"
 
     def test_known_models_and_unknown_or_empty_groups_keep_their_entries(self, tmp_path):
         listing = self._listing(self._row("gpt-5.5"), self._row("unknown"), self._row("empty"))
