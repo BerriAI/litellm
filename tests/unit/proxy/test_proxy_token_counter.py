@@ -2751,6 +2751,11 @@ _WEATHER_SYSTEM: Final = "You are a helpful assistant that answers weather quest
 _AZURE_GROK_4_1: Final = "azure_ai/grok-4-1-fast-reasoning"
 _FIREWORKS_DEEPSEEK_V4_1: Final = "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"
 _XAI_GROK_4_3: Final = "xai/grok-4.3"
+_NATIVE_RESPONSES_BASE: Final = {
+    _AZURE_GROK_4_1: "https://unused.services.ai.azure.com/models",
+    _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
+    _XAI_GROK_4_3: "https://unused.invalid",
+}
 
 
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
@@ -2839,7 +2844,7 @@ async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_s
             model_list=[
                 {
                     "model_name": "billed",
-                    "litellm_params": {"model": model, "api_key": "unused", "api_base": "https://unused.invalid"},
+                    "litellm_params": {"model": model, "api_key": "unused", "api_base": _NATIVE_RESPONSES_BASE[model]},
                 }
             ]
         ),
@@ -2857,6 +2862,67 @@ async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_s
 
     assert counted.count_source == "local_estimate"
     assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+def _single_deployment_router(litellm_params: dict[str, object], model_info: dict[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {"api_key": "unused", **litellm_params},
+                "model_info": model_info,
+            }
+        ]
+    )
+
+
+async def _count_with_router(
+    monkeypatch: pytest.MonkeyPatch, router: Router, tools: tuple[dict[str, object], ...], responses: bool
+) -> int:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="counted",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=list(tools) or None,
+        ),
+        responses_request={"model": "counted", "input": "What is the weather in Paris?"} if responses else None,
+    )
+    return counted.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS, (_FILL_FORM,)])
+@pytest.mark.parametrize("responses", [False, True])
+async def test_a_custom_deployment_name_counts_like_the_base_model_it_names(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...], responses: bool
+):
+    api_base: Final = _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]
+    custom_name: Final = _single_deployment_router(
+        {"model": "azure_ai/prod-grok", "api_base": api_base}, {"base_model": _AZURE_GROK_4_1}
+    )
+    row_name: Final = _single_deployment_router({"model": _AZURE_GROK_4_1, "api_base": api_base}, {})
+
+    assert await _count_with_router(monkeypatch, custom_name, tools, responses) == await _count_with_router(
+        monkeypatch, row_name, tools, responses
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS])
+async def test_a_responses_count_the_proxy_bridges_to_chat_completions_frames_like_the_chat_count(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...]
+):
+    bridged: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": "https://unused.cognitiveservices.azure.com/models"}, {}
+    )
+    native: Final = _single_deployment_router(
+        {"model": _AZURE_GROK_4_1, "api_base": _NATIVE_RESPONSES_BASE[_AZURE_GROK_4_1]}, {}
+    )
+    chat_count: Final = await _count_with_router(monkeypatch, bridged, tools, responses=False)
+
+    assert await _count_with_router(monkeypatch, bridged, tools, responses=True) == chat_count
+    assert await _count_with_router(monkeypatch, native, tools, responses=True) != chat_count
 
 
 _KIMI_WEATHER: Final = {

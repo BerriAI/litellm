@@ -197,6 +197,40 @@ def test_hidden_prompt_is_the_framing_set_for_the_request_api_and_tools_falling_
     assert settings.hidden_prompt_tokens(carries_tools=carries_tools, responses_api=responses_api) == expected
 
 
+_PER_API_COST_MAP: Final = {
+    "token_count_framing": 149,
+    "token_count_tool_framing": 300,
+    "token_count_responses_framing": 145,
+    "token_count_responses_tool_framing": 104,
+}
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ({}, (149, 300, 145, 104)),
+        ({"token_count_framing": 500}, (500, 500, 500, 500)),
+        ({"token_count_framing": 0}, (0, 0, 0, 0)),
+        ({"token_count_tool_framing": 250}, (149, 250, 145, 250)),
+        ({"token_count_framing": 500, "token_count_tool_framing": 250}, (500, 250, 500, 250)),
+        ({"token_count_responses_framing": 120}, (149, 300, 120, 104)),
+        ({"token_count_framing": -1}, (149, 300, 145, 104)),
+    ],
+)
+def test_an_operator_framing_applies_to_every_request_kind_the_cost_map_splits_more_finely(
+    configured: dict[str, object], expected: tuple[int, int, int, int]
+) -> None:
+    settings: Final = resolve_token_count_settings(
+        configured=configured, default=_PER_API_COST_MAP, deployment_region=_in_us_west_2
+    )
+    assert (
+        settings.hidden_prompt_tokens(carries_tools=False, responses_api=False),
+        settings.hidden_prompt_tokens(carries_tools=True, responses_api=False),
+        settings.hidden_prompt_tokens(carries_tools=False, responses_api=True),
+        settings.hidden_prompt_tokens(carries_tools=True, responses_api=True),
+    ) == expected
+
+
 def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> None:
     assert resolve_token_count_settings(
         configured={}, default={}, deployment_region=_in_us_west_2

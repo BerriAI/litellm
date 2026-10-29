@@ -976,6 +976,7 @@ from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.responses.main import provider_stores_the_conversation
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
     AssistantsTypedDict,
@@ -15110,6 +15111,7 @@ async def _tokenizer_or_provider_error(
 
 async def _local_token_estimate(
     model: str,
+    template_model: str,
     prompt: str | None,
     messages: Sequence[AllMessageValues] | None,
     tools: list[ChatCompletionToolParam] | None,
@@ -15122,7 +15124,7 @@ async def _local_token_estimate(
         else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
     )
     count: Final = offload_token_count(litellm.token_counter)(
-        model=model,
+        model=template_model,
         text=prompt,
         messages=messages,
         tools=tools,
@@ -15185,10 +15187,15 @@ def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
     )
 
 
+def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("model_info", {}).get("base_model")) or _non_empty_str(
+        deployment.get("litellm_params", {}).get("base_model")
+    )
+
+
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
-    model_info: Final = deployment.get("model_info", {})
     params: Final = deployment.get("litellm_params", {})
-    base_model: Final = _non_empty_str(model_info.get("base_model")) or _non_empty_str(params.get("base_model"))
+    base_model: Final = _deployment_base_model(deployment)
     if base_model is not None:
         return base_model, None
     model: Final = _non_empty_str(params.get("model"))
@@ -15278,6 +15285,22 @@ def _native_responses_count(
 
 def _deployment_api_base(deployment: _TokenCountDeployment) -> str | None:
     return _non_empty_str(deployment.get("litellm_params", {}).get("api_base"))
+
+
+def _serves_native_responses(deployment: _TokenCountDeployment, request_model: str) -> bool:
+    params: Final = deployment.get("litellm_params", {})
+    try:
+        return provider_stores_the_conversation(
+            _non_empty_str(params.get("model")) or request_model,
+            _non_empty_str(params.get("custom_llm_provider")),
+            {
+                "use_chat_completions_api": params.get("use_chat_completions_api"),
+                "model_info": dict(deployment.get("model_info", {})),
+                "api_base": _deployment_api_base(deployment),
+            },
+        )
+    except litellm.BadRequestError:
+        return False
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -15534,7 +15557,8 @@ async def _count_request_tokens(
         0
         if counted_messages is None
         else settings.hidden_prompt_tokens(
-            carries_tools=bool(counted_tools), responses_api=responses_request is not None
+            carries_tools=bool(counted_tools),
+            responses_api=responses_request is not None and _serves_native_responses(deployment_view, request.model),
         )
     )
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
@@ -15551,8 +15575,10 @@ async def _count_request_tokens(
             tokenizer_type="huggingface_tokenizer",
             count_source="local_estimate",
         )
+    openai_model: Final = deployment_openai_model(deployment_view)
     estimate: Final = await _local_token_estimate(
-        model=deployment_openai_model(deployment_view) or model_to_use,
+        model=openai_model or model_to_use,
+        template_model=openai_model or _deployment_base_model(deployment_view) or model_to_use,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,

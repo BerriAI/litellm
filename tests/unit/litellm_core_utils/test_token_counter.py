@@ -667,6 +667,18 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
 
 
+# A request with a one-function tool billed 283 prompt tokens on xAI grok-4.3 without tool_choice and 297 with a
+# named one, and 357 and 358 on Azure AI Foundry grok-4-1-fast-reasoning, on 2026-10-29
+@pytest.mark.parametrize("model", ["grok-4.3", "grok-4-1-fast-reasoning"])
+def test_token_counter_counts_a_named_tool_choice_for_grok(model: str):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+    named: Final = {"type": "function", "function": {"name": "get_weather"}}
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=named
+    ) > token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
 @pytest.mark.parametrize(
     ("tool_choice", "expected_tool_choice"),
     [

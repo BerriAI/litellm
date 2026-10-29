@@ -873,7 +873,11 @@ def _count_extra(
         tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
     reply_primer_tokens: Final = 3
-    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
+    tool_choice_tokens: Final = (
+        _count_tool_choice(count_function, tool_choice)
+        if tool_section is None or tool_section.counts_tool_choice
+        else 0
+    )
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
