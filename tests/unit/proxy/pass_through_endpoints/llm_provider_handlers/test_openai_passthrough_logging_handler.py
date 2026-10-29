@@ -24,8 +24,10 @@ from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -2088,6 +2090,7 @@ COMPACTION: Final = {
     "output": [{"id": "cmp_082492f9", "type": "compaction", "encrypted_content": "gAAAA"}],
     "usage": RESPONSES_USAGE,
 }
+AGENTS_SESSIONS_URL: Final = "https://api.openai.com/v1/agents/sessions"
 ASSISTANT_MESSAGE: Final = {
     "id": "msg_080b10ff5d740c69",
     "type": "message",
@@ -2116,6 +2119,28 @@ def _stored_response(status: str, background: bool, usage: Mapping[str, object] 
         "tools": [],
         "top_p": 0.98,
         "usage": usage,
+    }
+
+
+def _agent_session(agent_model: str | None) -> dict[str, object]:
+    agent: Final = (
+        {}
+        if agent_model is None
+        else {
+            "agent": {"id": "agent_6a0b0f8e", "model": agent_model, "name": None, "service_tier": "auto", "tools": []}
+        }
+    )
+    return {
+        "id": "sess_6a0b0f8e2c1d4e5f",
+        "object": "agent.session",
+        "created_at": 1792270025,
+        "last_active_at": 1792270025,
+        "status": "in_progress",
+        "metadata": {},
+        "required_actions": [],
+        "vault_ids": [],
+        "usage": None,
+        **agent,
     }
 
 
@@ -2296,20 +2321,12 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not dispatched["kwargs"].get("response_cost")
         assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
-    async def _logged_call(
-        self,
-        method: str,
-        sub_route: str,
-        request_body: dict[str, object],
-        response_body: dict[str, object],
-        litellm_call_id: str,
-    ) -> _LoggedCall:
-        url_route: Final = f"{RESPONSES_URL}{sub_route}"
-        recorder: Final = _SpendRowRecorder()
+    @staticmethod
+    def _recorded_logging_obj(recorder: _SpendRowRecorder, litellm_call_id: str, stream: bool) -> LiteLLMLoggingObj:
         logging_obj: Final = LiteLLMLoggingObj(
             model="unknown",
             messages=[],
-            stream=False,
+            stream=stream,
             call_type="pass_through_endpoint",
             start_time=DISPATCH_TIME,
             litellm_call_id=litellm_call_id,
@@ -2319,6 +2336,36 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         logging_obj.update_environment_variables(
             model="unknown", user="unknown", optional_params={}, litellm_params={}, call_type="pass_through_endpoint"
         )
+        return logging_obj
+
+    async def _logged_stream(
+        self, url_route: str, request_body: dict[str, object], sse_events: tuple[bytes, ...], litellm_call_id: str
+    ) -> _LoggedCall:
+        recorder: Final = _SpendRowRecorder()
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=self._recorded_logging_obj(recorder, litellm_call_id, stream=True),
+            passthrough_success_handler_obj=PassThroughEndpointLogging(),
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=EndpointType.OPENAI,
+            start_time=DISPATCH_TIME,
+            raw_bytes=sse_events,
+            end_time=DISPATCH_TIME,
+        )
+        return await asyncio.wait_for(recorder.call, timeout=5)
+
+    async def _logged_call(
+        self,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+        litellm_call_id: str,
+        base_url: str = RESPONSES_URL,
+    ) -> _LoggedCall:
+        url_route: Final = f"{base_url}{sub_route}"
+        recorder: Final = _SpendRowRecorder()
+        logging_obj: Final = self._recorded_logging_obj(recorder, litellm_call_id, stream=False)
 
         await PassThroughEndpointLogging().pass_through_async_success_handler(
             httpx_response=httpx.Response(200, json=response_body, request=httpx.Request(method, url_route)),
@@ -2348,6 +2395,79 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         ).spend_row
 
         assert spend_log_row["model"] == response_body["model"]
+        assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_agent", "response_agent_model", "logged_model"),
+        [
+            pytest.param({"agent_id": "agent_6a0b0f8e"}, "gpt-5.4-mini", "gpt-5.4-mini", id="saved_agent"),
+            pytest.param({"agent": {"model": "gpt-5.4-mini"}}, None, "gpt-5.4-mini", id="request_agent_only"),
+            pytest.param({"agent": {"model": "gpt-5.4"}}, "gpt-5.4-mini", "gpt-5.4-mini", id="response_agent_wins"),
+        ],
+    )
+    async def test_unbilled_agents_session_spend_log_names_the_agent_model(
+        self, request_agent: dict[str, object], response_agent_model: str | None, logged_model: str
+    ):
+        spend_log_row: Final = (
+            await self._logged_call(
+                "POST",
+                "",
+                {"environment": {"type": "none"}, "input": "Say hi in one word", **request_agent},
+                _agent_session(response_agent_model),
+                "2f7c9e1a-4b3d-4a6e-8c5f-1d0e9b7a3c62",
+                AGENTS_SESSIONS_URL,
+            )
+        ).spend_row
+
+        assert spend_log_row["model"] == logged_model
+        assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_unbilled_saved_agent_spend_log_names_the_agent_model(self):
+        saved_agent: Final = {"id": "agent_6a0b0f8e", "object": "agent", "model": "gpt-5.4-mini", "tools": []}
+
+        spend_log_row: Final = (
+            await self._logged_call(
+                "POST",
+                "",
+                {"model": "gpt-5.4-mini", "instructions": "Answer in one word"},
+                saved_agent,
+                "8d2e4f6a-1b3c-4d5e-9f7a-2c4e6a8b0d13",
+                "https://api.openai.com/v1/agents",
+            )
+        ).spend_row
+
+        assert spend_log_row["model"] == saved_agent["model"]
+        assert not spend_log_row["spend"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_body", "session_agent_model", "logged_model"),
+        [
+            pytest.param({}, "gpt-5.4-mini", "gpt-5.4-mini", id="session_event_names_the_model"),
+            pytest.param({"agent": {"model": "gpt-5.4"}}, None, "gpt-5.4", id="request_agent_fallback"),
+        ],
+    )
+    async def test_streamed_agents_session_spend_log_names_the_agent_model(
+        self, request_body: dict[str, object], session_agent_model: str | None, logged_model: str
+    ):
+        session_event: Final = {"type": "agent.session.in_progress", "session": _agent_session(session_agent_model)}
+        sse_events: Final = (
+            f"event: agent.session.in_progress\ndata: {json.dumps(session_event)}\n\n".encode(),
+            b'event: agent.turn.completed\ndata: {"type": "agent.turn.completed", "usage": null}\n\n',
+        )
+
+        spend_log_row: Final = (
+            await self._logged_stream(
+                f"{AGENTS_SESSIONS_URL}/sess_6a0b0f8e2c1d4e5f/events",
+                request_body,
+                sse_events,
+                "5b7d9f1a-3c5e-4a7b-8d9f-0e2a4c6b8d35",
+            )
+        ).spend_row
+
+        assert spend_log_row["model"] == logged_model
         assert not spend_log_row["spend"]
 
     @pytest.mark.asyncio
