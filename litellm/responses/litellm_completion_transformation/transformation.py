@@ -909,6 +909,11 @@ class LiteLLMCompletionResponsesConfig:
             "metadata": kwargs.get("metadata"),
             "service_tier": responses_api_request.get("service_tier"),
             "safety_identifier": responses_api_request.get("safety_identifier"),
+            "prompt_cache_key": responses_api_request.get("prompt_cache_key"),
+            "prompt_cache_retention": responses_api_request.get("prompt_cache_retention"),
+            "verbosity": (
+                text_param.get("verbosity") if isinstance(text_param, dict) else None
+            ),
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,

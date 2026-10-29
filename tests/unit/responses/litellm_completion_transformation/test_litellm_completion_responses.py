@@ -1244,6 +1244,27 @@ class TestFunctionCallTransformation:
 
         assert result["safety_identifier"] == "user-7f3a"
 
+    def test_text_verbosity_forwarded_as_top_level_verbosity(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="openai/gpt-5.6",
+            input="Explain what an HTTP 400 is.",
+            responses_api_request={"text": {"verbosity": "high"}},
+            custom_llm_provider="openai",
+        )
+
+        assert result["verbosity"] == "high"
+
+    def test_prompt_cache_key_forwarded_to_chat_completion_request(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="openai/gpt-5.6",
+            input="hi",
+            responses_api_request={"prompt_cache_key": "sess-abc", "prompt_cache_retention": "24h"},
+            custom_llm_provider="openai",
+        )
+
+        assert result["prompt_cache_key"] == "sess-abc"
+        assert result["prompt_cache_retention"] == "24h"
+
     def test_parallel_tool_calls_dropped_when_no_chat_tools_remain(self) -> None:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
         codex_tool_search: Final = {
