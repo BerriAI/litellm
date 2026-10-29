@@ -30,6 +30,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
+from litellm.litellm_core_utils.audio_utils.utils import as_raw_pcm16_base64
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
@@ -2046,7 +2047,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     expires_at = int(time.time()) + (24 * 60 * 60)
                     transcript = ""  # Gemini doesn't provide transcript
 
-                    return ChatCompletionAudioResponse(data=data, expires_at=expires_at, transcript=transcript)
+                    return ChatCompletionAudioResponse(
+                        data=as_raw_pcm16_base64(mime_type, data), expires_at=expires_at, transcript=transcript
+                    )
 
         return None
 
