@@ -1173,8 +1173,8 @@ class PrometheusLogger(CustomLogger):
         # Build label filters from valid configurations
         label_filters: Final = self._build_label_filters(parsed_configs)
 
-        # Pretty print the processed configuration
-        self._pretty_print_prometheus_config(label_filters)
+        if litellm.suppress_startup_output is not True:
+            self._pretty_print_prometheus_config(label_filters)
         return label_filters
 
     def _parse_exclude_config(self) -> tuple[frozenset[str], frozenset[str]]:
@@ -5148,6 +5148,12 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
         **(requester_metadata if isinstance(requester_metadata, dict) else {}),
         **(user_api_key_auth_metadata if isinstance(user_api_key_auth_metadata, dict) else {}),
         **(spend_logs_metadata if isinstance(spend_logs_metadata, dict) else {}),
+        "is_silent_experiment": (
+            "true"
+            if "is_silent_experiment" in standard_logging_metadata
+            and standard_logging_metadata["is_silent_experiment"] is True
+            else None
+        ),
     }
 
 

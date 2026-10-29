@@ -15,14 +15,16 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.token_counter import served_openai_models, unresolved_tokenizer_model
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -32,6 +34,9 @@ from litellm.rust_bridge.token_counter import (
     native_count,
     rust_tokenizer,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
@@ -45,6 +50,25 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     and rendering rather than walking keeps mapping keys in the total, which a
     tool schema's property names are."""
     return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
+
+
+def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
+    """The names to count a request for `model` with, keeping the largest count.
+
+    An alias resolves to its target group. A group served only by OpenAI models counts as those models, so it gets
+    their tokenizer. Any other group counts as its OpenAI models, if any, and as the requested name with the encoding
+    tiktoken gives that name as written, so its other deployments keep that count without loading their vendor's
+    tokenizer. A name the router does not index counts as written."""
+    if llm_router is None:
+        return (model,)
+    group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
+    served: Final = served_openai_models(llm_router.deployments_named(group) or ())
+    if not served:
+        return (model,)
+    openai_served: Final = tuple(served_model for served_model in served if served_model is not None)
+    if len(openai_served) == len(served):
+        return openai_served
+    return (unresolved_tokenizer_model(model), *openai_served)
 
 
 async def count_input_tokens(

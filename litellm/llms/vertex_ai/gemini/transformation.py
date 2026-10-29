@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
@@ -18,16 +18,18 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_generic_image_chunk_to_openai_image_obj,
+    GeminiMediaSource,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
+    gemini_media_source,
+    gemini_tool_media_needs_download,
     get_thought_signature_from_tool,
     response_schema_prompt,
 )
@@ -42,9 +44,6 @@ from litellm.types.files import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
-    ChatCompletionAudioObject,
-    ChatCompletionFileObject,
-    ChatCompletionImageObject,
     ChatCompletionTextObject,
     ChatCompletionUserMessage,
 )
@@ -59,7 +58,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
-from litellm.types.utils import GenericImageParsingChunk, LlmProviders
+from litellm.types.utils import LlmProviders
 
 from ..common_utils import (
     GEMINI_FILES_API_URI_PREFIX,
@@ -78,6 +77,7 @@ _GCS_METADATA_VERTEX_BASE: "VertexBase | None" = None
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
 _DECODED_JSON: Final = TypeAdapter(object)
+_MESSAGE_PARTS: Final = TypeAdapter(Sequence[object])
 _GEMINI_MIME_TYPE_ALIASES: Final[dict[str, str]] = {
     "image/jpg": "image/jpeg",
 }
@@ -167,20 +167,13 @@ def _extract_max_media_resolution_from_messages(
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
-            for item in content:
-                if not isinstance(item, dict):
+            for item in _MESSAGE_PARTS.validate_python(content):
+                if (fields := as_str_mapping(item)) is None:
                     continue
-                detail: str | None = None
-                if item.get("type") == "image_url":
-                    image_url = item.get("image_url")
-                    if isinstance(image_url, dict):
-                        detail = image_url.get("detail")
-                elif item.get("type") == "file":
-                    file_obj = item.get("file")
-                    if isinstance(file_obj, dict):
-                        detail = file_obj.get("detail")
-                if detail:
-                    max_resolution = _get_highest_media_resolution(max_resolution, detail)
+                if (
+                    source := gemini_media_source(fields, prefer_file_id=msg.get("role") in ("user", "system"))
+                ) is not None and source.detail:
+                    max_resolution = _get_highest_media_resolution(max_resolution, source.detail)
     return max_resolution
 
 
@@ -278,17 +271,17 @@ def _image_url_payload_may_need_sync_gcs_metadata_fetch(
     return _gs_uri_requires_content_type_metadata(url)
 
 
-def _openai_messages_may_need_sync_gcs_metadata_fetch(
+def _openai_messages_may_need_sync_media_fetch(
     messages: list[AllMessageValues],
+    custom_llm_provider: str = "vertex_ai",
+    model: str | None = None,
 ) -> bool:
-    """
-    Heuristic: True if any message part can trigger a blocking GCS JSON
-    metadata read inside _transform_request_body (extension-less gs:// without
-    explicit MIME hints). Covers user/system ``content`` parts and assistant
-    ``images`` (same paths as ``_gemini_convert_messages_with_history``). Used
-    to decide whether ``async_transform_request_body`` should offload the sync
-    transform via ``asyncify``.
-    """
+    """Check media left after async prefetch for synchronous downloads or GCS metadata reads."""
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    nested_inline_only: Final = custom_llm_provider == "gemini" and (
+        model is None or VertexGeminiConfig.supports_multimodal_function_responses(model)
+    )
     for raw in messages:
         msg: Any = raw
         if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
@@ -306,27 +299,25 @@ def _openai_messages_may_need_sync_gcs_metadata_fetch(
         content = msg.get("content")
         if not isinstance(content, list):
             continue
-        for item in content:
-            if not isinstance(item, dict):
+        for item in _MESSAGE_PARTS.validate_python(content):
+            if (fields := as_str_mapping(item)) is None:
                 continue
-            itype = item.get("type")
-            if itype == "image_url":
-                if _image_url_payload_may_need_sync_gcs_metadata_fetch(item.get("image_url")):
-                    return True
-            elif itype == "file":
-                file_obj = item.get("file")
-                if not isinstance(file_obj, dict):
-                    continue
-                fmt = file_obj.get("format") or file_obj.get("mime_type") or file_obj.get("content_type")
-                passed = file_obj.get("file_id") or file_obj.get("file_data")
-                if (
-                    isinstance(passed, str)
-                    and "gs://" in passed
-                    and not fmt
-                    and _gs_uri_requires_content_type_metadata(passed)
-                ):
-                    return True
+            if (source := gemini_media_source(fields, prefer_file_id=msg.get("role") in ("user", "system"))) is None:
+                continue
+            if not source.format and _gs_uri_requires_content_type_metadata(source.url):
+                return True
+            if msg.get("role") in ("tool", "function") and gemini_tool_media_needs_download(source):
+                return True
+            if source.url.startswith(("http://", "https://")) and (
+                _ai_studio_inlines
+                if nested_inline_only and msg.get("role") in ("tool", "function")
+                else _vertex_inlines
+            )(RemoteMedia(source.url, {"format": source.format}, "file")):
+                return True
     return False
+
+
+_openai_messages_may_need_sync_gcs_metadata_fetch: Final = _openai_messages_may_need_sync_media_fetch
 
 
 def _get_gcs_object_content_type(
@@ -478,7 +469,7 @@ def _normalize_and_validate_gemini_mime_type(mime_type: str, model: str | None) 
     return get_file_mime_type_for_file_type(file_type)
 
 
-def _process_gemini_media(
+def process_gemini_media(
     image_url: str,
     format: str | None = None,
     media_resolution_enum: dict[str, str] | None = None,
@@ -586,6 +577,26 @@ def _process_gemini_media(
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
+
+
+_process_gemini_media: Final = process_gemini_media
+
+
+def encode_gemini_media_source(
+    source: GeminiMediaSource,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+) -> PartType:
+    return process_gemini_media(
+        image_url=source.url,
+        format=source.format,
+        model=model,
+        vertex_project=vertex_project,
+        vertex_credentials=vertex_credentials,
+        media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
+        video_metadata=source.video_metadata,
+    )
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -697,6 +708,61 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
+def _gemini_history_media_part(
+    content: Mapping[str, object],
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    message_index: int | None = None,
+    content_index: int | None = None,
+) -> PartType | None:
+    source: Final = gemini_media_source(content, prefer_file_id=message_index is not None)
+    if source is None:
+        if message_index is not None and content.get("type") == "image_url":
+            raw_url: Final = content.get("image_url")
+            if raw_url is None:
+                raise litellm.BadRequestError(
+                    message="Invalid message content: element type is 'image_url' but 'image_url' field is missing ",
+                    model=model,
+                    llm_provider="vertex_ai",
+                )
+            raw_fields: Final = as_str_mapping(raw_url)
+            if raw_fields is not None and raw_fields.get("url") is None:
+                raise litellm.BadRequestError(
+                    message="Invalid message content: element type is 'image_url' but 'url' field is missing inside 'image_url' ",
+                    model=model,
+                    llm_provider="vertex_ai",
+                )
+            raise ValueError(f"Invalid image received - {raw_url}")
+        if message_index is not None and content.get("type") == "file":
+            if content.get("file") is None:
+                raise litellm.BadRequestError(
+                    message="Content block has type='file' but is missing the required 'file' field",
+                    model=model,
+                    llm_provider="vertex_ai",
+                )
+            raise Exception("Unknown file type. Please pass in a file_id or file_data")
+        return None
+    try:
+        return encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
+    except litellm.BadRequestError:
+        raise
+    except Exception as exc:
+        if message_index is None or content.get("type") != "file":
+            raise
+        file_fields: Final = as_str_mapping(content.get("file")) or {}
+        raise litellm.BadRequestError(
+            message=(
+                f"Unable to determine mime type for file: {file_fields.get('file_id') or 'provided data'}, "
+                f"set this explicitly using message[{message_index}].content[{content_index}].file.format "
+                f"(or file.mime_type/content_type). Original error: {exc}"
+            ),
+            model=model,
+            llm_provider="vertex_ai",
+        ) from exc
+
+
 def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
@@ -744,123 +810,17 @@ def gemini_convert_messages_with_history(
                             element = cast(ChatCompletionTextObject, element)
                             _part = PartType(text=element["text"])
                             _parts.append(_part)
-                        elif element["type"] == "image_url":
-                            element = cast(ChatCompletionImageObject, element)
-                            img_element = element
-                            format: str | None = None
-                            media_resolution_enum: dict[str, str] | None = None
-                            raw_image_url = img_element.get("image_url")
-                            if raw_image_url is None:
-                                raise litellm.BadRequestError(
-                                    message="Invalid message content: element type is 'image_url' but 'image_url' field is missing ",
-                                    model=model,
-                                    llm_provider="vertex_ai",
-                                )
-                            if isinstance(raw_image_url, dict):
-                                image_url = raw_image_url.get("url")
-                                if image_url is None:
-                                    raise litellm.BadRequestError(
-                                        message="Invalid message content: element type is 'image_url' but 'url' field is missing inside 'image_url' ",
-                                        model=model,
-                                        llm_provider="vertex_ai",
-                                    )
-                                # TypedDict does not declare mime_type/content_type;
-                                # read via Dict[str, Any] for caller-provided MIME fields.
-                                image_url_dict = cast(dict[str, Any], raw_image_url)
-                                format = (
-                                    image_url_dict.get("format")
-                                    or image_url_dict.get("mime_type")
-                                    or image_url_dict.get("content_type")
-                                )
-                                detail = image_url_dict.get("detail")
-                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
-                            else:
-                                image_url = raw_image_url
-                            _part = _process_gemini_media(
-                                image_url=image_url,
-                                format=format,
-                                media_resolution_enum=media_resolution_enum,
-                                model=model,
-                                vertex_project=vertex_project,
-                                vertex_credentials=vertex_credentials,
+                        elif (
+                            media_part := _gemini_history_media_part(
+                                element,
+                                model,
+                                vertex_project,
+                                vertex_credentials,
+                                message_index=msg_i,
+                                content_index=element_idx,
                             )
-                            _parts.append(_part)
-                        elif element["type"] == "input_audio":
-                            audio_element = cast(ChatCompletionAudioObject, element)
-                            audio_data = audio_element["input_audio"].get("data")
-                            audio_format = audio_element["input_audio"].get("format")
-                            if audio_data is not None and audio_format is not None:
-                                audio_format_modified = (
-                                    "audio/" + audio_format
-                                    if audio_format.startswith("audio/") is False
-                                    else audio_format
-                                )  # Gemini expects audio/wav, audio/mp3, etc.
-                                openai_image_str = convert_generic_image_chunk_to_openai_image_obj(
-                                    image_chunk=GenericImageParsingChunk(
-                                        type="base64",
-                                        media_type=audio_format_modified,
-                                        data=audio_data,
-                                    )
-                                )
-                                _part = _process_gemini_media(
-                                    image_url=openai_image_str,
-                                    format=audio_format_modified,
-                                    model=model,
-                                    vertex_project=vertex_project,
-                                    vertex_credentials=vertex_credentials,
-                                )
-                                _parts.append(_part)
-                        elif element["type"] == "file":
-                            file_element = cast(ChatCompletionFileObject, element)
-                            _file_field = file_element.get("file")
-                            if _file_field is None:
-                                raise litellm.BadRequestError(
-                                    message="Content block has type='file' but is missing the required 'file' field",
-                                    model=model,
-                                    llm_provider="vertex_ai",
-                                )
-                            # TypedDict does not declare mime_type/content_type;
-                            # read via Dict[str, Any] for caller-provided MIME fields.
-                            file_dict = cast(dict[str, Any], _file_field)
-                            file_id = file_dict.get("file_id")
-                            format = (
-                                file_dict.get("format") or file_dict.get("mime_type") or file_dict.get("content_type")
-                            )
-                            file_data = file_dict.get("file_data")
-                            detail = file_dict.get("detail")
-                            video_metadata = file_dict.get("video_metadata")
-                            passed_file = file_id or file_data
-                            if passed_file is None:
-                                raise Exception("Unknown file type. Please pass in a file_id or file_data")
-
-                            # Convert detail to media_resolution_enum
-                            media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
-
-                            try:
-                                _part = _process_gemini_media(
-                                    image_url=passed_file,
-                                    format=format,
-                                    model=model,
-                                    media_resolution_enum=media_resolution_enum,
-                                    video_metadata=video_metadata,
-                                    vertex_project=vertex_project,
-                                    vertex_credentials=vertex_credentials,
-                                )
-                                _parts.append(_part)
-                            except litellm.BadRequestError:
-                                raise
-                            except Exception as e:
-                                raise litellm.BadRequestError(
-                                    message=(
-                                        f"Unable to determine mime type for file: "
-                                        f"{file_id or 'provided data'}, set this explicitly "
-                                        f"using message[{msg_i}].content[{element_idx}].file.format "
-                                        f"(or file.mime_type/content_type). "
-                                        f"Original error: {e}"
-                                    ),
-                                    model=model,
-                                    llm_provider="vertex_ai",
-                                )
+                        ) is not None:
+                            _parts.append(media_part)
                     user_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
                     _part = PartType(text=_message_content)
@@ -902,6 +862,12 @@ def gemini_convert_messages_with_history(
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
+                            elif (
+                                media_part := _gemini_history_media_part(
+                                    element, model, vertex_project, vertex_credentials
+                                )
+                            ) is not None:
+                                _parts.append(media_part)
 
                     assistant_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
@@ -1033,6 +999,10 @@ def gemini_convert_messages_with_history(
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
                     supports_multimodal_function_responses=supports_multimodal_function_responses,
+                    custom_llm_provider=custom_llm_provider,
+                    model=model,
+                    vertex_project=vertex_project,
+                    vertex_credentials=vertex_credentials,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1459,13 +1429,9 @@ async def async_transform_request_body(
         cached_content=cached_content,
         optional_params=optional_params,
     )
-    # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
-    # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
-    # whole sync transformation on a worker thread so it does not block the
-    # async event loop.
     request_body: Final[RequestBody] = (
         await asyncify(transform)()
-        if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages)
+        if _openai_messages_may_need_sync_media_fetch(inlined_messages, custom_llm_provider, model)
         else transform()
     )
     return _with_default_output_budget(
