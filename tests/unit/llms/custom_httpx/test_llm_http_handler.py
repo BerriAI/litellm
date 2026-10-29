@@ -5546,17 +5546,17 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
 
 
 class TestAgenticFollowUpKeepsTheProviderPrefix:
-    """#38829: the follow-up must re-dispatch a model litellm.acompletion can route."""
-
     @staticmethod
-    async def _run_followup(model: str, custom_llm_provider: str, patched_model: str | None = None):
+    async def _run_followup(
+        model: str, custom_llm_provider: str, patched_model: str | None = None
+    ) -> ModelResponse:
         from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
         from litellm.types.integrations.custom_logger import (
             AgenticLoopPlan,
             AgenticLoopRequestPatch,
         )
 
-        return await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
+        response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
             plan=AgenticLoopPlan(
                 run_agentic_loop=True,
                 request_patch=AgenticLoopRequestPatch(
@@ -5573,28 +5573,30 @@ class TestAgenticFollowUpKeepsTheProviderPrefix:
             fingerprints=[],
             fingerprint="fp",
         )
+        assert isinstance(response, ModelResponse)
+        return response
 
     @pytest.mark.asyncio
-    async def test_a_sub_path_model_still_resolves_a_provider(self):
+    async def test_a_sub_path_model_still_resolves_a_provider(self) -> None:
         response: Final = await self._run_followup("mantle/anthropic.claude-sonnet-5", "bedrock")
 
         assert response.choices[0].message.content == "ok from followup"
 
     @pytest.mark.asyncio
-    async def test_an_ordinary_model_still_resolves_a_provider(self):
+    async def test_an_ordinary_model_still_resolves_a_provider(self) -> None:
         response: Final = await self._run_followup("gpt-4o-mini", "openai")
 
         assert response.choices[0].message.content == "ok from followup"
 
     @pytest.mark.asyncio
-    async def test_a_hook_that_patches_another_providers_model_reaches_that_provider(self):
+    async def test_a_hook_that_patches_another_providers_model_reaches_that_provider(self) -> None:
         response: Final = await self._run_followup("gpt-4o", "openai", patched_model="anthropic/claude-sonnet-4-5")
 
         assert response.model == "claude-sonnet-4-5"
         assert response._hidden_params["custom_llm_provider"] == "anthropic"
 
     @pytest.mark.asyncio
-    async def test_a_hook_echoing_an_org_style_model_stays_on_the_request_provider(self):
+    async def test_a_hook_echoing_an_org_style_model_stays_on_the_request_provider(self) -> None:
         response: Final = await self._run_followup("openai/gpt-4o", "openrouter", patched_model="openai/gpt-4o")
 
         assert response._hidden_params["custom_llm_provider"] == "openrouter"
