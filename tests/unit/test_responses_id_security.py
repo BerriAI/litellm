@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.responses_id_security import (
     ResponsesIDSecurity,
-    _is_responses_api_create_route,
+    _streams_response_ids,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.llms.openai import (
@@ -533,7 +533,7 @@ class TestAsyncPreCallHook:
                     assert "team" in exc_info.value.detail.lower()
 
 
-class TestIsResponsesApiCreateRoute:
+class TestStreamsResponseIds:
     """Test the route gate that decides whether a streamed response id is encrypted."""
 
     @pytest.mark.parametrize(
@@ -542,10 +542,13 @@ class TestIsResponsesApiCreateRoute:
             "/v1/responses",
             "/responses",
             "/openai/v1/responses",
+            "/v1/responses/resp_abc",
+            "/responses/resp_abc",
+            "/openai/v1/responses/resp_abc",
         ],
     )
-    def test_create_routes_match(self, route):
-        assert _is_responses_api_create_route(route) is True
+    def test_create_and_retrieve_routes_match(self, route):
+        assert _streams_response_ids(route) is True
 
     @pytest.mark.parametrize(
         "route",
@@ -553,14 +556,14 @@ class TestIsResponsesApiCreateRoute:
             None,
             "/chat/completions",
             "/openai/v1/chat/completions",
-            "/v1/responses/{response_id}",
-            "/openai/v1/responses/{response_id}",
+            "/v1/responses/",
+            "/v1/responses/resp_abc/input_items",
             "/v1/responsesX",
             "/responsesX",
         ],
     )
-    def test_non_create_routes_do_not_match(self, route):
-        assert _is_responses_api_create_route(route) is False
+    def test_other_routes_do_not_match(self, route):
+        assert _streams_response_ids(route) is False
 
 
 class TestAsyncPostCallStreamingIteratorHook:
@@ -615,7 +618,13 @@ class TestAsyncPostCallStreamingIteratorHook:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "route",
-        ["/v1/responses", "/responses", "/openai/v1/responses"],
+        [
+            "/v1/responses",
+            "/responses",
+            "/openai/v1/responses",
+            "/v1/responses/resp_rawprovider123",
+            "/openai/v1/responses/resp_rawprovider123",
+        ],
     )
     async def test_streamed_id_encrypted_on_all_responses_routes(
         self, responses_id_security, route, monkeypatch

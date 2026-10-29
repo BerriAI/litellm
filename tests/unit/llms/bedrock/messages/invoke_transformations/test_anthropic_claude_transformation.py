@@ -4198,3 +4198,110 @@ def test_bedrock_messages_without_guardrail_config_sends_no_guardrail_headers() 
         headers={}, model="anthropic.claude-sonnet-5-v1:0", messages=[], optional_params={}, litellm_params={}
     )
     assert not any(name.startswith("X-Amzn-Bedrock-Guardrail") for name in headers)
+
+
+@dataclass(slots=True)
+class BedrockDownAnthropicUp:
+    anthropic_bodies: tuple[dict[str, object], ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host != "api.anthropic.com":
+            return httpx.Response(500, json={"message": "Bedrock is unavailable"})
+        self.anthropic_bodies = (*self.anthropic_bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
+        return httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("unnamed_tool_extras", "sent_extras"),
+    [
+        ({}, {}),
+        ({"custom": {"eager_input_streaming": True}}, {}),
+        ({"custom": {"defer_loading": False}}, {"defer_loading": False}),
+    ],
+)
+async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedrock_filled_in(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    unnamed_tool_extras: dict[str, object],
+    sent_extras: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = BedrockDownAnthropicUp()
+    respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/invoke/us.anthropic.claude-opus-4-8",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {"model_name": "anthropic-claude", "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"}},
+        ],
+        fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
+        num_retries=0,
+    )
+    schema: Final[Mapping[str, object]] = {"type": "object", "properties": {}}
+
+    await router.aanthropic_messages(
+        model="bedrock-claude",
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        max_tokens=100,
+        tools=[{"input_schema": schema, **unnamed_tool_extras}, {"name": "get_weather", "input_schema": schema}],
+    )
+
+    (body,) = upstream.anthropic_bodies
+    assert body["tools"] == [
+        {"name": "litellm_unnamed_tool_0", "input_schema": schema, **sent_extras},
+        {"name": "get_weather", "input_schema": schema},
+    ]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("custom", "sent_extras"),
+    [({"eager_input_streaming": True}, {}), ({"defer_loading": False}, {"defer_loading": False})],
+)
+async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    custom: dict[str, object],
+    sent_extras: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = BedrockDownAnthropicUp()
+    respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/invoke/us.anthropic.claude-opus-4-8",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test", "drop_params": True},
+            },
+        ],
+        fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
+        num_retries=0,
+    )
+    schema: Final[Mapping[str, object]] = {"type": "object", "properties": {}}
+
+    await router.acompletion(
+        model="bedrock-claude",
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        max_tokens=100,
+        tools=[{"name": "get_weather", "input_schema": schema, "custom": custom}],
+    )
+
+    (body,) = upstream.anthropic_bodies
+    assert body["tools"] == [{"name": "get_weather", "input_schema": schema, **sent_extras}]

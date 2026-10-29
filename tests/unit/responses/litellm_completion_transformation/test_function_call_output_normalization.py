@@ -111,6 +111,8 @@ def test_media_normalization_preserves_formats_references_and_metadata(kind: str
             "keep",
         ),
         ([{"type": "input_image", "file_id": "file-only"}], '[{"type": "input_image", "file_id": "file-only"}]'),
+        ({"ids": {7}}, "{'ids': {7}}"),
+        ([{"type": "unknown", "ids": {7}}], "[{'type': 'unknown', 'ids': {7}}]"),
     ],
 )
 def test_tool_output_without_usable_media_keeps_its_existing_fallback(output: object, expected: str) -> None:
