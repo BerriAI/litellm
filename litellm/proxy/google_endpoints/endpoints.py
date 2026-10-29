@@ -156,14 +156,21 @@ def _google_error_response(request: Request, error: ProxyException) -> JSONRespo
     )
 
 
-def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
+def with_google_contents_as_messages(request: TokenCountRequest) -> TokenCountRequest:
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
-    validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
-    contents: Final = [dict(content) for content in validated_data.contents]
+    if request.contents is None or request.messages is not None:
+        return request
     messages: Final = (
-        GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
+        GoogleGenAIAdapter()
+        .translate_generate_content_to_completion(request.model, request.contents)
+        .get("messages", [])
     )
+    return request.model_copy(update={"messages": messages})
+
+
+def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
+    validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
     system: Final = (
         [
             {"type": "text", "text": part.text}
@@ -182,12 +189,13 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         }
         for declaration in declarations
     ]
-    return TokenCountRequest(
-        model=model_name,
-        contents=contents,
-        messages=messages,
-        system=system,
-        tools=tools or None,
+    return with_google_contents_as_messages(
+        TokenCountRequest(
+            model=model_name,
+            contents=[dict(content) for content in validated_data.contents],
+            system=system,
+            tools=tools or None,
+        )
     )
 
 

@@ -11,7 +11,7 @@ import logging
 import threading
 import traceback
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -2145,6 +2145,62 @@ async def test_framed_estimate_counts_google_contents_like_the_same_conversation
 
     assert from_google.count_source == "local_estimate"
     assert from_google.total_tokens == from_messages.total_tokens
+
+
+def _local_luna(monkeypatch: pytest.MonkeyPatch) -> bool:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "openai/gpt-6-luna"}}]),
+    )
+    return False
+
+
+def _framed_kimi_count(monkeypatch: pytest.MonkeyPatch) -> bool:
+    _framed_kimi(monkeypatch)
+    return True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    [pytest.param(_local_luna, id="local_count"), pytest.param(_framed_kimi_count, id="provider_count_fails")],
+)
+@pytest.mark.parametrize(
+    "contents",
+    [
+        pytest.param([{"role": "user", "parts": [{"text": "Return exactly OK."}]}], id="text"),
+        pytest.param([{"role": "user", "parts": {"text": "Return exactly OK."}}], id="parts_as_one_object"),
+        pytest.param(
+            [
+                {"role": "user", "parts": [{"text": "Weather in Paris?"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": "get_weather", "response": {"forecast": "Sun"}}}],
+                },
+            ],
+            id="tool_loop",
+        ),
+    ],
+)
+async def test_utils_token_counter_counts_a_contents_only_body_like_the_google_count_tokens_route(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: Callable[[pytest.MonkeyPatch], bool],
+    contents: Sequence[Mapping[str, object]],
+):
+    call_endpoint: Final = deployment(monkeypatch)
+
+    from_utils: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=[dict(content) for content in contents]),
+        call_endpoint=call_endpoint,
+    )
+    from_google: Final = await token_counter(
+        request=_google_count_tokens_request("kimi", {"contents": contents}), call_endpoint=call_endpoint
+    )
+
+    assert from_utils.count_source == "local_estimate"
+    assert from_utils.total_tokens == from_google.total_tokens > 0
 
 
 @pytest.mark.asyncio

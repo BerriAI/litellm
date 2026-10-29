@@ -633,6 +633,7 @@ from litellm.proxy.discovery_endpoints import (
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
+from litellm.proxy.google_endpoints.endpoints import with_google_contents_as_messages
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
     initialize_guardrails,
@@ -15303,7 +15304,9 @@ async def token_counter(
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
+    return await count_request_tokens(
+        request=with_google_contents_as_messages(request), call_endpoint=call_endpoint, litellm_call_id=litellm_call_id
+    )
 
 
 async def count_request_tokens(
