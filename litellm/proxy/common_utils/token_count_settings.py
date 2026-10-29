@@ -57,6 +57,13 @@ class TokenCountSettings:
     count_model: TokenCountModel | None
     tokenizer: TokenCountTokenizer | None = None
     tool_framing: int | None = None
+    responses_framing: int | None = None
+    responses_tool_framing: int | None = None
+
+    def hidden_prompt_tokens(self, carries_tools: bool, responses_api: bool) -> int:
+        chat: Final = self.tool_framing if carries_tools and self.tool_framing is not None else self.framing
+        responses: Final = self.responses_tool_framing if carries_tools else self.responses_framing
+        return (responses if responses_api and responses is not None else chat) or 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +195,8 @@ def resolve_token_count_settings(
         ),
         tokenizer=_tokenizer(default.get("token_count_tokenizer")),
         tool_framing=_configured_framing(configured, default, "token_count_tool_framing"),
+        responses_framing=_configured_framing(configured, default, "token_count_responses_framing"),
+        responses_tool_framing=_configured_framing(configured, default, "token_count_responses_tool_framing"),
     )
 
 

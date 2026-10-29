@@ -2653,7 +2653,7 @@ async def test_framing_comes_from_the_row_the_deployment_provider_or_base_model_
 
 
 @pytest.mark.asyncio
-async def test_tool_framing_is_added_once_and_only_when_the_request_carries_tools(monkeypatch: pytest.MonkeyPatch):
+async def test_a_tool_request_counts_its_framing_in_place_of_the_plain_one_per_api(monkeypatch: pytest.MonkeyPatch):
     def deployment(name: str, model_info: dict[str, object]) -> dict[str, object]:
         return {
             "model_name": name,
@@ -2667,28 +2667,41 @@ async def test_tool_framing_is_added_once_and_only_when_the_request_carries_tool
         Router(
             model_list=[
                 deployment("plain", {}),
-                deployment("tool-framed", {"token_count_tool_framing": 50}),
-                deployment("both", {"token_count_framing": 7, "token_count_tool_framing": 50}),
+                deployment("chat", {"token_count_framing": 7, "token_count_tool_framing": 50}),
+                deployment(
+                    "per-api",
+                    {
+                        "token_count_framing": 7,
+                        "token_count_tool_framing": 50,
+                        "token_count_responses_framing": 5,
+                        "token_count_responses_tool_framing": 2,
+                    },
+                ),
             ]
         ),
     )
     messages: Final = [{"role": "user", "content": "What is the weather in Paris?"}]
     tools: Final = [_KIMI_WEATHER]
 
-    async def count(model: str, request_tools: list[dict[str, object]] | None) -> int:
-        response: Final = await token_counter(
-            request=TokenCountRequest(model=model, messages=messages, tools=request_tools)
+    async def count(model: str, request_tools: list[dict[str, object]] | None, responses: bool) -> int:
+        response: Final = await count_request_tokens(
+            request=TokenCountRequest(model=model, messages=messages, tools=request_tools),
+            responses_request={"model": model, "input": "What is the weather in Paris?"} if responses else None,
         )
         return response.total_tokens
 
-    plain_with_tools: Final = await count("plain", tools)
-    plain_without_tools: Final = await count("plain", None)
+    plain_with_tools: Final = await count("plain", tools, responses=False)
+    plain_without_tools: Final = await count("plain", None, responses=False)
 
-    assert await count("tool-framed", tools) == plain_with_tools + 50
-    assert await count("both", tools) == plain_with_tools + 57
-    assert await count("tool-framed", None) == plain_without_tools
-    assert await count("tool-framed", []) == plain_without_tools
-    assert await count("both", None) == plain_without_tools + 7
+    assert await count("plain", tools, responses=True) == plain_with_tools
+    assert await count("chat", tools, responses=False) == plain_with_tools + 50
+    assert await count("chat", None, responses=False) == plain_without_tools + 7
+    assert await count("chat", [], responses=False) == plain_without_tools + 7
+    assert await count("chat", tools, responses=True) == plain_with_tools + 50
+    assert await count("chat", None, responses=True) == plain_without_tools + 7
+    assert await count("per-api", tools, responses=False) == plain_with_tools + 50
+    assert await count("per-api", tools, responses=True) == plain_with_tools + 2
+    assert await count("per-api", None, responses=True) == plain_without_tools + 5
 
 
 _GET_WEATHER: Final = {
@@ -2791,6 +2804,55 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
             tools=list(tools) or None,
             system=system,
         )
+    )
+
+    assert counted.count_source == "local_estimate"
+    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
+# usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
+# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "system", "tools", "billed_prompt_tokens"),
+    [
+        (_AZURE_GROK_4_1, None, (), 159),
+        (_AZURE_GROK_4_1, None, (_GET_WEATHER,), 159),
+        (_AZURE_GROK_4_1, None, _THREE_TOOLS, 257),
+        (_AZURE_GROK_4_1, None, (_FILL_FORM,), 352),
+        (_AZURE_GROK_4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 170),
+        (_FIREWORKS_DEEPSEEK_V4_1, None, (_GET_WEATHER,), 304),
+        (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
+    ],
+)
+async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_shipped_framing(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    system: str | None,
+    tools: tuple[dict[str, object], ...],
+    billed_prompt_tokens: int,
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "billed",
+                    "litellm_params": {"model": model, "api_key": "unused", "api_base": "https://unused.invalid"},
+                }
+            ]
+        ),
+    )
+
+    counted: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="billed",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=list(tools) or None,
+            system=system,
+        ),
+        responses_request={"model": "billed", "input": "What is the weather in Paris?"},
     )
 
     assert counted.count_source == "local_estimate"

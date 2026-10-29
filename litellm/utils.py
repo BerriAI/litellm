@@ -7057,6 +7057,8 @@ def get_model_info_helper(
                 supported_audio_formats=_model_info.get("supported_audio_formats", None),
                 token_count_framing=_model_info.get("token_count_framing", None),
                 token_count_tool_framing=_model_info.get("token_count_tool_framing", None),
+                token_count_responses_framing=_model_info.get("token_count_responses_framing", None),
+                token_count_responses_tool_framing=_model_info.get("token_count_responses_tool_framing", None),
                 token_count_model=_model_info.get("token_count_model", None),
                 token_count_tokenizer=_model_info.get("token_count_tokenizer", None),
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),

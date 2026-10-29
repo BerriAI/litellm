@@ -187,6 +187,8 @@ pub struct ModelInfoFields {
     pub supported_audio_formats: Option<Value>,
     pub token_count_framing: Option<i64>,
     pub token_count_tool_framing: Option<i64>,
+    pub token_count_responses_framing: Option<i64>,
+    pub token_count_responses_tool_framing: Option<i64>,
     pub token_count_model: Option<Value>,
     pub token_count_tokenizer: Option<Value>,
     pub vertex_ai_audio_api: Option<Value>,

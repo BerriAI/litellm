@@ -131,27 +131,70 @@ def test_shipped_australian_count_region_stays_with_an_australian_deployment() -
     assert settings.count_model == TokenCountModel(model="au.anthropic.claude-opus-5-5", region="ap-southeast-4")
 
 
+_ABSENT: Final = object()
+
+
+@pytest.mark.parametrize(
+    "key", ["token_count_tool_framing", "token_count_responses_framing", "token_count_responses_tool_framing"]
+)
 @pytest.mark.parametrize(
     ("configured", "default", "expected"),
     [
-        ({}, {"token_count_tool_framing": 151}, (None, 151)),
-        ({"token_count_tool_framing": 40}, {"token_count_tool_framing": 151}, (None, 40)),
-        ({"token_count_tool_framing": 0}, {"token_count_tool_framing": 151}, (None, 0)),
-        ({"token_count_tool_framing": 40.0}, {}, (None, 40)),
-        ({"token_count_tool_framing": -1}, {"token_count_tool_framing": 151}, (None, 151)),
-        ({"token_count_tool_framing": True}, {"token_count_tool_framing": 151}, (None, 151)),
-        ({"token_count_tool_framing": "40"}, {}, (None, None)),
-        ({"token_count_tool_framing": 40}, {"token_count_framing": 97}, (97, 40)),
-        ({"token_count_framing": 40}, {"token_count_tool_framing": 151}, (40, 151)),
+        (_ABSENT, 151, 151),
+        (40, 151, 40),
+        (0, 151, 0),
+        (40.0, _ABSENT, 40),
+        (-1, 151, 151),
+        (True, 151, 151),
+        ("40", _ABSENT, None),
     ],
 )
-def test_tool_framing_resolves_like_framing_and_apart_from_it(
-    configured: dict[str, object], default: dict[str, object], expected: tuple[int | None, int | None]
+def test_each_request_kind_framing_resolves_like_framing_and_apart_from_the_others(
+    key: str, configured: object, default: object, expected: int | None
 ) -> None:
     settings: Final = resolve_token_count_settings(
-        configured=configured, default=default, deployment_region=_in_us_west_2
+        configured={} if configured is _ABSENT else {key: configured},
+        default={"token_count_framing": 97, **({} if default is _ABSENT else {key: default})},
+        deployment_region=_in_us_west_2,
     )
-    assert (settings.framing, settings.tool_framing) == expected
+    resolved: Final = {
+        "token_count_tool_framing": settings.tool_framing,
+        "token_count_responses_framing": settings.responses_framing,
+        "token_count_responses_tool_framing": settings.responses_tool_framing,
+    }
+    assert settings.framing == 97
+    assert resolved == {name: expected if name == key else None for name in resolved}
+
+
+_CHAT_ONLY: Final = TokenCountSettings(framing=185, count_model=None, tool_framing=214)
+_PER_API: Final = TokenCountSettings(
+    framing=149, count_model=None, tool_framing=300, responses_framing=145, responses_tool_framing=104
+)
+
+
+@pytest.mark.parametrize(
+    ("settings", "carries_tools", "responses_api", "expected"),
+    [
+        (TokenCountSettings(framing=None, count_model=None), True, True, 0),
+        (TokenCountSettings(framing=23, count_model=None), True, False, 23),
+        (TokenCountSettings(framing=23, count_model=None), True, True, 23),
+        (_CHAT_ONLY, False, False, 185),
+        (_CHAT_ONLY, True, False, 214),
+        (_CHAT_ONLY, False, True, 185),
+        (_CHAT_ONLY, True, True, 214),
+        (_PER_API, False, False, 149),
+        (_PER_API, True, False, 300),
+        (_PER_API, False, True, 145),
+        (_PER_API, True, True, 104),
+        (TokenCountSettings(framing=149, count_model=None, tool_framing=0), True, False, 0),
+        (TokenCountSettings(framing=149, count_model=None, responses_tool_framing=0), True, True, 0),
+        (TokenCountSettings(framing=149, count_model=None, responses_framing=145), True, True, 149),
+    ],
+)
+def test_hidden_prompt_is_the_framing_set_for_the_request_api_and_tools_falling_back_to_chat(
+    settings: TokenCountSettings, carries_tools: bool, responses_api: bool, expected: int
+) -> None:
+    assert settings.hidden_prompt_tokens(carries_tools=carries_tools, responses_api=responses_api) == expected
 
 
 def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> None:

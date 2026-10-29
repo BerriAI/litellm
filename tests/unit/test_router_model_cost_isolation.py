@@ -625,6 +625,8 @@ def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
         "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-west-2"},
         "token_count_framing": 7,
         "token_count_tool_framing": 3,
+        "token_count_responses_framing": 5,
+        "token_count_responses_tool_framing": 2,
     }
     builtin: Final = {field: cost_map_entry(backend_model).get(field) for field in configured}
     assert all(builtin[field] != value for field, value in configured.items()), builtin
