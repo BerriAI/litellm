@@ -7,6 +7,12 @@ attribution, priced against the deployment that served it. The poll's status che
 with BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked managed by the
 managed files hook, so both stay free. The spend event carries the id the client holds, the row's
 unified_object_id, so its spend log is found under that id with the _background_cost suffix.
+The spend event reaches the creating key's or team's own logging callbacks the way that creator's
+requests do. Its message content is redacted when the creator's key or team logging turns message
+logging off, else as the proxy is set, the way the batch poll decides it. The row is claimed before
+the creator is read, so reads that lose the race skip the lookups. A creator whose lookup fails, or
+whose logging settings the logger rejects, is still billed, through the proxy's own callbacks only
+and with its message content redacted.
 A read that finds no row, because the create could not store one, stores it under the reading key
 and bills it the same way, so a response the create left untracked is still billed once. A streamed
 background create is free on its own; its stream stores the row under the creating key and bills
@@ -29,6 +35,7 @@ from typing import TYPE_CHECKING, Final, cast
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
+    ResponseCreator,
 )
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -54,12 +61,29 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.proxy.proxy_server import ProxyConfig
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.router import Router
 
 _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_CALLBACK_LIST_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+
+
+class _RoutedModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str | None = None
+
+
+class _RoutedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    model_info: _RoutedModelInfo = _RoutedModelInfo()
+
+
+_ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
 _RETRIEVE_RESPONSE_CALL_TYPE: Final = "aget_responses"
+_CALLBACK_LIST_FIELDS: Final = frozenset({"success_callback", "failure_callback", "litellm_disabled_callbacks"})
+_REJECTED_CREATOR_LOGGING: Final[Mapping[str, object]] = MappingProxyType({"turn_off_message_logging": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +100,7 @@ class BilledBackgroundResponse:
     custom_llm_provider: str | None
     litellm_params: Mapping[str, object]
     metadata: Mapping[str, object]
+    creator_logging: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,11 +119,51 @@ def _without_read_price(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
     return unpriced
 
 
-async def log_billed_background_response(billed: BilledBackgroundResponse) -> BilledCharge:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+def _string_callbacks(callbacks: object) -> tuple[str, ...]:
+    if not isinstance(callbacks, list):
+        return ()
+    return tuple(
+        callback for callback in _CALLBACK_LIST_ADAPTER.validate_python(callbacks) if isinstance(callback, str)
+    )
 
-    logging_obj: Final = LiteLLMLogging(
+
+def _running_proxy_config() -> "ProxyConfig":
+    from litellm.proxy.proxy_server import proxy_config
+
+    return proxy_config
+
+
+def creator_logging_fields(creator: ResponseCreator, proxy_config: "ProxyConfig | None") -> Mapping[str, object]:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
+
+    if not creator.settings_read:
+        return _REJECTED_CREATOR_LOGGING
+    try:
+        return key_and_team_logging_fields(
+            user_api_key_dict=UserAPIKeyAuth(
+                metadata=dict(creator.key_metadata),
+                team_id=creator.team_id,
+                team_metadata=dict(creator.team_metadata),
+            ),
+            proxy_config=proxy_config if proxy_config is not None else _running_proxy_config(),
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"CheckResponsesCost: could not read the creator's logging settings, so only the proxy's "
+            f"callbacks get the billed event: {e}"
+        )
+        return _REJECTED_CREATOR_LOGGING
+
+
+def _billed_logging_obj(billed: BilledBackgroundResponse, creator_logging: Mapping[str, object]) -> "LiteLLMLogging":
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.utils import split_dynamic_success_callbacks
+
+    sync_callbacks, async_callbacks = split_dynamic_success_callbacks(
+        _string_callbacks(creator_logging.get("success_callback"))
+    )
+    return LiteLLMLogging(
         model=billed.model,
         messages=[{"role": "user", "content": "<retrieve_response>"}],
         stream=False,
@@ -106,7 +171,27 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> Bi
         start_time=datetime.now(),
         litellm_call_id=str(uuid.uuid4()),
         function_id=str(uuid.uuid4()),
+        dynamic_success_callbacks=list(sync_callbacks),
+        dynamic_async_success_callbacks=list(async_callbacks) or None,
+        kwargs={key: value for key, value in creator_logging.items() if key not in _CALLBACK_LIST_FIELDS},
     )
+
+
+def _creator_or_proxy_logging_obj(billed: BilledBackgroundResponse) -> "LiteLLMLogging":
+    try:
+        return _billed_logging_obj(billed, billed.creator_logging)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"CheckResponsesCost: the creator's logging settings were rejected, so only the proxy's "
+            f"callbacks get the billed event: {e}"
+        )
+        return _billed_logging_obj(billed, _REJECTED_CREATOR_LOGGING)
+
+
+async def log_billed_background_response(billed: BilledBackgroundResponse) -> BilledCharge:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    logging_obj: Final = _creator_or_proxy_logging_obj(billed)
     logging_obj.update_environment_variables(
         litellm_params={**billed.litellm_params, "metadata": dict(billed.metadata)},
         optional_params={},
@@ -174,6 +259,7 @@ class CheckResponsesCost:
         prisma_client: "PrismaClient",
         llm_router: "Router",
         log_billed_response: BilledResponseLogger = log_billed_background_response,
+        proxy_config: "ProxyConfig | None" = None,
     ):
         from litellm.proxy.utils import PrismaClient, ProxyLogging
         from litellm.router import Router
@@ -183,6 +269,7 @@ class CheckResponsesCost:
         self.llm_router: Router = llm_router
         self._creator_attribution: Final = ManagedObjectCreatorAttribution(prisma_client, "CheckResponsesCost")
         self._log_billed_response: Final = log_billed_response
+        self._proxy_config: Final = proxy_config
 
     def _resolve_deployment(self, response_id: str) -> Deployment | None:
         model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
@@ -294,11 +381,12 @@ class CheckResponsesCost:
             data={"status": job.status or PENDING_RESPONSE_STATUSES[0]},
         )
 
-    async def _billed_response(
+    def _billed_response(
         self,
         job: ManagedObjectRow,
         target: _PollTarget,
         response: ResponsesAPIResponse,
+        creator: ResponseCreator,
     ) -> BilledBackgroundResponse:
         deployment: Final = target.deployment
         return BilledBackgroundResponse(
@@ -310,12 +398,26 @@ class CheckResponsesCost:
             litellm_params=_deployment_litellm_params(deployment) if deployment is not None else MappingProxyType({}),
             metadata=MappingProxyType(
                 {
-                    **(await self._creator_attribution.response_metadata(job, job.unified_object_id)),
+                    **creator.metadata,
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **target.model_metadata,
                     **(_deployment_metadata(deployment) if deployment is not None else {}),
+                    **self._requested_model_group(target, job.team_id),
                 }
             ),
+            creator_logging=creator_logging_fields(creator, self._proxy_config),
+        )
+
+    def _requested_model_group(self, target: _PollTarget, team_id: str | None) -> Mapping[str, object]:
+        requested: Final = target.model_metadata.get("model_group")
+        if target.deployment is None or not isinstance(requested, str):
+            return MappingProxyType({})
+        routed: Final = _ROUTED_DEPLOYMENTS.validate_python(
+            self.llm_router.get_model_list(model_name=requested, team_id=team_id) or ()
+        )
+        serving_id: Final = target.deployment.model_info.id
+        return MappingProxyType(
+            {"model_group": requested} if any(row.model_info.id == serving_id for row in routed) else {}
         )
 
     async def _bill_once(
@@ -328,7 +430,8 @@ class CheckResponsesCost:
             verbose_proxy_logger.info(f"Response {job.unified_object_id} was already billed elsewhere, skipping")
             return None
         try:
-            charge: Final = await self._log_billed_response(await self._billed_response(job, target, response))
+            creator: Final = await self._creator_attribution.response_creator(job, job.unified_object_id)
+            charge: Final = await self._log_billed_response(self._billed_response(job, target, response, creator))
         except BaseException:
             await self._release_billing_claim(job)
             raise

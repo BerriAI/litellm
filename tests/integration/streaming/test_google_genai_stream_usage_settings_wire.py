@@ -18,6 +18,8 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROJECT: Final = "scripted-project"
 _ADAPTER_MODEL: Final = "settings-adapter-openai"

@@ -1,4 +1,6 @@
-use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
+use litellm_llms_types::formats::messages::{
+    MessagesOptionalParams, MessagesRequest, MessagesResponse,
+};
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
@@ -55,6 +57,7 @@ pub trait BaseMessagesConfig: Sync {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        optional_params: &MessagesOptionalParams,
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
@@ -72,6 +75,15 @@ pub trait BaseMessagesConfig: Sync {
 
     fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
         headers
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        _headers: &Headers,
+        _drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
@@ -110,6 +122,7 @@ mod tests {
             headers: Headers,
             _api_key: Option<&str>,
             _model: &str,
+            _optional_params: &MessagesOptionalParams,
             _litellm_params: &LitellmParams,
             _env_lookup: &dyn Fn(&str) -> Option<String>,
         ) -> Result<ValidatedEnvironment, Error> {

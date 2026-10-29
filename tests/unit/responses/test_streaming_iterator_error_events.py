@@ -19,10 +19,12 @@ Also covers: ErrorEventError.param must accept dict payloads without raising a
 Pydantic ValidationError (previously typed as Optional[str]).
 """
 
+import asyncio
 import json
 from datetime import datetime
 from importlib import import_module
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
 from unittest.mock import Mock, patch
 
 import httpx
@@ -30,16 +32,21 @@ import pytest
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
+    ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
     _status_code_for_error_fields,
 )
+from litellm.utils import ProviderConfigManager
+from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ErrorEvent,
     ErrorEventError,
@@ -519,6 +526,82 @@ def test_handle_logging_failed_response_records_usage_and_cost():
     iterator.logging_obj.response_cost_calculator.assert_called_once_with(result=chunk.response)
 
 
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed: tuple[StandardLoggingPayload, ...] = ()
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failed = (*self.failed, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+
+async def _first_failure_row(recorder: _FailureRecorder) -> StandardLoggingPayload:
+    for _ in range(200):
+        if recorder.failed:
+            return recorder.failed[0]
+        await asyncio.sleep(0.01)
+    pytest.fail("the failed stream logged no failure row")
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_bills_only_its_own_usage_over_an_earlier_attempts_stash():
+    recorder: Final = _FailureRecorder()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-5.6",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="responses-failed-over-stash",
+        function_id="responses-failed-over-stash",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.6", optional_params={}, litellm_params=get_litellm_params(custom_llm_provider="openai")
+    )
+    logging_obj.model_call_details["combined_usage_object"] = litellm.Usage(
+        prompt_tokens=100, completion_tokens=50, total_tokens=150
+    )
+    logging_obj.model_call_details["response_cost"] = 0.5
+    failed: Final = {
+        "type": "response.failed",
+        "sequence_number": 1,
+        "response": {
+            "id": "resp_failed_over_stash",
+            "object": "response",
+            "created_at": 1790000000,
+            "status": "failed",
+            "model": "gpt-5.6",
+            "output": [],
+            "error": {"code": "server_error", "message": "boom"},
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        },
+    }
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=f"data: {json.dumps(failed)}\n\n".encode()
+        ),
+        model="gpt-5.6",
+        responses_api_provider_config=ProviderConfigManager.get_provider_responses_api_config(
+            provider="openai", model="gpt-5.6"
+        ),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await anext(aiter(iterator))
+
+    row: Final = await _first_failure_row(recorder)
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="gpt-5.6", prompt_tokens=10, completion_tokens=5, custom_llm_provider="openai"
+    )
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (10, 5)
+    assert row["response_cost"] == pytest.approx(prompt_cost + completion_cost)
+
+
 def test_handle_logging_failed_response_without_usage_skips_recording():
     iterator = _make_iterator()
     iterator.completed_response = _make_failed_chunk(
@@ -658,3 +741,140 @@ def test_openai_top_level_error_event_keeps_the_provider_code_and_message(
     assert exc_info.value.status_code == status_code
     assert type(exc_info.value.original_exception) is exception_type
     assert f"upstream said {code}" in str(exc_info.value.original_exception)
+
+
+_AZURE_RESPONSES_API_BASE: Final = "https://responses-mid-stream.openai.azure.com"
+_AZURE_RESPONSES_REQUEST_URL: Final = f"{_AZURE_RESPONSES_API_BASE}/openai/responses?api-version=2025-04-01-preview"
+_AZURE_RESPONSES_FAILED_EVENT: Final = {
+    "type": "response.failed",
+    "sequence_number": 2,
+    "response": {
+        "id": "resp_mid_stream",
+        "object": "response",
+        "created_at": 1790000000,
+        "status": "failed",
+        "model": "gpt-5.4-mini",
+        "output": [],
+        "error": {"code": "server_error", "message": "upstream failed mid-stream"},
+    },
+}
+_AZURE_RESPONSES_WS_URL: Final = "wss://responses-mid-stream.openai.azure.com/openai/v1/responses?api-version=preview"
+
+
+def _azure_responses_logging_obj(logged_api_base: str, routed_api_base: str | None) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-5.4-mini",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="responses-mid-stream",
+        function_id="responses-mid-stream",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-mini",
+        optional_params={},
+        litellm_params=get_litellm_params(
+            api_base=logged_api_base,
+            custom_llm_provider="azure",
+            metadata={
+                "model_group": "gpt-5.4-mini-azure",
+                "deployment": "azure/gpt-5.4-mini",
+                "api_base": routed_api_base,
+            },
+        ),
+    )
+    return logging_obj
+
+
+def _assert_names_the_azure_deployment(exception: BaseException, api_base: str = _AZURE_RESPONSES_API_BASE) -> None:
+    debug_info: Final = getattr(exception, "litellm_debug_info", None)
+    assert isinstance(debug_info, str)
+    assert f"API Base: `{api_base}`" in debug_info
+    assert "model_group: `gpt-5.4-mini-azure`" in debug_info
+    assert "deployment: `azure/gpt-5.4-mini`" in debug_info
+    assert "api.openai.com" not in debug_info
+
+
+@pytest.mark.asyncio
+async def test_response_failed_after_output_reports_the_deployment_it_was_sent_to():
+    delta: Final = {
+        "type": "response.output_text.delta",
+        "sequence_number": 1,
+        "item_id": "msg_mid_stream",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "1",
+    }
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in (delta, _AZURE_RESPONSES_FAILED_EVENT))
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode()),
+        model="gpt-5.4-mini",
+        responses_api_provider_config=ProviderConfigManager.get_provider_responses_api_config(
+            provider="azure", model="gpt-5.4-mini"
+        ),
+        logging_obj=_azure_responses_logging_obj(_AZURE_RESPONSES_REQUEST_URL, _AZURE_RESPONSES_API_BASE),
+        custom_llm_provider="azure",
+    )
+    stream: Final = aiter(iterator)
+    assert getattr(await anext(stream), "delta", None) == "1"
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await anext(stream)
+    assert exc_info.value.is_pre_first_chunk is False
+    _assert_names_the_azure_deployment(exc_info.value.original_exception)
+
+
+class _ScriptedAzureSocket:
+    def __init__(self, events: tuple[str, ...]) -> None:
+        self._events = iter(events)
+        self._drained = asyncio.Event()
+
+    async def recv(self, decode: bool = False) -> str:
+        event: Final = next(self._events, None)
+        if event is None:
+            self._drained.set()
+            raise ConnectionError("backend closed")
+        return event
+
+    async def send(self, message: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def send_text(self, data: str) -> None:
+        return None
+
+    async def receive_text(self) -> str:
+        await self._drained.wait()
+        raise ConnectionError("client closed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("routed_api_base", "reported_api_base"),
+    [
+        (_AZURE_RESPONSES_API_BASE, _AZURE_RESPONSES_API_BASE),
+        (None, "wss://responses-mid-stream.openai.azure.com/openai/v1/responses"),
+    ],
+    ids=["router", "no_router"],
+)
+async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_sent_to(
+    routed_api_base: str | None, reported_api_base: str
+):
+    connection_logging_obj: Final = _azure_responses_logging_obj(_AZURE_RESPONSES_WS_URL, routed_api_base)
+    connection_logging_obj.pre_call(input=None, api_key="", additional_args={"api_base": _AZURE_RESPONSES_WS_URL})
+    socket: Final = _ScriptedAzureSocket((json.dumps(_AZURE_RESPONSES_FAILED_EVENT),))
+    streaming: Final = ResponsesWebSocketStreaming(
+        websocket=socket,
+        backend_ws=socket,
+        logging_obj=connection_logging_obj,
+        authorized_model="gpt-5.4-mini",
+        custom_llm_provider="azure",
+    )
+
+    failure: Final = await streaming.bidirectional_forward()
+
+    assert failure is not None
+    _assert_names_the_azure_deployment(failure, reported_api_base)

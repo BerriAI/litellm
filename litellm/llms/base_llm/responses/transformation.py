@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 import httpx
 
@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
+
+ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -90,6 +92,10 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
+
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        """The ``reasoning.summary`` LiteLLM's opt-in auto summary asks this provider for."""
+        return "detailed"
 
     @abstractmethod
     def map_openai_params(
@@ -260,6 +266,9 @@ class BaseResponsesAPIConfig(ABC):
         custom_llm_provider: str | None = None,
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False
+
+    def may_answer_stream_with_json(self) -> bool:
         return False
 
     def supports_native_websocket(self) -> bool:

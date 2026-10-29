@@ -31,18 +31,29 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import (
+    ModelInfoLookupMiss,
+    ProviderConfigManager,
+    lookup_model_info_for_registration,
+    resolve_api_key_secret_reference,
+)
 
-from ..litellm_core_utils.core_helpers import normalize_drop_params
+from ..litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ..litellm_core_utils.realtime_streaming import client_websocket_scope
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
-from ..llms.bedrock.realtime.handler import BedrockRealtime
+from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
+from ..llms.openai.common_utils import is_openai_backed_api_base
 from ..llms.openai.live.handler import OpenAILiveSessions
-from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.openai.realtime.handler import (
+    OpenAIRealtime,
+    confirm_gateway_session_started,
+    confirm_session_started,
+)
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
@@ -80,6 +91,13 @@ def _with_resolved_session_model(session: dict[str, object], model_name: str) ->
     if "model" not in session:
         return session
     return {**session, "model": model_name}
+
+
+def _resolved_request_session(request_data: Mapping[str, object], model_name: str) -> Mapping[str, object] | None:
+    session: Final = as_str_mapping(request_data.get("session"))
+    if not isinstance(session, dict):
+        return None
+    return _with_resolved_session_model(session, model_name)
 
 
 def _build_litellm_metadata(kwargs: dict) -> dict[str, object]:
@@ -188,8 +206,9 @@ async def acreate_realtime_client_secret(
         custom_llm_provider=custom_llm_provider,
     )
     request_data: Final = req.model_dump(exclude_none=True, exclude={"model"})
-    if isinstance(request_data.get("session"), dict):
-        request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
+    resolved_session: Final = _resolved_request_session(request_data, model_name)
+    if resolved_session is not None:
+        request_data["session"] = resolved_session
     return await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=await _realtime_http_bearer_token(
@@ -471,6 +490,7 @@ async def _arealtime(
 
     For PROXY use only.
     """
+    raise_if_session_committed(client_websocket_scope(websocket))
     headers = cast(dict | None, kwargs.get("headers"))
     extra_headers: Final = cast(dict | None, kwargs.get("extra_headers"))
     if headers is None:
@@ -560,7 +580,12 @@ async def _arealtime(
             configured_realtime_protocol, query_params=query_params, websocket=websocket
         )
         resolved_azure_ad_token: Final = (
-            None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
+            None
+            if api_key
+            else await asyncio.to_thread(
+                get_azure_ad_token,
+                GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token),
+            )
         )
         await azure_realtime.async_realtime(
             model=model,
@@ -725,6 +750,18 @@ def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) 
     return "/v1/realtime/transcription_sessions" in (model_info.get("supported_endpoints") or ())
 
 
+_REALTIME_SERVED_ENDPOINTS: Final = ("/v1/realtime", "/v1/audio/transcriptions", "/v1/live")
+_GATEWAY_FIRST_EVENT_WAIT_SECONDS: Final = 3.0
+
+
+def _cost_map_lists_outside_realtime(model: str) -> bool:
+    model_info: Final = lookup_model_info_for_registration(model, "openai")
+    endpoints: Final = (
+        () if isinstance(model_info, ModelInfoLookupMiss) else model_info.get("supported_endpoints") or ()
+    )
+    return bool(endpoints) and not any(endpoint.startswith(_REALTIME_SERVED_ENDPOINTS) for endpoint in endpoints)
+
+
 _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcription"}
 
 
@@ -741,15 +778,21 @@ def _azure_realtime_health_protocol(
     return "GA", query_params
 
 
-def _realtime_health_check_auth_headers(
+async def _realtime_health_check_auth_headers(
     custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, object]
 ) -> Mapping[str, str]:
     if custom_llm_provider == "azure":
+        azure_ad_token: Final = (
+            None
+            if api_key
+            else await asyncio.to_thread(
+                get_azure_ad_token,
+                GenericLiteLLMParams.model_validate(dict(model_params)),
+            )
+        )
         return azure_realtime.get_auth_headers(
             api_key=api_key,
-            azure_ad_token=(
-                None if api_key else get_azure_ad_token(GenericLiteLLMParams.model_validate(dict(model_params)))
-            ),
+            azure_ad_token=azure_ad_token,
         )
     if api_key is None:
         return _EMPTY_AUTH_HEADERS
@@ -764,6 +807,7 @@ async def realtime_health_check(
     api_version: str | None = None,
     realtime_protocol: str | None = None,
     model_params: Mapping[str, object] | None = None,
+    gateway_first_event_wait_seconds: float = _GATEWAY_FIRST_EVENT_WAIT_SECONDS,
 ) -> bool:
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -779,33 +823,46 @@ async def realtime_health_check(
             without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
-        bool - True if connection is successful, False otherwise
+        bool - True once the connection is open, and on OpenAI's own hosts once the first server event is not an
+            error, since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
+            the failure in its first server event. Behind any other OpenAI api_base the first event is read for
+            `gateway_first_event_wait_seconds` only, and a gateway that stays silent that long counts as healthy.
+            An `invalid_model` error also counts as healthy unless litellm's
+            cost map lists only endpoints realtime never serves for the model: OpenAI checks the key first, and Live
+            and transcription models are served through other endpoints. The listed `mode` is not read, since a
+            deployment's own `mode: realtime` replaces it when the router registers the deployment
     Raises:
-        Exception - if the connection is not successful
+        Exception - if the connection is not successful or if OpenAI's first server event is any other error
     """
     import websockets
 
     resolved_params: Final = _model_params_with_stored_credentials(model_params or _EMPTY_MODEL_PARAMS)
-    resolved_api_key: Final = cast(  # cast-ok: provider parameters expose optional string credentials
-        str | None, api_key or resolved_params.get("api_key")
-    )
     resolved_api_base: Final = cast(  # cast-ok: provider parameters expose optional string endpoints
         str | None, api_base or resolved_params.get("api_base")
+    )
+    resolved_api_key: Final = resolve_api_key_secret_reference(
+        cast(  # cast-ok: provider parameters expose optional string credentials
+            str | None, api_key or resolved_params.get("api_key")
+        ),
+        model=model,
+        llm_provider=custom_llm_provider,
+        upstream=MappingProxyType({**resolved_params, "api_base": resolved_api_base}),
     )
     resolved_api_version: Final = cast(  # cast-ok: provider parameters expose optional string versions
         str | None, api_version or resolved_params.get("api_version")
     )
     url: str | None = None
+    openai_api_base: Final = resolved_api_base or litellm.api_base or "https://api.openai.com/"
     health_check_api_key: Final = (
         await resolve_openai_bearer_token_async(
             static_api_key=openai_static_api_key(resolved_api_key),
-            api_base=resolved_api_base,
+            api_base=openai_api_base,
             litellm_params=resolved_params,
         )
         if custom_llm_provider == LlmProviders.OPENAI.value
         else resolved_api_key
     )
-    auth_headers: Final = _realtime_health_check_auth_headers(
+    auth_headers: Final = await _realtime_health_check_auth_headers(
         custom_llm_provider=custom_llm_provider,
         api_key=health_check_api_key,
         model_params=resolved_params,
@@ -824,10 +881,7 @@ async def realtime_health_check(
             query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
-        url = openai_realtime.construct_url(
-            api_base=resolved_api_base or "https://api.openai.com/",
-            query_params={"model": model},
-        )
+        url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
     elif custom_llm_provider == "xai":
         url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
@@ -873,8 +927,23 @@ async def realtime_health_check(
         additional_headers=auth_headers,
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=realtime_ssl_for_url(url),
-    ):
-        return True
+    ) as connection:
+        if custom_llm_provider != "openai":
+            return True
+        if not is_openai_backed_api_base(url):
+            return await confirm_gateway_session_started(
+                connection,
+                model,
+                sent_credentials=bool(auth_headers),
+                model_listed_outside_realtime=_cost_map_lists_outside_realtime(model),
+                first_event_wait_seconds=gateway_first_event_wait_seconds,
+            )
+        return await confirm_session_started(
+            connection,
+            model,
+            sent_credentials=bool(auth_headers),
+            model_listed_outside_realtime=_cost_map_lists_outside_realtime(model),
+        )
 
 
 _realtime_health_check = realtime_health_check

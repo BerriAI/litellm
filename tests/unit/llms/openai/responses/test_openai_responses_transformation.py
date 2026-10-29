@@ -7,13 +7,17 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
@@ -1373,12 +1377,99 @@ class TestOpenAIResponsesAPIConfig:
 
         assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
 
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": None},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": None,
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": None}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+            ),
+        ],
+        ids=("compaction", "shell-call-output-entries", "sent-created-by"),
+    )
+    def test_an_input_item_saved_with_a_null_created_by_replays_without_it(
+        self, item: dict[str, object], expected: dict[str, object]
+    ):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=[item, {"role": "user", "content": "And Berlin?"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            (
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"},
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                ResponseCompactionItem(id="cmp_1", type="compaction", encrypted_content="gAAAA", created_by="user_1"),
+                {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "created_by": "user_1",
+                    "output": [{"stdout": "a.py", "stderr": "", "created_by": "user_1"}],
+                },
+                {"type": "shell_call_output", "call_id": "call_1", "output": [{"stdout": "a.py", "stderr": ""}]},
+            ),
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": [], "created_by": "user_1"},
+                {"id": "rs_1", "type": "reasoning", "summary": []},
+            ),
+        ],
+        ids=("compaction", "sdk-compaction-item", "shell-call-output-entries", "reasoning"),
+    )
+    def test_a_set_created_by_is_dropped_under_drop_params(self, item: object, expected: dict[str, object]):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=cast("list[dict[str, object]]", [item]),  # cast-ok: an SDK item stands in for its JSON shape
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [expected]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):
         self.config = AzureOpenAIResponsesAPIConfig()
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
+
+    def test_azure_drops_a_set_created_by_under_drop_params(self):
+        compaction: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"}
+
+        request: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=[{**compaction, "created_by": "user_1"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+
+        assert request["input"] == [compaction]
 
     def test_azure_decodes_json_string_tool_parameters(self):
         """Azure reaches the same wire through `super()`, after un-nesting a chat-shaped tool."""
@@ -2302,6 +2393,115 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert ("top_p" in mapped) is top_p_survives
+
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_effort_levels_the_map_row_turns_off_are_dropped_or_refused(self, local_model_cost_map, level):
+        """Same row as the chat gate, read opt-out for every level but max. gpt-6.1-sol's row turns
+        none and minimal off: OpenAI lists low, medium, high, xhigh and max for it
+        (https://developers.openai.com/api/docs/models/gpt-6.1-sol, via #43910), and a local proxy
+        got OpenAI's 400 for none and minimal through /v1/responses on 2026-09-30."""
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+        )
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if forwarded:
+            kept = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": level}},
+                model="gpt-6.1-sol",
+                drop_params=False,
+            )
+            assert kept["reasoning"] == {"effort": level}
+        else:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
+    @pytest.mark.parametrize(
+        ("flags", "level", "forwarded"),
+        [
+            ({}, "none", True),
+            ({"supports_none_reasoning_effort": False}, "none", False),
+            ({"supports_none_reasoning_effort": True}, "none", True),
+            ({"supports_minimal_reasoning_effort": False}, "minimal", False),
+            ({"supports_max_reasoning_effort": False}, "max", True),
+            ({}, "xhigh", True),
+            ({"supports_xhigh_reasoning_effort": False}, "xhigh", False),
+            ({"supports_none_reasoning_effort": False}, "medium", True),
+        ],
+    )
+    def test_the_row_flags_alone_decide_whether_a_level_is_forwarded(
+        self, local_model_cost_map, monkeypatch, flags, level, forwarded
+    ):
+        """Same model name, rewritten row: this surface reads every level opt-out, xhigh included,
+        so the gate flips with the flags alone. max is the one level no flag can turn off here,
+        since the same model honors it on this route and refuses it on chat. The chat test module
+        pins the real row's facts."""
+        real_row = litellm.model_cost["gpt-6.1-sol"]
+        without_flags = {
+            field: value
+            for field, value in real_row.items()
+            if not (field.startswith("supports_") and field.endswith("_reasoning_effort"))
+        }
+        monkeypatch.setitem(litellm.model_cost, "gpt-6.1-sol", {**without_flags, **flags})
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if not forwarded:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
+    def test_dropping_a_refused_effort_keeps_the_rest_of_the_reasoning_object(self, local_model_cost_map):
+        refused = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": refused, "summary": "auto"}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert mapped["reasoning"] == {"summary": "auto"}
+
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_gpt5_3_codex_forwards_exactly_the_effort_levels_its_map_row_allows(self, local_model_cost_map, level):
+        """The gate turns a stale false into a local refusal, so the Responses-only codex row has to
+        say what the route does. On 2026-10-01 /v1/responses answered gpt-5.3-codex none and xhigh
+        with 200 (effort echoed back) and minimal and max with 400 unsupported_value naming none,
+        low, medium, high and xhigh, so the row takes none and xhigh and turns minimal off."""
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-5.3-codex"].get(f"supports_{level}_reasoning_effort") is not False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-5.3-codex",
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is forwarded
+
+    def test_gpt5_3_codex_row_takes_none_and_xhigh(self, local_model_cost_map):
+        """Pinned on purpose so the row-derived test above cannot go vacuous: the live answers of
+        2026-10-01 listed above. When OpenAI changes the set, flip the row and this assertion
+        together."""
+        row = litellm.model_cost["gpt-5.3-codex"]
+        assert row["supports_none_reasoning_effort"] is True
+        assert row["supports_xhigh_reasoning_effort"] is True
+        assert row["supports_minimal_reasoning_effort"] is False
 
     def test_top_p_raises_without_drop_params(self, local_model_cost_map):
         with pytest.raises(litellm.UnsupportedParamsError):
@@ -4168,3 +4368,116 @@ def test_dict_responses_input_filters_unset_reasoning_fields() -> None:
     function_call_item: Final = validated_input[2]
     assert function_call_item["type"] == "function_call"
     assert function_call_item["status"] == "completed"
+
+
+_COMPACT_CONFIGS: Final = (
+    pytest.param(OpenAIResponsesAPIConfig(), "https://api.openai.com/v1/responses", id="openai"),
+    pytest.param(
+        AzureOpenAIResponsesAPIConfig(),
+        "https://x.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
+        id="azure",
+    ),
+    pytest.param(AzureAIResponsesAPIConfig(), "https://x.services.ai.azure.com/openai/v1/responses", id="azure_ai"),
+)
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_omits_metadata_and_user_and_keeps_the_rest_without_drop_params(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={
+            "metadata": {"ticket": "qa-1"},
+            "user": "end-user-1",
+            "instructions": "be brief",
+            "previous_response_id": "resp_1",
+            "reasoning": {"effort": "low"},
+            "temperature": 0.2,
+        },
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=False),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "gpt-5.4-mini",
+        "instructions": "be brief",
+        "previous_response_id": "resp_1",
+        "reasoning": {"effort": "low"},
+        "temperature": 0.2,
+    }
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_drops_params_compact_rejects_under_drop_params(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={
+            "metadata": {"ticket": "qa-1"},
+            "user": "end-user-1",
+            "temperature": 0.2,
+            "store": False,
+            "truncation": "auto",
+            "max_output_tokens": 100,
+            "tool_choice": "auto",
+            "reasoning": {"effort": "low"},
+            "include": ["reasoning.encrypted_content"],
+            "text": {"format": {"type": "text"}},
+        },
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "gpt-5.4-mini",
+        "reasoning": {"effort": "low"},
+        "include": ["reasoning.encrypted_content"],
+        "text": {"format": {"type": "text"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "api_base"),
+    (
+        pytest.param(XAIResponsesAPIConfig(), "https://api.x.ai/v1/responses", id="xai"),
+        pytest.param(HostedVLLMResponsesAPIConfig(), "http://vllm.example.com/v1/responses", id="hosted_vllm"),
+    ),
+)
+def test_compact_request_forwards_every_param_for_providers_not_known_to_reject_them(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="some-model",
+        input="hi",
+        response_api_optional_request_params={"metadata": {"ticket": "qa-1"}, "user": "end-user-1", "temperature": 0.2},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "some-model",
+        "metadata": {"ticket": "qa-1"},
+        "user": "end-user-1",
+        "temperature": 0.2,
+    }
+
+
+@pytest.mark.parametrize(("config", "api_base"), _COMPACT_CONFIGS)
+def test_compact_request_keeps_stream_under_drop_params(config: OpenAIResponsesAPIConfig, api_base: str) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="gpt-5.4-mini",
+        input="hi",
+        response_api_optional_request_params={"stream": True, "stream_options": {"include_obfuscation": False}},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {"model": "gpt-5.4-mini", "stream": True}

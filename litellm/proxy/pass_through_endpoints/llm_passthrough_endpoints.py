@@ -25,7 +25,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -44,11 +44,13 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
@@ -87,6 +89,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     model_deployments_support_stream_options,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -99,9 +102,15 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
+)
+from litellm.proxy.common_utils.token_count_log import (
+    deployment_model_id,
+    logged_provider_token_count,
+    rejected_token_count,
 )
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
@@ -222,7 +231,12 @@ async def _json_request_body(request: Request) -> Mapping[str, object]:
     return await request.json()
 
 
-def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def get_passthrough_router_request_metadata(
+    user_api_key_dict: UserAPIKeyAuth, request: Request | None = None
+) -> Mapping[str, object]:
     """
     Build the request metadata carrying key-level spend attribution and the
     pre-call budget reservation for a router-model passthrough request.
@@ -243,13 +257,17 @@ def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -
     """
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    request_data: Final = {"litellm_metadata": {}}
+    request_data: Final[dict[str, object]] = {  # mutable-ok: legacy enrichment writes this wrapper
+        "litellm_metadata": {}
+    }
     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=request_data,
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name="litellm_metadata",
     )
-    return request_data["litellm_metadata"]
+    if request is not None:
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+    return _METADATA_ADAPTER.validate_python(request_data["litellm_metadata"])
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -549,7 +567,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
-                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
             ),
         )
 
@@ -680,6 +698,20 @@ async def typesafe_proxy_route(
         is_streaming_request=False,
     )
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+_COST_MAP_ENTRIES: Final = TypeAdapter(Mapping[str, object])
+
+
+def typesafe_allowlist_model_names() -> tuple[str, ...]:
+    if not passthrough_endpoint_router.has_credentials(custom_llm_provider="typesafe"):
+        return ()
+    cost_map: Final = _COST_MAP_ENTRIES.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
+    priced_names: Final = (name.removeprefix("typesafe/") for name in cost_map if name.startswith("typesafe/"))
+    jev_models_typesafe_serves: Final = sorted(
+        name for name in priced_names if match_routing_generalization(name) == "typesafe"
+    )
+    return ("typesafe/*", *jev_models_typesafe_serves)
 
 
 @router.post(
@@ -1088,6 +1120,16 @@ def _guardrail_refusal_status(error: Exception) -> int | None:
             return None
 
 
+def _aws_error_type(error: Exception, handled: ProxyException) -> str | None:
+    """The AWS error type to answer the handled error with: ValidationException for a guardrail block, else the type
+    the error carried, as LiteLLM's own Bedrock request checks set it. None when the shared handler changed the
+    guardrail block's status."""
+    refusal_status: Final = _guardrail_refusal_status(error)
+    if refusal_status is not None:
+        return "ValidationException" if str(refusal_status) == handled.code else None
+    return next((value for name, value in handled.headers.items() if name.lower() == AWS_ERROR_TYPE_HEADER), None)
+
+
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
     """Bedrock's own error response, for an error Bedrock answered the passthrough request with an AWS error
     type."""
@@ -1112,9 +1154,9 @@ async def bedrock_passthrough_error_response(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLoggingType,
 ) -> Response:
-    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block or an error
-    Bedrock returned the way Bedrock does, so an AWS SDK reads its code and message. Anything else is raised as the
-    shared handler raises it."""
+    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block, an error
+    Bedrock returned, or an error carrying an AWS error type the way Bedrock does, so an AWS SDK reads its code and
+    message. Anything else is raised as the shared handler raises it."""
     try:
         await processor.handle_llm_api_exception(
             e=error,
@@ -1127,9 +1169,9 @@ async def bedrock_passthrough_error_response(
             raise
         return response
     except ProxyException as handled:
-        refusal_status: Final = _guardrail_refusal_status(error)
-        if refusal_status is not None and str(refusal_status) == handled.code:
-            raise AwsErrorTypeProxyException(handled, "ValidationException") from handled
+        aws_error_type: Final = _aws_error_type(error, handled)
+        if aws_error_type is not None:
+            raise AwsErrorTypeProxyException(handled, aws_error_type) from handled
         raise
 
 
@@ -1240,6 +1282,7 @@ async def handle_bedrock_count_tokens(
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
     from litellm.proxy.proxy_server import llm_router
 
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     try:
         # Initialize the handler
         handler: Final = BedrockCountTokensHandler()
@@ -1247,46 +1290,51 @@ async def handle_bedrock_count_tokens(
         # Extract model from request body
         model: Final = _optional_str(request_body.get("model"))
         if not model:
-            raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
+            raise rejected_token_count(
+                HTTPException(status_code=400, detail={"error": "Model is required in request body"}),
+                litellm_call_id,
+                None,
+            )
 
         # Get model parameters from router
         litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
         resolved_model = model  # Default fallback
 
-        if llm_router:
-            deployments: Final = llm_router.get_model_list(model_name=model)
-            if deployments and len(deployments) > 0:
-                # Get the first matching deployment
-                deployment: Final = deployments[0]
-                model_litellm_params: Final = deployment.get("litellm_params", {})
+        deployments: Final = llm_router.get_model_list(model_name=model) if llm_router else None
+        deployment: Final = deployments[0] if deployments else None
+        if deployment is not None:
+            model_litellm_params: Final = deployment.get("litellm_params", {})
 
-                # Get the resolved model ID from the configuration
-                if "model" in model_litellm_params:
-                    resolved_model = model_litellm_params["model"]
+            # Get the resolved model ID from the configuration
+            if "model" in model_litellm_params:
+                resolved_model = model_litellm_params["model"]
 
-                # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
-                for key, value in model_litellm_params.items():
-                    if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
-                        litellm_params[key] = value
+            # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
+            for key, value in model_litellm_params.items():
+                if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                    litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
         verbose_proxy_logger.debug("Resolved model: %s", resolved_model)
 
-        # Handle the count tokens request
-        result: Final = await handler.handle_count_tokens_request(
-            request_data=request_body,
-            litellm_params=litellm_params,
-            resolved_model=resolved_model,
+        return await logged_provider_token_count(
+            handler.handle_count_tokens_request(
+                request_data=request_body,
+                litellm_params=litellm_params,
+                resolved_model=resolved_model,
+            ),
+            litellm_call_id=litellm_call_id,
+            request_model=model,
+            model_id=deployment_model_id(deployment),
+            model_used=partial(handler.count_tokens_model_id, resolved_model),
         )
-
-        return result
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
         verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
-        provider_headers: Final = getattr(getattr(e, "response", None), "headers", None)
+        provider_headers: Final = e.response.headers
         raise HTTPException(
             status_code=e.status_code,
             detail={"error": e.message},
@@ -1440,7 +1488,6 @@ async def bedrock_proxy_route(
     """
     create_request_copy(request)
 
-    aws_region_name: Final = get_secret_str(secret_name="AWS_REGION_NAME")
     if not _is_bedrock_agent_runtime_route(endpoint=endpoint):
         return await bedrock_llm_proxy_route(
             endpoint=endpoint,
@@ -1455,6 +1502,10 @@ async def bedrock_proxy_route(
             detail="bedrock-agent-runtime pass-through is disabled on this proxy.",
         )
 
+    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
+    from litellm.llms.bedrock.chat import BedrockConverseLLM
+
+    aws_region_name: Final = await run_aws_signing(get_secret_str, secret_name="AWS_REGION_NAME")
     base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -1468,10 +1519,6 @@ async def bedrock_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
-
-    # Add or update query parameters
-    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
-    from litellm.llms.bedrock.chat import BedrockConverseLLM
 
     bedrock_llm: Final = BedrockConverseLLM()
     # Assuming the body contains JSON data, parse it
@@ -2219,7 +2266,7 @@ async def _relay_router_model(
             params=None,
             headers=None,
             cookies=None,
-            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)
@@ -2561,6 +2608,47 @@ def _is_vertex_anthropic_count_tokens_route(endpoint: str) -> bool:
     return endpoint.rsplit("/", 1)[-1].split(":", 1)[0] == "count-tokens"
 
 
+_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING: Final = "vertex_ai_pass_through_drop_anthropic_betas"
+_VERTEX_DROPPED_ANTHROPIC_BETAS: Final[TypeAdapter[frozenset[str] | None]] = TypeAdapter(frozenset[str] | None)
+_ANTHROPIC_BETA_REQUEST_HEADERS: Final = ("anthropic-beta", f"{PASS_THROUGH_HEADER_PREFIX}anthropic-beta")
+
+
+def _vertex_dropped_anthropic_betas(
+    general_settings: Mapping[str, object], request_headers: Mapping[str, str]
+) -> frozenset[str]:
+    if not any(name in request_headers for name in _ANTHROPIC_BETA_REQUEST_HEADERS):
+        return frozenset()
+    try:
+        configured: Final = _VERTEX_DROPPED_ANTHROPIC_BETAS.validate_python(
+            general_settings.get(_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING)
+        )
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"general_settings.{_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING} must be a list of strings",
+        ) from error
+    listed_betas: Final = (beta.strip() for beta in ",".join(configured or ()).split(","))
+    return frozenset(beta for beta in listed_betas if beta)
+
+
+def _upstream_vertex_header_value(name: str, value: str, dropped_anthropic_betas: frozenset[str]) -> str | None:
+    if name.lower() != "anthropic-beta":
+        return value
+    betas: Final = tuple(beta.strip() for beta in value.split(","))
+    if dropped_anthropic_betas.isdisjoint(betas):
+        return value
+    return ",".join(beta for beta in betas if beta and beta not in dropped_anthropic_betas) or None
+
+
+def _without_dropped_anthropic_betas(
+    dropped_anthropic_betas: frozenset[str], headers: Mapping[str, str]
+) -> Mapping[str, str]:
+    upstream_values: Final = (
+        (name, _upstream_vertex_header_value(name, value, dropped_anthropic_betas)) for name, value in headers.items()
+    )
+    return MappingProxyType({name: value for name, value in upstream_values if value is not None})
+
+
 def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]) -> Mapping[str, str]:
     if not _is_vertex_anthropic_count_tokens_route(endpoint):
         return headers
@@ -2880,6 +2968,7 @@ async def _base_vertex_proxy_route(
     request: Request,
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    general_settings: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth | None = None,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
@@ -2895,6 +2984,7 @@ async def _base_vertex_proxy_route(
         request: FastAPI request object
         fastapi_response: FastAPI response object
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+        general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
         user_api_key_dict: User API key authentication dict
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
@@ -3013,6 +3103,9 @@ async def _base_vertex_proxy_route(
         target=target,
         custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
+        upstream_headers_filter=partial(
+            _without_dropped_anthropic_betas, _vertex_dropped_anthropic_betas(general_settings, request.headers)
+        ),
     )  # dynamically construct pass-through endpoint based on incoming path
 
     try:
@@ -3075,6 +3168,7 @@ async def vertex_discovery_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=discovery_handler,
+        general_settings=_proxy_general_settings(),
         router_credentials=vector_store_credentials,
     )
 
@@ -3108,6 +3202,7 @@ async def vertex_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=ai_platform_handler,
+        general_settings=_proxy_general_settings(),
         user_api_key_dict=user_api_key_dict,
     )
 

@@ -61,6 +61,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.utils import get_prompt_cache_min_tokens
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _OWNED_PROXY_TIMEOUT: Final = 2 * graceful_stop_seconds() + 120
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _LANE_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"

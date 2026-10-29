@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 from collections.abc import Callable, Iterator
@@ -7,9 +8,13 @@ from typing import Final
 import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from pydantic import BaseModel, JsonValue
 from redis import Redis
+
+from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
 def _python_isoformat(value: datetime) -> str:
@@ -130,8 +135,6 @@ class _BulkBudgetUpdateResponse(BaseModel):
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text
         yield client
 
 
@@ -304,7 +307,7 @@ def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gatewa
         counted: Final = eventually(lambda: cache.get(counter_key), lambda value: value is not None, seconds=10)
         assert float(counted) == pytest.approx(0.06), counted
         cache.set(counter_key, "0.01")
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         denied: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -346,6 +349,7 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
         assert peer_first.status_code == 200, peer_first.text
         observed_before_update: Final = _observed_models(upstream)
         assert observed_before_update == (provider_model, provider_model), repr(observed_before_update)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.12,
@@ -445,9 +449,7 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         )
         assert added.status_code == 200, added.text
         default_budget_id: Final = _team_default_budget_id(team) if budget_source == "team-default" else None
-        default_budget_before: Final = (
-            _budget_record(default_budget_id) if default_budget_id is not None else ()
-        )
+        default_budget_before: Final = _budget_record(default_budget_id) if default_budget_id is not None else ()
         if default_budget_id is not None:
             assert len(default_budget_before) == 1, repr(default_budget_before)
             assert default_budget_before[0].max_budget == 0.05, default_budget_before
@@ -466,6 +468,7 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         assert first.status_code == 200, first.text
         observed_before_block: Final = _observed_models(upstream)
         assert observed_before_block == (provider_model,), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
@@ -503,7 +506,7 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         else:
             assert default_budget_id is not None
             assert state[0].budget_id != default_budget_id, state
-            assert state[0].max_budget is None, state
+            assert state[0].max_budget == 0.05, state
             default_budget_after: Final = _budget_record(default_budget_id)
             assert default_budget_after == default_budget_before, repr(default_budget_after)
             assert default_budget_after[0].max_budget == 0.05, default_budget_after
@@ -701,6 +704,7 @@ def test_member_update_by_email_sets_models_role_and_forks_the_team_default_budg
         assert _ErrorResponse.model_validate_json(denied.text).error.type == "team_model_access_denied", denied.text
         observed_before_clear: Final = _observed_models(upstream)
         assert observed_before_clear == (provider_one,), repr(observed_before_clear)
+        upstream.delete("/__observations").raise_for_status()
 
         cleared_models: Final = _member_update(
             gateway,
@@ -815,6 +819,7 @@ def test_bulk_update_is_a_merge_patch_per_member(gateway: Gateway, upstream: htt
         assert first_chat.status_code == 200, first_chat.text
         observed_before_update: Final = _observed_models(upstream)
         assert observed_before_update == (provider_spend,), repr(observed_before_update)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user_one),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
@@ -889,6 +894,7 @@ def test_bulk_update_is_a_merge_patch_per_member(gateway: Gateway, upstream: htt
         )
         observed_after_first_patch: Final = _observed_models(upstream)
         assert observed_after_first_patch == (provider_one,), repr(observed_after_first_patch)
+        upstream.delete("/__observations").raise_for_status()
 
         cleared_max: Final = gateway.request(
             "POST",
@@ -974,6 +980,7 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
         assert first_chat.status_code == 200, first_chat.text
         first_observations: Final = _observed_models(upstream)
         assert first_observations == (provider_model,), repr(first_observations)
+        upstream.delete("/__observations").raise_for_status()
         accrued: Final = eventually(
             lambda: _budget_state(team, user),
             lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend >= 0.06,
@@ -984,6 +991,7 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
         assert second_chat.status_code == 200, second_chat.text
         second_observations: Final = _observed_models(upstream)
         assert second_observations == (provider_model,), repr(second_observations)
+        upstream.delete("/__observations").raise_for_status()
         cleared: Final = gateway.request(
             "POST",
             f"/management/v1/teams/{team}/members/bulk_update",
@@ -1021,9 +1029,94 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
         )
 
 
-@pytest.fixture(autouse=True)
-def _drain_unobserved_requests(gateway: Gateway) -> Iterator[None]:
-    yield
-    with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text
+def _budget_reset_at(budget_id: str) -> str:
+    rows: Final = read_rows(
+        'SELECT budget_reset_at::text AS budget_reset_at FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (budget_id,)
+    )
+    assert len(rows) == 1, rows
+    return string_value(rows[0]["budget_reset_at"])
+
+
+async def _run_scheduled_budget_reset() -> None:
+    client: Final = PrismaClient(
+        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    )
+    await client.connect()
+    try:
+        await ResetBudgetJob(
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()), client
+        ).reset_budget_for_litellm_budget_table()
+    finally:
+        await client.db.disconnect()
+
+
+def test_temp_budget_increase_on_a_team_default_member_keeps_the_team_reset_schedule(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        model, provider_model = _priced_model(scenario)
+        team: Final = scenario.team(models=[model], team_member_budget=5, team_member_budget_duration="30d")
+        topped_up: Final = scenario.user()
+        untouched: Final = scenario.user()
+        for user in (topped_up, untouched):
+            added = gateway.request(
+                "POST", "/team/member_add", {"team_id": team, "member": {"user_id": user, "role": "user"}}
+            )
+            assert added.status_code == 200, added.text
+        default_budget_id: Final = _team_default_budget_id(team)
+        for user in (topped_up, untouched):
+            key = scenario.key(team_id=team, user_id=user)
+            chat = _chat(gateway, model, key, f"spend before top-up {uuid.uuid4().hex}")
+            assert chat.status_code == 200, chat.text
+        observed: Final = _observed_models(upstream)
+        assert observed == (provider_model, provider_model), repr(observed)
+        for user in (topped_up, untouched):
+            accrued = eventually(
+                lambda user=user: _budget_state(team, user),
+                lambda values: len(values) == 1 and values[0].spend is not None and values[0].spend > 0,
+                seconds=70,
+            )
+            assert accrued[0].budget_id == default_budget_id, accrued
+
+        expiry: Final = datetime.now(timezone.utc) + timedelta(days=30)
+        granted: Final = _member_update(
+            gateway,
+            {
+                "team_id": team,
+                "user_id": topped_up,
+                "temp_budget_increase": 1,
+                "temp_budget_expiry": expiry.isoformat(),
+            },
+        )
+        assert granted.temp_budget_increase == 1, granted
+        topped_up_state: Final = _budget_state(team, topped_up)
+        assert len(topped_up_state) == 1, topped_up_state
+        topped_up_budget_id: Final = topped_up_state[0].budget_id
+        assert topped_up_budget_id is not None and topped_up_budget_id != default_budget_id, topped_up_state
+        assert topped_up_state[0].max_budget == 5, topped_up_state
+        assert topped_up_state[0].budget_duration == "30d", topped_up_state
+        assert topped_up_state[0].temp_budget_increase == 1, topped_up_state
+        assert _budget_reset_at(topped_up_budget_id) == _budget_reset_at(default_budget_id), topped_up_state
+        assert _budget_state(team, untouched)[0].budget_id == default_budget_id
+
+        write_rows(
+            "UPDATE \"LiteLLM_BudgetTable\" SET budget_reset_at = NOW() - INTERVAL '1 hour' WHERE budget_id IN (%s, %s)",
+            (default_budget_id, topped_up_budget_id),
+        )
+        asyncio.run(_run_scheduled_budget_reset())
+        for user in (topped_up, untouched):
+            after_reset = _budget_state(team, user)
+            assert len(after_reset) == 1 and after_reset[0].spend == 0, (user, after_reset)
+        assert _budget_reset_at(topped_up_budget_id) == _budget_reset_at(default_budget_id)
+
+        cleared: Final = _member_update(
+            gateway,
+            {"team_id": team, "user_id": topped_up, "temp_budget_increase": None, "temp_budget_expiry": None},
+        )
+        assert cleared.temp_budget_increase is None, cleared
+        final_state: Final = _budget_state(team, topped_up)
+        assert len(final_state) == 1, final_state
+        assert final_state[0].budget_id == topped_up_budget_id, final_state
+        assert final_state[0].budget_duration == "30d", final_state
+        assert final_state[0].max_budget == 5, final_state
+        assert final_state[0].temp_budget_increase is None, final_state
