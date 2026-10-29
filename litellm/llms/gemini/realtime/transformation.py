@@ -241,9 +241,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
         return True
 
-    def _rejects_undocumented_voices(self) -> bool:
-        return False
-
     @staticmethod
     def _usage_detail_alias(details: object, defaults: dict[str, int]) -> dict[str, object]:
         detail_mapping: Final = as_str_mapping(details)
@@ -443,9 +440,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if realtime_input_config is not None:
                     optional_params["realtimeInputConfig"] = realtime_input_config
             elif key == "voice":
-                speech_config = _gemini_live_speech_config(
-                    value, self.drop_params and self._rejects_undocumented_voices()
-                )
+                speech_config = _gemini_live_speech_config(value, self.drop_params)
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
@@ -608,7 +603,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         audio_output: Final = as_str_mapping((as_str_mapping(session.get("audio")) or {}).get("output")) or {}
         output_voice: Final = audio_output.get("voice")
         voice: Final = output_voice or session.get("voice")
-        if not self._rejects_undocumented_voices() or not _is_undocumented_live_voice(voice):
+        if not _is_undocumented_live_voice(voice):
             return None
         param: Final = "session.audio.output.voice" if output_voice else "session.voice"
         return RealtimeSessionUpdateRejection(
