@@ -1770,3 +1770,24 @@ def test_a_static_catalog_id_stored_with_the_provider_prefix_still_lists_and_rea
     assert _model_the_server_received(router, openai_compatible_server, catalog_id) == catalog_id.removeprefix(
         "openai/"
     )
+
+
+def test_a_catch_all_over_a_live_listing_keeps_listing_an_org_id_that_reaches_the_served_model(
+    openai_compatible_server: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = _wildcard_router("*", "openai/*")
+    v1_models: Final = _v1_models(router, "*")
+    model_info_names: Final = [
+        str(row["model_name"])
+        for row in expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or []], router
+        )
+    ]
+
+    assert _SERVED_ORG_ID in v1_models
+    assert _SERVED_ORG_ID in model_info_names
+    assert _model_the_server_received(router, openai_compatible_server, _SERVED_ORG_ID) == _SERVED_ORG_ID

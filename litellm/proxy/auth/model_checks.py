@@ -50,13 +50,16 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
-    model_info: Final = _provider_model_info(provider)
-    if provider not in litellm.models_by_provider and model_info is None:
+    if provider not in litellm.models_by_provider and _provider_model_info(provider) is None:
         return None
-    provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+
+
+def _prefixed_served_ids(provider: str, provider_models: Sequence[str]) -> Sequence[str]:
+    model_info: Final = _provider_model_info(provider)
     if not litellm.check_provider_endpoint or model_info is None or not model_info.lists_served_model_ids():
         return provider_models
-    return [f"{provider}/{served_model_id}" for served_model_id in provider_models]
+    return tuple(f"{provider}/{served_model_id}" for served_model_id in provider_models)
 
 
 def _provider_model_info(provider: str) -> BaseLLMModelInfo | None:
@@ -437,10 +440,11 @@ def get_known_models_from_wildcard(
 
     litellm_params = _hydrate_litellm_credential_name(litellm_params)
 
-    wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
+    provider_models: Final = get_provider_models(provider=provider, litellm_params=litellm_params)
 
-    if wildcard_models is None:
+    if provider_models is None:
         return []
+    wildcard_models = provider_models if wildcard_model == "*" else _prefixed_served_ids(provider, provider_models)
     if deployment_pattern_naming_listed_ids is not None:
         return list(
             _ids_routing_to_catalog_models(
