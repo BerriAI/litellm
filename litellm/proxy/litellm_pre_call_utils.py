@@ -865,7 +865,7 @@ def _strip_router_reserved_metadata(
             )
 
 
-def get_metadata_variable_name(request: Request, data: Mapping[str, object]) -> str:
+def get_metadata_variable_name(request: Request, data: Mapping[str, object] | None = None) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 
@@ -876,7 +876,10 @@ def get_metadata_variable_name(request: Request, data: Mapping[str, object]) -> 
     # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
-    return metadata_variable_name_for_request(get_request_route(request), data)
+    route: Final = get_request_route(request)
+    if data is None:
+        return metadata_variable_name_for_route(route)
+    return metadata_variable_name_for_request(route, data)
 
 
 _get_metadata_variable_name: Final = get_metadata_variable_name
