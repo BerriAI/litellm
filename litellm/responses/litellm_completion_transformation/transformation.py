@@ -3555,7 +3555,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif choice.message.content is not None:
+            elif choice.message.content is not None or getattr(choice.message, "annotations", None):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3629,13 +3629,13 @@ class LiteLLMCompletionResponsesConfig:
 
         return OutputText(
             type="output_text",
-            text=message.content,
+            text=message.content or "",
             annotations=transformed_annotations,
         )
 
     @staticmethod
     def transform_chat_completion_annotations_to_response_output_annotations(
-        annotations: list[ChatCompletionAnnotation] | None,
+        annotations: Sequence[ChatCompletionAnnotation] | None,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
         response_output_annotations: Final[list[GenericResponseOutputItemContentAnnotation]] = []
 
