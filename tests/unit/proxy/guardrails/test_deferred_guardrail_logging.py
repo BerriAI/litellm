@@ -75,11 +75,13 @@ class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.standard_logging_object: StandardLoggingPayload | None = None
+        self.logged: asyncio.Event = asyncio.Event()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         self.standard_logging_object = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.logged.set()
 
 
 class PostCallGuardrail(CustomGuardrail):
@@ -241,9 +243,6 @@ class TestHasPostCallGuardrailsForPassthrough:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deferred", (False, True))
 async def test_success_logging_waits_for_deferred_closure_when_requested(deferred: bool) -> None:
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    from litellm.responses.streaming_iterator import drain_logging_tasks
-
     recorder: Final = _RecordingLogger()
     logging_obj: Final = Logging(
         model="gpt-4o-mini",
@@ -266,8 +265,7 @@ async def test_success_logging_waits_for_deferred_closure_when_requested(deferre
         assert recorder.standard_logging_object is None
         assert logging_obj.enqueue_deferred_logging is not None
         logging_obj.enqueue_deferred_logging()
-    await drain_logging_tasks()
-    await GLOBAL_LOGGING_WORKER.flush()
+    await asyncio.wait_for(recorder.logged.wait(), timeout=5)
     assert recorder.standard_logging_object is not None
     assert recorder.standard_logging_object["id"] == response.id
 
