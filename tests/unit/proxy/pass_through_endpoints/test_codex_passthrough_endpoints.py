@@ -1099,13 +1099,14 @@ _CHATGPT_REASONING: Final = {"type": "reasoning", "summary": [], "encrypted_cont
 
 
 @pytest.fixture
-def xai_and_openai_router(monkeypatch: pytest.MonkeyPatch) -> Router:
+def xai_fireworks_and_openai_router(monkeypatch: pytest.MonkeyPatch) -> Router:
     router: Final = Router(
         model_list=[
             {
                 "model_name": "grok-4.7",
                 "litellm_params": {"model": "xai/grok-4.7", "api_base": _XAI_BASE, "api_key": "test-xai-key"},
             },
+            _open_weights("open-weights"),
             {
                 "model_name": "oai-luna",
                 "litellm_params": {
@@ -1124,21 +1125,21 @@ def xai_and_openai_router(monkeypatch: pytest.MonkeyPatch) -> Router:
 @pytest.mark.parametrize(
     ("model", "replayed", "expected"),
     [
-        pytest.param("grok-4.7", _CHATGPT_REASONING, None, id="chatgpt reasoning to xai is dropped"),
-        pytest.param("grok-4.7", _LUNA_REASONING, None, id="another deployment's reasoning to xai is dropped"),
+        pytest.param("open-weights", _CHATGPT_REASONING, None, id="chatgpt reasoning to fireworks is dropped"),
+        pytest.param("open-weights", _LUNA_REASONING, None, id="another deployment's reasoning to fireworks is dropped"),
         pytest.param("oai-luna", _LUNA_REASONING, _LUNA_BLOB, id="the minting deployment's reasoning is kept"),
     ],
 )
 def test_litellm_model_on_native_route_gets_only_the_reasoning_it_can_decrypt(
     client: TestClient,
     respx_mock: respx.MockRouter,
-    xai_and_openai_router: Router,
+    xai_fireworks_and_openai_router: Router,
     model: str,
     replayed: dict[str, object],
     expected: str | None,
 ) -> None:
     _account_catalog(respx_mock)
-    xai: Final = respx_mock.post(f"{_XAI_BASE}/responses").mock(side_effect=_provider_reply)
+    fireworks: Final = _open_weights_provider(respx_mock)
     luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
     response: Final = client.post(
         "/backend-api/codex/responses",
@@ -1151,7 +1152,7 @@ def test_litellm_model_on_native_route_gets_only_the_reasoning_it_can_decrypt(
         headers=_ACCOUNT_HEADERS,
     )
     assert response.status_code == 200, response.text
-    provider: Final = xai if model == "grok-4.7" else luna
+    provider: Final = fireworks if model == "open-weights" else luna
     sent: Final = json.loads(provider.calls.last.request.content)["input"]
     assert [item.get("encrypted_content") for item in sent if item.get("type") == "reasoning"] == (
         [] if expected is None else [expected]
@@ -1179,10 +1180,10 @@ _ADDITIONAL_TOOLS: Final = {
     ("model", "expected_input", "expected_tool_names"),
     [
         pytest.param(
-            "grok-4.7",
+            "open-weights",
             [_USER_TURN],
-            ["exec_command", "collaboration__followup_task", "mcp__docs____search"],
-            id="xai gets the item's tools as top-level functions",
+            ["exec_command", "collaboration", "mcp__docs__"],
+            id="fireworks gets the item's tools as top-level tools",
         ),
         pytest.param("oai-luna", [_ADDITIONAL_TOOLS, _USER_TURN], ["exec_command"], id="the openai api keeps the item"),
     ],
@@ -1190,13 +1191,13 @@ _ADDITIONAL_TOOLS: Final = {
 def test_codex_additional_tools_item_reaches_each_provider_in_a_shape_it_accepts(
     client: TestClient,
     respx_mock: respx.MockRouter,
-    xai_and_openai_router: Router,
+    xai_fireworks_and_openai_router: Router,
     model: str,
     expected_input: list[dict[str, object]],
     expected_tool_names: list[str],
 ) -> None:
     _account_catalog(respx_mock)
-    xai: Final = respx_mock.post(f"{_XAI_BASE}/responses").mock(side_effect=_provider_reply)
+    fireworks: Final = _open_weights_provider(respx_mock)
     luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
     response: Final = client.post(
         "/backend-api/codex/responses",
@@ -1210,7 +1211,7 @@ def test_codex_additional_tools_item_reaches_each_provider_in_a_shape_it_accepts
         headers=_ACCOUNT_HEADERS,
     )
     assert response.status_code == 200, response.text
-    sent: Final = json.loads((xai if model == "grok-4.7" else luna).calls.last.request.content)
+    sent: Final = json.loads((fireworks if model == "open-weights" else luna).calls.last.request.content)
     assert sent["input"] == expected_input
     assert [tool["name"] for tool in sent["tools"]] == expected_tool_names
 
@@ -1270,17 +1271,6 @@ def test_codex_namespace_tool_called_through_the_chat_bridge_comes_back_with_its
 
 _CLOCK_NAMESPACE: Final = _namespace("clock", "sleep")
 _CLOCK_TOOLS: Final = {"type": "additional_tools", "role": "developer", "tools": [_CLOCK_NAMESPACE]}
-_FLAT_SLEEP_TOOL: Final = {"type": "function", "name": "clock__sleep", "parameters": {"type": "object"}}
-_FLAT_SLEEP_CALL: Final = {
-    "type": "function_call",
-    "id": "fc_sleep",
-    "call_id": "call_sleep",
-    "name": "clock__sleep",
-    "arguments": '{"seconds":1}',
-    "status": "completed",
-}
-
-
 def test_codex_namespace_tool_reaches_fireworks_as_a_namespace(
     client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
 ) -> None:
@@ -1295,113 +1285,102 @@ def test_codex_namespace_tool_reaches_fireworks_as_a_namespace(
     assert json.loads(provider.calls.last.request.content)["tools"] == [_CLOCK_NAMESPACE]
 
 
-def test_xai_namespace_call_round_trips_to_codex_with_its_namespace(
-    client: TestClient, respx_mock: respx.MockRouter, xai_and_openai_router: Router
-) -> None:
-    _account_catalog(respx_mock)
-    xai: Final = respx_mock.post(f"{_XAI_BASE}/responses").respond(
-        json={**_provider_completed(""), "output": [_FLAT_SLEEP_CALL]}
+_CUSTOM_EXEC_TOOL: Final = {"type": "custom", "name": "exec", "description": "Run a command", "format": {"type": "text"}}
+_XAI_SEARCH_CALL: Final = {
+    "id": "call_search",
+    "type": "function",
+    "function": {"name": "mcp__docs____search", "arguments": '{"query":"proxy"}'},
+}
+_XAI_USAGE: Final = {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+
+
+def _xai_chat_chunk(choice: dict[str, object], **fields: object) -> str:
+    chunk: Final = {
+        "id": "chatcmpl-xai",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "grok-4.7",
+        "choices": [{"index": 0, **choice}],
+        **fields,
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
+
+
+def _xai_search_call_reply(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content).get("stream") is not True:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-xai",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "grok-4.7",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": None, "tool_calls": [_XAI_SEARCH_CALL]},
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": _XAI_USAGE,
+            },
+        )
+    stream: Final = (
+        _xai_chat_chunk(
+            {"delta": {"role": "assistant", "tool_calls": [{"index": 0, **_XAI_SEARCH_CALL}]}, "finish_reason": None}
+        )
+        + _xai_chat_chunk({"delta": {}, "finish_reason": "tool_calls"}, usage=_XAI_USAGE)
+        + "data: [DONE]\n\n"
     )
-    replayed_call: Final = {**_FLAT_SLEEP_CALL, "name": "sleep", "namespace": "clock"}
-    replayed_output: Final = {"type": "function_call_output", "call_id": "call_sleep", "output": "slept"}
-    response: Final = client.post(
-        "/backend-api/codex/responses",
-        json={
-            "model": "grok-4.7",
-            "input": [_CLOCK_TOOLS, _USER_TURN, replayed_call, replayed_output],
-            "stream": False,
-            "store": False,
-        },
-        headers=_ACCOUNT_HEADERS,
-    )
-    assert response.status_code == 200, response.text
-    sent: Final = json.loads(xai.calls.last.request.content)
-    assert sent["tools"] == [_FLAT_SLEEP_TOOL]
-    assert sent["input"][1:] == [_FLAT_SLEEP_CALL, replayed_output]
-    (call,) = (item for item in response.json()["output"] if item["type"] == "function_call")
-    assert (call["name"], call["namespace"], call["call_id"]) == ("sleep", "clock", "call_sleep")
-
-
-def _sse_events(*events: dict[str, object]) -> bytes:
-    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
-
-
-def _xai_sleep_call_stream() -> bytes:
-    completed: Final = {**_provider_completed(""), "output": [_FLAT_SLEEP_CALL]}
-    return _sse_events(
-        {
-            "type": "response.created",
-            "sequence_number": 0,
-            "response": {**completed, "status": "in_progress", "output": []},
-        },
-        {
-            "type": "response.output_item.added",
-            "sequence_number": 1,
-            "output_index": 0,
-            "item": {**_FLAT_SLEEP_CALL, "arguments": "", "status": "in_progress"},
-        },
-        {
-            "type": "response.function_call_arguments.delta",
-            "sequence_number": 2,
-            "item_id": "fc_sleep",
-            "output_index": 0,
-            "delta": '{"seconds":1}',
-        },
-        {"type": "response.output_item.done", "sequence_number": 3, "output_index": 0, "item": _FLAT_SLEEP_CALL},
-        {"type": "response.completed", "sequence_number": 4, "response": completed},
-    )
+    return httpx.Response(200, content=stream.encode(), headers={"content-type": "text/event-stream"})
 
 
 def _data_lines(stream: bytes) -> list[bytes]:
     return [line.removeprefix(b"data: ") for line in stream.splitlines() if line.startswith(b"data: {")]
 
 
-def test_xai_streamed_namespace_call_reaches_codex_with_its_namespace_and_other_events_unchanged(
-    client: TestClient, respx_mock: respx.MockRouter, xai_and_openai_router: Router
-) -> None:
-    _account_catalog(respx_mock)
-    respx_mock.post(f"{_XAI_BASE}/responses").respond(
-        content=_xai_sleep_call_stream(), headers={"content-type": "text/event-stream"}
-    )
-    native: Final = client.post(
-        "/backend-api/codex/responses",
-        json={"model": "grok-4.7", "input": [_CLOCK_TOOLS, _USER_TURN], "stream": True, "store": False},
-        headers=_ACCOUNT_HEADERS,
-    )
-    v1: Final = client.post(
-        "/v1/responses",
-        json={"model": "grok-4.7", "input": [_USER_TURN], "tools": [_FLAT_SLEEP_TOOL], "stream": True, "store": False},
-        headers={"authorization": f"Bearer {MASTER_KEY}"},
-    )
-    assert native.status_code == v1.status_code == 200
-    native_lines: Final = _data_lines(native.content)
-    v1_lines: Final = _data_lines(v1.content)
-    native_events: Final = [json.loads(line) for line in native_lines]
-    v1_events: Final = [json.loads(line) for line in v1_lines]
-    assert (
-        [event["type"] for event in native_events]
-        == [event["type"] for event in v1_events]
-        == [
-            "response.created",
-            "response.output_item.added",
-            "response.function_call_arguments.delta",
-            "response.output_item.done",
-            "response.completed",
+def _function_calls_of(response: httpx.Response, stream: bool) -> list[dict[str, object]]:
+    items: Final = (
+        response.json()["output"]
+        if not stream
+        else [
+            event["item"]
+            for event in map(json.loads, _data_lines(response.content))
+            if event["type"] == "response.output_item.done"
         ]
     )
-    restored: Final = {"name": "sleep", "namespace": "clock"}
-    for native_line, v1_line, native_event, v1_event in zip(native_lines, v1_lines, native_events, v1_events):
-        match v1_event["type"]:
-            case "response.output_item.added" | "response.output_item.done":
-                assert native_event == {**v1_event, "item": {**v1_event["item"], **restored}}
-            case "response.completed":
-                (v1_call,) = v1_event["response"]["output"]
-                assert native_event == {
-                    **v1_event,
-                    "response": {**v1_event["response"], "output": [{**v1_call, **restored}]},
-                }
-            case _:
-                assert native_line == v1_line
+    return [item for item in items if item["type"] == "function_call"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_codex_turn_for_xai_goes_through_chat_completions_and_its_namespaced_call_comes_back_whole(
+    client: TestClient, respx_mock: respx.MockRouter, xai_fireworks_and_openai_router: Router, stream: bool
+) -> None:
+    _account_catalog(respx_mock)
+    responses_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/responses").respond(json=_provider_completed("Hi"))
+    chat_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/chat/completions").mock(side_effect=_xai_search_call_reply)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": "grok-4.7",
+            "input": [_ADDITIONAL_TOOLS, _USER_TURN],
+            "tools": [_EXEC_TOOL, _CUSTOM_EXEC_TOOL],
+            "stream": stream,
+            "store": False,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert not responses_endpoint.called
+    sent_tools: Final = json.loads(chat_endpoint.calls.last.request.content)["tools"]
+    assert [(tool["type"], tool["function"]["name"]) for tool in sent_tools] == [
+        ("function", "exec_command"),
+        ("function", "exec"),
+        ("function", "collaboration__followup_task"),
+        ("function", "mcp__docs____search"),
+    ]
+    (call,) = _function_calls_of(response, stream)
+    assert (call["name"], call["namespace"], call["call_id"]) == ("search", "mcp__docs__", "call_search")
 
 
 def test_encrypted_reasoning_stays_only_when_every_deployment_the_router_may_pick_can_decrypt_it(
