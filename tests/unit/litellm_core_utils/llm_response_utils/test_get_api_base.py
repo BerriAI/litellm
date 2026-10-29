@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 
 import pytest
 
@@ -82,7 +83,10 @@ class TestDeclaredAuthenticatingProvider:
 @pytest.mark.parametrize(
     "model, expected",
     [
-        ("gemini/gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
+        (
+            "gemini/gemini-2.5-pro",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        ),
         ("openai/gpt-4o", "https://api.openai.com"),
     ],
 )
@@ -110,3 +114,64 @@ def test_base_url_alias_is_reported_as_the_api_base():
         litellm.get_api_base(model="groq/whisper-large-v3", optional_params={"base_url": ""})
         == "https://api.groq.com/openai/v1"
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "optional_params", "toggle", "expected"),
+    (
+        (
+            "gemini/gemini-3-flash-preview",
+            {"model_info": {"mode": "interactions"}},
+            False,
+            "https://generativelanguage.googleapis.com/v1beta/interactions",
+        ),
+        (
+            "gemini/gemini-3-flash-preview",
+            {"model_info": {"mode": "interactions"}, "stream": True},
+            False,
+            "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse",
+        ),
+        (
+            "vertex_ai/gemini-3-flash-preview",
+            {"vertex_project": "proj-1", "vertex_location": "global", "model_info": {"mode": "interactions"}},
+            False,
+            "https://aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/global/interactions",
+        ),
+        (
+            "vertex_ai/gemini-3-flash-preview",
+            {"vertex_project": "proj-1", "vertex_location": "us-central1"},
+            True,
+            "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/us-central1/interactions",
+        ),
+        (
+            "vertex_ai/gemini-3-flash-preview",
+            {"vertex_project": "proj-1", "vertex_location": "us"},
+            True,
+            "https://aiplatform.us.rep.googleapis.com/v1beta1/projects/proj-1/locations/us/interactions",
+        ),
+        (
+            "vertex_ai/gemini-3-flash-preview",
+            {"vertex_project": "proj-1", "model_info": {"mode": "interactions"}},
+            False,
+            "https://aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/global/interactions",
+        ),
+        (
+            "vertex_ai/gemini-3-flash-preview",
+            {"vertex_project": "proj-1", "vertex_location": "us-central1", "model_info": {"mode": "chat"}},
+            True,
+            "us-central1-aiplatform.googleapis.com/v1/projects/proj-1/locations/us-central1/publishers/google/models/gemini-3-flash-preview:generateContent",
+        ),
+    ),
+)
+def test_interactions_api_base_respects_vertex_location_hosts_and_deployment_mode(
+    model: str,
+    optional_params: Mapping[str, object],
+    toggle: bool,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_API_BASE", raising=False)
+    monkeypatch.delenv("LITELLM_ROUTE_ALL_CHAT_GEMINI_TO_INTERACTIONS", raising=False)
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", toggle)
+
+    assert litellm.get_api_base(model=model, optional_params=dict(optional_params)) == expected

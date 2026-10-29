@@ -5,7 +5,7 @@ from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/m
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -386,7 +386,12 @@ def should_route_to_interactions_api(
     if explicit_toggle is not None:
         return explicit_toggle
 
-    pinned_mode: Final = deployment_routing_mode(str_keyed_mapping(deployment_model_info), custom_llm_provider)
+    pinned_mode: Final = deployment_routing_mode(
+        deployment_model_info.model_dump(exclude_none=True)
+        if isinstance(deployment_model_info, BaseModel)
+        else str_keyed_mapping(deployment_model_info),
+        custom_llm_provider,
+    )
     if pinned_mode == "chat":
         return False
     if pinned_mode == "interactions":
