@@ -455,19 +455,30 @@ class Cache:
         3. Else use the `model` passed in kwargs, plus `model_id` when set (e.g. a SageMaker inference component)
         """
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        metadata_sources: Final[tuple[dict, ...]] = (
-            kwargs.get("litellm_metadata") or {},
-            kwargs.get("metadata") or {},
-            litellm_params.get("litellm_metadata") or {},
-            litellm_params.get("metadata") or {},
+        metadata_sources: Final = cast(  # cast-ok: each source is the untyped request's metadata dict or empty
+            "tuple[dict[str, object], ...]",
+            (
+                kwargs.get("litellm_metadata") or {},
+                kwargs.get("metadata") or {},
+                litellm_params.get("litellm_metadata") or {},
+                litellm_params.get("metadata") or {},
+            ),
         )
-        model_group_source: Final = next((source for source in metadata_sources if source.get("model_group")), None)
+        call_model_info: Final[object] = kwargs.get("model_info")
+        model_group_source: Final = next(
+            (
+                source
+                for source in metadata_sources
+                if call_model_info and source.get("model_group") and source.get("model_info") == call_model_info
+            ),
+            None,
+        ) or next((source for source in metadata_sources if source.get("model_group")), None)
         if model_group_source is None:
             model_id_suffix: Final = (
                 f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
             )
             return f"{kwargs['model']}{model_id_suffix}"
-        model_group: Final[str] = model_group_source["model_group"]
+        model_group: Final = str(model_group_source["model_group"])
         return self._get_caching_group(model_group_source, model_group) or model_group
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:

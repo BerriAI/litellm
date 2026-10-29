@@ -17,7 +17,7 @@ from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
 
 from unittest.mock import AsyncMock, patch, MagicMock
-from litellm.caching.caching_handler import LLMCachingHandler, CachingHandlerResponse
+from litellm.caching.caching_handler import LLMCachingHandler, CachingHandlerResponse, _PENDING_CACHE_WRITES
 from litellm.caching.caching import LiteLLMCacheType
 from litellm.types.utils import CallTypes
 from litellm.types.rerank import RerankResponse
@@ -307,6 +307,43 @@ def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_grou
         )
         == "group-a"
     )
+    deployment: Final = {"id": "deployment-1"}
+    assert (
+        cache._get_model_param_value(
+            {
+                **request,
+                "model_info": deployment,
+                "metadata": {"model_group": "target", "model_info": deployment},
+                "litellm_metadata": {"model_group": "caller", "model_info": deployment},
+            }
+        )
+        == "caller"
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_call_keeps_its_own_group_when_forwarded_litellm_metadata_names_another(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-test", "mock_response": f"{group} answer"},
+            }
+            for group in ("group-a", "group-b")
+        ]
+    )
+    messages: Final = [{"role": "user", "content": "which group answers this"}]
+
+    await router.acompletion(
+        model="group-a", messages=messages, caching=True, litellm_metadata={"model_group": "group-b"}
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    reply: Final = await router.acompletion(model="group-b", messages=messages, caching=True)
+
+    assert reply.choices[0].message.content == "group-b answer"
 
 
 @pytest.mark.parametrize("planted", [["sales-premium"], [("sales", "sales-premium")]], ids=["string", "tuple"])
