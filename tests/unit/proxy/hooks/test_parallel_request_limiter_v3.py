@@ -9270,3 +9270,20 @@ def test_project_itpm_counts_a_model_group_alias_as_its_target_group():
     )
 
     assert _project_itpm_estimate(router, "prod") == _project_itpm_estimate(router, "gpt-6.1-sol")
+
+
+def test_media_models_resolve_to_each_deployment_base_model():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _resolve_media_models
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "whisper",
+                "litellm_params": {"model": "azure/my-whisper", "api_key": "k", "api_base": "https://x.invalid"},
+                "model_info": {"id": "w1", "base_model": "azure/whisper-1"},
+            }
+        ]
+    )
+    assert _resolve_media_models(None, "whisper", None) == ("whisper",)
+    assert _resolve_media_models(router, "whisper", None) == ("azure/whisper-1",)
+    assert _resolve_media_models(router, "unknown", None) == ("unknown",)

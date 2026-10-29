@@ -159,12 +159,13 @@ def models_counted_for(model: str, llm_router: Router | None, team_id: str | Non
 
 
 def _routed_deployments(model: str, llm_router: Router, team_id: str | None) -> Sequence[object]:
+    registry: Final = llm_router.registry()
     named: Final = (
-        *llm_router.get_all_deployments(model_name=model, team_id=team_id),
-        *llm_router.get_model_list_from_model_alias(model_name=model),
-        *llm_router.get_model_list_from_routing_groups(model_name=model),
+        *registry.deployments(model, source="all", team_id=team_id),
+        *registry.deployments(model, source="alias"),
+        *registry.deployments(model, source="routing_groups"),
     )
-    return named or llm_router.wildcard_route_deployments(model, team_id)
+    return named or registry.deployments(model, source="wildcard", team_id=team_id)
 
 
 def openai_chat_pdf_file_tokens(counted_model: str, pdf_files: int) -> int:
