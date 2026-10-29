@@ -6192,6 +6192,12 @@ def completion(
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
                     *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
+                    "vertex_credentials",
+                    "vertex_ai_credentials",
+                    "vertex_project",
+                    "vertex_ai_project",
+                    "vertex_location",
+                    "vertex_ai_location",
                     "github_copilot_auth_type",
                     "github_copilot_host",
                     "github_copilot_user_session",
@@ -6361,6 +6367,7 @@ def completion(
                 processed_params=processed_non_default_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped params local
                 stream_options=stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
                 litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
+                raw_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs local
                 timeout=timeout,
                 client=client,  # pyright: ignore[reportUnknownArgumentType]  # untyped client local
                 custom_llm_provider=custom_llm_provider,

@@ -37,6 +37,14 @@ _INTERACTIONS_ALLOWED_OPENAI_PARAMS: Final = (
     "logprobs",
     "top_logprobs",
 )
+_VERTEX_BRIDGE_PARAM_KEYS: Final = (
+    "vertex_credentials",
+    "vertex_ai_credentials",
+    "vertex_project",
+    "vertex_ai_project",
+    "vertex_location",
+    "vertex_ai_location",
+)
 _OBJECT_SEQ: Final[TypeAdapter[Sequence[object]]] = TypeAdapter(Sequence[object])
 _STR_SEQ_OR_NONE: Final[TypeAdapter[Sequence[str] | None]] = TypeAdapter(Sequence[str] | None)
 
@@ -408,6 +416,20 @@ def resolve_bridge_allowed_openai_params(
     return (*(existing or ()), "reasoning_effort", *extra_interactions)
 
 
+def _merge_vertex_bridge_params(
+    base_llm_map: Mapping[str, object] | None,
+    raw_kwargs_map: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    if base_llm_map is None and raw_kwargs_map is None:
+        return None
+    merged: Final[dict[str, object]] = dict(base_llm_map or {})  # mutable-ok: request litellm_params copy
+    if raw_kwargs_map is not None:
+        for key in _VERTEX_BRIDGE_PARAM_KEYS:
+            if merged.get(key) is None and raw_kwargs_map.get(key) is not None:
+                merged[key] = raw_kwargs_map[key]
+    return merged
+
+
 def dispatch_interactions_bridge(
     *,
     model: str,
@@ -421,6 +443,7 @@ def dispatch_interactions_bridge(
     processed_params: object,
     stream_options: object,
     litellm_params: object,
+    raw_kwargs: object = None,
     timeout: float | httpx.Timeout | None,
     client: object,
     custom_llm_provider: str,
@@ -434,7 +457,7 @@ def dispatch_interactions_bridge(
     )
     if stream_options is not None and "stream_options" not in cleaned_opt:
         cleaned_opt["stream_options"] = stream_options
-    llm_map: Final = str_keyed_mapping(litellm_params)
+    llm_map: Final = _merge_vertex_bridge_params(str_keyed_mapping(litellm_params), str_keyed_mapping(raw_kwargs))
     hdr_map: Final = str_keyed_mapping(headers)
     msg_seq: Final = _OBJECT_SEQ.validate_python(messages)
     assert isinstance(logging_obj, LiteLLMLoggingObj)

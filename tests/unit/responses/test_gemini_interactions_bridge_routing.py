@@ -5,9 +5,15 @@ import httpx
 import pytest
 
 import litellm
+import litellm.completion_extras
 from litellm import Router
+from litellm.completion_extras.litellm_interactions_transformation import (
+    InteractionsToCompletionBridgeHandler,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteractionsConfig
 from litellm.responses.bridge_check import should_route_to_interactions_api
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import Choices, ModelResponse
 
 
@@ -152,3 +158,69 @@ async def test_router_deployment_mode_pins_isolate_interactions_and_generate_con
     assert len(seen_paths) == 2
     assert seen_paths[0] == "/v1beta/interactions"
     assert seen_paths[1].endswith("/models/gemini-3-flash-preview:generateContent")
+
+
+@pytest.mark.asyncio
+async def test_vertex_completion_and_acompletion_forward_credentials_project_and_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", True)
+    seen_mints: Final[list[tuple[VERTEX_CREDENTIALS_TYPES | None, str | None]]] = []  # mutable-ok: minter spy
+    seen_urls: Final[list[str]] = []  # mutable-ok: transport spy
+
+    def minter(creds: VERTEX_CREDENTIALS_TYPES | None, project_id: str | None) -> tuple[str, str]:
+        seen_mints.append((creds, project_id))
+        return "vertex-minted-token", project_id or "missing-project"
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(req.url))
+        return httpx.Response(
+            200,
+            json={
+                "id": "v1_vertex_fwd",
+                "status": "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": "VERTEX_FWD_OK"}]}],
+                "usage": {"total_input_tokens": 5, "total_output_tokens": 2, "total_tokens": 7},
+            },
+        )
+
+    injected_bridge: Final = InteractionsToCompletionBridgeHandler(
+        provider_config=VertexAIInteractionsConfig(mint_access_token=minter)
+    )
+    monkeypatch.setattr(litellm.completion_extras, "interactions_api_bridge", injected_bridge)
+
+    sync_creds: Final = {"type": "service_account", "client_email": "svc@sync-proj.iam.gserviceaccount.com"}
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_sync:
+        sync_resp: Final = litellm.completion(
+            model="vertex_ai/gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            vertex_credentials=sync_creds,
+            vertex_project="sync-proj",
+            vertex_location="us-central1",
+            client=HTTPHandler(client=raw_sync),
+        )
+
+    async_creds: Final = '{"type":"service_account","project_id":"async-proj"}'
+    async_handler: Final = AsyncHTTPHandler()
+    async_handler.client = httpx.AsyncClient(transport=httpx.MockTransport(responder))
+    async_resp: Final = await litellm.acompletion(
+        model="vertex_ai/gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "ping"}],
+        vertex_ai_credentials=async_creds,
+        vertex_ai_project="async-proj",
+        vertex_ai_location="europe-west4",
+        client=async_handler,
+    )
+
+    assert isinstance(sync_resp, ModelResponse)
+    assert isinstance(async_resp, ModelResponse)
+    assert seen_mints == [
+        (sync_creds, "sync-proj"),
+        (sync_creds, "sync-proj"),
+        (async_creds, "async-proj"),
+        (async_creds, "async-proj"),
+    ]
+    assert seen_urls == [
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/sync-proj/locations/us-central1/interactions",
+        "https://europe-west4-aiplatform.googleapis.com/v1beta1/projects/async-proj/locations/europe-west4/interactions",
+    ]

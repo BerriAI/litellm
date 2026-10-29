@@ -93,6 +93,10 @@ def _resolve_provider_config(
     return resolved
 
 
+def _first_non_none(candidates: Sequence[object]) -> object:
+    return next((val for val in candidates if val is not None), None)
+
+
 def _build_generic_litellm_params(
     litellm_params: Mapping[str, object],
     optional_params: Mapping[str, object],
@@ -101,23 +105,29 @@ def _build_generic_litellm_params(
     api_base: str | None,
     custom_llm_provider: str,
 ) -> GenericLiteLLMParams:
-    explicit_project: Final = (
-        optional_params.get("vertex_project")
-        or optional_params.get("vertex_ai_project")
-        or litellm_params.get("vertex_project")
-        or litellm_params.get("vertex_ai_project")
+    explicit_project: Final = _first_non_none(
+        (
+            optional_params.get("vertex_project"),
+            optional_params.get("vertex_ai_project"),
+            litellm_params.get("vertex_project"),
+            litellm_params.get("vertex_ai_project"),
+        )
     )
-    explicit_location: Final = (
-        optional_params.get("vertex_location")
-        or optional_params.get("vertex_ai_location")
-        or litellm_params.get("vertex_location")
-        or litellm_params.get("vertex_ai_location")
+    explicit_location: Final = _first_non_none(
+        (
+            optional_params.get("vertex_location"),
+            optional_params.get("vertex_ai_location"),
+            litellm_params.get("vertex_location"),
+            litellm_params.get("vertex_ai_location"),
+        )
     )
-    explicit_credentials: Final = (
-        optional_params.get("vertex_credentials")
-        or optional_params.get("vertex_ai_credentials")
-        or litellm_params.get("vertex_credentials")
-        or litellm_params.get("vertex_ai_credentials")
+    explicit_credentials: Final = _first_non_none(
+        (
+            optional_params.get("vertex_credentials"),
+            optional_params.get("vertex_ai_credentials"),
+            litellm_params.get("vertex_credentials"),
+            litellm_params.get("vertex_ai_credentials"),
+        )
     )
     merged: Final = {
         **litellm_params,
