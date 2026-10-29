@@ -5726,7 +5726,6 @@ def completion(
         drop_unsupported_reasoning: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
-        drops_tool_choice: Final = drop_policy(routing_kwargs).drops("tool_choice")
         reasoning_model_group: Final = model_group_from_metadata(
             routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
         )
@@ -5878,8 +5877,8 @@ def completion(
                 _OPAQUE_VALUE_ADAPTER.validate_python(tool_choice),
                 custom_llm_provider=custom_llm_provider,
                 model=model,
-                drop_params=drops_tool_choice,
-                base_model=base_model if isinstance(base_model, str) else None,
+                drop_params=drop_policy(routing_kwargs).drops("tool_choice"),
+                base_model=_OPAQUE_VALUE_ADAPTER.validate_python(base_model),
             ),
             "max_retries": max_retries,
             "logprobs": logprobs,

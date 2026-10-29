@@ -124,12 +124,12 @@ def is_allowed_tools_choice(tool_choice: object) -> bool:
             return False
 
 
-def _accepts_allowed_tools(custom_llm_provider: str, model: str, base_model: str | None) -> bool:
+def _accepts_allowed_tools(custom_llm_provider: str, model: str, base_model: object) -> bool:
     match custom_llm_provider:
         case "azure_ai":
             from litellm.llms.azure_ai.common_utils import azure_ai_serves_openai_chat_model
 
-            return azure_ai_serves_openai_chat_model(model, base_model)
+            return azure_ai_serves_openai_chat_model(model, base_model if isinstance(base_model, str) else None)
         case _:
             return custom_llm_provider in PROVIDERS_ACCEPTING_ALLOWED_TOOLS
 
@@ -140,7 +140,7 @@ def tool_choice_for_provider(
     custom_llm_provider: str,
     model: str,
     drop_params: bool,
-    base_model: str | None = None,
+    base_model: object = None,
 ) -> _ToolChoiceT | Mapping[str, JsonValue] | None:
     if not is_allowed_tools_choice(tool_choice):
         return tool_choice
