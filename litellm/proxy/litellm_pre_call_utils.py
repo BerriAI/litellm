@@ -3024,13 +3024,7 @@ async def add_litellm_data_to_request(
         getattr(request.state, "litellm_roi_estimator", False) is True
     )
 
-    verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s",
-        data,
-    )
-
     # Team/Project credential overrides from model_config
-    # Placed after the debug log to avoid leaking credential secrets in logs
     _apply_credential_overrides_from_model_config(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -3290,7 +3284,7 @@ def _per_user_credential_names_for_groups(
         GITHUB_COPILOT_AUTH_TYPE_KEY,
         GITHUB_COPILOT_PER_USER_AUTH_TYPE,
     )
-    from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
+    from litellm.router_strategy.auto_router.auto_router_model_naming import classify_strategy_router_model
 
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
