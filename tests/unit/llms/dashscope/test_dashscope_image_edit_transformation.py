@@ -7,7 +7,11 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.dashscope.image_edit.transformation import DashScopeImageEditConfig
+from litellm.llms.dashscope.text_to_speech.transformation import DashScopeTextToSpeechConfig
+from litellm.types.utils import ModelInfo
 
 PNG: Final = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -44,6 +48,7 @@ def _sync_client(
 @pytest.fixture(autouse=True)
 def _no_ambient_dashscope_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DASHSCOPE_API_BASE_IMAGE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
 
 
 @pytest.mark.parametrize("asynchronous", (False, True))
@@ -109,26 +114,42 @@ def test_an_openai_size_reaches_dashscope_in_its_star_format(size: str, dashscop
     assert json.loads(seen[0].content)["parameters"] == {"size": dashscope_size}
 
 
+CHINA_ENDPOINT: Final = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+
+
 @pytest.mark.parametrize(
-    ("api_base", "image_base", "endpoint"),
+    ("api_base", "env_base", "image_base", "endpoint"),
     (
+        ("https://dashscope.aliyuncs.com/compatible-mode/v1", None, None, CHINA_ENDPOINT),
+        ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", None, None, INTL_ENDPOINT),
+        (
+            "https://gw.example.com/compatible-mode/v1",
+            None,
+            None,
+            "https://gw.example.com/api/v1/services/aigc/multimodal-generation/generation",
+        ),
+        (None, "https://dashscope.aliyuncs.com/compatible-mode/v1", None, CHINA_ENDPOINT),
+        (None, "https://dashscope.aliyuncs.com/api/v1", None, CHINA_ENDPOINT),
+        (None, None, None, INTL_ENDPOINT),
+        (
+            "https://images.example.com/edit",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            None,
+            "https://images.example.com/edit",
+        ),
         (
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             None,
-            "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-        ),
-        ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", None, INTL_ENDPOINT),
-        ("https://gw.example.com/compatible-mode/v1", None, INTL_ENDPOINT),
-        (
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "https://images.example.com/edit",
             "https://images.example.com/edit",
         ),
     ),
 )
-def test_a_chat_api_base_sends_the_edit_to_the_image_endpoint_in_its_region(
-    monkeypatch: pytest.MonkeyPatch, api_base: str, image_base: str | None, endpoint: str
+def test_an_edit_goes_to_the_image_endpoint_on_the_host_its_dashscope_base_names(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, env_base: str | None, image_base: str | None, endpoint: str
 ) -> None:
+    if env_base is not None:
+        monkeypatch.setenv("DASHSCOPE_API_BASE", env_base)
     if image_base is not None:
         monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", image_base)
     seen: Final[list[httpx.Request]] = []  # mutable-ok: request log
@@ -143,6 +164,21 @@ def test_a_chat_api_base_sends_the_edit_to_the_image_endpoint_in_its_region(
     )
 
     assert str(seen[0].url) == endpoint
+
+
+@pytest.mark.parametrize("api_base", ("https://dashscope.aliyuncs.com/compatible-mode/v1", None))
+def test_an_edit_and_a_speech_call_with_the_same_dashscope_base_reach_the_same_host(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None
+) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_BASE", "https://gw.example.com/compatible-mode/v1")
+    edit_url: Final = DashScopeImageEditConfig().get_complete_url(
+        model="qwen-image-2.0", api_base=api_base, litellm_params={}
+    )
+    speech_url: Final = DashScopeTextToSpeechConfig().get_complete_url(
+        model="qwen3-tts-flash", api_base=api_base, litellm_params={}
+    )
+
+    assert httpx.URL(edit_url).host == httpx.URL(speech_url).host
 
 
 def test_a_fourth_image_is_refused_with_a_400_before_any_request_even_under_drop_params() -> None:
@@ -259,3 +295,49 @@ def test_the_input_images_dashscope_reports_are_billed_on_top_of_the_edited_imag
         call_type="aimage_edit",
         custom_llm_provider="dashscope",
     ) == pytest.approx(2 * prices["input_cost_per_image"] + prices["output_cost_per_image"])
+
+
+def _edited_images(count: int, input_images: int) -> litellm.ImageResponse:
+    response: Final = litellm.ImageResponse(data=[{"url": EDITED_URL}] * count)
+    response.hidden_params = {"billable_input_image_count": input_images}
+    return response
+
+
+@pytest.mark.parametrize(
+    ("model", "deployment_price", "size", "expected_cost"),
+    (
+        ("qwen-image-2.0", ModelInfo(input_cost_per_image=0.02), None, 2 * 0.02),
+        ("qwen-image-3.0", ModelInfo(output_cost_per_image=0.05), None, 2 * 0.05),
+        ("qwen-image-3.0-pro", ModelInfo(input_cost_per_pixel=1e-08), "1024x1024", 2 * 1024 * 1024 * 1e-08),
+    ),
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_deployment_image_price_bills_the_edit_the_way_it_bills_any_image_call(
+    model: str, deployment_price: ModelInfo, size: str | None, expected_cost: float
+) -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=_edited_images(count=2, input_images=3),
+        custom_llm_provider="dashscope",
+        size=size,
+        call_type="aimage_edit",
+        model_info=deployment_price,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_deployment_token_price_keeps_the_shared_per_image_billing() -> None:
+    prices: Final = litellm.model_cost["dashscope/qwen-image-3.0"]
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="qwen-image-3.0",
+        completion_response=_edited_images(count=1, input_images=2),
+        custom_llm_provider="dashscope",
+        call_type="aimage_edit",
+        model_info=ModelInfo(input_cost_per_token=1e-06),
+    )
+
+    assert cost == pytest.approx(2 * prices["input_cost_per_image"] + prices["output_cost_per_image"])
+

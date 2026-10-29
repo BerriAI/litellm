@@ -23,9 +23,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # factory stub leaves params untyped
 )
 from litellm.llms.dashscope.common_utils import (
-    DASHSCOPE_CHAT_COMPATIBLE_PATH,
     DASHSCOPE_MULTIMODAL_GENERATION_PATH,
     DashScopeError,
+    dashscope_api_root,
     missing_dashscope_family_key_message,
     resolve_dashscope_family_api_key,
 )
@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 DASHSCOPE_TTS_DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com"
-_DASHSCOPE_API_PATH: Final = "/api/v1"
 _SPEECH_SYNTHESIZER_MODEL_PREFIX: Final = "qwen-audio-"
 _TIMEOUT_PHASES: Final = TypeAdapter(dict[str, float | None])
 
@@ -93,14 +92,6 @@ def text_to_speech_family(model: str) -> _TextToSpeechFamily:
     if model.startswith(_SPEECH_SYNTHESIZER_MODEL_PREFIX):
         return SPEECH_SYNTHESIZER_FAMILY
     return MULTIMODAL_GENERATION_FAMILY
-
-
-def _api_root(api_base: str) -> str:
-    trimmed: Final = api_base.rstrip("/")
-    if trimmed.endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
-        return trimmed.removesuffix(DASHSCOPE_CHAT_COMPATIBLE_PATH)
-    root, separator, _ = trimmed.partition(_DASHSCOPE_API_PATH)
-    return root if separator else trimmed
 
 
 def _mapped_field(family: _TextToSpeechFamily, key: str, value: object) -> Mapping[str, object] | None:
@@ -241,7 +232,7 @@ class DashScopeTextToSpeechConfig(BaseTextToSpeechConfig):
         litellm_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> str:
         configured: Final = api_base or get_secret_str("DASHSCOPE_API_BASE")
-        root: Final = _api_root(configured) if configured else DASHSCOPE_TTS_DEFAULT_API_BASE
+        root: Final = dashscope_api_root(configured) if configured else DASHSCOPE_TTS_DEFAULT_API_BASE
         return f"{root}{text_to_speech_family(model).path}"
 
     @override

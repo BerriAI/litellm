@@ -10,10 +10,12 @@ import litellm
 from litellm.images.utils import image_to_data_url
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.dashscope.common_utils import (
+    DASHSCOPE_CHAT_COMPATIBLE_PATH,
     DASHSCOPE_MULTIMODAL_GENERATION_PATH,
-    dashscope_service_url_on_chat_host,
+    dashscope_api_root,
 )
 from litellm.llms.dashscope.image_generation.transformation import (
+    DEFAULT_API_BASE,
     OPENAI_TO_DASHSCOPE_SIZE,
     DashScopeImageGenerationConfig,
 )
@@ -85,16 +87,13 @@ class DashScopeImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> str:
-        regional_url: Final = dashscope_service_url_on_chat_host(api_base, DASHSCOPE_MULTIMODAL_GENERATION_PATH)
-        if regional_url is not None:
-            return get_secret_str("DASHSCOPE_API_BASE_IMAGE") or regional_url
-        return self._generation_config.get_complete_url(
-            api_base=api_base,
-            api_key=None,
-            model=model,
-            optional_params={},
-            litellm_params=litellm_params,
+        if api_base is not None and not api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
+            return api_base
+        configured: Final = api_base or get_secret_str("DASHSCOPE_API_BASE")
+        derived: Final = (
+            f"{dashscope_api_root(configured)}{DASHSCOPE_MULTIMODAL_GENERATION_PATH}" if configured else None
         )
+        return get_secret_str("DASHSCOPE_API_BASE_IMAGE") or derived or DEFAULT_API_BASE
 
     @override
     def use_multipart_form_data(self) -> bool:

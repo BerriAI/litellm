@@ -218,8 +218,8 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         images: Final = [*(model_response.data or ()), *(ImageObject(url=url) for url in _image_urls(response_object))]
         image_response: Final = model_response.model_copy(update={"data": images})
-        usage: Final = _JSON_OBJECT.validate_python(response_object.get("usage", {}))
-        input_image_count: Final = usage.get("input_image_count")
+        usage: Final = response_object.get("usage")
+        input_image_count: Final = usage.get("input_image_count") if isinstance(usage, Mapping) else None
         if isinstance(input_image_count, int) and input_image_count > 0:
             image_response.hidden_params = {
                 **model_response.hidden_params,

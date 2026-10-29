@@ -493,6 +493,16 @@ def test_transform_response_without_image_content_has_no_images(
     assert _transform_response(payload).data == []
 
 
+@pytest.mark.parametrize("usage", [None, "n/a", ["input_image_count", 2]])
+def test_transform_response_returns_the_images_whatever_shape_usage_has(usage: object):
+    response = _transform_response(
+        {"output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]}, "usage": usage}
+    )
+
+    assert [image.url for image in response.data] == ["https://a.example/1.png"]
+    assert "billable_input_image_count" not in response.hidden_params
+
+
 def test_transform_response_skips_content_items_without_an_image():
     response = _transform_response(
         {
