@@ -33,6 +33,7 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
+from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -10943,6 +10944,82 @@ async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
     error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
     assert error_frame["error"]["message"] == "rate limited"
     assert "audit backend" not in collected[-2].decode()
+
+
+def _late_block(delay=0.2):
+    async def slow_block(*_args, **_kwargs):
+        await asyncio.sleep(delay)
+        raise ModifyResponseException(
+            message="blocked by policy", model="gpt-4o", request_data={"stream": True}, guardrail_name="g"
+        )
+
+    return slow_block
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_streams_the_routes_block_response_instead_of_an_error_frame():
+    block_frames = ['data: {"choices": [{"delta": {"content": "blocked by policy"}}]}\n\n', "data: [DONE]\n\n"]
+    blocks_seen = []
+    audited = []
+
+    async def stream_block(block):
+        blocks_seen.append(block)
+        return _sse_response(block_frames)
+
+    async def record(exc):
+        audited.append(exc)
+
+    response = await open_sse_before_first_byte(
+        _late_block()(),
+        ping_interval_seconds=0.05,
+        on_late_failure=record,
+        on_passthrough_block=stream_block,
+    )
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert [chunk for chunk in collected if chunk != TTFT_PING] == [frame.encode() for frame in block_frames]
+    assert [block.message for block in blocks_seen] == ["blocked by policy"]
+    assert audited == []
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_on_a_route_without_a_block_stream_still_ends_the_stream():
+    response = await open_sse_before_first_byte(_late_block()(), ping_interval_seconds=0.05)
+    collected = await _drain(response)
+
+    assert "error" in json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_base_process_llm_request_hands_a_late_passthrough_block_to_the_routes_block_stream():
+    block_frames = ['data: {"choices": [{"delta": {"content": "blocked by policy"}}]}\n\n', "data: [DONE]\n\n"]
+
+    async def stream_block(block):
+        return _sse_response(block_frames)
+
+    proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4o", "stream": True})
+
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", _late_block(0.25)):
+            response = await processor.base_process_llm_request(
+                request=MagicMock(spec=Request),
+                fastapi_response=Response(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                route_type="acompletion",
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                on_passthrough_block=stream_block,
+            )
+        collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert [chunk for chunk in collected if chunk != TTFT_PING] == [frame.encode() for frame in block_frames]
+    proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

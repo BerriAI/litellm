@@ -196,7 +196,9 @@ from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    Choices,
     CountContextManagement,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -12722,6 +12724,70 @@ def _blocked_response_usage(original_response: object | None) -> "litellm.Usage"
     return litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
 
+def _passthrough_block_response(e: ModifyResponseException) -> ModelResponse:
+    return ModelResponse(
+        model=e.model,
+        choices=[Choices(message=Message(content=e.message), finish_reason="content_filter")],
+        usage=_blocked_response_usage(e.original_response),
+    )
+
+
+async def _record_passthrough_block(e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth) -> None:
+    await proxy_logging_obj.post_call_failure_hook(
+        user_api_key_dict=user_api_key_dict,
+        original_exception=e,
+        request_data=e.request_data,
+    )
+
+
+async def _stream_chat_passthrough_block(
+    e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth, request: Request
+) -> StreamingResponse:
+    # Read before post_call_failure_hook, which pops it from the request data.
+    logging_obj: Final = e.request_data.get("litellm_logging_obj")
+    await _record_passthrough_block(e, user_api_key_dict)
+    streaming_response: Final = litellm.CustomStreamWrapper(
+        completion_stream=litellm.utils.ModelResponseIterator(
+            model_response=_passthrough_block_response(e), convert_to_delta=True
+        ),
+        model=e.model,
+        custom_llm_provider="cached_response",
+        logging_obj=logging_obj,
+    )
+    return StreamingResponse(
+        select_data_generator(
+            response=streaming_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=e.request_data,
+            request=request,
+        ),
+        media_type="text/event-stream",
+        status_code=200,
+    )
+
+
+async def _stream_text_completion_passthrough_block(
+    e: ModifyResponseException, user_api_key_dict: UserAPIKeyAuth, request: Request
+) -> StreamingResponse:
+    await _record_passthrough_block(e, user_api_key_dict)
+    streaming_response: Final = litellm.TextCompletionStreamWrapper(
+        completion_stream=litellm.utils.ModelResponseIterator(
+            model_response=_passthrough_block_response(e), convert_to_delta=True
+        ),
+        model=e.model,
+    )
+    return StreamingResponse(
+        select_data_generator(
+            response=streaming_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=e.request_data,
+            request=request,
+        ),
+        media_type="text/event-stream",
+        status_code=200,
+    )
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -12811,50 +12877,17 @@ async def chat_completion(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            on_passthrough_block=lambda block: _stream_chat_passthrough_block(block, user_api_key_dict, request),
         )
         if isinstance(result, BaseModel):
             return model_dump_with_preserved_fields(result, exclude_unset=True)
         else:
             return result
     except ModifyResponseException as e:
-        # Guardrail flagged content in passthrough mode - return 200 with violation message
-        _data = e.request_data
-        # Capture logging_obj before post_call_failure_hook pops it from _data.
-        _logging_obj: Final = _data.get("litellm_logging_obj")
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
-        )
-        _chat_response = litellm.ModelResponse()
-        _chat_response.model = e.model
-        _chat_response.choices[0].message.content = e.message
-        _chat_response.choices[0].finish_reason = "content_filter"
-        # Report the blocked LLM response's real usage (set before the stream
-        # branch so both paths carry it); zero for pre-call blocks.
-        _chat_response.usage = _blocked_response_usage(e.original_response)
-
-        if data.get("stream", None) is not None and data["stream"] is True:
-            _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
-            _streaming_response = litellm.CustomStreamWrapper(
-                completion_stream=_iterator,
-                model=e.model,
-                custom_llm_provider="cached_response",
-                logging_obj=_logging_obj,
-            )
-            selected_data_generator = select_data_generator(
-                response=_streaming_response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=_data,
-                request=request,
-            )
-
-            return StreamingResponse(
-                selected_data_generator,
-                media_type="text/event-stream",
-                status_code=200,  # Return 200 for passthrough mode
-            )
-        return _chat_response
+        if data.get("stream") is True:
+            return await _stream_chat_passthrough_block(e, user_api_key_dict, request)
+        await _record_passthrough_block(e, user_api_key_dict)
+        return _passthrough_block_response(e)
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -12967,49 +13000,20 @@ async def completion(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            on_passthrough_block=lambda block: _stream_text_completion_passthrough_block(
+                block, user_api_key_dict, request
+            ),
         )
     except ModifyResponseException as e:
-        # Guardrail flagged content in passthrough mode - return 200 with violation message
-        _data = e.request_data
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
-        )
-
-        if _data.get("stream", None) is not None and _data["stream"] is True:
-            _text_response: Final = litellm.ModelResponse()
-            # Set text attribute dynamically for text completion format
-            setattr(_text_response.choices[0], "text", e.message)
-            _text_response.model = e.model
-            _usage = _blocked_response_usage(e.original_response)
-            # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
-            setattr(_text_response, "usage", _usage)
-            _iterator = litellm.utils.ModelResponseIterator(model_response=_text_response, convert_to_delta=True)
-            _streaming_response = litellm.TextCompletionStreamWrapper(
-                completion_stream=_iterator,
-                model=e.model,
-            )
-
-            selected_data_generator = select_data_generator(
-                response=_streaming_response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=_data,
-                request=request,
-            )
-
-            return StreamingResponse(
-                selected_data_generator,
-                media_type="text/event-stream",
-                status_code=200,  # Return 200 for passthrough mode
-            )
-        else:
-            _response = litellm.TextCompletionResponse()
-            _response.choices[0].text = e.message
-            _response.model = e.model
-            _usage = _blocked_response_usage(e.original_response)
-            _response.usage = _usage
-            return _response
+        if e.request_data.get("stream") is True:
+            return await _stream_text_completion_passthrough_block(e, user_api_key_dict, request)
+        await _record_passthrough_block(e, user_api_key_dict)
+        text_completion_response: Final = litellm.TextCompletionResponse()
+        text_completion_response.choices[0].text = e.message
+        text_completion_response.choices[0].finish_reason = "content_filter"
+        text_completion_response.model = e.model
+        text_completion_response.usage = _blocked_response_usage(e.original_response)
+        return text_completion_response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(

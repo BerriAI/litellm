@@ -8852,6 +8852,7 @@ class ModelResponseIterator:
         if convert_to_delta is True:
             _stream_response: Final = ModelResponseStream()
             _stream_response.choices[0].delta.content = model_response.choices[0].message.content
+            _stream_response.choices[0].finish_reason = model_response.choices[0].finish_reason
             self.model_response: ModelResponse | ModelResponseStream = _stream_response
         else:
             self.model_response = model_response

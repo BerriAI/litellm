@@ -51,6 +51,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
+from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.bug_report import (
@@ -1422,6 +1423,7 @@ async def open_sse_before_first_byte(
     ping_interval_seconds: float | str | None,
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+    on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None = None,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1437,7 +1439,8 @@ async def open_sse_before_first_byte(
     Committing the status line that early is the cost: a failure discovered after
     the first ping reaches the client as an SSE error frame under a 200 rather than
     as an HTTP error status, and LiteLLM's own `x-litellm-*` response headers are
-    not yet known. Both are why this stays off until an operator sets an interval.
+    not yet known. A passthrough guardrail block is not a failure: when the route
+    passes `on_passthrough_block`, the stream it builds for the block is relayed. Both are why this stays off until an operator sets an interval.
     """
     interval: Final = coerce_keepalive_interval(ping_interval_seconds)
     if interval is None:
@@ -1460,6 +1463,10 @@ async def open_sse_before_first_byte(
             try:
                 produced: Final = produce_task.result()
             except Exception as exc:  # noqa: BLE001  # the status line is already sent; surface it as a frame
+                if isinstance(exc, ModifyResponseException) and on_passthrough_block is not None:
+                    async for chunk in _relay_late_response(await on_passthrough_block(exc)):
+                        yield chunk
+                    return
                 verbose_proxy_logger.exception(
                     "request failed after its SSE keepalive had opened the response: %s", exc
                 )
@@ -2863,6 +2870,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
+        on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None = None,
     ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
@@ -2906,6 +2914,7 @@ class ProxyBaseLLMRequestProcessing:
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
+            on_passthrough_block=on_passthrough_block,
         )
 
     async def _process_llm_request(
