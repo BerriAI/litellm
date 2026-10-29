@@ -14,6 +14,8 @@ from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
+_MODEL_ROW_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 
 class SimpleProviderConfig:
@@ -98,9 +100,27 @@ class JSONProviderRegistry:
         return "/v1/embeddings" in provider.supported_endpoints
 
     @classmethod
+    def serves_endpoint(cls, slug: str, model: str | None, endpoint: str) -> bool:
+        provider: Final = cls._providers.get(slug)
+        if provider is None:
+            return False
+        return endpoint in provider.supported_endpoints or endpoint in _model_supported_endpoints(slug, model)
+
+    @classmethod
     def list_providers(cls) -> list:
         """List all registered provider slugs"""
         return list(cls._providers.keys())
+
+
+def _model_supported_endpoints(slug: str, model: str | None) -> tuple[str, ...]:
+    import litellm
+
+    if not model:
+        return ()
+    row: Final = _MODEL_ROW_ADAPTER.validate_python(
+        litellm.model_cost.get(f"{slug}/{model.removeprefix(f'{slug}/')}", {})
+    )
+    return _ENDPOINTS_ADAPTER.validate_python(row.get("supported_endpoints") or ())
 
 
 # Load on import

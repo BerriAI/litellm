@@ -233,6 +233,21 @@ def test_hostinger_router_embeddings_send_extra_headers_as_http_headers():
     assert set(body) == {"model", "input"}
 
 
+def test_hostinger_router_embeddings_key_headers_replace_extra_headers_of_any_case():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            extra_headers={"authorization": "Bearer caller-key", "content-type": "text/plain"},
+        )
+
+    request: Final = route.calls.last.request
+    assert request.headers.get_list("authorization") == ["Bearer hostinger-test-key"]
+    assert request.headers.get_list("content-type") == ["application/json"]
+
+
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("HOSTINGER_ROUTER_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_LIKE_API_KEY", "other-provider-key")
@@ -297,3 +312,67 @@ async def test_hostinger_router_anthropic_messages_request(monkeypatch: pytest.M
     assert body["model"] == "claude-sonnet-5"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from Hostinger Router"
+
+
+CHAT_COMPLETION_RESPONSE: Final = {
+    "id": "chatcmpl_hostinger",
+    "object": "chat.completion",
+    "created": 1_789_550_000,
+    "model": "gpt-5.2",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello from Hostinger Router"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+}
+UNSUPPORTED_ENDPOINT: Final = {"error": {"message": "Model does not support this endpoint."}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-5.2", "gpt-5-nano"])
+async def test_hostinger_router_messages_bridge_models_without_native_messages(
+    model: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    with respx.mock(assert_all_called=False) as upstream:
+        native: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
+            403, json=UNSUPPORTED_ENDPOINT
+        )
+        chat: Final = upstream.post("https://router.hostinger.com/v1/chat/completions").respond(
+            200, json=CHAT_COMPLETION_RESPONSE
+        )
+        response: Final = await litellm.anthropic.messages.acreate(
+            model=f"hostinger_router/{model}",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+            api_key="hostinger-test-key",
+        )
+
+    assert native.call_count == 0
+    assert chat.call_count == 1
+    assert json.loads(chat.calls.last.request.content)["model"] == model
+    assert response["content"][0]["text"] == "Hello from Hostinger Router"
+
+
+def test_hostinger_router_responses_bridge_models_without_native_responses():
+    with respx.mock(assert_all_called=False) as upstream:
+        native: Final = upstream.post("https://router.hostinger.com/v1/responses").respond(
+            403, json=UNSUPPORTED_ENDPOINT
+        )
+        chat: Final = upstream.post("https://router.hostinger.com/v1/chat/completions").respond(
+            200, json=CHAT_COMPLETION_RESPONSE
+        )
+        response: Final = litellm.responses(
+            model="hostinger_router/claude-sonnet-5",
+            input="Say hello",
+            api_key="hostinger-test-key",
+        )
+
+    assert native.call_count == 0
+    assert chat.call_count == 1
+    assert json.loads(chat.calls.last.request.content)["model"] == "claude-sonnet-5"
+    assert response.output[0].content[0].text == "Hello from Hostinger Router"
