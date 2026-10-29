@@ -52,8 +52,10 @@ class LiteLLMCompletionTransformationHandler:
         bridged_request: Final[ResponsesAPIOptionalRequestParams] = (
             {**responses_api_request, "tools": list(hoisted.tools)} if hoisted.hoisted else responses_api_request
         )
-        litellm_completion_request: Final[dict] = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        text_config: Final = bridged_request.get("text")
+        verbosity: Final = text_config.get("verbosity") if isinstance(text_config, Mapping) else None
+        litellm_completion_request: Final[dict] = {
+            **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,
                 responses_api_request=bridged_request,
@@ -61,8 +63,9 @@ class LiteLLMCompletionTransformationHandler:
                 stream=stream,
                 extra_headers=extra_headers,
                 **kwargs,
-            )
-        )
+            ),
+            **({"verbosity": verbosity} if verbosity is not None else {}),
+        }
 
         if _is_async:
             return self.async_response_api_handler(
