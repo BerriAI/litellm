@@ -31,7 +31,12 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager, get_model_cost_key, resolve_api_key_secret_reference
+from litellm.utils import (
+    ModelInfoLookupMiss,
+    ProviderConfigManager,
+    lookup_model_info_for_registration,
+    resolve_api_key_secret_reference,
+)
 
 from ..litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
@@ -741,6 +746,16 @@ def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) 
     return "/v1/realtime/transcription_sessions" in (model_info.get("supported_endpoints") or ())
 
 
+_REALTIME_SERVED_MODES: Final = frozenset({"realtime", "audio_transcription"})
+
+
+def _cost_map_lists_outside_realtime(model: str) -> bool:
+    model_info: Final = lookup_model_info_for_registration(model, "openai")
+    if isinstance(model_info, ModelInfoLookupMiss) or model_info["mode"] in _REALTIME_SERVED_MODES:
+        return False
+    return not any(endpoint.startswith("/v1/realtime") for endpoint in model_info.get("supported_endpoints") or ())
+
+
 _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcription"}
 
 
@@ -803,8 +818,9 @@ async def realtime_health_check(
     Returns:
         bool - True once the connection is open, and on OpenAI's own hosts once the first server event is not an
             error, since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
-            the failure in its first server event. An `invalid_model` error for a model litellm knows also counts as
-            healthy: OpenAI checks the key first, and Live and transcription models are served through other endpoints
+            the failure in its first server event. An `invalid_model` error also counts as healthy unless litellm's
+            cost map lists the model under a mode realtime never serves: OpenAI checks the key first, and Live and
+            transcription models are served through other endpoints
     Raises:
         Exception - if the connection is not successful or if OpenAI's first server event is any other error
     """
@@ -905,7 +921,10 @@ async def realtime_health_check(
         if custom_llm_provider != "openai" or not is_openai_backed_api_base(url):
             return True
         return await confirm_session_started(
-            connection, model, sent_credentials=bool(auth_headers), model_is_known=get_model_cost_key(model) is not None
+            connection,
+            model,
+            sent_credentials=bool(auth_headers),
+            model_listed_outside_realtime=_cost_map_lists_outside_realtime(model),
         )
 
 

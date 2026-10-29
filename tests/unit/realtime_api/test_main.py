@@ -490,9 +490,9 @@ _OPENAI_LIVE_MODEL_ON_REALTIME_EVENT: Final = (
     '{"type": "error", "event_id": "event_7", "error": {"type": "invalid_request_error", "code": "invalid_model", '
     '"message": "Model \\"gpt-live-1\\" is not supported in realtime mode.", "param": null, "event_id": null}}'
 )
-_OPENAI_UNKNOWN_MODEL_EVENT: Final = (
+_OPENAI_CHAT_MODEL_ON_REALTIME_EVENT: Final = (
     '{"type": "error", "event_id": "event_8", "error": {"type": "invalid_request_error", "code": "invalid_model", '
-    '"message": "Model \\"realtime-2.1\\" is not supported in realtime mode.", "param": null, "event_id": null}}'
+    '"message": "Model \\"gpt-5.5\\" is not supported in realtime mode.", "param": null, "event_id": null}}'
 )
 _OPENAI_MODEL_NOT_FOUND_EVENT: Final = (
     '{"type": "error", "event_id": "event_9", "error": {"type": "invalid_request_error", "code": "model_not_found", '
@@ -761,14 +761,13 @@ async def test_openai_health_check_is_healthy_once_session_created_arrives():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-live-1", "gpt-4o-transcribe", "gpt-audio", "gpt-live-unreleased"])
 async def test_openai_health_check_is_healthy_for_a_model_served_outside_realtime_once_the_key_is_accepted(
-    local_model_cost_map,
+    local_model_cost_map, model: str
 ):
     connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_LIVE_MODEL_ON_REALTIME_EVENT))
     with patch("websockets.connect", connect):
-        assert await realtime_main.realtime_health_check(
-            model="gpt-live-1", custom_llm_provider="openai", api_key="sk-real"
-        )
+        assert await realtime_main.realtime_health_check(model=model, custom_llm_provider="openai", api_key="sk-real")
 
 
 @pytest.mark.asyncio
@@ -776,10 +775,10 @@ async def test_openai_health_check_is_healthy_for_a_model_served_outside_realtim
     ("model", "first_event", "expected_exception", "expected_message"),
     [
         (
-            "realtime-2.1",
-            _OPENAI_UNKNOWN_MODEL_EVENT,
+            "gpt-5.5",
+            _OPENAI_CHAT_MODEL_ON_REALTIME_EVENT,
             litellm.BadRequestError,
-            'Model "realtime-2.1" is not supported in realtime mode',
+            'Model "gpt-5.5" is not supported in realtime mode',
         ),
         (
             "gpt-realtime-2.1x",

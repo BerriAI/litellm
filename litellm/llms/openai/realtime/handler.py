@@ -8,7 +8,6 @@ import ssl
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
-from openai.types.realtime import RealtimeError, RealtimeErrorEvent
 from pydantic import TypeAdapter
 
 from litellm._logging import redact_string, verbose_logger
@@ -31,6 +30,7 @@ from ..openai import OpenAIChatCompletion
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
+    from openai.types.realtime import RealtimeError
     from websockets.asyncio.client import ClientConnection
 
 _SERVER_EVENT_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -38,18 +38,22 @@ _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL: Final = "invalid_model"
 _CREDENTIALS_REJECTED: Final = "invalid_api_key"
 
 
-def first_event_error(first_event: str | bytes) -> RealtimeError | None:
+def first_event_error(first_event: str | bytes) -> "RealtimeError | None":
     event: Final = _SERVER_EVENT_FIELDS.validate_json(first_event)
     if event.get("type") != "error":
         return None
+    from openai.types.realtime import RealtimeErrorEvent
+
     return RealtimeErrorEvent.model_validate(event).error
 
 
 async def confirm_session_started(
-    connection: "ClientConnection", model: str, sent_credentials: bool, model_is_known: bool
+    connection: "ClientConnection", model: str, sent_credentials: bool, model_listed_outside_realtime: bool
 ) -> Literal[True]:
     error: Final = first_event_error(await connection.recv())
-    if error is None or (error.code == _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL and model_is_known):
+    if error is None or (
+        error.code == _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL and not model_listed_outside_realtime
+    ):
         return True
     if error.code == _CREDENTIALS_REJECTED or not sent_credentials:
         raise AuthenticationError(message=error.message, llm_provider="openai", model=model)
