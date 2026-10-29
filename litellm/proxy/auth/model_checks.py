@@ -8,8 +8,6 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import TypeAdapter
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -30,8 +28,6 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
-
-_ROUTER_DEPLOYMENT: Final = TypeAdapter(object)
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -553,10 +549,8 @@ def _litellm_model(deployment: Mapping[str, object]) -> object:
     return litellm_params.get("model") if is_str_keyed_mapping(litellm_params) else None
 
 
-def _router_deployment(registry: RouterRegistry, model_id: object) -> Mapping[str, object] | None:
-    if not isinstance(model_id, str):
-        return None
-    deployment: Final = _ROUTER_DEPLOYMENT.validate_python(registry.deployment_dict(model_id))
+def _router_deployment(registry: RouterRegistry, model_id: str) -> Mapping[str, object] | None:
+    deployment: Final[object] = registry.deployment_dict(model_id)
     return deployment if is_str_keyed_mapping(deployment) else None
 
 
@@ -582,22 +576,17 @@ def _deployment_routed_model(source: Mapping[str, object], listed_name: str) -> 
 
 
 def wildcard_routed_model(row: Mapping[str, object], llm_router: Router | None) -> str | None:
-    if llm_router is None:
+    model_id: Final = _model_info_field(row, "id")
+    listed_name: Final = row.get("model_name")
+    if llm_router is None or not isinstance(model_id, str) or not isinstance(listed_name, str):
         return None
     registry: Final = llm_router.registry()
-    source: Final = _router_deployment(registry, _model_info_field(row, "id"))
-    listed_name: Final = row.get("model_name")
-    if source is None or not isinstance(listed_name, str):
+    source: Final = _router_deployment(registry, model_id)
+    if source is None or _litellm_model(row) == _litellm_model(source):
         return None
-    if _litellm_model(row) == _litellm_model(source) or listed_name in registry.names(kind="group_set"):
+    if model_id not in registry.names(listed_name, kind="route_candidates", team_id=_deployment_team_id(row)):
         return None
-    routed_model: Final = _deployment_routed_model(source, listed_name)
-    return (
-        routed_model
-        if routed_model is not None
-        and routed_model in registry.names(listed_name, kind="wildcard", team_id=_deployment_team_id(row))
-        else None
-    )
+    return _deployment_routed_model(source, listed_name)
 
 
 def _get_wildcard_models(

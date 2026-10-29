@@ -676,15 +676,28 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
     monkeypatch: pytest.MonkeyPatch,
     local_model_cost_map: None,
 ) -> None:
-    """``acme-lite`` has a deployment of its own and ``my-openai/gpt-acme-*`` is a narrower wildcard,
-    so calls to those names never reach the catch-all or ``my-openai/*``, which still list them. Such a
-    row may go unpriced, but any price a row shows must be the one its calls are billed at."""
+    """``acme-lite`` has a deployment of its own, ``acme-pro`` is an alias of it, ``acme-max`` is a
+    routing group over it, and ``my-openai/gpt-acme-*`` is a narrower wildcard, so calls to those names
+    never reach the catch-all or ``my-openai/*``, which still list them. Such a row may go unpriced, but
+    any price a row shows must be the one its calls are billed at."""
     from litellm.proxy.auth import model_checks
 
     catalog: Final = {
         "fireworks_ai/accounts/fireworks/models/acme-lite": {
             "input_cost_per_token": 5e-07,
             "output_cost_per_token": 6e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-pro": {
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 2.5e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-max": {
+            "input_cost_per_token": 3.5e-07,
+            "output_cost_per_token": 4.5e-07,
             "litellm_provider": "fireworks_ai",
             "mode": "chat",
         },
@@ -707,7 +720,11 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
         model_checks,
         "get_provider_models",
         lambda provider, litellm_params=None: {
-            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-lite"],
+            "fireworks_ai": [
+                "fireworks_ai/accounts/fireworks/models/acme-lite",
+                "fireworks_ai/accounts/fireworks/models/acme-pro",
+                "fireworks_ai/accounts/fireworks/models/acme-max",
+            ],
             "openai": ["gpt-acme-lite"],
         }.get(provider, []),
     )
@@ -733,7 +750,9 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
                 "litellm_params": {"model": "deepseek/acme-*", "api_key": "x"},
                 "model_info": {"id": "deepseek-wildcard"},
             },
-        ]
+        ],
+        model_group_alias={"acme-pro": "acme-lite"},
+        routing_groups=[{"group_name": "acme-max", "models": ["acme-lite"], "routing_strategy": "simple-shuffle"}],
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
@@ -753,7 +772,10 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
     }
     assert sorted(listed) == [
         ("deepseek-acme-lite", "acme-lite"),
+        ("deepseek-acme-lite", "acme-pro"),
         ("fireworks-wildcard", "acme-lite"),
+        ("fireworks-wildcard", "acme-max"),
+        ("fireworks-wildcard", "acme-pro"),
         ("openai-wildcard", "my-openai/gpt-acme-lite"),
     ]
     assert listed[("deepseek-acme-lite", "acme-lite")] == (7e-07, 8e-07)
@@ -772,6 +794,78 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
             for key, (input_cost, output_cost) in priced_rows.items()
         }
     )
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_model_info_prices_a_team_wildcard_row_by_the_route_its_team_takes(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """Team ``team-a`` owns ``team-fw/*`` over Fireworks and its own DeepSeek deployment published as
+    ``team-fw/acme-chat``, so the team's calls to that name skip the wildcard while ``team-fw/acme-lite``
+    goes through it."""
+    from litellm.proxy.auth import model_checks
+
+    catalog: Final = {
+        "fireworks_ai/accounts/fireworks/models/acme-chat": {
+            "input_cost_per_token": 1e-07,
+            "output_cost_per_token": 2e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-lite": {
+            "input_cost_per_token": 5e-07,
+            "output_cost_per_token": 6e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: {
+            "fireworks_ai": [
+                "fireworks_ai/accounts/fireworks/models/acme-chat",
+                "fireworks_ai/accounts/fireworks/models/acme-lite",
+            ],
+        }.get(provider, []),
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-fw/*",
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+                "model_info": {"id": "team-wildcard", "team_id": "team-a"},
+            },
+            {
+                "model_name": "model_name_team-a_acme-chat",
+                "litellm_params": {"model": "deepseek/acme-chat", "api_key": "x"},
+                "model_info": {
+                    "id": "team-deepseek",
+                    "team_id": "team-a",
+                    "team_public_model_name": "team-fw/acme-chat",
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    wildcard_rows: Final = {
+        row["model_name"]: row["model_info"].get("input_cost_per_token")
+        for row in response.json()["data"]
+        if row["model_info"]["id"] == "team-wildcard" and "*" not in row["model_name"]
+    }
+    assert wildcard_rows == {"team-fw/acme-chat": None, "team-fw/acme-lite": 5e-07}
     _invalidate_model_cost_lowercase_map()
 
 
