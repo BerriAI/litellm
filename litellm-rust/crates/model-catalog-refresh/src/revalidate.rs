@@ -72,9 +72,7 @@ impl Revalidation {
                 body,
                 ..
             } => self.adopt(body.unwrap_or_default(), etag),
-            Reply::Response { status: 304, .. } => self.finish(
-                Repr::NotModified.into(),
-            ),
+            Reply::Response { status: 304, .. } => self.finish(Repr::NotModified.into()),
             Reply::Response {
                 status,
                 retry_after,
@@ -115,12 +113,7 @@ impl Revalidation {
         let loaded = match checked {
             Ok(loaded) => loaded,
             Err(source) => {
-                return self.finish(
-                    Repr::Unusable {
-                        source,
-                    }
-                    .into(),
-                );
+                return self.finish(Repr::Unusable(source).into());
             }
         };
         let installed = Installed {
@@ -299,7 +292,7 @@ mod tests {
         assert!(!error.transient());
         assert_eq!(
             report(&error),
-            format!("HTTP {status} from https://example.com/map.json")
+            format!("the model cost map source returned HTTP {status}")
         );
     }
 

@@ -317,7 +317,7 @@ def test_reload_gives_up_after_max_attempts():
     with _serving([(503, {"Retry-After": "0"}, b"")]) as server:
         result = reload_model_cost_map(server.url, catalog)
     assert isinstance(result, Unavailable)
-    assert result.reason == f"gave up after 3 attempts: HTTP 503 from {server.url}"
+    assert result.reason == "gave up after 3 attempts: the model cost map source returned HTTP 503"
     assert len(server.requests) == 3
 
 
@@ -327,7 +327,7 @@ def test_reload_non_retryable_status_fails_immediately(status):
     with _serving([(status, {}, b"")]) as server:
         result = reload_model_cost_map(server.url, catalog)
     assert isinstance(result, Unavailable)
-    assert result.reason == f"HTTP {status} from {server.url}"
+    assert result.reason == f"the model cost map source returned HTTP {status}"
     assert len(server.requests) == 1
 
 
@@ -562,7 +562,7 @@ def test_boot_load_does_not_retry_non_retryable_failure():
     assert _retry_threads() == []
     provenance = catalog.provenance()
     assert provenance.source == "local"
-    assert provenance.fallback_reason == f"Remote fetch failed: HTTP 404 from {server.url}"
+    assert provenance.fallback_reason == "Remote fetch failed: the model cost map source returned HTTP 404"
     assert provenance.url == server.url
 
 

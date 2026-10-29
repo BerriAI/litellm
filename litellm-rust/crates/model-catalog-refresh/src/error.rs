@@ -89,7 +89,7 @@ impl Error {
             | Repr::NotAFilePath { .. }
             | Repr::InvalidS3Url { .. }
             | Repr::UnsupportedScheme { .. }
-            | Repr::NotModified { .. }
+            | Repr::NotModified
             | Repr::Unusable { .. }
             | Repr::Exhausted { .. }
             | Repr::OutOfOrder(_) => false,
@@ -109,7 +109,7 @@ impl Error {
             | Repr::S3Timeout { .. }
             | Repr::S3Redirect { .. }
             | Repr::S3Body { .. }
-            | Repr::NotModified { .. }
+            | Repr::NotModified
             | Repr::Unusable { .. }
             | Repr::Exhausted { .. }
             | Repr::OutOfOrder(_) => None,
@@ -130,7 +130,7 @@ impl Error {
             | Repr::S3Timeout { .. }
             | Repr::S3Redirect { .. }
             | Repr::S3Body { .. }
-            | Repr::NotModified { .. }
+            | Repr::NotModified
             | Repr::Unusable { .. }
             | Repr::OutOfOrder(_) => None,
         }
@@ -145,7 +145,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::{Installed, Origin, Revalidation, Reply, RetryPolicy, Step};
+    use crate::{Installed, Origin, Reply, RetryPolicy, Revalidation, Step};
 
     fn finish_failed_reply(error: Error) -> Error {
         let source = Source::parse("https://example.com/map.json").expect("valid source");
