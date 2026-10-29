@@ -6418,7 +6418,9 @@ async def test_a_streamed_cache_hit_keeps_the_vllm_stop_reason_and_every_token_i
 ) -> None:
     emitted: Final = await _replayed_cache_hit_choices(logging_obj, replay)
 
-    assert [choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is not None] == [", 5"]
+    assert [
+        (choice["finish_reason"], choice["stop_reason"]) for choice in emitted if choice.get("stop_reason") is not None
+    ] == [("stop", ", 5")]
     assert _joined_token_ids(emitted) == _CACHED_VLLM_TOKEN_IDS
 
 
