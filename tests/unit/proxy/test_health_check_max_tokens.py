@@ -840,6 +840,125 @@ def test_health_check_params_apply_to_non_chat_modes():
     assert "max_tokens" not in updated
 
 
+@pytest.mark.parametrize(
+    ("model_info", "litellm_params"),
+    [
+        ({}, {"model": "azure/gpt-audio-mini"}),
+        ({}, {"model": "openai/gpt-audio-mini"}),
+        ({"base_model": "azure/gpt-audio-mini"}, {"model": "azure/my-audio-deployment"}),
+        ({}, {"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-1.5"}),
+        (
+            {"base_model": "azure/gpt-4o-mini", "health_check_model": "azure/gpt-audio-mini"},
+            {"model": "azure/my-text-deployment"},
+        ),
+        (
+            {"base_model": "gpt-4o-mini", "health_check_params": {"model": "openai/gpt-audio-mini"}},
+            {"model": "openai/my-text-model"},
+        ),
+        ({"base_model": "openai/gpt-audio-1.5"}, {"model": "azure/my-audio-deployment"}),
+    ],
+)
+def test_openai_and_azure_audio_chat_probe_asks_for_audio_output(
+    model_info: dict[str, str], litellm_params: dict[str, str]
+):
+    updated: Final = update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["modalities"] == ["text", "audio"]
+    assert updated["audio"] == {"voice": "alloy", "format": "wav"}
+    assert updated["max_tokens"] == 16
+
+
+@pytest.mark.parametrize(
+    ("model_info", "litellm_params"),
+    [
+        ({}, {"model": "azure/gpt-4o-mini"}),
+        ({}, {"model": "gemini/lyria-3-clip-preview"}),
+        ({}, {"model": "azure/my-audio-deployment"}),
+        ({}, {"model": "unmapped-model-name"}),
+        ({"mode": "responses"}, {"model": "openai/gpt-audio-mini"}),
+        ({"mode": "completion"}, {"model": "openai/gpt-audio-mini"}),
+        ({"base_model": "gemini/lyria-3-clip-preview"}, {"model": "azure/my-audio-deployment"}),
+        (
+            {"base_model": "azure/gpt-audio-mini", "health_check_model": "azure/gpt-4o-mini"},
+            {"model": "azure/my-audio-deployment"},
+        ),
+        (
+            {"health_check_model": "azure/gpt-4o-mini"},
+            {"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-mini"},
+        ),
+        (
+            {"base_model": "gpt-audio-mini", "health_check_params": {"model": "openai/gpt-5.4-mini"}},
+            {"model": "openai/gpt-audio-mini"},
+        ),
+        (
+            {"health_check_params": {"model": "openai/gpt-5.4-mini"}},
+            {"model": "openai/gpt-audio-mini", "base_model": "gpt-audio-mini"},
+        ),
+    ],
+)
+def test_probe_without_openai_audio_chat_model_asks_for_no_audio_output(
+    model_info: dict[str, str], litellm_params: dict[str, str]
+):
+    updated: Final = update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "modalities" not in updated
+    assert "audio" not in updated
+
+
+@pytest.mark.parametrize(
+    "operator_params",
+    [
+        {"modalities": ["audio", "text"], "audio": {"voice": "verse", "format": "mp3"}},
+        {"audio": {"voice": "verse", "format": "mp3"}},
+    ],
+)
+def test_audio_chat_probe_keeps_audio_params_set_in_health_check_params(operator_params: dict[str, object]):
+    updated: Final = update_litellm_params_for_health_check(
+        {"health_check_params": operator_params}, {"model": "azure/gpt-audio-mini"}
+    )
+
+    assert {key: updated[key] for key in operator_params} == operator_params
+    assert updated["modalities"] == operator_params.get("modalities", ["text", "audio"])
+
+
+_AUDIO_OUTPUT_CHAT_MODELS: Final = tuple(
+    sorted(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") in ("openai", "azure")
+        and info.get("mode") == "chat"
+        and "audio" in (info.get("supported_output_modalities") or [])
+    )
+)
+
+
+@pytest.mark.parametrize("cost_map_model", _AUDIO_OUTPUT_CHAT_MODELS)
+def test_every_audio_output_chat_model_in_the_cost_map_gets_the_audio_probe(cost_map_model: str):
+    provider: Final = litellm.model_cost[cost_map_model]["litellm_provider"]
+    updated: Final = update_litellm_params_for_health_check(
+        {"base_model": cost_map_model}, {"model": f"{provider}/my-audio-deployment"}
+    )
+
+    assert updated["modalities"] == ["text", "audio"]
+
+
+def test_text_only_modalities_in_health_check_params_get_no_default_audio():
+    updated: Final = update_litellm_params_for_health_check(
+        {"health_check_params": {"modalities": ["text"]}}, {"model": "openai/gpt-audio-mini"}
+    )
+
+    assert updated["modalities"] == ["text"]
+    assert "audio" not in updated
+
+
+def test_audio_chat_probe_uses_health_check_voice():
+    updated: Final = update_litellm_params_for_health_check(
+        {"health_check_voice": "verse"}, {"model": "openai/gpt-audio-mini"}
+    )
+
+    assert updated["audio"] == {"voice": "verse", "format": "wav"}
+
+
 async def _pegasus_health_check_request_body(
     model_info: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> dict[str, object]:
