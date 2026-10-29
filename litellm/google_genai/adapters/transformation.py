@@ -116,6 +116,12 @@ _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "r
 _TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
 _JSON_MIME_TYPE: Final = "application/json"
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
+_COMPLETION_PARAM_CONFIG_KEYS: Final = (
+    ("temperature", ("temperature",)),
+    ("max_tokens", ("maxOutputTokens", "max_output_tokens")),
+    ("top_p", ("topP", "top_p")),
+    ("stop", ("stopSequences", "stop_sequences")),
+)
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
 _Validated: Final = TypeVar("_Validated")
@@ -489,9 +495,15 @@ class GoogleGenAIAdapter:
         messages: Final = self._transform_contents_to_messages(contents_list, system_instruction=system_instruction)
 
         # Create base request as dict (which is compatible with ChatCompletionRequest)
+        config_fields: Final = _validated(_CONFIG_FIELDS, config) or {}
         completion_request: Final[_JsonDict] = {
             "model": model,
             "messages": messages,
+            **{
+                param: value
+                for param, keys in _COMPLETION_PARAM_CONFIG_KEYS
+                if (value := _first_present(config_fields, keys)) is not None
+            },
         }
 
         #########################################################
@@ -506,20 +518,6 @@ class GoogleGenAIAdapter:
         # - tool_choice
         #########################################################
 
-        # Add config parameters if provided
-        if config:
-            # Map common Google GenAI config parameters to OpenAI equivalents
-            if "temperature" in config:
-                completion_request["temperature"] = config["temperature"]
-            if "maxOutputTokens" in config:
-                completion_request["max_tokens"] = config["maxOutputTokens"]
-            if "topP" in config:
-                completion_request["top_p"] = config["topP"]
-            if "topK" in config:
-                # OpenAI doesn't have direct topK, but we can pass it as extra
-                pass
-            if "stopSequences" in config:
-                completion_request["stop"] = config["stopSequences"]
         response_format: Final = _translate_response_format(config)
         if response_format is not None and _deployment_supports_response_format(
             model, litellm_params.custom_llm_provider if litellm_params else None

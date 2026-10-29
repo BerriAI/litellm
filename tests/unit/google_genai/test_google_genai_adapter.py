@@ -265,7 +265,15 @@ def test_list_contents_transformation():
     assert completion_request["messages"][2]["content"] == "What's the weather like?"
 
 
-def test_config_parameter_mapping():
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"temperature": 0.8, "maxOutputTokens": 150, "topP": 0.9, "stopSequences": ["END", "STOP"]},
+        {"temperature": 0.8, "max_output_tokens": 150, "top_p": 0.9, "stop_sequences": ["END", "STOP"]},
+    ],
+    ids=["camelCase", "snake_case"],
+)
+def test_config_parameter_mapping(config: dict[str, object]):
     """Test that config parameters are correctly mapped"""
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
@@ -273,12 +281,6 @@ def test_config_parameter_mapping():
 
     model = "gpt-3.5-turbo"
     contents = {"role": "user", "parts": [{"text": "Test"}]}
-    config = {
-        "temperature": 0.8,
-        "maxOutputTokens": 150,
-        "topP": 0.9,
-        "stopSequences": ["END", "STOP"],
-    }
 
     completion_request = adapter.translate_generate_content_to_completion(
         model=model, contents=contents, config=config
