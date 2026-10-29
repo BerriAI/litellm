@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_param,
     stored_attribute,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -127,7 +128,7 @@ def _prepend_upstream_choice_extras(
 
 
 _NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
-_NO_FINISH_CHOICE_FIELDS: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
+_NO_CHOICE_FIELDS_BY_INDEX: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
 
 
 def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
@@ -399,7 +400,8 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
-        self.received_finish_choice_fields: Mapping[int, Mapping[str, object]] = _NO_FINISH_CHOICE_FIELDS
+        self.received_finish_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
+        self.carried_chunk_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -1198,9 +1200,10 @@ class CustomStreamWrapper:
         )
 
         is_chunk_non_empty: Final = self.is_chunk_non_empty(completion_obj, model_response, response_obj)
-        chunk_choice_fields: Final[Mapping[str, object]] = response_obj.get(
+        upstream_chunk_choice_fields: Final[Mapping[str, object]] = response_obj.get(
             "chunk_choice_fields", _NO_UPSTREAM_CHOICE_FIELDS
         )
+        chunk_choice_fields: Final = self._take_carried_chunk_choice_fields(response_obj, upstream_chunk_choice_fields)
 
         if is_chunk_non_empty:  # cannot set content of an OpenAI Object to be an empty string
             self.raise_on_model_repetition()
@@ -1300,11 +1303,19 @@ class CustomStreamWrapper:
             else:
                 return
         elif self.received_finish_reason is not None:
-            another_choice_fields_chunk: Final = self._another_choice_fields_chunk(
-                model_response, response_obj, chunk_choice_fields
-            )
-            if another_choice_fields_chunk is not None:
-                return another_choice_fields_chunk
+            chunk_upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
+            if chunk_choice_fields and self._streams_past_the_pending_finish(
+                model_response, response_obj, chunk_upstream_index
+            ):
+                self.carried_chunk_choice_fields = MappingProxyType(
+                    {**self.carried_chunk_choice_fields, chunk_upstream_index: chunk_choice_fields}
+                )
+            else:
+                another_choice_fields_chunk: Final = self._another_choice_fields_chunk(
+                    model_response, response_obj, chunk_choice_fields
+                )
+                if another_choice_fields_chunk is not None:
+                    return another_choice_fields_chunk
             if self.sent_last_chunk is True:
                 # Bedrock returns the guardrail trace in the last chunk - we want to return this here
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
@@ -2021,6 +2032,37 @@ class CustomStreamWrapper:
 
     def _apply_finish_choice_fields(self, choice: StreamingChoices) -> None:
         _apply_choice_fields(choice, self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS))
+
+    def _streams_past_the_pending_finish(
+        self, model_response: ModelResponseStream, response_obj: Mapping[str, object], upstream_index: int
+    ) -> bool:
+        finishing_index: Final = model_response.choices[0].index
+        return (
+            not self.sent_last_chunk
+            and not response_obj.get("is_finished")
+            and upstream_index != finishing_index
+            and finishing_index in self.received_finish_choice_fields
+        )
+
+    def _take_carried_chunk_choice_fields(
+        self, response_obj: Mapping[str, object], chunk_choice_fields: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        if not self.carried_chunk_choice_fields:
+            return chunk_choice_fields
+        upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
+        carried: Final = self.carried_chunk_choice_fields.get(upstream_index)
+        if carried is None:
+            return chunk_choice_fields
+        self.carried_chunk_choice_fields = MappingProxyType(
+            {index: fields for index, fields in self.carried_chunk_choice_fields.items() if index != upstream_index}
+        )
+        return MappingProxyType(
+            {
+                field: [*object_items(carried.get(field)), *object_items(chunk_choice_fields.get(field))]
+                for field in STREAM_CHUNK_CHOICE_FIELDS
+                if field in carried or field in chunk_choice_fields
+            }
+        )
 
     def _another_choice_fields_chunk(
         self,

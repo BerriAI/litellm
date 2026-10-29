@@ -6372,6 +6372,33 @@ def test_hosted_vllm_stream_with_two_choices_delivers_every_token_id_and_stop_re
     ) == frozenset(_TWO_CHOICE_STOP_REASONS.items())
 
 
+def test_hosted_vllm_stream_with_two_choices_finishes_the_first_choice_before_the_other_choice_streams_on(
+    logging_obj: Logging,
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            *({"index": index, "delta": {"role": "assistant", "content": ""}, "finish_reason": None} for index in (0, 1)),
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": "stop", "stop_reason": ",2", "token_ids": [16]},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [26]},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [11]},
+            {"index": 1, "delta": {"content": "1,"}, "finish_reason": None, "token_ids": [27]},
+            {"index": 1, "delta": {"content": "3"}, "finish_reason": "stop", "stop_reason": 151645, "token_ids": [28]},
+        ),
+    )
+    first_choice_finish: Final = next(
+        position for position, choice in enumerate(emitted) if choice["index"] == 0 and choice["finish_reason"]
+    )
+
+    assert emitted[first_choice_finish]["stop_reason"] == ",2"
+    assert _joined_token_ids([choice for choice in emitted[first_choice_finish:] if choice["index"] == 1]) == (
+        26,
+        11,
+        27,
+        28,
+    )
+
+
 _CACHED_VLLM_TOKEN_IDS: Final = (16, 11, 220, 17, 11, 220, 18, 11, 220, 19)
 
 
