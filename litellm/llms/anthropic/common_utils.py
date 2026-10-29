@@ -382,9 +382,33 @@ def is_anthropic_oauth_key(value: str | None) -> bool:
 ANTHROPIC_OAUTH_FORWARD_PROVIDERS: Final[frozenset[str]] = frozenset((LlmProviders.ANTHROPIC.value,))
 
 
-def resolve_used_client_oauth_token(client_sent_oauth_token: object, custom_llm_provider: str | None) -> bool | None:
+def is_official_anthropic_api_base(api_base: str | None) -> bool:
+    """
+    Check if the resolved api_base points to an official Anthropic endpoint.
+    Returns True if api_base is None (defaulting to api.anthropic.com) or points to *.anthropic.com.
+    Returns False for custom third-party endpoints (e.g. 127.0.0.1, moonshot, kimi, z.ai).
+    """
+    if not api_base:
+        return True
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(api_base if "://" in api_base else f"https://{api_base}")
+        hostname = (parsed.hostname or "").lower()
+        return hostname == "api.anthropic.com" or hostname.endswith(".anthropic.com")
+    except Exception:
+        return False
+
+
+def resolve_used_client_oauth_token(
+    client_sent_oauth_token: object,
+    custom_llm_provider: str | None,
+    api_base: str | None = None,
+) -> bool | None:
     if not isinstance(client_sent_oauth_token, bool):
         return None
+    if api_base and not is_official_anthropic_api_base(api_base):
+        return False
     return client_sent_oauth_token and custom_llm_provider in ANTHROPIC_OAUTH_FORWARD_PROVIDERS
 
 
@@ -407,23 +431,46 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     return ",".join(sorted(betas))
 
 
-def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
+def optionally_handle_anthropic_oauth(
+    headers: dict,
+    api_key: str | None,
+    api_base: str | None = None,
+) -> tuple[dict, str | None]:
     """
     Handle Anthropic OAuth token detection and header setup.
 
     If an OAuth token is detected in the Authorization header (any casing),
-    extracts it and sets the required OAuth headers.
+    extracts it and sets the required OAuth headers when targeting an official
+    Anthropic endpoint.
+    When targeting a custom third-party api_base, the OAuth token is NOT forwarded/swapped,
+    protecting client Claude subscriptions and preserving the deployment's configured api_key.
 
     Args:
         headers: Request headers dict
         api_key: Current API key (may be None)
+        api_base: Optional base URL (e.g. "https://api.anthropic.com" or custom third-party host)
 
     Returns:
         Tuple of (updated headers, api_key)
     """
+    from litellm._logging import verbose_logger
+
     # Check Authorization header (passthrough / forwarded requests)
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
     if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        if api_base and not is_official_anthropic_api_base(api_base):
+            verbose_logger.warning(
+                "Anthropic OAuth token detected in Authorization header, but request targets a custom "
+                f"api_base ({api_base}). Suppressing Anthropic OAuth token forwarding to protect client credentials."
+            )
+            # Remove client's Anthropic OAuth Authorization header so it does not reach third party
+            for name in tuple(
+                header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+            ):
+                if name.lower() == "authorization":
+                    headers.pop(name)
+            return headers, api_key
+
         api_key = auth_header.removeprefix("Bearer ")
         for name in tuple(
             header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
@@ -437,6 +484,10 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+        if api_base and not is_official_anthropic_api_base(api_base):
+            verbose_logger.warning(
+                f"Anthropic OAuth token used as api_key for custom api_base ({api_base})."
+            )
         for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
             headers.pop(name)
         headers["authorization"] = f"Bearer {api_key}"
@@ -1391,7 +1442,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
         )
         # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key, api_base=api_base)
         api_key = AnthropicModelInfo.get_api_key(api_key)
         # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
         auth_token: str | None = None
