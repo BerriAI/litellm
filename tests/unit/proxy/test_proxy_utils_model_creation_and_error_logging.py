@@ -1418,7 +1418,10 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
 from typing import cast
 
 import litellm
-from litellm.proxy.utils import create_model_info_response
+from litellm.proxy.utils import (
+    create_model_info_response,
+    resolve_model_provider_and_created_at,
+)
 from litellm.types.router import DeploymentModelListingInfo
 from litellm.types.utils import ModelInfo, ModelResponse, Usage
 
@@ -1717,6 +1720,60 @@ def test_create_model_info_response_no_router_keeps_base_fields():
         "created": response["created"],
         "owned_by": "openai",
     }
+
+
+def test_create_model_info_response_uses_created_when_given():
+    response = create_model_info_response(model_id="some-model", provider="openai", llm_router=None, created=12345)
+
+    assert response["created"] == 12345
+
+
+def test_create_model_info_response_defaults_created_when_none():
+    from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
+
+    response = create_model_info_response(model_id="some-model", provider="openai", llm_router=None, created=None)
+
+    assert response["created"] == DEFAULT_MODEL_CREATED_AT_TIME
+
+
+def _router_with_models(*models: tuple[str, str, real_datetime.datetime | None]) -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": model, "api_key": "sk-test"},
+                "model_info": {"created_at": created_at} if created_at is not None else {},
+            }
+            for name, model, created_at in models
+        ]
+    )
+
+
+def test_resolve_model_provider_and_created_at_reads_deployment():
+    created_at: Final = real_datetime.datetime(2024, 1, 1, tzinfo=real_datetime.timezone.utc)
+    router: Final = _router_with_models(("claude-sonnet", "anthropic/claude-3-5-sonnet-latest", created_at))
+
+    provider, created = resolve_model_provider_and_created_at(router, "claude-sonnet")
+
+    assert provider == "anthropic"
+    assert created == int(created_at.timestamp())
+
+
+def test_resolve_model_provider_and_created_at_without_created_at_returns_none():
+    router: Final = _router_with_models(("gpt-4", "gpt-4", None))
+
+    assert resolve_model_provider_and_created_at(router, "gpt-4") == ("openai", None)
+
+
+@pytest.mark.parametrize("model_id", ["not-a-configured-group", "openai/*"])
+def test_resolve_model_provider_and_created_at_unbacked_model_defaults_openai(model_id):
+    router: Final = _router_with_models(("gpt-4", "gpt-4", None))
+
+    assert resolve_model_provider_and_created_at(router, model_id) == ("openai", None)
+
+
+def test_resolve_model_provider_and_created_at_no_router_defaults_openai():
+    assert resolve_model_provider_and_created_at(None, "some-model") == ("openai", None)
 
 
 def test_create_model_info_response_reads_real_cost_map():
