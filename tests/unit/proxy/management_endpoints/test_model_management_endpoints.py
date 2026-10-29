@@ -1,6 +1,6 @@
-import inspect
 import asyncio
 import contextlib
+import inspect
 import json
 import socket
 from collections.abc import Iterator, Mapping
@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
 from litellm.models.credentials import CredentialItem
+from litellm.models.project import LiteLLM_ProjectTable
 
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
@@ -31,6 +32,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     KubernetesPodsResponse,
     ModelManagementAuthChecks,
     _get_team_deployments,
+    _raise_if_model_update_adds_missing_rate_limits,
     _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
@@ -38,6 +40,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     patch_model,
     update_model,
 )
+from litellm.proxy.management_helpers.model_quota_policy import REQUIRE_BOTH_LIMITS, ModelQuotaPolicy
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
@@ -308,7 +311,7 @@ async def test_model_creation_fails_closed_when_authoritative_policy_is_unavaila
             Deployment(model_name="cannot-create", litellm_params={"model": "openai/test-model"}),
             UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER),
         )
-    assert error.value.code == "503"
+    assert (error.value.code, error.value.type) == ("503", "internal_server_error")
     prisma.db.litellm_proxymodeltable.create.assert_not_called()
     prisma.db.litellm_teamtable.find_unique.assert_not_called()
 
@@ -1458,10 +1461,10 @@ class TestDeleteModelClearsRouterRegistry:
         add_deployment never restores, so an unguarded pop would make it permanently
         unroutable (the same cross-tenant DoS clear_cache was hardened against).
         """
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
-        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
 
         model_id = "regular-del-1"
         admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -2736,11 +2739,11 @@ class TestAddAndDeleteModelLifecycle:
         - Delete same model again → raises (model not found)
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
             add_new_model,
-            delete_model as delete_model_endpoint,
         )
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
         )
 
         model_id = "lifecycle-test-model-123"
@@ -2830,6 +2833,8 @@ class TestDeleteTeamBYOKModelGhost:
     async def test_delete_strips_public_name_and_refreshes_cache(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -2913,6 +2918,8 @@ class TestDeleteTeamBYOKModelGhost:
         alias cleanup (delete_team_model_alias), preserving legacy behavior."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -2981,6 +2988,8 @@ class TestDeleteTeamBYOKModelGhost:
         team.models when one replica is deleted but a sibling still backs it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3062,6 +3071,8 @@ class TestDeleteTeamBYOKModelGhost:
         deployment still serves it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3142,6 +3153,8 @@ class TestDeleteTeamBYOKModelGhost:
         the alias would break routing that works."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3249,6 +3262,8 @@ class TestDeleteModelTeamAuth:
     async def test_proxy_admin_can_delete_model_when_team_deleted(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3284,6 +3299,8 @@ class TestDeleteModelTeamAuth:
         """A missing team must never let a non-admin delete the orphan (no fail-open)."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
         from litellm.proxy.proxy_server import ProxyException
@@ -3319,6 +3336,8 @@ class TestDeleteModelTeamAuth:
         """The auth check must not add a redundant team query on the live-team path."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
         from litellm.proxy.proxy_server import ProxyException
@@ -4389,7 +4408,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_echoed_cost_map_metadata_is_not_persisted(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4415,7 +4433,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4480,7 +4497,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_metadata_without_a_cost_map_key_is_persisted(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
         from litellm.types.utils import echoed_cost_map_fields
@@ -4510,7 +4526,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_a_stored_mode_survives_an_echoed_save(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4533,7 +4548,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_resetting_an_override_to_the_cost_map_value_removes_it(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4557,7 +4571,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_reset_is_recognised_after_the_router_registered_the_override(self, monkeypatch: pytest.MonkeyPatch):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4583,7 +4596,6 @@ class TestModelInfoCostMapEchoFilter:
         from types import MappingProxyType
 
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4608,7 +4620,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_echo_is_compared_against_the_deployments_lookup_not_the_key(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4650,7 +4661,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_base_model_wins_over_litellm_params_model_for_the_lookup(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4678,7 +4688,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_encrypted_stored_model_is_decrypted_for_the_lookup(self, monkeypatch):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -6428,7 +6437,7 @@ class TestStrategyRouterWriteValidation:
             AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY,
             _auto_router_capability_slot,
         )
-        from litellm.router_utils.auto_router_model_naming import gated_capabilities_of
+        from litellm.router_strategy.auto_router.auto_router_model_naming import gated_capabilities_of
 
         capabilities: Final = gated_capabilities_of(effective_params)
 
@@ -6565,7 +6574,7 @@ class TestStrategyRouterWriteValidation:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         configs = {
             "_TUNED_A": self._TUNED_A,
@@ -6621,7 +6630,7 @@ class TestStrategyRouterWriteValidation:
 
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         fake = self._FakeDb([])
         fake.tx_obj.litellm_proxymodeltable.find_many = AsyncMock(
@@ -6666,7 +6675,7 @@ class TestStrategyRouterWriteValidation:
         row id before the slot is entered, so a second tuned router is refused before its DB write."""
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         baselines = snapshot_tuning_baselines([self._db_router_row("a", self._TUNED_A)])
@@ -7369,12 +7378,19 @@ class TestAutoRouterClassifierDefaultPrompt:
             assert response.system_prompt == classification_system_prompt(5)
 
 
+_CUSTOMER_MODEL_ADD_POLICY: Final = ModelQuotaPolicy.model_validate(
+    {
+        "providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []},
+        "models": {"veo-*": ["rpm"], "jev-latest": []},
+    }
+)
+
+
 class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_disabled_even_without_limits(self):
         assert (
             _raise_if_rate_limits_required_but_missing(
-                litellm_params=LiteLLM_Params(model="azure/gpt-5.2"),
-                enforced=False,
+                model_name="gpt-5.2", team_model=False, litellm_params=LiteLLM_Params(model="azure/gpt-5.2"), policy=None
             )
             is None
         )
@@ -7382,8 +7398,9 @@ class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_enabled_and_both_set(self):
         assert (
             _raise_if_rate_limits_required_but_missing(
+                model_name="gpt-5.2", team_model=False,
                 litellm_params=LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=1000),
-                enforced=True,
+                policy=REQUIRE_BOTH_LIMITS,
             )
             is None
         )
@@ -7398,13 +7415,617 @@ class TestEnforceRpmTpmOnModelAdd:
             (LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=-1), "tpm"),
         ],
     )
-    def test_raises_when_enabled_and_missing(self, params, expected_missing):
-        from litellm.proxy._types import ProxyException
-
+    def test_raises_when_enabled_and_missing(self, params: LiteLLM_Params, expected_missing: str):
         with pytest.raises(ProxyException) as exc_info:
-            _raise_if_rate_limits_required_but_missing(litellm_params=params, enforced=True)
-        assert expected_missing in str(exc_info.value.message)
+            _raise_if_rate_limits_required_but_missing(
+                model_name="gpt-5.2", team_model=False, litellm_params=params, policy=REQUIRE_BOTH_LIMITS
+            )
+        assert exc_info.value.message.startswith(f"{expected_missing} must be set")
         assert exc_info.value.code == "400"
+
+    @pytest.mark.parametrize(
+        ("model_name", "params"),
+        [
+            ("runway-gen4", LiteLLM_Params(model="runwayml/gen4_turbo")),
+            ("my-runway", LiteLLM_Params(model="gen4_turbo", custom_llm_provider="runwayml")),
+            ("jev-latest", LiteLLM_Params(model="openai/jev-latest")),
+            ("veo-3.1-generate-001", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", rpm=10)),
+            ("gemini-3-pro", LiteLLM_Params(model="vertex_ai/gemini-3-pro", rpm=10, tpm=1000)),
+        ],
+    )
+    def test_policy_asks_each_model_only_for_the_limits_its_entry_requires(
+        self, model_name: str, params: LiteLLM_Params
+    ):
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                model_name=model_name, team_model=False, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        ("model_name", "params", "expected_missing"),
+        [
+            ("veo-3.1-generate-001", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", tpm=1000), "rpm"),
+            ("gemini-3-pro", LiteLLM_Params(model="vertex_ai/gemini-3-pro", rpm=10), "tpm"),
+            ("openai-gpt", LiteLLM_Params(model="openai/gpt-5.2"), "rpm and tpm"),
+            ("runway-gen4", LiteLLM_Params(model="runwayml/gen4_turbo", rpm=0), "rpm"),
+        ],
+    )
+    def test_policy_rejects_a_model_missing_a_required_or_carrying_a_non_positive_limit(
+        self, model_name: str, params: LiteLLM_Params, expected_missing: str
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_if_rate_limits_required_but_missing(
+                model_name=model_name, team_model=False, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+            )
+        assert exc_info.value.message.startswith(f"{expected_missing} must be set to a positive value for '{model_name}'")
+        assert exc_info.value.code == "400"
+
+    @pytest.mark.parametrize("api_base", ["https://api.groq.com/openai/v1", "os.environ/QA_GROQ_API_BASE"])
+    def test_policy_reads_the_provider_behind_a_known_api_base(self, monkeypatch: pytest.MonkeyPatch, api_base: str):
+        monkeypatch.setenv("QA_GROQ_API_BASE", "https://api.groq.com/openai/v1")
+        policy: Final = ModelQuotaPolicy.model_validate({"default": [], "providers": {"groq": ["rpm", "tpm"]}})
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_if_rate_limits_required_but_missing(
+                model_name="qa-llama", team_model=False,
+                litellm_params=LiteLLM_Params(model="qa-llama", api_base=api_base),
+                policy=policy,
+            )
+        assert exc_info.value.message.startswith("rpm and tpm must be set to a positive value for 'qa-llama'")
+
+    @pytest.mark.parametrize(
+        ("model_name", "params", "shared_missing", "team_missing"),
+        [
+            pytest.param(
+                "jev-latest", LiteLLM_Params(model="vertex_ai/gemini-3.8-flash"), None, "rpm and tpm",
+                id="team-cannot-borrow-an-exempt-public-name",
+            ),
+            pytest.param(
+                "video-team", LiteLLM_Params(model="vertex_ai/veo-3.1-generate-001", rpm=5), "tpm", None,
+                id="team-matches-the-model-it-calls",
+            ),
+        ],
+    )
+    def test_policy_matches_a_team_model_by_the_model_it_calls(
+        self, model_name: str, params: LiteLLM_Params, shared_missing: str | None, team_missing: str | None
+    ):
+        assert _model_add_error(model_name, params, team_model=False) == _missing_limits_message(shared_missing, model_name)
+        assert _model_add_error(model_name, params, team_model=True) == _missing_limits_message(team_missing, model_name)
+
+
+def _missing_limits_message(missing: str | None, model_name: str) -> str | None:
+    if missing is None:
+        return None
+    return (
+        f"{missing} must be set to a positive value for '{model_name}' when "
+        "'enforce_rpm_tpm_on_model_add' is enabled in general_settings"
+    )
+
+
+def _model_add_error(model_name: str, params: LiteLLM_Params, team_model: bool) -> str | None:
+    try:
+        _raise_if_rate_limits_required_but_missing(
+            model_name=model_name, team_model=team_model, litellm_params=params, policy=_CUSTOMER_MODEL_ADD_POLICY
+        )
+    except ProxyException as error:
+        return error.message
+    return None
+
+
+_STORED_RUNWAY: Final = {"model": "runwayml/gen4_turbo"}
+
+
+def _stored_model(litellm_params: Mapping[str, object], team_id: str | None) -> Deployment:
+    return Deployment(
+        model_name="media-latest" if team_id is None else "model_name_media-team_team-row",
+        litellm_params=dict(litellm_params),
+        model_info={
+            "id": "team-row",
+            "team_id": team_id,
+            "team_public_model_name": None if team_id is None else "media-latest",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("stored", "team_id", "incoming", "missing"),
+    [
+        pytest.param(
+            _STORED_RUNWAY, "media-team", updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash"), "rpm and tpm",
+            id="team-model-moves-to-a-provider-that-needs-limits",
+        ),
+        pytest.param(
+            _STORED_RUNWAY, None, updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", rpm=10), "tpm",
+            id="proxy-model-moves-with-only-one-limit",
+        ),
+        pytest.param(
+            {**_STORED_RUNWAY, "tpm": 1000}, None, updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", rpm=10),
+            None, id="stored-limit-counts-toward-the-move",
+        ),
+        pytest.param(
+            _STORED_RUNWAY, "media-team", updateLiteLLMParams(model="vertex_ai/veo-3.1-generate-001", rpm=5), None,
+            id="team-model-moves-to-a-model-entry-it-meets",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3.8-flash"}, None, updateLiteLLMParams(api_key="qa-rotated-key"), None,
+            id="unchanged-route-adds-no-limits",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000}, None, updateLiteLLMParams(rpm=0), None,
+            id="unchanged-route-can-zero-a-limit-as-on-main",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3.8-flash"}, None, updateLiteLLMParams(rpm=10), None,
+            id="legacy-model-without-tpm-stays-editable",
+        ),
+    ],
+)
+def test_model_update_requires_only_the_limits_its_new_route_adds(
+    stored: Mapping[str, object], team_id: str | None, incoming: updateLiteLLMParams, missing: str | None
+) -> None:
+    assert _model_update_error(_stored_model(stored, team_id), incoming) == _missing_limits_message(
+        missing, "media-latest"
+    )
+
+
+def _model_update_error(
+    existing: Deployment,
+    incoming: updateLiteLLMParams,
+    policy: ModelQuotaPolicy = _CUSTOMER_MODEL_ADD_POLICY,
+    remaining: LiteLLM_Params | None = None,
+) -> str | None:
+    try:
+        _raise_if_model_update_adds_missing_rate_limits(
+            existing=existing,
+            written_name="media-latest",
+            written_team_model=existing.model_info.team_id is not None,
+            incoming_params=incoming,
+            remaining_params=existing.litellm_params if remaining is None else remaining,
+            policy=policy,
+        )
+    except ProxyException as error:
+        return error.message
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setting", "expected_code", "expected_message"),
+    [
+        ({"default": [], "models": {"veo-*": ["rpm"]}}, "400", "rpm must be set to a positive value for 'veo-3.1'"),
+        ("yes", "400", "rpm and tpm must be set to a positive value for 'veo-3.1'"),
+        ({"enabled": True}, "400", "rpm and tpm must be set to a positive value for 'veo-3.1'"),
+        (
+            {"providers": {"vertex_ai": ["qps"]}},
+            "500",
+            "general_settings.enforce_rpm_tpm_on_model_add is invalid",
+        ),
+    ],
+)
+async def test_model_add_resolves_the_quota_policy_for_the_public_model_name(
+    monkeypatch: pytest.MonkeyPatch, setting: object, expected_code: str, expected_message: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    prisma: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_rpm_tpm_on_model_add": setting})
+    with pytest.raises(ProxyException) as error:
+        await add_new_model(
+            Deployment(model_name="veo-3.1", litellm_params={"model": "vertex_ai/veo-3.1"}),
+            UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.code == expected_code
+    assert error.value.message.startswith(expected_message)
+    prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_model_add_cannot_borrow_a_model_entry_by_its_public_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(team_id="media-team"))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"jev-latest": []}}},
+    )
+    with pytest.raises(ProxyException) as error:
+        await add_new_model(
+            Deployment(
+                model_name="jev-latest",
+                litellm_params={"model": "vertex_ai/gemini-3.8-flash"},
+                model_info={"team_id": "media-team"},
+            ),
+            UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.code == "400"
+    assert error.value.message.startswith("rpm and tpm must be set to a positive value for 'jev-latest'")
+    prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+
+_PROJECT_QUOTA_SETTINGS: Final = {
+    "enforce_project_model_quota": {
+        "providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []},
+        "models": {"jev-latest": []},
+    }
+}
+_TEAM_VERTEX: Final = {"model": "vertex_ai/gemini-3.8-flash", "vertex_project": "qa-project"}
+_TEAM_RUNWAY: Final = {"model": "gen4_turbo", "custom_llm_provider": "runwayml"}
+
+
+def _media_team_db(public_name: str, project_metadata: Mapping[str, object]) -> MagicMock:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(team_id="media-team"))
+    prisma.db.litellm_projecttable.find_many = AsyncMock(
+        return_value=[
+            LiteLLM_ProjectTable(
+                project_id="p-1",
+                project_alias="video-gen",
+                team_id="media-team",
+                models=[public_name],
+                metadata=dict(project_metadata),
+            ),
+            LiteLLM_ProjectTable(
+                project_id="p-2", project_alias="chat-only", team_id="media-team", models=["chat-only-model"]
+            ),
+        ]
+    )
+    return prisma
+
+
+def _team_model_row(public_name: str, litellm_params: Mapping[str, object]) -> LiteLLM_ProxyModelTable:
+    return LiteLLM_ProxyModelTable(
+        model_id="team-row",
+        model_name="model_name_media-team_team-row",
+        litellm_params=dict(litellm_params),
+        model_info={"id": "team-row", "team_id": "media-team", "team_public_model_name": public_name},
+        created_by="admin",
+        updated_by="admin",
+    )
+
+
+def _quota_router(public_name: str, proxy_params: Mapping[str, object], *team_params: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": public_name, "litellm_params": dict(proxy_params)},
+            *(
+                {
+                    "model_name": "model_name_media-team_team-row",
+                    "litellm_params": dict(params),
+                    "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": public_name},
+                }
+                for params in team_params
+            ),
+        ]
+    )
+
+
+def _use_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock, router: Router) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", _PROJECT_QUOTA_SETTINGS)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+
+_ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.asyncio
+async def test_team_model_add_rejects_a_route_its_projects_lack_the_quota_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    prisma: Final = _media_team_db("jev-latest", {})
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}))
+
+    with pytest.raises(ProxyException) as error:
+        await add_new_model(
+            Deployment(
+                model_name="jev-latest",
+                litellm_params={**_TEAM_VERTEX, "rpm": 10, "tpm": 1000},
+                model_info={"team_id": "media-team"},
+            ),
+            _ADMIN,
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith(
+        "projects video-gen list 'jev-latest' without a positive rpm and tpm quota, "
+        "which 'enforce_project_model_quota' requires once this team model change applies"
+    )
+    prisma.db.litellm_projecttable.find_many.assert_awaited_once_with(where={"team_id": "media-team"})
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "project_metadata"),
+    [
+        pytest.param(
+            _TEAM_VERTEX,
+            {"model_rpm_limit": {"jev-latest": 5}, "model_tpm_limit": {"jev-latest": 500}},
+            id="projects-carry-the-added-limits",
+        ),
+        pytest.param(_TEAM_RUNWAY, {}, id="new-route-is-exempt"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_model_add_goes_through_when_its_projects_meet_the_new_route(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: Mapping[str, object], project_metadata: Mapping[str, object]
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    _use_quota_proxy(
+        monkeypatch, _media_team_db("jev-latest", project_metadata), _quota_router("jev-latest", {"model": "openai/jev-latest"})
+    )
+
+    with pytest.raises(ProxyException) as error:
+        await add_new_model(
+            Deployment(model_name="jev-latest", litellm_params=dict(litellm_params), model_info={"team_id": "media-team"}),
+            _ADMIN,
+        )
+
+    assert "STORE_MODEL_IN_DB" in error.value.message
+
+
+@pytest.mark.parametrize("endpoint", ["patch", "put"])
+@pytest.mark.asyncio
+async def test_team_model_update_rejects_moving_its_route_where_its_projects_lack_quota(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    runway_by_prefix: Final = {"model": "runwayml/gen4_turbo"}
+    prisma: Final = _media_team_db("jev-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+        return_value=_team_model_row("jev-latest", runway_by_prefix)
+    )
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, runway_by_prefix))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    moved_to_vertex: Final = updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", vertex_project="qa-project")
+
+    write: Final = (
+        patch_model(
+            model_id="team-row", patch_data=updateDeployment(litellm_params=moved_to_vertex), user_api_key_dict=_ADMIN
+        )
+        if endpoint == "patch"
+        else update_model(
+            model_params=updateDeployment(litellm_params=moved_to_vertex, model_info=ModelInfo(id="team-row")),
+            user_api_key_dict=_ADMIN,
+        )
+    )
+
+    with pytest.raises(ProxyException) as error:
+        await write
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("projects video-gen list 'jev-latest' without a positive rpm and tpm quota")
+
+
+def _team_route_router(public_name: str, team_params: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "jev-latest", "litellm_params": {"model": "openai/jev-latest"}},
+            {
+                "model_name": "model_name_media-team_team-row",
+                "litellm_params": dict(team_params),
+                "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": public_name},
+            },
+        ],
+        model_group_alias={"media": "jev-latest"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("public_name", "project_model", "team_params", "moved_to"),
+    [
+        pytest.param(
+            "video-*",
+            "video-gen-1",
+            {"model": "runwayml/*"},
+            updateLiteLLMParams(model="vertex_ai/*", vertex_project="qa-project"),
+            id="a-name-the-team-wildcard-serves",
+        ),
+        pytest.param(
+            "jev-latest",
+            "media",
+            {"model": "runwayml/gen4_turbo"},
+            updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", vertex_project="qa-project"),
+            id="an-alias-of-the-team-name",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_model_patch_rechecks_projects_listing_any_name_it_serves(
+    monkeypatch: pytest.MonkeyPatch,
+    public_name: str,
+    project_model: str,
+    team_params: Mapping[str, object],
+    moved_to: updateLiteLLMParams,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma: Final = _media_team_db(project_model, {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row(public_name, team_params))
+    _use_quota_proxy(monkeypatch, prisma, _team_route_router(public_name, team_params))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    with pytest.raises(ProxyException) as error:
+        await patch_model(
+            model_id="team-row", patch_data=updateDeployment(litellm_params=moved_to), user_api_key_dict=_ADMIN
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith(
+        f"projects video-gen list '{project_model}' without a positive rpm and tpm quota"
+    )
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_update_checks_the_limits_of_the_name_it_renames_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProxyModelTable(
+            model_id="vertex-row",
+            model_name="jev-latest",
+            litellm_params={"model": "vertex_ai/gemini-3.8-flash"},
+            model_info={"id": "vertex-row"},
+            created_by="admin",
+            updated_by="admin",
+        )
+    )
+    _use_quota_proxy(monkeypatch, prisma, Router(model_list=[]))
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"]}, "models": {"jev-latest": []}}},
+    )
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    with pytest.raises(ProxyException) as error:
+        await update_model(
+            model_params=updateDeployment(
+                model_name="gemini-3.8-flash", litellm_params=updateLiteLLMParams(), model_info=ModelInfo(id="vertex-row")
+            ),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("rpm and tpm must be set to a positive value for 'gemini-3.8-flash'")
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("incoming", "remaining"),
+    [
+        pytest.param(updateLiteLLMParams(rpm=0), {"model": "vertex_ai/gemini-3.8-flash", "tpm": 1000}, id="zeroes-rpm"),
+        pytest.param(updateLiteLLMParams(), {"model": "vertex_ai/gemini-3.8-flash", "tpm": 1000}, id="removes-rpm"),
+        pytest.param(updateLiteLLMParams(model="runwayml/gen4_turbo"), {"model": "runwayml/gen4_turbo"}, id="moves"),
+    ],
+)
+def test_model_update_under_the_boolean_setting_never_rejects_as_on_main(
+    incoming: updateLiteLLMParams, remaining: Mapping[str, object]
+) -> None:
+    from litellm.proxy.management_helpers.model_quota_policy import parse_model_quota_setting
+
+    stored: Final = _stored_model({"model": "vertex_ai/gemini-3.8-flash", "rpm": 10, "tpm": 1000}, None)
+    policy: Final = parse_model_quota_setting(True)
+
+    assert policy is not None
+    assert _model_update_error(stored, incoming, policy, LiteLLM_Params(**remaining)) is None
+
+
+@pytest.mark.asyncio
+async def test_team_model_patch_rejects_a_removal_that_moves_its_route_where_its_projects_lack_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
+
+    prisma: Final = _media_team_db("jev-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("jev-latest", _TEAM_RUNWAY))
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    with pytest.raises(ProxyException) as error:
+        await patch_model(
+            model_id="team-row",
+            patch_data=PatchModelRequest(litellm_params_to_remove=("custom_llm_provider",)),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("projects video-gen list 'jev-latest' without a positive rpm and tpm quota")
+
+
+@pytest.mark.asyncio
+async def test_team_model_delete_rejects_falling_back_to_a_route_its_projects_lack_quota_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete, delete_model
+
+    prisma: Final = _media_team_db("media-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("media-latest", _TEAM_RUNWAY))
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("media-latest", _TEAM_VERTEX, _TEAM_RUNWAY))
+
+    with pytest.raises(ProxyException) as error:
+        await delete_model(model_info=ModelInfoDelete(id="team-row"), user_api_key_dict=_ADMIN)
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("projects video-gen list 'media-latest' without a positive rpm and tpm quota")
+    prisma.db.litellm_proxymodeltable.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_model_delete_goes_through_when_nothing_else_serves_its_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete, delete_model
+
+    prisma: Final = _media_team_db("media-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("media-latest", _TEAM_RUNWAY))
+    only_the_team_model: Final = Router(
+        model_list=[
+            {
+                "model_name": "model_name_media-team_team-row",
+                "litellm_params": dict(_TEAM_RUNWAY),
+                "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": "media-latest"},
+            }
+        ]
+    )
+    _use_quota_proxy(monkeypatch, prisma, only_the_team_model)
+
+    with pytest.raises(ProxyException) as error:
+        await delete_model(model_info=ModelInfoDelete(id="team-row"), user_api_key_dict=_ADMIN)
+
+    assert "STORE_MODEL_IN_DB" in str(error.value.message)
+
+
+@pytest.mark.parametrize("endpoint", ["patch", "put"])
+@pytest.mark.asyncio
+async def test_team_model_update_rejects_moving_to_a_provider_that_needs_limits_it_lacks(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    prisma: Final = _media_team_db("media-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("media-latest", _TEAM_RUNWAY))
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("media-latest", _TEAM_RUNWAY, _TEAM_RUNWAY))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enforce_rpm_tpm_on_model_add": {"providers": {"vertex_ai": ["rpm", "tpm"], "runwayml": []}}},
+    )
+    moved_to_vertex: Final = updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", custom_llm_provider="vertex_ai")
+
+    write: Final = (
+        patch_model(
+            model_id="team-row", patch_data=updateDeployment(litellm_params=moved_to_vertex), user_api_key_dict=_ADMIN
+        )
+        if endpoint == "patch"
+        else update_model(
+            model_params=updateDeployment(litellm_params=moved_to_vertex, model_info=ModelInfo(id="team-row")),
+            user_api_key_dict=_ADMIN,
+        )
+    )
+
+    with pytest.raises(ProxyException) as error:
+        await write
+
+    assert error.value.code == "400"
+    assert error.value.message == _missing_limits_message("rpm and tpm", "media-latest")
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
 
 class TestBlockModelResponseSerialization:
@@ -7861,6 +8482,76 @@ class TestTeamMemberAutoRouterWrites:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["create", "patch", "legacy"])
+    @pytest.mark.parametrize("legacy", [False, True])
+    @pytest.mark.parametrize("field", ["api_key", "api_base"])
+    async def test_team_admin_classifier_writes_reject_environment_references(
+        self, endpoint: str, legacy: bool, field: str
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        stored_config: Final = self._classifier_config(
+            {"api_key": "os.environ/PRIVATE_JEV_VALUE", "api_base": "https://trusted-jev.test"}, legacy
+        )
+        row: Final = self._row().model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router", "complexity_router_config": stored_config,
+        }})
+        team: Final = self._team().model_copy(update={"members_with_roles": [Member(user_id="owner", role="admin")]})
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER)
+        config: Final = self._classifier_config(
+            {"api_key": "caller-key", "api_base": "https://untrusted-jev.test", field: "os.environ/PRIVATE_JEV_VALUE"},
+            legacy,
+        )
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        operation: Final = (
+            add_new_model(Deployment(
+                model_name="new-jev-router",
+                litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=config),
+                model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+            ), actor)
+            if endpoint == "create"
+            else patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+        )
+        with self._environment(database, row), pytest.raises((HTTPException, ProxyException)) as denied:
+            await operation
+        assert (denied.value.status_code if isinstance(denied.value, HTTPException) else int(denied.value.code)) == 403
+        database.db.litellm_proxymodeltable.create.assert_not_awaited()
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("change_config", [False, True])
+    async def test_team_admin_unrelated_updates_preserve_stored_environment_references(
+        self, endpoint: str, change_config: bool
+    ) -> None:
+        connection: Final = {"api_key": "os.environ/SAVED_JEV_KEY", "api_base": "os.environ/SAVED_JEV_BASE"}
+        stored_config: Final = self._classifier_config(connection, True)
+        row: Final = self._row().model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router", "complexity_router_config": stored_config,
+        }})
+        team: Final = self._team().model_copy(update={"members_with_roles": [Member(user_id="owner", role="admin")]})
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER)
+        params: Final = (
+            {"complexity_router_config": self._classifier_config({"timeout_ms": 8100}, False)}
+            if change_config else {"max_tokens": 100}
+        )
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(params), model_info=ModelInfo(id=row.model_id),
+        )
+        with self._environment(database, row):
+            await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        assert saved == (
+            self._classifier_config({**connection, "timeout_ms": 8100}, False) if change_config else stored_config
+        )
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "stored_params,removed,denied_param",
         [
@@ -8295,7 +8986,10 @@ class TestTeamMemberAutoRouterWrites:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.proxy.management_helpers.auto_router_permissions import MemberAutoRouterWrite, validate_member_auto_router_config
+        from litellm.proxy.management_helpers.auto_router_permissions import (
+            MemberAutoRouterWrite,
+            validate_member_auto_router_config,
+        )
 
         row: Final = self._row()
         database: Final = self._database(self._team(), row)
@@ -9992,6 +10686,8 @@ class TestFederationGateScopesToWhatTheWriteTouches:
         and the team that owns the model must be able to take it off their page."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -10217,3 +10913,76 @@ class TestNonAdminCannotSetPerUserOauthOnModel:
                 user_api_key_dict=admin,
             )
             assert result is created_row
+
+
+@pytest.mark.asyncio
+async def test_delete_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ModelInfoDelete
+    from litellm.proxy.management_endpoints.model_management_endpoints import delete_model
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await delete_model(
+            model_info=ModelInfoDelete(id="no-such-model"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_update_model_reports_an_unknown_model_id_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_model(
+            model_params=updateDeployment(model_info=ModelInfo(id="no-such-model")),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert exc_info.value.message == "model not found"
+
+
+@pytest.mark.asyncio
+async def test_add_new_model_reports_a_database_outage_during_the_insert_as_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import prisma.errors
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    unreachable_db: Final = MagicMock()
+    unreachable_db.db.query_raw = AsyncMock(return_value=[])
+    unreachable_db.db.litellm_proxymodeltable.create = AsyncMock(
+        side_effect=prisma.errors.PrismaError("Can't reach database server at `db:5432`")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", unreachable_db)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-outage-salt")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await add_new_model(
+            model_params=Deployment(
+                model_name="outage-model",
+                litellm_params=LiteLLM_Params(model="openai/gpt-5.4-mini", api_key="fake-key"),
+                model_info={"id": "outage-model-1"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")

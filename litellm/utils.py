@@ -305,7 +305,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -607,7 +607,21 @@ def custom_llm_setup():
             litellm.provider_list.append(custom_llm["provider"])
 
         if custom_llm["provider"] not in litellm._custom_providers:
+            _warn_if_built_in_provider_shadows_custom_handler(custom_llm["provider"])
             litellm._custom_providers.append(custom_llm["provider"])
+
+
+def _warn_if_built_in_provider_shadows_custom_handler(provider: str) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    if provider not in LlmProvidersSet and not JSONProviderRegistry.exists(provider):
+        return
+    verbose_logger.warning(
+        "custom_provider_map provider '%s' has the same name as a built-in LiteLLM provider, which handles "
+        "'%s/' models instead of your custom_handler. Rename the provider and its models to use your handler",
+        provider,
+        provider,
+    )
 
 
 def add_custom_logger_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
@@ -4068,7 +4082,9 @@ def get_optional_params_transcription(
         "timestamp_granularities": None,
     }
 
-    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
+    non_default_params: Final = {
+        k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])
+    }
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -4105,6 +4121,19 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+    elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.audio_transcription import (
+            UnsupportedTranscriptionParams,
+            map_openai_transcription_params,
+        )
+
+        match map_openai_transcription_params(
+            non_default_params, drop_params=drop_params is True or litellm.drop_params is True
+        ):
+            case UnsupportedTranscriptionParams(message=message):
+                raise UnsupportedParamsError(message=message, llm_provider="bedrock")
+            case mapped_params:
+                optional_params = dict(mapped_params)
     elif provider_config is not None:  # custom audio transcription config
         supported_params = provider_config.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
@@ -4119,7 +4148,7 @@ def get_optional_params_transcription(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=OPENAI_TRANSCRIPTION_PARAMS,
+        openai_params=list(default_params) if custom_llm_provider == "bedrock" else OPENAI_TRANSCRIPTION_PARAMS,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
@@ -5060,8 +5089,10 @@ def get_optional_params(
             supported_params: List[str] - supported params from the litellm config
         """
         verbose_logger.info("\nLiteLLM completion() model= %s; provider = %s", model, custom_llm_provider)
-        verbose_logger.debug("\nLiteLLM: Params passed to completion() %s", passed_params)
-        verbose_logger.debug("\nLiteLLM: Non-Default params passed to completion() %s", non_default_params)
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                "\nLiteLLM: Non-Default params passed to completion() %s", _debug_params_repr(non_default_params)
+            )
         unsupported_params: Final = {}
         for k in non_default_params:
             if k not in supported_params:
@@ -5602,7 +5633,9 @@ def get_optional_params(
         additional_drop_params=additional_drop_params,
     )
     if _print_verbose_is_active():
-        print_verbose(f"Final returned optional params: {redact_credentials_in_payload(optional_params)}")
+        print_verbose(
+            f"Final returned optional params: {_debug_params_repr(redact_credentials_in_payload(optional_params))}"
+        )
     optional_params = apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
@@ -5642,6 +5675,7 @@ def add_provider_specific_params_to_optional_params(
         "openai",
         "azure",
         "text-completion-openai",
+        "bigmodel",
         *litellm.openai_compatible_providers,
     ] or JSONProviderRegistry.exists(custom_llm_provider)
     if calls_through_openai_sdk:
@@ -6611,8 +6645,6 @@ def get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider or declared_authenticating_provider(model)
         )
 
-        verbose_logger.debug("checking potential_model_names in litellm.model_cost: %s", potential_model_names)
-
         combined_model_name: Final = potential_model_names["combined_model_name"]
         stripped_model_name: Final = potential_model_names["stripped_model_name"]
         combined_stripped_model_name: Final = potential_model_names["combined_stripped_model_name"]
@@ -6715,6 +6747,7 @@ def get_model_info_helper(
                     key, _model_info = generalization
 
             if _model_info is None or key is None:
+                verbose_logger.debug("model not found in litellm.model_cost, tried: %s", potential_model_names)
                 raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
             _input_cost_per_token: float | None = _model_info.get("input_cost_per_token")
             if _input_cost_per_token is None:
@@ -7001,6 +7034,8 @@ def get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
+                reasoning_modes=_model_info.get("reasoning_modes", None),
+                reasoning_contexts=_model_info.get("reasoning_contexts", None),
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
@@ -7663,7 +7698,6 @@ def validate_environment(
             model in litellm.open_ai_chat_completion_models
             or model in litellm.open_ai_text_completion_models
             or model in litellm.open_ai_embedding_models
-            or model in litellm.openai_image_generation_models
             or model.startswith("gpt-image")
         ):
             if "OPENAI_API_KEY" in os.environ:
@@ -8561,6 +8595,23 @@ def get_valid_models(
         return []  # NON-Blocking
 
 
+_MAX_INLINE_DEBUG_ARG_CHARS: Final = 500
+
+
+def _debug_arg_repr(value: object) -> str:
+    """Short form of a call argument, since the outgoing provider request log already prints the request body."""
+    rendered: Final = repr(value)
+    if len(rendered) <= _MAX_INLINE_DEBUG_ARG_CHARS:
+        return rendered
+    if isinstance(value, Sized):
+        return f"<{type(value).__name__} len={len(value)}>"
+    return f"<{type(value).__name__}>"
+
+
+def _debug_params_repr(params: Mapping[str, object]) -> str:
+    return "{" + ", ".join(f"{key!r}: {_debug_arg_repr(value)}" for key, value in params.items()) + "}"
+
+
 def print_args_passed_to_litellm(original_function, args, kwargs):
     if not is_debugging_on():
         return
@@ -8581,9 +8632,9 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
         ):
             return
 
-        args_str: Final = ", ".join(map(repr, args))
+        args_str: Final = ", ".join(map(_debug_arg_repr, args))
         redacted_kwargs: Final = redact_credentials_in_payload(kwargs)
-        kwargs_str: Final = ", ".join(f"{key}={value!r}" for key, value in redacted_kwargs.items())
+        kwargs_str: Final = ", ".join(f"{key}={_debug_arg_repr(value)}" for key, value in redacted_kwargs.items())
         print_verbose(
             "\n",
         )  # new line before
@@ -9162,6 +9213,7 @@ class ProviderConfigManager:
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.BIGMODEL: (ProviderConfigManager._get_bigmodel_chat_config, False),
             LlmProviders.OPENCODE_GO: (ProviderConfigManager.get_opencode_go_config, True),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
@@ -9353,6 +9405,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_bigmodel_chat_config() -> BaseConfig:
+        from litellm.llms.bigmodel.chat.transformation import BigModelChatConfig
+
+        return BigModelChatConfig()
 
     @staticmethod
     def get_opencode_go_config(model: str) -> BaseConfig:
@@ -9641,18 +9699,19 @@ class ProviderConfigManager:
             return litellm.HostedVLLMDecisionsConfig()
         if provider == LlmProviders.LM_STUDIO:
             return litellm.LMStudioDecisionsConfig()
+        if provider in (LlmProviders.OLLAMA, LlmProviders.OLLAMA_CHAT):
+            return litellm.OllamaDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+                LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
             }
             return configs[provider]()
-        if provider == LlmProviders.AZURE_AI:
-            return litellm.AzureAIDecisionsConfig()
         return None
 
     @staticmethod
@@ -9674,6 +9733,10 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if provider == LlmProviders.BIGMODEL:
+            from litellm.llms.bigmodel.messages.transformation import BigModelMessagesConfig
+
+            return BigModelMessagesConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.common_utils import go_endpoint
             from litellm.llms.opencode.messages.transformation import OpenCodeGoMessagesConfig
@@ -9905,6 +9968,10 @@ class ProviderConfigManager:
         if provider is None:
             return None
 
+        if provider == LlmProviders.BIGMODEL:
+            from litellm.llms.bigmodel.responses.transformation import BigModelResponsesAPIConfig
+
+            return BigModelResponsesAPIConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.common_utils import go_endpoint
             from litellm.llms.opencode.responses.transformation import OpenCodeGoResponsesConfig
@@ -9926,8 +9993,14 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.common_utils import (
                 azure_ai_supports_native_responses,
+                is_foundry_project_agent,
+            )
+            from litellm.llms.azure_ai.responses.transformation import (
+                AzureAIAgentResponsesAPIConfig,
             )
 
+            if is_foundry_project_agent(model):
+                return AzureAIAgentResponsesAPIConfig()
             if azure_ai_supports_native_responses(model, api_base):
                 return litellm.AzureAIResponsesAPIConfig()
             return None
@@ -10339,11 +10412,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> BaseImageGenerationConfig | None:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_generation import (
-                get_openai_image_generation_config,
-            )
+            from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 
-            return get_openai_image_generation_config(model)
+            return GPTImageGenerationConfig()
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_generation import (
                 get_azure_image_generation_config,
@@ -10446,6 +10517,13 @@ class ProviderConfigManager:
             return get_modelscope_image_generation_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIImageGenerationConfig()
+        elif LlmProviders.TENCENT == provider:
+            from litellm.llms.tencent.image_generation.transformation import (
+                TencentImageGenerationConfig,
+                is_tokenhub_image_model,
+            )
+
+            return TencentImageGenerationConfig() if is_tokenhub_image_model(model) else None
         return None
 
     @staticmethod
@@ -10567,9 +10645,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> BaseImageEditConfig | None:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_edit import get_openai_image_edit_config
+            from litellm.llms.openai.image_edit import OpenAIImageEditConfig
 
-            return get_openai_image_edit_config(model=model)
+            return OpenAIImageEditConfig()
         elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
 
@@ -10634,6 +10712,15 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.TENCENT == provider:
+            from litellm.llms.tencent.image_edit.transformation import (
+                TencentImageEditConfig,
+            )
+            from litellm.llms.tencent.image_generation.transformation import (
+                is_tokenhub_image_model,
+            )
+
+            return TencentImageEditConfig() if is_tokenhub_image_model(model) else None
         return None
 
     @staticmethod

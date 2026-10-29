@@ -20,6 +20,8 @@ from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models
 
+LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
+
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
@@ -40,10 +42,6 @@ def _check_wildcard_routing(model: str) -> bool:
     return False
 
 
-def _has_static_catalog(provider: str) -> bool:
-    return provider in litellm.models_by_provider
-
-
 def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str] | None:
     """
     Returns the list of known models by provider
@@ -51,7 +49,7 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
-    if _has_static_catalog(provider):
+    if provider in litellm.models_by_provider:
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
 
@@ -278,26 +276,6 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
-_KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
-
-
-def _prefix_wildcard_model(model: str, wildcard_provider_prefix: str, provider: str) -> str:
-    if model.startswith(f"{wildcard_provider_prefix}/"):
-        return model
-    # `get_provider_models` can return provider-prefixed ids (e.g. "ollama/gemma3:1b").
-    # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
-    # multiple instances), replace that existing provider prefix instead of stacking
-    # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
-    # Only strip the leading segment when it is a known provider that prefixes this
-    # provider's ids: either the provider's own name or, for a provider with a static
-    # catalog, any provider. Ids a server reports with an org or another provider's
-    # name first (e.g. "meta-llama/Llama-3-8B" or "openai/gpt-oss-20b" on vLLM) keep it.
-    leading, sep, model_suffix = model.partition("/")
-    if sep and leading in _KNOWN_PROVIDERS and (_has_static_catalog(provider) or leading == provider):
-        return f"{wildcard_provider_prefix}/{model_suffix}"
-    return f"{wildcard_provider_prefix}/{model}"
-
-
 def _is_routing_segment(
     segment: str, provider: str, name_segments: frozenset[str], provider_model_ids: tuple[str, ...]
 ) -> bool:
@@ -483,8 +461,20 @@ def get_known_models_from_wildcard(
             wildcard_models = [f"{model_prefix}{model.removeprefix(provider_id_prefix)}" for model in wildcard_models]
 
     return list(
-        dict.fromkeys(_prefix_wildcard_model(model, wildcard_provider_prefix, provider) for model in wildcard_models)
+        dict.fromkeys(_under_wildcard_prefix(model, wildcard_provider_prefix, provider) for model in wildcard_models)
     )
+
+
+def _under_wildcard_prefix(model: str, wildcard_provider_prefix: str, listed_provider: str) -> str:
+    if model.startswith(f"{wildcard_provider_prefix}/"):
+        return model
+    leading, sep, model_suffix = model.partition("/")
+    leading_is_listed_providers_own_prefix: Final = (
+        sep != ""
+        and leading in LLM_PROVIDER_PREFIXES
+        and (leading == listed_provider or listed_provider.startswith(f"{leading}_"))
+    )
+    return f"{wildcard_provider_prefix}/{model_suffix if leading_is_listed_providers_own_prefix else model}"
 
 
 def expand_wildcard_deployments_for_model_info(
