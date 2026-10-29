@@ -2758,6 +2758,44 @@ def test_claude_default_max_tokens_keeps_a_mapped_models_own_cap_over_its_base_m
 
 
 @pytest.mark.parametrize(
+    "config_cls, deployment_model, model, cost_map_key",
+    [
+        (
+            VertexAIAnthropicConfig,
+            "vertex_ai/claude-haiku-4-5@20251001",
+            "claude-haiku-4-5@20251001",
+            "vertex_ai/claude-haiku-4-5@20251001",
+        ),
+        (
+            AmazonAnthropicClaudeConfig,
+            "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+            "invoke/us.anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-sonnet-4-6",
+        ),
+    ],
+)
+def test_claude_default_max_tokens_follows_each_deployments_own_model_info(
+    local_model_cost_map: None,
+    config_cls: type[AnthropicConfig],
+    deployment_model: str,
+    model: str,
+    cost_map_key: str,
+) -> None:
+    mapped_cap: Final = litellm.model_cost[cost_map_key]["max_output_tokens"]
+    capped_info: Final = {"id": "capped", "max_output_tokens": mapped_cap // 16}
+    plain_info: Final = {"id": "plain"}
+    litellm.Router(
+        model_list=[
+            {"model_name": "capped", "litellm_params": {"model": deployment_model}, "model_info": capped_info},
+            {"model_name": "plain", "litellm_params": {"model": deployment_model}, "model_info": plain_info},
+        ]
+    )
+
+    assert _default_max_tokens_sent(config_cls(), model, {"model_info": plain_info}) == mapped_cap
+    assert _default_max_tokens_sent(config_cls(), model, {"model_info": capped_info}) == mapped_cap // 16
+
+
+@pytest.mark.parametrize(
     "model,level,expected",
     [
         ("claude-opus-4-7", "max", True),

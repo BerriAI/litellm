@@ -24,6 +24,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
+from litellm.litellm_core_utils.get_model_cost_map import catalog_capped_output_limit
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
@@ -455,16 +456,18 @@ def _none_on_error(lookup: Callable[[], int | None]) -> int | None:
         return None
 
 
-def _host_row_max_output_tokens(model: str, custom_llm_provider: str) -> int | None:
+def _host_row_max_output_tokens(model: str, custom_llm_provider: str, deployment_model_info: object) -> int | None:
     info: Final = cached_get_model_info_helper(model, custom_llm_provider)
-    return None if is_generalized_model_info(info) else info.get("max_output_tokens")
+    if is_generalized_model_info(info):
+        return None
+    return catalog_capped_output_limit(info["key"], deployment_model_info or info)
 
 
-def _mapped_max_output_tokens(model: str, custom_llm_provider: str | None) -> int | None:
+def _mapped_max_output_tokens(model: str, custom_llm_provider: str | None, deployment_model_info: object) -> int | None:
     own_row_max_tokens: Final = _none_on_error(lambda: get_max_tokens(model))
     if own_row_max_tokens is not None or custom_llm_provider is None:
         return own_row_max_tokens
-    return _none_on_error(lambda: _host_row_max_output_tokens(model, custom_llm_provider))
+    return _none_on_error(lambda: _host_row_max_output_tokens(model, custom_llm_provider, deployment_model_info))
 
 
 def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
@@ -519,30 +522,44 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @classmethod
     def get_config(
-        cls, *, model: str | None = None, custom_llm_provider: str | None = None, base_model: str | None = None
+        cls,
+        *,
+        model: str | None = None,
+        custom_llm_provider: str | None = None,
+        base_model: str | None = None,
+        deployment_model_info: object = None,
     ):
         config: Final = super().get_config()
 
         # anthropic requires a default value for max_tokens
         if config.get("max_tokens") is None:
-            config["max_tokens"] = cls.get_max_tokens_for_model(model, custom_llm_provider, base_model)
+            config["max_tokens"] = cls.get_max_tokens_for_model(
+                model, custom_llm_provider, base_model, deployment_model_info
+            )
 
         return config
 
     @staticmethod
     def get_max_tokens_for_model(
-        model: str | None = None, custom_llm_provider: str | None = None, base_model: str | None = None
+        model: str | None = None,
+        custom_llm_provider: str | None = None,
+        base_model: str | None = None,
+        deployment_model_info: object = None,
     ) -> int:
         """
         Get the max output tokens for a given model from its own cost-map row, else from the
         serving host's row, else from the deployment's base_model rows. Falls back to
         DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if none of them exists.
         """
-        model_max_tokens: Final = None if model is None else _mapped_max_output_tokens(model, custom_llm_provider)
+        model_max_tokens: Final = (
+            None if model is None else _mapped_max_output_tokens(model, custom_llm_provider, deployment_model_info)
+        )
         if model_max_tokens is not None:
             return model_max_tokens
         base_model_max_tokens: Final = (
-            None if base_model is None else _mapped_max_output_tokens(base_model, custom_llm_provider)
+            None
+            if base_model is None
+            else _mapped_max_output_tokens(base_model, custom_llm_provider, deployment_model_info)
         )
         return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if base_model_max_tokens is None else base_model_max_tokens
 
@@ -2415,11 +2432,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         ## Load Config
+        deployment_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)
         config: Final[Mapping[str, object]] = MappingProxyType(
             litellm.AnthropicConfig.get_config(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
-                base_model=_deployment_base_model(_LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)),
+                base_model=_deployment_base_model(deployment_params),
+                deployment_model_info=deployment_params.get("model_info"),
             )
         )
         for k, v in config.items():

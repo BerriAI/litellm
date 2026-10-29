@@ -28,7 +28,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251  # adapts boto3 and botocore's dynamic client responses
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, PositiveInt, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm import verbose_logger
@@ -216,6 +216,28 @@ RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
 MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
 MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 _litellm_import_complete = threading.Event()
+
+
+class _OutputLimit(TypedDict):
+    max_output_tokens: NotRequired[ReadOnly[PositiveInt | None]]
+
+
+_OUTPUT_LIMIT: Final = TypeAdapter(_OutputLimit)
+
+
+def _output_limit(fields: object) -> int | None:
+    try:
+        return _OUTPUT_LIMIT.validate_python(fields).get("max_output_tokens")
+    except ValidationError:
+        return None
+
+
+def catalog_capped_output_limit(cost_map_key: str, override: object) -> int | None:
+    limits: Final = (
+        _output_limit(GetModelCostMap.loaded_model_cost_map().get(cost_map_key)),
+        _output_limit(override),
+    )
+    return min((limit for limit in limits if limit is not None), default=None)
 
 
 def mark_litellm_import_complete() -> None:

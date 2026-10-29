@@ -270,7 +270,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     @classmethod
     def get_config(
-        cls, *, model: str | None = None, custom_llm_provider: str | None = None, base_model: str | None = None
+        cls,
+        *,
+        model: str | None = None,
+        custom_llm_provider: str | None = None,
+        base_model: str | None = None,
+        deployment_model_info: object = None,
     ):
         return super().get_config()
 

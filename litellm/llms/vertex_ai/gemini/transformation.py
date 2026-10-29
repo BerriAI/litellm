@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.get_model_cost_map import catalog_capped_output_limit
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -1312,28 +1312,6 @@ def _answers_text(cost_map_key: str) -> bool:
     return "text" in row.get("supported_output_modalities", ("text",))
 
 
-class _OutputLimit(TypedDict):
-    max_output_tokens: NotRequired[ReadOnly[PositiveInt | None]]
-
-
-_OUTPUT_LIMIT: Final = TypeAdapter(_OutputLimit)
-
-
-def _output_limit(fields: object) -> int | None:
-    try:
-        return _OUTPUT_LIMIT.validate_python(fields).get("max_output_tokens")
-    except ValidationError:
-        return None
-
-
-def _catalog_capped_output_limit(cost_map_key: str, override: object) -> int | None:
-    limits: Final = (
-        _output_limit(GetModelCostMap.loaded_model_cost_map().get(cost_map_key)),
-        _output_limit(override),
-    )
-    return min((limit for limit in limits if limit is not None), default=None)
-
-
 def _text_chat_model_max_output_tokens(
     model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> int | None:
@@ -1342,7 +1320,7 @@ def _text_chat_model_max_output_tokens(
         return None
     if not _answers_text(info["key"]):
         return None
-    return _catalog_capped_output_limit(info["key"], deployment_model_info or info)
+    return catalog_capped_output_limit(info["key"], deployment_model_info or info)
 
 
 def _with_default_output_budget(
