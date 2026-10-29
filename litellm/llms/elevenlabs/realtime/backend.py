@@ -6,9 +6,10 @@ from typing import Final
 from pydantic import ValidationError
 from typing_extensions import Self
 from websockets.asyncio.client import ClientConnection
-from websockets.exceptions import ConnectionClosedOK
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, InvalidHandshake, InvalidStatus
 from websockets.frames import Close
 
+from litellm import verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
 from litellm.types.llms.elevenlabs import ElevenLabsRealtimeConfigure
@@ -63,6 +64,16 @@ def _normal_closure() -> ConnectionClosedOK:
     return ConnectionClosedOK(rcvd=Close(1000, ""), sent=None)
 
 
+def _failure_close(error: OSError | TimeoutError | InvalidHandshake) -> Close:
+    reason: Final = (
+        f"ElevenLabs realtime connection failed (HTTP {error.response.status_code})"
+        if isinstance(error, InvalidStatus)
+        else "ElevenLabs realtime connection failed"
+    )
+    verbose_logger.warning(reason)
+    return Close(1011, reason)
+
+
 def _configure_query(message: str | bytes) -> str:
     try:
         return ElevenLabsRealtimeConfigure.model_validate_json(message).query
@@ -80,6 +91,8 @@ class ElevenLabsRealtimeBackend:
         self._ready: Final = asyncio.Event()
         self._upstream: RealtimeBackend | None = None
         self._closed: bool = False
+        self._opening: bool = False
+        self._failure: Close | None = None
 
     async def __aenter__(self) -> Self:
         return self
@@ -92,14 +105,33 @@ class ElevenLabsRealtimeBackend:
     ) -> None:
         await self.close()
 
+    def _closure(self) -> ConnectionClosedError | ConnectionClosedOK:
+        failure: Final = self._failure
+        if failure is not None:
+            return ConnectionClosedError(rcvd=failure, sent=None)
+        return _normal_closure()
+
     async def send(self, message: str | bytes) -> None:
         upstream: Final = self._upstream
         if upstream is not None:
             await upstream.send(message)
             return
-        if self._closed:
-            raise _normal_closure()
-        opened: Final = await self._connect(f"{self._url}?{_configure_query(message)}", self._headers)
+        if self._closed or self._failure is not None:
+            raise self._closure()
+        if self._opening:
+            raise RuntimeError("the ElevenLabs realtime session is already being configured")
+        query: Final = _configure_query(message)
+        self._opening = True
+        try:
+            opened: Final = await self._connect(f"{self._url}?{query}", self._headers)
+        except (OSError, TimeoutError, InvalidHandshake) as error:
+            self._opening = False
+            if self._closed:
+                raise _normal_closure() from None
+            self._failure = _failure_close(error)
+            self._ready.set()
+            return
+        self._opening = False
         if self._closed:
             await opened.close()
             raise _normal_closure()
@@ -110,7 +142,7 @@ class ElevenLabsRealtimeBackend:
         await self._ready.wait()
         upstream: Final = self._upstream
         if upstream is None:
-            raise _normal_closure()
+            raise self._closure()
         return await upstream.recv(decode)
 
     async def close(self) -> None:
