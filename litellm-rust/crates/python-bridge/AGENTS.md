@@ -106,13 +106,28 @@ GIL handling to `litellm-host-python`.
 
 ## Data Handling
 
+- Reuse large immutable bundled data and parsed catalogs across calls, including in
+  replacement APIs. Share Rust storage and cache repeated Python projections instead
+  of reparsing, serializing or copying the full payload on every access
+- Cache owned Python objects with `PyOnceLock<Py<T>>`, then bind and clone references
+  while attached. Do not use blocking `OnceLock::get_or_init` while attached
+  ([PyO3 initialization](https://pyo3.rs/v0.29.2/faq.html),
+  [reference ownership](https://pyo3.rs/v0.29.2/types.html))
+- Never reuse Python objects across interpreters or interpreter reinitialization.
+  Once-only caches are for immutable data. Reloadable/custom data needs versioned
+  entries or invalidation, and caller-mutable Python containers must not be shared
+- Test unchanged contents and allocation reuse, not just equal values. Keep this
+  coverage when replacing a bundled-data accessor with a catalog API
 - OCR payloads can contain personal data and large base64 images. Do not log
   payloads or provider responses.
 - Avoid copying large payloads more than needed. The current JSON round-trip is
   acceptable for the first scaffold, but future performance work should evaluate
   direct PyO3 conversion before expanding Rust coverage to image-heavy paths.
-- Do not expose raw Rust errors that include document contents or upstream
-  bodies.
+- Render a Rust error for Python only in its mapping function, with
+  `litellm_error::Report`, never `Debug` or a document's contents. An upstream
+  body reaches Python intact as the `RustUpstreamError` args for provider error
+  mapping. The 256-character cap applies only to HTTP error diagnostics, not
+  response bodies. Do not log those args.
 
 ## Tests
 

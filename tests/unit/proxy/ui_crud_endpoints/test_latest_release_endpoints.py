@@ -401,6 +401,26 @@ class TestLatestReleaseInfoEndpoint:
         assert response.status_code == 200
         assert response.json() is None
 
+    @pytest.mark.parametrize("name", ["LITELLM_DISABLE_LATEST_RELEASE_CHECK", "LITELLM_OFFLINE_MODE"])
+    @pytest.mark.parametrize(
+        ("flag", "expected_body", "expected_urls"),
+        [
+            ("true", None, []),
+            (" TRUE ", None, []),
+            ("false", EXPECTED_INFO, [CHANGELOG_FEED_URL, _tag_url("v1.102.0")]),
+        ],
+    )
+    def test_disable_flag_skips_every_outbound_request(
+        self, http_client, monkeypatch, name, flag, expected_body, expected_urls
+    ):
+        monkeypatch.setenv(name, flag)
+        client = _minor_release()
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        response = http_client.get("/get/latest_release_info")
+        assert response.status_code == 200
+        assert response.json() == expected_body
+        assert client.urls == expected_urls
+
     def test_repeated_requests_reuse_cache(self, http_client):
         client = _minor_release()
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)

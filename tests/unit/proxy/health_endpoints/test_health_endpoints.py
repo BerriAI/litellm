@@ -378,7 +378,7 @@ async def test_test_model_connection_loads_config_from_router():
         },
         "model_info": {},
     }
-    mock_router.get_model_list.return_value = [mock_deployment]
+    mock_router.registry.return_value.deployments.return_value = [mock_deployment]
 
     # Mock ModelManagementAuthChecks - patch at the source module since it's imported inside the function
     mock_can_user_make_model_call = AsyncMock()
@@ -394,7 +394,7 @@ async def test_test_model_connection_loads_config_from_router():
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
     # Mock _update_litellm_params_for_health_check
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         # Just return params with messages added
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
@@ -447,8 +447,8 @@ async def test_test_model_connection_loads_config_from_router():
             user_api_key_dict=mock_user_api_key_dict,
         )
 
-        # Verify router.get_model_list was called with the model name
-        mock_router.get_model_list.assert_called_once_with(model_name="gpt-4o")
+        # Verify the registry was asked for the model name's deployments
+        mock_router.registry.return_value.deployments.assert_called_once_with("gpt-4o")
 
         # Verify that run_with_timeout was called (which wraps ahealth_check)
         assert mock_run_with_timeout.called
@@ -519,9 +519,9 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
     }
 
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [deployment_a, deployment_b]
+    mock_router.registry.return_value.deployments.return_value = [deployment_a, deployment_b]
 
-    # Backend uses get_deployment(model_id=...) for O(1) lookup by id.
+    # Backend uses registry().deployment(id) for O(1) lookup by id.
     def _get_deployment_by_id(model_id):
         if model_id == "deployment-A-id":
             return Deployment(
@@ -537,7 +537,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
             )
         return None
 
-    mock_router.get_deployment.side_effect = _get_deployment_by_id
+    mock_router.registry.return_value.deployment.side_effect = _get_deployment_by_id
 
     mock_can_user_make_model_call = AsyncMock()
 
@@ -545,7 +545,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
@@ -649,14 +649,14 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
     }
 
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [deployment_a, deployment_b]
+    mock_router.registry.return_value.deployments.return_value = [deployment_a, deployment_b]
 
     mock_can_user_make_model_call = AsyncMock()
     mock_health_check_result = {"status": "healthy"}
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
@@ -714,7 +714,7 @@ def _test_connection_probe(
         return {"status": "healthy"}
 
     router: Final = MagicMock()
-    router.get_deployment.side_effect = lambda model_id: (
+    router.registry.return_value.deployment.side_effect = lambda model_id: (
         Deployment(
             model_name=str(deployment["model_name"]),
             litellm_params=LiteLLM_Params(**deployment["litellm_params"]),  # pyright: ignore[reportArgumentType]  # test fixture dict
@@ -903,6 +903,47 @@ async def test_test_model_connection_overridden_model_probe_params_follow_the_pr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "deployment_model_info"),
+    [
+        ({"model": "azure/my-audio-deployment"}, {"id": "audio-id", "base_model": "azure/gpt-audio-1.5"}),
+        ({"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-1.5"}, {"id": "audio-id"}),
+    ],
+    ids=["model_info.base_model", "litellm_params.base_model"],
+)
+@pytest.mark.parametrize(
+    ("request_params", "expects_audio_probe"),
+    [({}, True), ({"model": "azure/my-text-deployment"}, False)],
+    ids=["own model", "swapped model"],
+)
+async def test_test_model_connection_stored_audio_base_model_follows_the_stored_model(
+    deployment_params: Mapping[str, str],
+    deployment_model_info: Mapping[str, str],
+    request_params: Mapping[str, str],
+    expects_audio_probe: bool,
+):
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "custom-name-audio",
+            "litellm_params": {**deployment_params, "api_key": "fake-azure-key", "api_base": "https://x.openai.azure.com"},
+            "model_info": deployment_model_info,
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params=dict(request_params),
+            model_info={"id": "audio-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    probe_params: Final = ahealth_check.call_args.kwargs["model_params"]
+    assert ("modalities" in probe_params) is expects_audio_probe
+    assert probe_params.get("base_model") == deployment_params.get("base_model")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("params_mode", [123, ["chat"], {"mode": "chat"}, False], ids=["int", "list", "dict", "bool"])
 async def test_test_model_connection_non_string_params_mode_is_a_bad_request(params_mode: object):
     with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
@@ -1014,7 +1055,7 @@ async def test_test_model_connection_uses_loaded_deployment_team_id():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = other_team_deployment
+    mock_router.registry.return_value.deployment.return_value = other_team_deployment
 
     async def fake_find_unique(*, where):
         team_id = where["team_id"]
@@ -1123,7 +1164,7 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
     }
 
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [other_team_deployment_dict]
+    mock_router.registry.return_value.deployments.return_value = [other_team_deployment_dict]
 
     async def fake_find_unique(*, where):
         return SimpleNamespace(
@@ -1200,7 +1241,7 @@ async def _probe_federated_deployment_as_team_admin(litellm_params):
     from litellm.proxy._types import LiteLLM_TeamTable
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = _federated_deployment()
+    mock_router.registry.return_value.deployment.return_value = _federated_deployment()
 
     async def fake_find_unique(*, where):
         if where["team_id"] != FEDERATED_DEPLOYMENT_TEAM_ID:
@@ -1371,7 +1412,7 @@ async def test_test_model_connection_authorized_team_admin_passes_real_auth():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = owned_deployment
+    mock_router.registry.return_value.deployment.return_value = owned_deployment
 
     async def fake_find_unique(*, where):
         if where["team_id"] == owner_team_id:
@@ -4729,8 +4770,8 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         router = MagicMock()
-        router.get_model_list.return_value = [deployment]
-        router.get_deployment.return_value = deployment_by_id
+        router.registry.return_value.deployments.return_value = [deployment]
+        router.registry.return_value.deployment.return_value = deployment_by_id
 
         with (
             patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
@@ -4791,8 +4832,8 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
         client: Final = TestClient(app)
         router: Final = MagicMock()
-        router.get_model_list.return_value = [deployment]
-        router.get_deployment.return_value = None
+        router.registry.return_value.deployments.return_value = [deployment]
+        router.registry.return_value.deployment.return_value = None
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -4848,7 +4889,7 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         router: Final = MagicMock()
-        router.get_model_list.return_value = [deployment]
+        router.registry.return_value.deployments.return_value = [deployment]
         ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
 
         with (
@@ -4907,7 +4948,7 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         router: Final = MagicMock()
-        router.get_deployment.return_value = deployment
+        router.registry.return_value.deployment.return_value = deployment
         ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
 
         with (
@@ -5021,7 +5062,7 @@ class TestNoRedisWarning:
 
     @staticmethod
     def _router(redis_cache):
-        return SimpleNamespace(cache=SimpleNamespace(redis_cache=redis_cache))
+        return SimpleNamespace(health=lambda: SimpleNamespace(store=SimpleNamespace(redis_cache=redis_cache)))
 
     @staticmethod
     def _prisma_with_workers(live_workers=None, error=None):
@@ -5437,3 +5478,73 @@ async def test_health_services_endpoint_langfuse_missing_keys_errors(monkeypatch
     with pytest.raises(ProxyException, match="auth_check failed") as raised:
         await health_services_endpoint(service="langfuse")
     assert "connection refused by lf.internal.example" in str(raised.value.message)
+
+
+@pytest.mark.asyncio
+async def test_health_services_reports_an_unknown_service_as_a_request_error_not_an_auth_error() -> None:
+    with pytest.raises(ProxyException) as exc_info:
+        await health_services_endpoint(service="totally_unknown_service_xyz")
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [False, True])
+async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admin: bool
+) -> None:
+    from starlette.requests import Request
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", str(tmp_path / "missing-default-auth.json"))
+    auth_file: Final = tmp_path / "auth.json"
+    auth_file.write_text(
+        json.dumps({"access_token": "token-probe", "account_id": "acct-probe", "expires_at": 4102444800})
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    output: Final = {
+        "id": "msg_probe",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+    }
+    response: Final = {
+        "id": "resp_probe",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-6.1-sol",
+        "output": [output],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://chatgpt.com/backend-api/codex/responses").respond(
+            200,
+            text="data: " + json.dumps({"type": "response.completed", "response": response}) + "\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+        call: Final = health_test_model_connection(
+            request=Request({"type": "http", "headers": []}),
+            mode="responses",
+            litellm_params={"model": "chatgpt/gpt-6.1-sol", "chatgpt_auth_file": str(auth_file)},
+            model_info={},
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN if admin else LitellmUserRoles.INTERNAL_USER, token="test-key"
+            ),
+        )
+        if admin:
+            result: Final = await call
+            assert result["status"] == "success"
+            assert upstream.calls.last.request.headers["Authorization"] == "Bearer token-probe"
+            assert upstream.calls.last.request.headers["ChatGPT-Account-Id"] == "acct-probe"
+            assert isinstance(json.loads(upstream.calls.last.request.content)["input"], list)
+        else:
+            with pytest.raises(ProxyException) as error:
+                await call
+            assert error.value.code == "403"
+            assert len(upstream.calls) == 0

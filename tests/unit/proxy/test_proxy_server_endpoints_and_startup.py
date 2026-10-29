@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import types
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
+
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import click
 import fastapi.routing
@@ -28,10 +31,11 @@ from fastapi.testclient import TestClient
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
+from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
     LitellmUserRoles,
@@ -46,6 +50,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from tests._master_key import MASTER_KEY
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
@@ -1254,7 +1259,7 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     }
 
     # Mock proxy_config.get_config and router settings
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1304,7 +1309,7 @@ def test_get_config_callbacks_fall_back_to_process_env(mock_env_vars, monkeypatc
         "general_settings": {},
         "environment_variables": {},
     }
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1351,7 +1356,7 @@ def test_get_config_callback_env_secrets_redacted_for_non_admin(mock_env_vars, m
         "general_settings": {},
         "environment_variables": {},
     }
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1401,7 +1406,7 @@ def test_get_config_returns_email_settings(monkeypatch):
         },
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1438,7 +1443,7 @@ def test_get_config_returns_email_settings(monkeypatch):
 def _get_email_alert_variables(monkeypatch, config_data):
     from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -1557,7 +1562,7 @@ def test_get_config_returns_slack_webhook(monkeypatch):
         "environment_variables": {"SLACK_WEBHOOK_URL": webhook_url},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
 
@@ -1607,7 +1612,7 @@ def test_get_config_cleared_slack_webhook_not_overridden_by_os_env(monkeypatch):
         "environment_variables": {"SLACK_WEBHOOK_URL": ""},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
 
@@ -2015,7 +2020,7 @@ async def test_get_all_team_models():
     mock_litellm_teamtable.find_many = AsyncMock()
 
     # Mock router
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
@@ -2143,7 +2148,7 @@ def test_add_team_models_to_all_models():
     team_db_objects_typed.team_id = "team1"
     team_db_objects_typed.models = ["all-proxy-models"]
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_list.return_value = [
         {"model_info": {"id": "gpt-4-model-1", "team_id": "team2"}},
         {"model_info": {"id": "gpt-4-model-2"}},
@@ -2157,7 +2162,7 @@ def test_add_team_models_to_all_models():
 
 
 def _make_router_with_access_groups(model_names, model_access_groups, deployments):
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_names.return_value = model_names
     llm_router.get_model_access_groups.return_value = model_access_groups
 
@@ -2315,7 +2320,7 @@ async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_list.return_value = [
         user_added_model,
         {"model_name": "team-model", "model_info": {"id": "team-model-1", "team_id": "team-a"}},
@@ -2667,7 +2672,7 @@ async def test_filter_models_by_team_id_excludes_viewer_direct_access():
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
     prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_access_groups = MagicMock(return_value={})
     # team-111 only resolves "some-other-model", which has no deployments
     router.get_model_list = MagicMock(return_value=[])
@@ -2756,7 +2761,7 @@ async def test_filter_models_by_team_id_allows_team_member():
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
     prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_access_groups = MagicMock(return_value={})
     router.get_model_list = MagicMock(return_value=[byok])
 
@@ -2843,7 +2848,7 @@ async def test_add_access_group_models_to_team_models():
     team_all_proxy.access_group_ids = ["premium"]
 
     # Mock router
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "claude-3":
@@ -2921,7 +2926,7 @@ async def test_add_access_group_models_multiple_teams_shared_group():
     team_b.models = ["gpt-3.5"]
     team_b.access_group_ids = ["shared-group", "extra-group"]
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "claude-3":
@@ -3030,7 +3035,7 @@ async def test_get_all_team_models_with_access_groups():
     mock_db.litellm_accessgrouptable = MagicMock()
     mock_db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[mock_ag_row])
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
 
     def mock_get_model_list(model_name, team_id=None):
         if model_name == "gpt-4":
@@ -3088,7 +3093,7 @@ async def test_delete_deployment_type_mismatch():
     pc = ProxyConfig()
 
     # Mock llm_router with string IDs (this is the source of the type mismatch)
-    mock_llm_router = MagicMock()
+    mock_llm_router = route_entry_points_to_stubs(MagicMock())
     mock_llm_router.get_model_ids.return_value = [
         "a96e12e76b36a57cfae57a41288eb41567629cac89b4828c6f7074afc3534695",
         "a40186dd0fdb9b7282380277d7f57044d29de95bfbfcd7f4322b3493702d5cd3",
@@ -3459,7 +3464,7 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
             # Create ProxyConfig instance and load config
             proxy_config = ProxyConfig()
             # Create a mock router since load_config requires it
-            mock_router = MagicMock()
+            mock_router = route_entry_points_to_stubs(MagicMock())
             await proxy_config.load_config(router=mock_router, config_file_path=config_file_path)
 
             # Verify get_instance_fn was called with correct parameters
@@ -5464,7 +5469,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
     proxy_config = ProxyConfig()
 
     # Mock router
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     # Test Case 1: Both config and DB settings exist - should merge them
@@ -5591,7 +5596,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     config_data = {
@@ -5640,7 +5645,7 @@ async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unc
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     config_data = {"router_settings": {"num_retries": 1}}
@@ -5672,7 +5677,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     # Test Case 1: No router provided
@@ -5761,7 +5766,7 @@ async def test_add_router_settings_shallow_merge_behavior():
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.update_settings = MagicMock()
 
     # Config with nested dictionary
@@ -5826,7 +5831,7 @@ async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeyp
 
     mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=db_row)
-    mock_router: Final = MagicMock()
+    mock_router: Final = route_entry_points_to_stubs(MagicMock())
     monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
     monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma_client)
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
@@ -5908,7 +5913,7 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     }
 
     # Mock the llm_router to return our test data
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
@@ -5975,7 +5980,7 @@ def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
             "supported_regions": frozenset({"eu"}),
         },
     }
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_list = [model_data]
     mock_router.get_model_list_from_model_alias.return_value = []
     mock_router.get_model_names.return_value = ["gpt-4o"]
@@ -6985,7 +6990,7 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
         "environment_variables": {},
     }
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
     monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
@@ -9335,8 +9340,8 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     from the authoritative DB and adds this request's settled cost, which the
     async spend flush has not written yet, so budget gating continues."""
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import increment_spend_counters
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     counter_cache = DualCache()
     budget_reservation = {
@@ -11314,7 +11319,7 @@ class TestDeleteDeploymentSync:
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.get_model_ids.return_value = ["model-id-to-evict"]
         mock_router.delete_deployment.return_value = MagicMock()
 
@@ -11339,7 +11344,7 @@ class TestDeleteDeploymentSync:
         from litellm.proxy.proxy_server import ProxyConfig
 
         proxy_config = ProxyConfig()
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
             with patch.object(proxy_config, "get_config", AsyncMock(return_value={})):
@@ -12350,8 +12355,8 @@ def _config_field_info_client(monkeypatch, user_role):
     from fastapi.testclient import TestClient
 
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import app
 
     db_record = types.SimpleNamespace(
@@ -13742,11 +13747,11 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
 def _window_spend_enqueue_env(cached_objects: dict):
     """Point increment_spend_counters at throwaway caches and a real
     WindowSpendUpdateQueue, and hand back the queue to inspect."""
+    import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
         WindowSpendUpdateQueue,
     )
-    import litellm.proxy.proxy_server as ps
 
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_get_cache = AsyncMock(side_effect=lambda key, **_: cached_objects.get(key))
@@ -13825,8 +13830,8 @@ async def test_team_window_spend_row_is_enqueued():
 async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
     """A reservation only pre-charged the cache counter with an estimate; the
     row still owes the actual cost, so the enqueue must not be skipped."""
-    from litellm.proxy.proxy_server import increment_spend_counters
     import litellm.proxy.spend_tracking.budget_reservation as br
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
     key_obj = MagicMock()
@@ -14158,7 +14163,7 @@ async def test_ptu_rollup_job_hands_the_rollup_the_proxys_router(monkeypatch):
 
     import litellm.proxy.proxy_server as ps
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     monkeypatch.setattr(ps, "llm_router", router)
     await scheduler.get_job(PTU_ROLLUP_JOB_ID).func()
 
@@ -14266,7 +14271,6 @@ async def test_moderations_response_carries_litellm_call_id_header():
 async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplog):
     """LIT-7836: the /v1/moderations error line must carry the litellm_call_id the
     client sent, rendered in the message and as a structured log record field."""
-    from litellm._logging import verbose_proxy_logger
     from litellm.proxy._types import ProxyException
 
     call_id = "moderations-call-7836"
@@ -15166,7 +15170,7 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
 
 
 def test_settings_store_exposes_dashboard_saved_mcp_client_allowlist_to_the_mcp_gateway() -> None:
-    from litellm.proxy._experimental.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
+    from litellm.proxy.mcp_server.client_allowlist import MCPClientAllowlist, load_mcp_client_allowlist
     from litellm.proxy.proxy_server import ProxyConfig
 
     settings: Final = ProxyConfig().settings
@@ -15207,21 +15211,23 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
     assert_loop_stayed_free(took, lags)
 
 
-async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
-    from litellm.rust_bridge._native import Tokenizer
+async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from queue import SimpleQueue
+    from threading import Thread, current_thread
+
+    from tokenizers import Tokenizer
 
     from litellm import Router
-    from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
 
-    claude_tokenizer: Final = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
+    claude_tokenizer: Final = Tokenizer.from_str(litellm.utils.claude_json_str)
+    loop_thread: Final = current_thread()
+    loader_threads: Final[SimpleQueue[Thread]] = SimpleQueue()
 
-    class SlowHubTokenizer:
-        @staticmethod
-        def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
-            time.sleep(0.3)
-            return claude_tokenizer
+    def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
+        loader_threads.put(current_thread())
+        return claude_tokenizer
 
-    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", SlowHubTokenizer.from_pretrained)
+    monkeypatch.setattr("tokenizers.Tokenizer", types.SimpleNamespace(from_pretrained=from_pretrained))
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -15237,21 +15243,21 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
         ),
     )
 
-    response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(
+    litellm.utils._select_custom_tokenizer_helper.cache_clear()
+    try:
+        response: Final = await proxy_server_module.token_counter(
             TokenCountRequest(model="self-hosted", prompt="count me off the loop")
         )
-    )
-
-    assert response.tokenizer_type == "huggingface_tokenizer"
-    assert response.total_tokens > 0
-    assert_loop_stayed_free(took, lags)
+        assert loader_threads.get_nowait() is not loop_thread
+        assert response.tokenizer_type == "huggingface_tokenizer"
+        assert response.total_tokens > 0
+    finally:
+        litellm.utils._select_custom_tokenizer_helper.cache_clear()
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from litellm.rust_bridge._native import Tokenizer
-
     from litellm import Router
+    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.router import DeploymentTypedDict
 
     claude_tokenizer: Final[Tokenizer] = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
@@ -15304,13 +15310,13 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
     """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
     from redis.asyncio import Redis
 
-    from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.mcp_server.byok_credential_cache import (
         byok_credential_cache,
         byok_credential_cache_key,
         cache_byok_credential,
         get_cached_byok_credential,
     )
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     class _QueuePubSub:
         def __init__(self, messages: list[object]) -> None:
@@ -15585,3 +15591,60 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=None),
     ]
 
+
+def test_feedback_box_is_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The feedback box is a dozen terminal lines; with JSON logs on it has to land as one parseable
+    record, not a plaintext line per row."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    turn_on_json()
+
+    proxy_server_module.generate_feedback_box()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert "Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new" in record["message"]
+    assert "Thank you for using LiteLLM! - Krrish & Ishaan" in record["message"]
+    assert "\x1b[" not in record["message"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_prints_the_banner_between_blank_lines_in_plain_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Operators without JSON logs see the banner exactly as before, flushed at once as show_banner()'s
+    click.echo did."""
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
+
+    await proxy_server_module.initialize()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    assert out.startswith(f"\n{LITELLM_BANNER}\n\n"), out
+
+
+@pytest.mark.asyncio
+async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """With JSON logs on, the six banner rows are one INFO record with their indentation kept, so the
+    first line a worker writes parses like every other."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
+    turn_on_json()
+
+    await proxy_server_module.initialize()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    records: Final = [json.loads(raw) for raw in out.splitlines() if raw.strip()]
+    banner_records: Final = [record for record in records if record["message"] == LITELLM_BANNER]
+    assert len(banner_records) == 1, records
+    assert banner_records[0]["level"] == "INFO"

@@ -37,7 +37,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
+from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
 )
@@ -219,6 +219,8 @@ from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export aft
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
 
+MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
+
 
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
@@ -307,8 +309,7 @@ class LiteLLMRoutes(enum.Enum):
         "/threads/{thread_id}/runs",
         "/v1/threads/{thread_id}/runs",
         # models
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         # token counter
         "/utils/token_counter",
         "/utils/model_info",
@@ -390,6 +391,7 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     mapped_pass_through_routes = [
+        "/backend-api/codex",
         "/bedrock",
         "/comprehendmedical",
         "/azure_speech",
@@ -577,8 +579,7 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
         "/key/list",
         "/user/filter/ui",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
@@ -760,8 +761,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/global/spend",
         "/global/spend/logs",
         "/global/spend/keys",
@@ -1767,8 +1767,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     max_parallel_requests: int | None = Field(
         default=None, description="Max concurrent requests allowed for this budget id."
     )
-    tpm_limit: int | None = Field(default=None, description="Max tokens per minute, allowed for this budget id.")
-    rpm_limit: int | None = Field(default=None, description="Max requests per minute, allowed for this budget id.")
+    tpm_limit: int | None = Field(default=None, ge=0, description="Max tokens per minute, allowed for this budget id.")
+    rpm_limit: int | None = Field(
+        default=None, ge=0, description="Max requests per minute, allowed for this budget id."
+    )
     tpd_limit: int | None = Field(
         default=None, description="Max tokens per day, charged by batch submissions, allowed for this budget id."
     )
@@ -1879,6 +1881,8 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     model_max_budget: GenericBudgetConfigType | None = Field(
@@ -1958,8 +1962,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_alias: str | None = None
     organization_id: str | None = None
     metadata: dict | None = None
-    tpm_limit: int | None = None
-    rpm_limit: int | None = None
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
@@ -2829,6 +2833,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    claude_code_marketplace_auth_required: bool = Field(
+        False,
+        description="If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.",
+    )
     disable_requester_ip_address_logging: bool | None = Field(
         None,
         description="If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.",
@@ -3280,7 +3288,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
 
     members: list[LiteLLM_OrganizationMembershipTable] = []
     teams: list[LiteLLM_TeamTable] = []
-    litellm_budget_table: LiteLLM_BudgetTable | None = None
+    litellm_budget_table: LiteLLM_BudgetTableFull | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -3464,12 +3472,12 @@ class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
 class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: str | None = None
-    messages: list[dict] | None = None
+    messages: list[dict[Any, Any]] | None = None
     """
     Anthropic token counting endpoint uses /messages
     """
 
-    contents: list[dict] | None = None
+    contents: list[dict[Any, Any]] | None = None
     """
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
@@ -3747,6 +3755,7 @@ class SpendLogsMetadata(TypedDict):
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
+    is_silent_experiment: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
     status: StandardLoggingPayloadStatus
@@ -3819,6 +3828,16 @@ class ManagementEndpointLoggingPayload(LiteLLMPydanticObjectBase):
     end_time: datetime | None = None
 
 
+def proxy_exception_status_code(message: str, code: str) -> str:
+    # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+    # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
+    if "No healthy deployment available" in message or "No deployments available" in message:
+        return "429"
+    if RouterErrors.no_deployments_with_tag_routing.value in message:
+        return "401"
+    return code
+
+
 class ProxyException(Exception):
     # NOTE: DO NOT MODIFY THIS
     # This is used to map exactly to OPENAI Exceptions
@@ -3847,13 +3866,7 @@ class ProxyException(Exception):
                     headers[k] = str(v)
         self.headers = headers or {}
         self.provider_specific_fields = provider_specific_fields
-        # rules for proxyExceptions
-        # Litellm router.py returns "No healthy deployment available" when there are no deployments available
-        # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
-        if "No healthy deployment available" in self.message or "No deployments available" in self.message:
-            self.code = "429"
-        elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
-            self.code = "401"
+        self.code = proxy_exception_status_code(self.message, self.code)
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
@@ -5269,6 +5282,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     team_id: str | None  # team that triggered discovery
     key_alias: str | None  # human-readable key alias
     user_agent: str | None  # HTTP User-Agent of the caller
+    call_count: ReadOnly[int]  # invocations folded into this row since the previous flush
 
 
 from litellm.models.managed_files import (  # noqa: E402

@@ -1,5 +1,5 @@
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:81211e15a86ea1d5357f284482af45730c51de45eaf10ad9ce205d6bfc2df323
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:81211e15a86ea1d5357f284482af45730c51de45eaf10ad9ce205d6bfc2df323
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:360896efb0753a5701c48f860e17130c205eae5a264797aa3e7ea126ee2923a7
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:360896efb0753a5701c48f860e17130c205eae5a264797aa3e7ea126ee2923a7
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 
 FROM $UV_IMAGE AS uvbin
@@ -43,6 +43,7 @@ ENV UV_PYTHON_DOWNLOADS=0
 COPY pyproject.toml README.md rust-toolchain.toml ./
 COPY .cargo ./.cargo
 COPY litellm-rust ./litellm-rust
+COPY model_prices_and_context_window.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p litellm/rust_bridge /wheels && \
@@ -61,7 +62,7 @@ COPY --from=uvbin /uv /uvx /usr/local/bin/
 # instead of nodeenv downloading one whose dynamic deps may not be in Wolfi
 # (e.g. Node 26.2.0 needs libatomic). Retry for transient apk.cgr.dev flakes.
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash gcc python-3.13 python-3.13-dev openssl openssl-dev libsndfile nodejs npm && break; \
+      apk add --no-cache bash gcc python-3.13 python-3.13-dev openssl libssl3 openssl-dev libsndfile nodejs npm && break; \
       [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
@@ -137,7 +138,9 @@ ENV HOME=/home/nonroot \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
     PRISMA_OFFLINE_MODE=true
 
-COPY --from=builder --chown=nonroot:nonroot /app /app
+COPY --from=builder --chown=nonroot:nonroot /app/.venv /app/.venv
+COPY --from=builder --chown=nonroot:nonroot /app/litellm /app/litellm
+COPY --from=builder --chown=nonroot:nonroot /app/run.py /app/run.py
 COPY --from=builder /opt/prisma /opt/prisma
 
 RUN chmod -R a+rX /opt/prisma && \

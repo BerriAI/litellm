@@ -1,9 +1,13 @@
 import { z } from "zod";
 
-export type ResultKind = "key" | "team" | "user" | "budget" | "spend" | "log";
+export type ResultKind = "key" | "team" | "user" | "budget" | "spend" | "usage" | "log";
 
 const limitedList = <Schema extends z.ZodType<unknown>>(schema: Schema, limit = 50) =>
   z.preprocess((value) => (Array.isArray(value) ? value.slice(0, limit) : value), z.array(schema));
+
+function sumKnownTokenCounts(left: number | null | undefined, right: number | null | undefined): number | undefined {
+  return left == null || right == null ? undefined : left + right;
+}
 
 export function generatedKey(value: unknown): string | undefined {
   const result = z.object({ key: z.string().min(1) }).safeParse(value);
@@ -133,6 +137,100 @@ export function projectToolResult(kind: ResultKind, value: unknown, secrets: rea
     cache_hit: z.union([text, z.boolean()]),
   };
   const log = z.object(logFields);
+  const usageMetricFields = {
+    spend: z.number().finite(),
+    api_requests: z.number().finite(),
+    total_tokens: z.number().finite(),
+    prompt_tokens: number,
+    completion_tokens: number,
+    cache_read_input_tokens: number,
+    cache_creation_input_tokens: number,
+  };
+  const usageMetrics = z.object(usageMetricFields);
+  const usageEntry = z.object({
+    metrics: usageMetrics,
+    metadata: z.object({ key_alias: text, team_alias: text }).optional(),
+  });
+  const usageBreakdown = z.record(z.string(), usageEntry).optional();
+  const usageBreakdownFields = {
+    models: usageBreakdown,
+    providers: usageBreakdown,
+    entities: usageBreakdown,
+    api_keys: usageBreakdown,
+  };
+  const usageMetadataFields = {
+    total_spend: number,
+    total_api_requests: number,
+    total_tokens: number,
+    total_prompt_tokens: number,
+    total_completion_tokens: number,
+    total_cache_read_input_tokens: number,
+    total_cache_creation_input_tokens: number,
+    total_successful_requests: number,
+    total_failed_requests: number,
+    total_api_keys: number,
+    api_key_limit: number,
+  };
+  const usage = z
+    .object({
+      results: z
+        .array(
+          z.object({
+            date: text,
+            metrics: usageMetrics,
+            breakdown: z.object(usageBreakdownFields).optional(),
+          }),
+        )
+        .max(367),
+      metadata: z.object(usageMetadataFields).optional(),
+    })
+    .transform(({ results, metadata }) => {
+      const top = (dimension: "models" | "providers" | "entities" | "api_keys") => {
+        const totals = new Map<string, z.infer<typeof usageEntry>>();
+        for (const day of results) {
+          for (const [name, entry] of Object.entries(day.breakdown?.[dimension] ?? {})) {
+            const previous = totals.get(name)?.metrics;
+            totals.set(name, {
+              metadata: entry.metadata,
+              metrics: previous
+                ? {
+                    spend: previous.spend + entry.metrics.spend,
+                    api_requests: previous.api_requests + entry.metrics.api_requests,
+                    total_tokens: previous.total_tokens + entry.metrics.total_tokens,
+                    prompt_tokens: sumKnownTokenCounts(previous.prompt_tokens, entry.metrics.prompt_tokens),
+                    completion_tokens: sumKnownTokenCounts(previous.completion_tokens, entry.metrics.completion_tokens),
+                    cache_read_input_tokens: sumKnownTokenCounts(
+                      previous.cache_read_input_tokens,
+                      entry.metrics.cache_read_input_tokens,
+                    ),
+                    cache_creation_input_tokens: sumKnownTokenCounts(
+                      previous.cache_creation_input_tokens,
+                      entry.metrics.cache_creation_input_tokens,
+                    ),
+                  }
+                : entry.metrics,
+            });
+          }
+        }
+        return [...totals.entries()]
+          .sort(([, a], [, b]) => b.metrics.spend - a.metrics.spend)
+          .slice(0, 20)
+          .map(([name, entry]) => ({
+            name: dimension === "api_keys" ? hash.parse(name) ?? "[redacted]" : text.parse(name),
+            alias: entry.metadata?.key_alias ?? entry.metadata?.team_alias,
+            ...entry.metrics,
+          }));
+      };
+      return {
+        totals: metadata,
+        daily: results.map(({ date, metrics }) => ({ date, ...metrics })),
+        breakdown_limit: 20,
+        top_models: top("models"),
+        top_providers: top("providers"),
+        top_entities: top("entities"),
+        top_api_keys: top("api_keys"),
+      };
+    });
   const teamEnvelope = {
     ...pagination,
     teams: limitedList(team).optional(),
@@ -149,6 +247,7 @@ export function projectToolResult(kind: ResultKind, value: unknown, secrets: rea
       budget.extend({ data: limitedList(budget).optional(), meta: z.object(pagination).optional() }),
     ]),
     spend: limitedList(spend),
+    usage,
     log: z.object({ ...pagination, data: limitedList(log) }),
   };
   const parsed = schemas[kind].safeParse(value);

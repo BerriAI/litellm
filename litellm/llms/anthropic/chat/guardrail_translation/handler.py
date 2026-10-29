@@ -26,18 +26,18 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.pass_through.adapters.transformation import (
+from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
     truncate_tool_name,
 )
-from litellm.llms.anthropic.pass_through.convertible_blocks import (
+from litellm.llms.anthropic.messages.convertible_blocks import (
     keep_non_string_tool_result_texts,
     scannable_tool_result_request,
 )
-from litellm.llms.anthropic.pass_through.messages.utils import filtered_safeguard_results, redacted_stop_details
-from litellm.llms.anthropic.pass_through.stream_assembly import (
+from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
+from litellm.llms.anthropic.messages.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
 )
@@ -432,27 +432,30 @@ class AnthropicMessagesHandler(BaseTranslation):
         message, _ = serialize_http_exception_detail(exc.detail)
         return tuple(anthropic_sse_error_frames(message))
 
-    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+    def build_block_response(self, exc: "ModifyResponseException") -> "AnthropicMessagesResponse":
         import uuid
 
-        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
         from litellm.llms.base_llm.guardrail_translation.utils import (
             blocked_response_usage,
         )
         from litellm.types.utils import AnthropicMessagesResponse
 
-        block_response: Final = AnthropicMessagesResponse(
+        return AnthropicMessagesResponse(
             id=f"msg_{uuid.uuid4()}",
             type="message",
             role="assistant",
             content=[{"type": "text", "text": exc.message}],
             model=exc.model,
             stop_reason="end_turn",
-            usage=blocked_response_usage(getattr(exc, "original_response", None)),
+            usage=blocked_response_usage(exc.original_response),
         )
-        return list(FakeAnthropicMessagesStreamIterator(response=block_response))
+
+    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+
+        return list(FakeAnthropicMessagesStreamIterator(response=self.build_block_response(exc)))
 
     def _block_continuation_chunks(
         self, exc: "ModifyResponseException", responses_so_far: Sequence[object]
@@ -1697,14 +1700,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not line.startswith("data:"):
             return line
         try:
-            data: Final[str | int | float | bool | None | Sequence[object] | Mapping[str, object]] = json.loads(
-                line[len("data:") :].strip()
-            )
+            data: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
         except json.JSONDecodeError:
             return line
-        if not isinstance(data, dict):
+        event: Final = as_str_mapping(data)
+        if not isinstance(event, dict):
             return line
-        rewritten: Final = _rewritten_event(_as_str_mapping(data), rewrite_event)
+        rewritten: Final = _rewritten_event(event, rewrite_event)
         return line if rewritten is data else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
