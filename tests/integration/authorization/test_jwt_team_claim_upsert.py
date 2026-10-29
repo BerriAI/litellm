@@ -23,7 +23,9 @@ def _jwks_reply(public_jwk: str) -> Reply:
     return Reply(body=json.dumps({"keys": [{**json.loads(public_jwk), "kid": KEY_ID}]}).encode())
 
 
-@pytest.mark.parametrize("team_id_upsert", [True, False], ids=["upsert-creates-claimed-teams", "no-upsert-skips-them"])
+@pytest.mark.parametrize(
+    "team_id_upsert", [True, False], ids=["upsert-creates-claimed-teams", "no-upsert-rejects-them"]
+)
 def test_jwt_teams_array_claim_creates_and_joins_every_team_only_when_team_id_upsert_is_on(
     gateway: Gateway, tmp_path: Path, team_id_upsert: bool
 ) -> None:
@@ -59,7 +61,6 @@ def test_jwt_teams_array_claim_creates_and_joins_every_team_only_when_team_id_up
         )
         with owned_proxy(gateway, tmp_path, {"JWT_PUBLIC_KEY_URL": jwks.url}, config=path) as candidate:
             model: Final = scenario.model()
-            scenario.cleanups.callback(scenario.delete_user, subject)
             scenario.cleanups.callback(gateway.request, "POST", "/team/delete", {"team_ids": claimed_teams})
             response: Final = candidate.request(
                 "POST",
@@ -67,13 +68,19 @@ def test_jwt_teams_array_claim_creates_and_joins_every_team_only_when_team_id_up
                 {"model": model, "messages": [{"role": "user", "content": "teams array claim"}]},
                 key=token,
             )
-            assert response.status_code == 200, response.text
-            expected_teams: Final = claimed_teams if team_id_upsert else []
-            user: Final = eventually(
-                lambda: read_rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)),
-                lambda rows: rows == [{"teams": expected_teams}],
-            )
-            teams: Final = read_rows(
+            team_rows: Final = read_rows(
                 'SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = ANY(%s) ORDER BY team_id', (claimed_teams,)
             )
-            assert (user, [row["team_id"] for row in teams]) == ([{"teams": expected_teams}], expected_teams)
+            if not team_id_upsert:
+                assert (response.status_code, team_rows) == (403, []), response.text
+                return
+            scenario.cleanups.callback(scenario.delete_user, subject)
+            assert response.status_code == 200, response.text
+            user_teams: Final = eventually(
+                lambda: read_rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)),
+                lambda rows: [sorted(row["teams"]) for row in rows] == [claimed_teams],
+            )
+            assert ([sorted(row["teams"]) for row in user_teams], [row["team_id"] for row in team_rows]) == (
+                [claimed_teams],
+                claimed_teams,
+            )
