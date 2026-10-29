@@ -8,7 +8,13 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.main import stream_chunk_builder
+from litellm.responses.litellm_completion_transformation.claude_hosted_tools import (
+    is_computer_member_call,
+    openai_computer_call,
+    requests_openai_computer_use,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -192,6 +198,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
         self._tool_search_requested: bool = has_server_tool_search(request_tools)
         self._tool_search_call_ids: frozenset[str] = frozenset()
+        self._computer_use_requested: bool = requests_openai_computer_use(request_tools)
+        self._computer_call_ids: frozenset[str] = frozenset()
 
     def _is_tool_search_call(self, call_id: str, fn_name: str) -> bool:
         if call_id in self._tool_search_call_ids:
@@ -199,6 +207,31 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not self._tool_search_requested or not is_anthropic_tool_search_use(call_id, fn_name):
             return False
         self._tool_search_call_ids = self._tool_search_call_ids | {call_id}
+        return True
+
+    def _is_computer_call(self, call_id: str, tool_call: object) -> bool:
+        if call_id in self._computer_call_ids:
+            return True
+        if not self._computer_use_requested or not is_computer_member_call(tool_call):
+            return False
+        self._computer_call_ids = self._computer_call_ids | {call_id}
+        return True
+
+    def _queued_computer_call_events(self, call_id: str, output_index: int, member: str, arguments: str) -> bool:
+        in_progress: Final = openai_computer_call(call_id, member, arguments, "in_progress")
+        completed: Final = openai_computer_call(call_id, member, arguments, "completed")
+        if in_progress is None or completed is None:
+            return False
+        self._queue_output_item_added(output_index, BaseLiteLLMOpenAIResponseObject(**in_progress.model_dump()))
+        self._sequence_number += 1
+        self._pending_tool_events.append(
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=output_index,
+                sequence_number=self._sequence_number,
+                item=BaseLiteLLMOpenAIResponseObject(**completed.model_dump()),
+            )
+        )
         return True
 
     def _next_output_item_added(self, output_index: int, item: BaseLiteLLMOpenAIResponseObject) -> OutputItemAddedEvent:
@@ -409,17 +442,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         Note: Some providers (like Bedrock) send tool call arguments in one large chunk.
         We split these into smaller deltas to match OpenAI's token-by-token streaming behavior.
         """
-        if not isinstance(tool_calls, list):
-            return
-
-        for tc in tool_calls:
+        for tc in parts_of(tool_calls):
             call_id = self._tool_call_id(tc)
             if not call_id:
                 continue
             if call_id in self._web_search_calls:
                 continue
 
-            fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+            fn = message_field(tc, "function")
             fn_name = ""
             fn_args_delta = ""
             if isinstance(fn, dict):
@@ -432,6 +462,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             if self._is_tool_search_call(call_id, fn_name):
                 self._queue_tool_search_call_added(call_id, output_index, fn_args_delta)
+                continue
+            if self._is_computer_call(call_id, tc):
                 continue
             self._started_tool_call = True
 
@@ -477,14 +509,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not tool_calls or not isinstance(tool_calls, list):
             return
 
-        for tc in tool_calls:
-            call_id_raw = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+        for tc in parts_of(tool_calls):
+            call_id_raw = message_field(tc, "id")
             if not call_id_raw:
                 continue
             call_id = str(call_id_raw)
             output_index = self._get_or_assign_tool_output_index(call_id)
 
-            fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+            fn = message_field(tc, "function")
             fn_name = ""
             fn_args = ""
             if isinstance(fn, dict):
@@ -501,6 +533,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 continue
             if self._is_tool_search_call(call_id, fn_name):
                 self._queue_tool_search_call_done(call_id, output_index, fn_args)
+                continue
+            if self._is_computer_call(call_id, tc) and self._queued_computer_call_events(
+                call_id, output_index, fn_name, fn_args
+            ):
                 continue
 
             # Track if this is a new tool call that wasn't streamed

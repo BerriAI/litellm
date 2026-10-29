@@ -17,6 +17,11 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.responses.litellm_completion_transformation.claude_hosted_tools import (
+    CLAUDE_CODE_EXECUTION_TOOL_TYPE,
+    CLAUDE_COMPUTER_TOOLSET_TYPE,
+    openai_computer_call,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -1197,4 +1202,235 @@ def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_th
                 {"type": "text", "text": _NEXT_INPUT[0]["content"]},
             ],
         }
+    ]
+
+
+_COMPUTER_USE_PREVIEW: Final = {
+    "type": "computer_use_preview",
+    "display_width": 1024,
+    "display_height": 768,
+    "environment": "browser",
+}
+_WHITE_PIXEL_DATA_URL: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+)
+_CTRL_CLICK_MEMBER_CALL: Final = {
+    "type": "tool_use",
+    "id": "toolu_click",
+    "name": "left_click",
+    "toolset_name": "computer",
+    "input": {"coordinate": [640, 400], "text": "ctrl"},
+}
+_CTRL_CLICK_ACTION: Final = {"type": "click", "button": "left", "x": 640, "y": 400, "keys": ["CTRL"]}
+
+
+def _assert_sends_a_toolset_whose_members_all_map_to_computer_call_actions(route: respx.Route) -> None:
+    sent_tool: Final = json.loads(route.calls[0].request.content)["tools"]
+    assert [tool["type"] for tool in sent_tool] == [CLAUDE_COMPUTER_TOOLSET_TYPE]
+    withheld: Final = sent_tool[0]["configs"]
+    assert {config["enabled"] for config in withheld.values()} == {False}
+    full_member_input: Final = json.dumps(
+        {"coordinate": [1, 2], "start_coordinate": [0, 0], "text": "a", "scroll_direction": "up", "scroll_amount": 1}
+    )
+    assert [
+        member for member in withheld if openai_computer_call("toolu_x", member, full_member_input, "completed")
+    ] == []
+
+
+def test_responses_computer_use_preview_loop_runs_over_anthropic(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[_anthropic_message(_CTRL_CLICK_MEMBER_CALL), _anthropic_message({"type": "text", "text": "Done."})]
+    )
+    user_turn: Final = {"role": "user", "content": "Click the search box while holding ctrl."}
+
+    first: Final = litellm.responses(
+        model=_MODEL, input=[user_turn], tools=[_COMPUTER_USE_PREVIEW], api_key="mock_api_key"
+    )
+
+    _assert_sends_a_toolset_whose_members_all_map_to_computer_call_actions(route)
+    assert [(item.type, item.call_id, item.action.model_dump(exclude_none=True)) for item in first.output] == [
+        ("computer_call", "toolu_click", _CTRL_CLICK_ACTION)
+    ]
+
+    litellm.responses(
+        model=_MODEL,
+        tools=[_COMPUTER_USE_PREVIEW],
+        api_key="mock_api_key",
+        input=[
+            user_turn,
+            *(item.model_dump(exclude_none=True) for item in first.output),
+            {
+                "type": "computer_call_output",
+                "call_id": "toolu_click",
+                "output": {"type": "computer_screenshot", "image_url": _WHITE_PIXEL_DATA_URL},
+            },
+        ],
+    )
+
+    replayed: Final = json.loads(route.calls[1].request.content)["messages"]
+    assert replayed[1]["content"] == [{**_CTRL_CLICK_MEMBER_CALL, "id": "toolu_click"}]
+    tool_result: Final = replayed[2]["content"][0]
+    assert (tool_result["type"], tool_result["tool_use_id"], tool_result["toolset_name"]) == (
+        "tool_result",
+        "toolu_click",
+        "computer",
+    )
+    assert [part["type"] for part in tool_result["content"]] == ["image"]
+
+
+def _anthropic_tool_use_stream(tool_use: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_anthropic_sse(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_tool_use",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [],
+                    "usage": {"input_tokens": 9, "output_tokens": 1},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {**tool_use, "input": {}}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_use["input"])},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 30}},
+            {"type": "message_stop"},
+        ),
+    )
+
+
+def test_streamed_responses_computer_use_preview_emit_a_computer_call_item(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_tool_use_stream(_CTRL_CLICK_MEMBER_CALL)
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input="Click the search box while holding ctrl.",
+            tools=[_COMPUTER_USE_PREVIEW],
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+
+    _assert_sends_a_toolset_whose_members_all_map_to_computer_call_actions(route)
+    items: Final = [
+        event.model_dump(exclude_none=True)["item"]
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    assert [(item["type"], item["status"], item["action"]) for item in items] == [
+        ("computer_call", "in_progress", _CTRL_CLICK_ACTION),
+        ("computer_call", "completed", _CTRL_CLICK_ACTION),
+    ]
+    assert ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA not in {event.type for event in events}
+    completed: Final = events[-1]
+    assert [(item.type, item.call_id) for item in completed.response.output] == [("computer_call", "toolu_click")]
+
+
+_LOOKUP_TOOL: Final = {
+    "type": "function",
+    "name": "lookup",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+
+
+@pytest.mark.parametrize(
+    "tool_use",
+    [
+        {**_CTRL_CLICK_MEMBER_CALL, "input": {"text": "ctrl"}},
+        {"type": "tool_use", "id": "toolu_lookup", "name": "lookup", "input": {"query": "weather"}},
+    ],
+    ids=["member_call_without_an_openai_action", "declared_function"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+def test_responses_tool_call_with_no_computer_action_stays_a_function_call(
+    respx_mock: respx.MockRouter, tool_use: Mapping[str, object], stream: bool
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_tool_use_stream(tool_use) if stream else _anthropic_message(tool_use)
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL,
+        input="Look up the weather or click.",
+        tools=[_COMPUTER_USE_PREVIEW, _LOOKUP_TOOL],
+        stream=stream,
+        api_key="mock_api_key",
+    )
+
+    sent_tools: Final = json.loads(route.calls.last.request.content)["tools"]
+    assert [tool.get("name", tool["type"]) for tool in sent_tools] == [CLAUDE_COMPUTER_TOOLSET_TYPE, "lookup"]
+    output: Final = tuple(response)[-1].response.output if stream else response.output
+    assert [(item.type, item.name, item.call_id) for item in output] == [
+        ("function_call", tool_use["name"], tool_use["id"])
+    ]
+
+
+@pytest.mark.parametrize(
+    "container_field",
+    [{"container": {"type": "auto", "file_ids": []}}, {}],
+    ids=["auto_container", "no_container"],
+)
+def test_responses_code_interpreter_runs_on_claude_code_execution(
+    respx_mock: respx.MockRouter, container_field: Mapping[str, object]
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "1267650600228229401496703205376"})
+    )
+
+    litellm.responses(
+        model=_MODEL,
+        input="Use code to compute 2**100.",
+        tools=[{"type": "code_interpreter", **container_field}],
+        api_key="mock_api_key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["tools"] == [
+        {"type": CLAUDE_CODE_EXECUTION_TOOL_TYPE, "name": "code_execution"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "container, named_setting",
+    [
+        ("cntr_existing", "`container`"),
+        ({"type": "auto", "file_ids": ["file_1"]}, "`container.file_ids`"),
+        ({"type": "auto", "memory_limit": "4g"}, "`container.memory_limit`"),
+    ],
+    ids=["container_id", "file_ids", "memory_limit"],
+)
+def test_responses_code_interpreter_setting_claude_lacks_answers_400_or_drops_only_that_setting(
+    respx_mock: respx.MockRouter, container: object, named_setting: str
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "ok"})
+    )
+    request: Final = {
+        "model": _MODEL,
+        "input": "Use code to compute 2**100.",
+        "tools": [{"type": "code_interpreter", "container": container}],
+        "api_key": "mock_api_key",
+    }
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.responses(**request)
+
+    assert rejected.value.status_code == 400
+    assert named_setting in str(rejected.value)
+    assert route.call_count == 0
+
+    litellm.responses(**request, drop_params=True)
+
+    assert [tool["type"] for tool in json.loads(route.calls.last.request.content)["tools"]] == [
+        CLAUDE_CODE_EXECUTION_TOOL_TYPE
     ]

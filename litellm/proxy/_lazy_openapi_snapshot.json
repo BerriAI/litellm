@@ -28534,6 +28534,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/ResponseCompactionItem"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ResponseComputerToolCall"
                       }
                     ]
                   },
@@ -48354,6 +48357,11 @@
             "index": {
               "title": "Index",
               "type": "integer"
+            },
+            "provider_specific_fields": {
+              "additionalProperties": true,
+              "title": "Provider Specific Fields",
+              "type": "object"
             },
             "type": {
               "const": "function",

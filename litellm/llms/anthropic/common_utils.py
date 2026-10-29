@@ -45,6 +45,7 @@ from litellm.llms.anthropic.wif import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_CLIENT_TOOLSET_PREFIXES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -581,10 +582,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """Returns the computer tool version if used, e.g. 'computer_20250124' or None"""
         if tools is None:
             return None
-        for tool in tools:
-            if "type" in tool and tool["type"].startswith("computer_"):
-                return tool["type"]
-        return None
+        return next(
+            (
+                tool["type"]
+                for tool in tools
+                if "type" in tool
+                and tool["type"].startswith("computer_")
+                and not tool["type"].startswith(ANTHROPIC_CLIENT_TOOLSET_PREFIXES)
+            ),
+            None,
+        )
 
     def is_web_search_tool_used(self, tools: list[AllAnthropicToolsValues] | None) -> bool:
         """Returns True if web_search tool is used"""

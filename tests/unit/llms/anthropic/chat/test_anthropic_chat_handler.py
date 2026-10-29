@@ -1064,6 +1064,15 @@ def test_anthropic_stream_tool_call_keeps_the_programmatic_caller():
     assert tool_calls[0].model_dump()["caller"] == caller
 
 
+def test_anthropic_stream_toolset_member_call_carries_its_toolset_name():
+    tool_calls: Final = _stream_one_anthropic_tool_use(
+        {"type": "tool_use", "id": "toolu_shot", "name": "screenshot", "toolset_name": "computer", "input": {}}
+    )
+
+    assert tool_calls[0].id == "toolu_shot"
+    assert tool_calls[0].provider_specific_fields == {"toolset_name": "computer"}
+
+
 def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
     """Anthropic streaming usage should account for emitted thinking deltas."""
     chunks = [

@@ -1819,6 +1819,7 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
 def convert_to_anthropic_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     force_base64: bool = False,
+    toolset_name: str | None = None,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1954,7 +1955,9 @@ def convert_to_anthropic_tool_result(
         raise Exception(f"Unable to parse anthropic tool result for message: {message}")
     if cache_control is not None:
         anthropic_tool_result["cache_control"] = cache_control
-    return anthropic_tool_result
+    if toolset_name is None:
+        return anthropic_tool_result
+    return {**anthropic_tool_result, "toolset_name": toolset_name}
 
 
 def convert_function_to_anthropic_tool_invoke(
@@ -2033,6 +2036,84 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
     )
 
 
+def _toolset_name_of_declared_tool(tool: object) -> str | None:
+    match tool:
+        case {"type": str() as tool_type}:
+            return next(
+                (
+                    prefix.removesuffix("_toolset_")
+                    for prefix in ANTHROPIC_CLIENT_TOOLSET_PREFIXES
+                    if tool_type.startswith(prefix)
+                ),
+                None,
+            )
+        case _:
+            return None
+
+
+def _name_of_declared_tool(tool: object) -> str | None:
+    match tool:
+        case {"name": str() as name}:
+            return name
+        case _:
+            return None
+
+
+def _toolset_name_the_tool_call_carries(tool_call: object) -> str | None:
+    match message_field(tool_call, "provider_specific_fields"):
+        case {"toolset_name": str() as toolset_name}:
+            return toolset_name
+        case _:
+            return None
+
+
+def _sole_toolset_name_for_a_plain_tool_call(
+    tool_call: object, sole_declared_toolset_name: str | None, other_tool_names: frozenset[str]
+) -> str | None:
+    if message_field(message_field(tool_call, "function"), "name") in other_tool_names:
+        return None
+    return sole_declared_toolset_name
+
+
+def _tool_call_id_and_toolset_name(
+    tool_call: object, sole_declared_toolset_name: str | None, other_tool_names: frozenset[str]
+) -> tuple[str, str] | None:
+    toolset_name: Final = _toolset_name_the_tool_call_carries(tool_call) or _sole_toolset_name_for_a_plain_tool_call(
+        tool_call, sole_declared_toolset_name, other_tool_names
+    )
+    match message_field(tool_call, "id"), toolset_name:
+        case str() as tool_call_id, str() as name:
+            return tool_call_id, name
+        case _:
+            return None
+
+
+def toolset_names_by_tool_call_id(messages: Sequence[object], tools: Sequence[object]) -> Mapping[str, str]:
+    declared_toolset_names: Final = tuple(
+        toolset_name for tool in tools if (toolset_name := _toolset_name_of_declared_tool(tool)) is not None
+    )
+    sole_declared_toolset_name: Final = declared_toolset_names[0] if len(declared_toolset_names) == 1 else None
+    other_tool_names: Final = frozenset(name for tool in tools if (name := _name_of_declared_tool(tool)) is not None)
+    assistant_tool_calls: Final = itertools.chain.from_iterable(
+        parts_of(message_field(message, "tool_calls"))
+        for message in messages
+        if message_field(message, "role") == "assistant"
+    )
+    return MappingProxyType(
+        dict(
+            pair
+            for tool_call in assistant_tool_calls
+            if (pair := _tool_call_id_and_toolset_name(tool_call, sole_declared_toolset_name, other_tool_names))
+            is not None
+        )
+    )
+
+
+def _toolset_name_answered(tool_message: object, toolset_names: Mapping[str, str]) -> str | None:
+    tool_call_id: Final = message_field(tool_message, "tool_call_id")
+    return toolset_names.get(tool_call_id) if isinstance(tool_call_id, str) else None
+
+
 def tool_call_ids_answered_by_client(
     messages: Sequence[object], supports_mid_conversation_system: bool = True
 ) -> frozenset[str]:
@@ -2068,11 +2149,22 @@ def _placed_and_paired(
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
 
 
+def _anthropic_tool_use(
+    tool_id: str, name: str, tool_input: Mapping[str, object], toolset_name: str | None
+) -> AnthropicMessagesToolUseParam:
+    if toolset_name is None:
+        return AnthropicMessagesToolUseParam(type="tool_use", id=tool_id, name=name, input=dict(tool_input))
+    return AnthropicMessagesToolUseParam(
+        type="tool_use", id=tool_id, name=name, input=dict(tool_input), toolset_name=toolset_name
+    )
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    toolset_names: Mapping[str, str] = MappingProxyType({}),
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2152,11 +2244,8 @@ def convert_to_anthropic_tool_invoke(
             continue
         else:
             sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
-            _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
-                type="tool_use",
-                id=sanitized_tool_id,
-                name=tool_name,
-                input=tool_input,
+            _anthropic_tool_use_param = _anthropic_tool_use(
+                sanitized_tool_id, tool_name, tool_input, toolset_names.get(tool_id)
             )
 
             _content_element = add_cache_control_to_content(
@@ -2913,6 +3002,7 @@ def anthropic_messages_pt(
     model: str,
     llm_provider: str,
     drop_params: bool = False,
+    tools: Sequence[object] = (),
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -2941,6 +3031,7 @@ def anthropic_messages_pt(
     messages = [_sanitize_empty_text_content(m) for m in messages]
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
+    toolset_names: Final = toolset_names_by_tool_call_id(messages, tools)
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -3072,7 +3163,11 @@ def anthropic_messages_pt(
             ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                    convert_to_anthropic_tool_result(
+                        user_message_types_block,
+                        force_base64=force_base64,
+                        toolset_name=_toolset_name_answered(user_message_types_block, toolset_names),
+                    )
                 )
 
             msg_i += 1
@@ -3142,6 +3237,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
                     answered_tool_ids=client_answered_tool_ids,
+                    toolset_names=toolset_names,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -3307,6 +3403,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
                     answered_tool_ids=client_answered_tool_ids,
+                    toolset_names=toolset_names,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates

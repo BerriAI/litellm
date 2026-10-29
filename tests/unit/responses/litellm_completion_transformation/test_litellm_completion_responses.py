@@ -4316,6 +4316,8 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._reasoning_output_index = None
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
+        iterator._computer_use_requested = False
+        iterator._computer_call_ids = frozenset()
         iterator.responses_api_request = {}
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         iterator._web_search_calls = {}
@@ -7052,3 +7054,22 @@ async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_
     assert await _input_tokens_billed_on_disconnect(
         cast(ResponseInputParam, [*history_it_replaces, *since_compaction])
     ) == await _input_tokens_billed_on_disconnect(since_compaction)
+
+
+@pytest.mark.parametrize(
+    "hosted_tool",
+    [
+        {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ],
+    ids=["computer_use_preview", "code_interpreter"],
+)
+def test_hosted_tool_reaches_a_route_that_builds_no_anthropic_request_as_sent(hosted_tool: Mapping[str, object]) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input="Use the tool.",
+        responses_api_request={"tools": [hosted_tool]},
+        custom_llm_provider="gemini",
+    )
+
+    assert result["tools"] == [hosted_tool]

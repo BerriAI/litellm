@@ -10,7 +10,10 @@ from litellm.responses.litellm_completion_transformation.count_request import (
     ChatCountRequest,
     chat_count_request,
 )
-from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
+from litellm.responses.litellm_completion_transformation.transformation import (
+    ChatCompletionSession,
+    LiteLLMCompletionResponsesConfig,
+)
 
 _MARK: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
 _MARKED_RESPONSES_REQUEST: Final[dict[str, JsonValue]] = {
@@ -200,3 +203,33 @@ async def test_claude_count_request_leaves_out_the_stored_turns_a_compaction_ite
     assert _SUMMARY in counted and "And Osaka?" in counted
     assert "Weather in SF?" not in counted
     assert "call_0" not in counted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hosted_tool",
+    [
+        {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ],
+    ids=["computer_use_preview", "code_interpreter"],
+)
+async def test_count_request_for_a_public_model_name_counts_the_tools_its_deployment_inference_sends(
+    hosted_tool: dict[str, JsonValue],
+) -> None:
+    count: Final = await chat_count_request(
+        model="claude-opus-5-5",
+        custom_llm_provider="azure_ai",
+        api_base=None,
+        responses_request={"model": "team-default", "input": [_QUESTION], "tools": [hosted_tool]},
+        policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+    )
+    inference: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="claude-opus-5-5",
+        input=[_QUESTION],
+        responses_api_request={"tools": [hosted_tool]},
+        custom_llm_provider="azure_ai",
+    )
+
+    assert isinstance(count, ChatCountRequest)
+    assert [dict(tool) for tool in count.tools or ()] == inference["tools"]

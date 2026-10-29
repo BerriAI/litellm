@@ -223,6 +223,7 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     input: dict
     cache_control: dict | ChatCompletionCachedContent | None
     caller: ToolCaller | None
+    toolset_name: ReadOnly[str]
 
 
 class CompactionBlock(TypedDict, total=False):
@@ -369,6 +370,7 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
         ]
     )
     cache_control: dict | ChatCompletionCachedContent | None
+    toolset_name: ReadOnly[str]
 
 
 AnthropicMessagesUserMessageValues = (
@@ -787,6 +789,9 @@ class AnthropicThinkingParam(TypedDict, total=False):
     budget_tokens: int
     display: ReadOnly[Literal["summarized", "omitted", "updates"]]
     block_binding: ReadOnly[AnthropicThinkingBlockBinding]
+
+
+ANTHROPIC_CLIENT_TOOLSET_PREFIXES: Final = ("computer_toolset_", "browser_toolset_")
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):

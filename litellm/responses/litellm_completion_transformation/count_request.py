@@ -197,7 +197,7 @@ async def chat_count_request(
         chat_body: Final = await _with_previous_turns(
             responses_batch_body_to_chat_body(
                 _with_compaction_as_summary_text(
-                    _with_emulated_file_search(_with_hoisted_additional_tools(responses_request))
+                    _with_emulated_file_search(_with_hoisted_additional_tools({**responses_request, "model": model}))
                 ),
                 custom_llm_provider,
                 policy.drop_params,

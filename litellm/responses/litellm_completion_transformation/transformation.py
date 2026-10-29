@@ -28,7 +28,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
+from openai.types.responses import ResponseComputerToolCall, ResponseFunctionToolCall, ResponseFunctionWebSearch
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
@@ -124,6 +124,13 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .claude_hosted_tools import (
+    claude_computer_member_call_message,
+    claude_tools_for_openai_hosted_tools,
+    is_computer_member_call,
+    openai_computer_call,
+    requests_openai_computer_use,
+)
 from .compaction_items import (
     carries_only_compaction,
     compaction_output_item,
@@ -168,6 +175,7 @@ from .tool_search import (
 NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
 NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
+_OPENAI_HOSTED_TOOL_TYPES_CLAUDE_RUNS: Final = frozenset({"computer_use_preview", "code_interpreter"})
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool | AnthropicToolSearchToolRegex
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
@@ -1025,6 +1033,16 @@ class LiteLLMCompletionResponsesConfig:
         return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
 
     @staticmethod
+    def _with_claude_equivalents_of_hosted_tools(
+        tools: ResponseTools, model: str, custom_llm_provider: str | None, drop_params: object
+    ) -> ResponseTools:
+        if not any(tool.get("type") in _OPENAI_HOSTED_TOOL_TYPES_CLAUDE_RUNS for tool in tools or ()):
+            return tools
+        if not provider_builds_anthropic_request(model, custom_llm_provider):
+            return tools
+        return claude_tools_for_openai_hosted_tools(tools or (), drops_unsupported_params(drop_params))
+
+    @staticmethod
     def _deferral_the_route_honors(
         tools: Sequence[ChatToolParam], callers_tools: ResponseTools, model: str, custom_llm_provider: str | None
     ) -> Sequence[ChatToolParam]:
@@ -1134,12 +1152,17 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
-        request_tools: Final = LiteLLMCompletionResponsesConfig._without_unsupported_tool_search(
-            LiteLLMCompletionResponsesConfig._without_malformed_tool_flags_when_dropping_params(
-                responses_api_request.get("tools") or [], drop_params
+        request_tools: Final = LiteLLMCompletionResponsesConfig._with_claude_equivalents_of_hosted_tools(
+            LiteLLMCompletionResponsesConfig._without_unsupported_tool_search(
+                LiteLLMCompletionResponsesConfig._without_malformed_tool_flags_when_dropping_params(
+                    responses_api_request.get("tools") or [], drop_params
+                ),
+                model=model,
+                custom_llm_provider=custom_llm_provider,
             ),
             model=model,
             custom_llm_provider=custom_llm_provider,
+            drop_params=drop_params,
         )
         (
             converted_tools,
@@ -2231,6 +2254,8 @@ class LiteLLMCompletionResponsesConfig:
                     tool_call_output=input_item
                 )
             )
+        elif input_item.get("type") == "computer_call":
+            return [claude_computer_member_call_message(input_item)]
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
             # handle function call input items
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
@@ -2426,7 +2451,7 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        return input_item.get("type") in ("function_call", "custom_tool_call", "computer_call")
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
@@ -2936,7 +2961,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]:
+    ) -> list[
+        ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
+        | CustomToolCallOutputItem
+        | OutputToolSearchCall
+        | ResponseComputerToolCall
+    ]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -2961,12 +2992,19 @@ class LiteLLMCompletionResponsesConfig:
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         tool_search_requested: Final = has_server_tool_search(request_tools)
+        computer_use_requested: Final = requests_openai_computer_use(request_tools)
 
         web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
             chat_completion_response
         )
         responses_tools: Final[
-            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]
+            list[
+                ResponseFunctionToolCall
+                | ResponseFunctionWebSearch
+                | CustomToolCallOutputItem
+                | OutputToolSearchCall
+                | ResponseComputerToolCall
+            ]
         ] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
@@ -2976,11 +3014,14 @@ class LiteLLMCompletionResponsesConfig:
                 tool_arguments = serialize_tool_call_arguments(function_definition.get("arguments"))
 
                 if (
-                    server_tool_call := LiteLLMCompletionResponsesConfig._server_tool_call_item(
+                    hosted_tool_call := LiteLLMCompletionResponsesConfig._server_tool_call_item(
                         tool_id, tool_name, tool_arguments, web_search_calls, tool_search_requested
                     )
+                    or LiteLLMCompletionResponsesConfig._computer_call_item(
+                        tool, tool_name, tool_arguments, computer_use_requested
+                    )
                 ) is not None:
-                    responses_tools.append(server_tool_call)
+                    responses_tools.append(hosted_tool_call)
                 elif is_custom_tool_call(tool_name, custom_tool_names):
                     # Build custom_tool_call output item
                     input_str = unwrap_custom_tool_arguments(tool_arguments)
@@ -3050,6 +3091,14 @@ class LiteLLMCompletionResponsesConfig:
         if tool_search_requested and is_anthropic_tool_search_use(tool_id, tool_name):
             return build_tool_search_call(tool_id, tool_arguments, "completed")
         return None
+
+    @staticmethod
+    def _computer_call_item(
+        tool: ChatCompletionMessageToolCall, tool_name: str, tool_arguments: str, computer_use_requested: bool
+    ) -> ResponseComputerToolCall | None:
+        if not computer_use_requested or not is_computer_member_call(tool):
+            return None
+        return openai_computer_call(tool.id or "", tool_name, tool_arguments, "completed")
 
     @staticmethod
     def _web_search_calls_by_call_id(
@@ -3325,6 +3374,7 @@ class LiteLLMCompletionResponsesConfig:
         | CustomToolCallOutputItem
         | OutputToolSearchCall
         | ResponseCompactionItem
+        | ResponseComputerToolCall
     ]:
         responses_output: list[
             GenericResponseOutputItem
@@ -3336,6 +3386,7 @@ class LiteLLMCompletionResponsesConfig:
             | CustomToolCallOutputItem
             | OutputToolSearchCall
             | ResponseCompactionItem
+            | ResponseComputerToolCall
         ] = []
 
         responses_output.extend(LiteLLMCompletionResponsesConfig._extract_compaction_output_items(choices))

@@ -53,6 +53,7 @@ except (ImportError, AttributeError):
 from typing import Annotated
 
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
+from openai.types.responses.response_computer_tool_call import ResponseComputerToolCall
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -665,6 +666,7 @@ class ChatCompletionToolCallChunk(TypedDict):  # result of /chat/completions cal
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
     index: int
+    provider_specific_fields: NotRequired[Mapping[str, builtins.object]]  # writable-ok: Gemini adds it to a built chunk
 
 
 class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
@@ -1571,6 +1573,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | CustomToolCallOutputItem
             | OutputToolSearchCall
             | ResponseCompactionItem
+            | ResponseComputerToolCall
         ]
     )
     parallel_tool_calls: bool | None = None

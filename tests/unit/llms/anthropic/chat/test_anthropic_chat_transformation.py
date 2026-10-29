@@ -9807,3 +9807,184 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
+
+
+_WHITE_PIXEL_DATA_URL: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+)
+
+
+def _toolset_member_reply(toolset_name: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=_anthropic_message_body(
+            [{"type": "tool_use", "id": "toolu_shot", "name": "screenshot", "toolset_name": toolset_name, "input": {}}],
+            "tool_use",
+        ),
+    )
+
+
+def _replayed_tool_call(tool_call: object, carries_provider_fields: bool) -> dict[str, object]:
+    plain: Final = {
+        "id": tool_call.id,
+        "type": "function",
+        "function": {"name": tool_call.function.name, "arguments": tool_call.function.arguments},
+    }
+    if not carries_provider_fields:
+        return plain
+    return {**plain, "provider_specific_fields": tool_call.provider_specific_fields}
+
+
+@pytest.mark.parametrize("carries_provider_fields", [True, False], ids=["replayed_as_returned", "replayed_plain"])
+@pytest.mark.parametrize(
+    "toolset_type, toolset_name",
+    [("computer_toolset_20260801", "computer"), ("browser_toolset_20260801", "browser")],
+)
+def test_claude_toolset_agent_loop_runs_two_turns_on_chat_completions(
+    respx_mock: respx.MockRouter, toolset_type: str, toolset_name: str, carries_provider_fields: bool
+):
+    """Anthropic requires the replayed tool_use and its tool_result to carry the same toolset_name
+    (platform.claude.com computer-use-tool, read 2026-10-28)."""
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_toolset_member_reply(toolset_name)
+    )
+    tools: Final = [{"type": toolset_type}]
+    user_turn: Final = {"role": "user", "content": "Take a screenshot first."}
+
+    first: Final = litellm.completion(
+        model="anthropic/claude-sonnet-5-5", api_key="mock_api_key", messages=[user_turn], tools=tools
+    )
+
+    first_request: Final = route.calls.last.request
+    assert json.loads(first_request.content)["tools"] == [{"type": toolset_type}]
+    assert "computer-use" not in first_request.headers.get("anthropic-beta", "")
+    tool_call: Final = first.choices[0].message.tool_calls[0]
+    assert (tool_call.function.name, tool_call.provider_specific_fields) == (
+        "screenshot",
+        {"toolset_name": toolset_name},
+    )
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        api_key="mock_api_key",
+        tools=tools,
+        messages=[
+            user_turn,
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_replayed_tool_call(tool_call, carries_provider_fields)],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": [{"type": "image_url", "image_url": {"url": _WHITE_PIXEL_DATA_URL}}],
+            },
+        ],
+    )
+
+    replayed_messages: Final = json.loads(route.calls.last.request.content)["messages"]
+    tool_use: Final = replayed_messages[1]["content"][0]
+    tool_result: Final = replayed_messages[2]["content"][0]
+    assert tool_use == {
+        "type": "tool_use",
+        "id": "toolu_shot",
+        "name": "screenshot",
+        "input": {},
+        "toolset_name": toolset_name,
+    }
+    assert (tool_result["type"], tool_result["tool_use_id"], tool_result["toolset_name"]) == (
+        "tool_result",
+        "toolu_shot",
+        toolset_name,
+    )
+    assert tool_result["content"][0]["type"] == "image"
+
+
+def test_plain_function_call_beside_a_toolset_is_not_given_a_toolset_name(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_toolset_member_reply("computer")
+    )
+    lookup_tool: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        api_key="mock_api_key",
+        tools=[{"type": "computer_toolset_20260801"}, lookup_tool],
+        messages=[
+            {"role": "user", "content": "Look it up, then take a screenshot."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "toolu_lookup", "type": "function", "function": {"name": "lookup", "arguments": "{}"}},
+                    {"id": "toolu_shot", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_lookup", "content": "found"},
+            {"role": "tool", "tool_call_id": "toolu_shot", "content": "done"},
+        ],
+    )
+
+    sent_messages: Final = json.loads(route.calls.last.request.content)["messages"]
+    toolset_name_by_block_id: Final = {
+        block.get("id", block.get("tool_use_id")): block.get("toolset_name")
+        for message in sent_messages[1:]
+        for block in message["content"]
+    }
+    assert toolset_name_by_block_id == {"toolu_lookup": None, "toolu_shot": "computer"}
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+        {"type": "file_search", "vector_store_ids": ["vs_1"]},
+        {"type": "image_generation"},
+    ],
+    ids=lambda tool: tool["type"],
+)
+def test_tool_type_claude_cannot_express_answers_400_naming_it_or_drops_under_drop_params(
+    respx_mock: respx.MockRouter, tool: dict[str, object]
+):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_toolset_member_reply("computer")
+    )
+    lookup_tool: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+    request: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "api_key": "mock_api_key",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [tool, lookup_tool],
+    }
+
+    with pytest.raises(litellm.exceptions.BadRequestError) as rejected:
+        litellm.completion(**request)
+
+    assert rejected.value.status_code == 400
+    assert f"`{tool['type']}`" in str(rejected.value)
+    assert route.call_count == 0
+
+    litellm.completion(**request, drop_params=True)
+
+    assert [sent_tool["name"] for sent_tool in json.loads(route.calls.last.request.content)["tools"]] == ["lookup"]
+
+
+def test_anthropic_shaped_tool_without_a_type_reaches_anthropic_as_sent(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "ok"}], "end_turn"))
+    )
+    lookup_tool: Final = {
+        "name": "lookup",
+        "description": "Look a word up.",
+        "input_schema": {"type": "object", "properties": {"word": {"type": "string"}}},
+    }
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Look up 'toolset'."}],
+        tools=[lookup_tool],
+    )
+
+    assert json.loads(route.calls.last.request.content)["tools"] == [lookup_tool]

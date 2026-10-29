@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -13,6 +14,7 @@ JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 TOKEN_COUNTING_BETA: Final = "token-counting-2024-11-01"
 ANTHROPIC_VERSION: Final = "2023-06-01"
 REJECTION: Final = 'messages.0: Unexpected role "system". The Messages API accepts a top-level `system` parameter'
+_VERSIONED_ANTHROPIC_TOOL_TYPE: Final = re.compile(r"[a-z_]+_\d{8}")
 
 USER_TEXT: Final = "Count this message"
 USER: Final[dict[str, JsonValue]] = {"role": "user", "content": USER_TEXT}
@@ -77,8 +79,26 @@ RESPONSES_TOOL_USE: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType
 )
 
 
+def _with_text_block_content(message: JsonValue) -> JsonValue:
+    # Anthropic count_tokens observed live on 2026-10-29: string content and the same text as one text block count the
+    # same tokens (18, 4129 with a computer toolset, 2875 with code_execution_20260521)
+    match message:
+        case {"content": str() as text}:
+            return {**message, "content": [{"type": "text", "text": text}]}
+        case _:
+            return message
+
+
 def counted_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    return {field: body[field] for field in ("messages", "system", "tools") if field in body}
+    messages: Final = body.get("messages")
+    return {
+        **{field: body[field] for field in ("system", "tools") if field in body},
+        **(
+            {"messages": [_with_text_block_content(message) for message in messages]}
+            if isinstance(messages, list)
+            else {}
+        ),
+    }
 
 
 REPORT_SCHEMA: Final[dict[str, JsonValue]] = {
@@ -195,7 +215,14 @@ def _conversation_message(message: JsonValue) -> bool:
 
 
 def _anthropic_tool(tool: JsonValue) -> bool:
-    return isinstance(tool, dict) and isinstance(tool.get("name"), str) and isinstance(tool.get("input_schema"), dict)
+    # Anthropic count_tokens observed live on 2026-10-29: a versioned server tool or client toolset (code_execution_20260521,
+    # computer_toolset_20260801) counts without an input_schema, while computer_use_preview answers 400
+    if not isinstance(tool, dict):
+        return False
+    tool_type: Final = tool.get("type")
+    if isinstance(tool_type, str) and _VERSIONED_ANTHROPIC_TOOL_TYPE.fullmatch(tool_type):
+        return True
+    return isinstance(tool.get("name"), str) and isinstance(tool.get("input_schema"), dict)
 
 
 def accepts_count_body(body: Mapping[str, JsonValue]) -> bool:

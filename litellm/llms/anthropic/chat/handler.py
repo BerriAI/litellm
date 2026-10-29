@@ -70,7 +70,12 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
-from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
+from .transformation import (
+    ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY,
+    AnthropicConfig,
+    JsonModeRequest,
+    openai_tool_call_chunk,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1012,14 +1017,12 @@ class ModelResponseIterator:
                     # Use empty string for arguments in content_block_start - actual arguments
                     # come in subsequent content_block_delta chunks and get accumulated.
                     # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=content_block_start["content_block"]["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=_stream_tool_name,
-                            arguments="",
-                        ),
+                    tool_use = openai_tool_call_chunk(
+                        tool_id=content_block_start["content_block"]["id"],
+                        name=_stream_tool_name,
+                        arguments="",
                         index=self.tool_index,
+                        content_block=content_block_start["content_block"],
                     )
                     # Track server tool use inputs for code_interpreter_results.
                     # The initial input in content_block_start is typically {}

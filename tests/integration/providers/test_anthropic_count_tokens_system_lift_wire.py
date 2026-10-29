@@ -617,6 +617,16 @@ _REWRITTEN_TOOL_USE: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyTyp
                 {"type": "additional_tools", "tools": RESPONSES_TOOLS},
             ],
         },
+        "computer-use-preview": {
+            "input": WEATHER_QUESTION,
+            "tools": [
+                {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"}
+            ],
+        },
+        "code-interpreter": {
+            "input": WEATHER_QUESTION,
+            "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        },
     }
 )
 
@@ -702,12 +712,6 @@ def test_responses_input_tokens_leaves_out_the_cache_marks_responses_inference_s
 
 _UNCOUNTABLE_TOOLS: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
     {
-        "computer_use_preview": {
-            "type": "computer_use_preview",
-            "display_width": 1024,
-            "display_height": 768,
-            "environment": "browser",
-        },
         "mcp": {
             "type": "mcp",
             "server_label": "docs",

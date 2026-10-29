@@ -23,7 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -60,6 +61,7 @@ from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_CLIENT_TOOLSET_PREFIXES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicPassThroughMessageValues,
@@ -187,6 +189,43 @@ def _is_openai_tool_search_tool(tool: object) -> bool:
 
 def _is_anthropic_tool_search_tool(tool: object) -> bool:
     return _tool_type(tool) in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def is_anthropic_client_toolset(tool: object) -> bool:
+    tool_type: Final = _tool_type(tool)
+    return tool_type is not None and tool_type.startswith(ANTHROPIC_CLIENT_TOOLSET_PREFIXES)
+
+
+_TOOL_TYPES_ANTHROPIC_EXPRESSES: Final = frozenset(
+    {
+        "function",
+        "custom",
+        "namespace",
+        "url",
+        "mcp",
+        "tool_search_tool_regex_20251119",
+        "tool_search_tool_bm25_20251119",
+        ANTHROPIC_ADVISOR_TOOL_TYPE,
+    }
+)
+_TOOL_TYPE_PREFIXES_ANTHROPIC_EXPRESSES: Final = (
+    *ANTHROPIC_CLIENT_TOOLSET_PREFIXES,
+    *(hosted_tool.value for hosted_tool in ANTHROPIC_HOSTED_TOOLS),
+)
+
+
+def _anthropic_expresses_tool_type(tool_type: str) -> bool:
+    return tool_type in _TOOL_TYPES_ANTHROPIC_EXPRESSES or tool_type.startswith(_TOOL_TYPE_PREFIXES_ANTHROPIC_EXPRESSES)
+
+
+def _tool_type_anthropic_cannot_express(tool: object) -> str | None:
+    match as_str_mapping(tool):
+        case {"type": str() as tool_type, "function": _} if tool_type.startswith("computer_"):
+            return None
+        case {"type": str() as tool_type} if not _anthropic_expresses_tool_type(tool_type):
+            return tool_type
+        case _:
+            return None
 
 
 def _without_defer_loading(fields: object) -> object:
@@ -427,6 +466,50 @@ TOOL_SEARCH_MODEL_INFO_REMEDY: Final = (
 )
 
 
+DROP_UNEXPRESSIBLE_TOOLS_WARNING: Final = (
+    "Dropping the %s tool(s) for model=%s on %s (drop_params=True) because Claude has no equivalent of them."
+)
+
+
+def tools_anthropic_can_express(tools: Sequence[object], model: str, route: str, drop_params: bool) -> Sequence[object]:
+    unexpressible_types: Final = tuple(
+        dict.fromkeys(
+            tool_type for tool in tools if (tool_type := _tool_type_anthropic_cannot_express(tool)) is not None
+        )
+    )
+    if not unexpressible_types:
+        return tools
+    named_types: Final = ", ".join(f"`{tool_type}`" for tool_type in unexpressible_types)
+    if not (litellm.drop_params or drop_params):
+        raise litellm.utils.UnsupportedParamsError(
+            message=(
+                f"{model} on {route} does not support the {named_types} tool type, since Claude has no "
+                "equivalent of it. To drop it, set `litellm.drop_params=True` or for proxy:\n\n"
+                "`litellm_settings:\n drop_params: true`\n"
+            ),
+            status_code=400,
+        )
+    litellm.verbose_logger.warning(DROP_UNEXPRESSIBLE_TOOLS_WARNING, named_types, model, route)
+    return [tool for tool in tools if _tool_type_anthropic_cannot_express(tool) is None]
+
+
+def openai_tool_call_chunk(
+    tool_id: str, name: str, arguments: str, index: int, content_block: Mapping[str, object]
+) -> ChatCompletionToolCallChunk:
+    function: Final = ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments)
+    match content_block.get("toolset_name"):
+        case str() as toolset_name:
+            return ChatCompletionToolCallChunk(
+                id=tool_id,
+                type="function",
+                function=function,
+                index=index,
+                provider_specific_fields={"toolset_name": toolset_name},
+            )
+        case _:
+            return ChatCompletionToolCallChunk(id=tool_id, type="function", function=function, index=index)
+
+
 def tools_without_unsupported_tool_search(
     tools: Sequence[object], model: str, route: str, drop_params: bool, remedy: str
 ) -> Sequence[object]:
@@ -533,14 +616,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Returns:
             ChatCompletionToolCallChunk in OpenAI format
         """
-        tool_call: Final = ChatCompletionToolCallChunk(
-            id=anthropic_tool_content["id"],
-            type="function",
-            function=ChatCompletionToolCallFunctionChunk(
-                name=anthropic_tool_content["name"],
-                arguments=json.dumps(anthropic_tool_content["input"]),
-            ),
+        tool_call: Final = openai_tool_call_chunk(
+            tool_id=anthropic_tool_content["id"],
+            name=anthropic_tool_content["name"],
+            arguments=json.dumps(anthropic_tool_content["input"]),
             index=index,
+            content_block=anthropic_tool_content,
         )
         # Include caller information if present (for programmatic tool calling)
         if "caller" in anthropic_tool_content:
@@ -1281,7 +1362,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             anthropic_tools.append(nested_tool)
                         if nested_mcp is not None:
                             mcp_servers.append(nested_mcp)
-            elif "input_schema" in tool:  # assume in anthropic format
+            elif "input_schema" in tool or is_anthropic_client_toolset(tool):
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
                 new_tool, mcp_server_tool = self._map_tool_helper(tool)
@@ -1838,7 +1919,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
                 anthropic_tools, mcp_servers = self._map_tools(
-                    list(self._tools_with_openai_tool_search_mapped(tools=value, model=model, drop_params=drop_params))
+                    list(
+                        tools_anthropic_can_express(
+                            tools=self._tools_with_openai_tool_search_mapped(
+                                tools=value, model=model, drop_params=drop_params
+                            ),
+                            model=model,
+                            route=self._resolved_provider,
+                            drop_params=drop_params,
+                        )
+                    )
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
@@ -2348,6 +2438,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model, custom_llm_provider=self.custom_llm_provider
             ),
         )
+        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
+            dict[str, object], optional_params
+        )
         # Format rest of message according to anthropic guidelines
         try:
             anthropic_messages = anthropic_messages_pt(
@@ -2355,6 +2448,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 messages=list(conversation),
                 llm_provider=self._resolved_provider,
                 drop_params=drop_params,
+                tools=parts_of(request_params.get("tools")),
             )
         except Exception as e:
             raise AnthropicError(
@@ -2415,9 +2509,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
-        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
-            dict[str, object], optional_params
-        )
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
