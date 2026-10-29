@@ -3,7 +3,7 @@ import builtins
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import chain, groupby
+from itertools import chain, groupby, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
 
@@ -1566,8 +1566,10 @@ def _narrowed_to_choice(chunks: Sequence[_BaseChunk], index: int) -> tuple[_Base
     )
 
 
-def _joined_simple_text(chunks: Sequence[_BaseChunk]) -> str:
-    return "".join(_simple_text_part(chunk["choices"]) or "" for chunk in chunks if chunk.get("choices"))
+def _simple_text(chunks: Sequence[_BaseChunk]) -> str | None:
+    choices_per_chunk: Final = tuple(chunk["choices"] for chunk in chunks if chunk.get("choices"))
+    parts: Final = tuple(takewhile(lambda part: part is not None, map(_simple_text_part, choices_per_chunk)))
+    return "".join(filter(None, parts)) if len(parts) == len(choices_per_chunk) else None
 
 
 def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> Iterator[tuple[str, object]]:
@@ -1759,12 +1761,10 @@ def stream_chunk_builder(
         response: Final = processor.build_base_response(chunks, choice_streams)
         rebuilt_choices: Final = tuple(zip(response.choices, (choice_chunks for _, choice_chunks in choice_streams)))
 
-        is_simple_text_stream: Final = all(
-            _simple_text_part(chunk["choices"]) is not None for chunk in chunks if chunk.get("choices")
-        )
-        if is_simple_text_stream:
-            for choice, choice_chunks in rebuilt_choices:
-                if simple_text := _joined_simple_text(choice_chunks):
+        simple_texts: Final = tuple(_simple_text(choice_chunks) for _, choice_chunks in choice_streams)
+        if None not in simple_texts:
+            for (choice, _), simple_text in zip(rebuilt_choices, simple_texts):
+                if simple_text:
                     choice.message.content = simple_text
             completion_output = get_content_from_model_response(response)
             usage = processor.calculate_usage(

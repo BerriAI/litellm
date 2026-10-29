@@ -431,6 +431,41 @@ class TestToolPermissionGuardrail:
         assert "berri" in choice.message.content
 
     @pytest.mark.asyncio
+    async def test_rewrite_denies_only_the_choice_whose_call_is_denied_when_choices_share_a_call_id(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="choice-guardrail",
+            rules=[{"id": "deny_bash", "tool_name": "Bash", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=index,
+                    finish_reason="tool_calls",
+                    message={
+                        "tool_calls": [
+                            {"id": "call_shared", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                        ]
+                    },
+                )
+                for index, name in enumerate(("Bash", "Read"))
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={"guardrails": ["choice-guardrail"]}, user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+
+        kept: Final = [
+            [tool_call.function.name for tool_call in choice.message.tool_calls or ()]
+            for choice in response.choices
+            if isinstance(choice, Choices)
+        ]
+        assert kept == [[], ["Read"]]
+
+    @pytest.mark.asyncio
     async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
         self,
     ):
