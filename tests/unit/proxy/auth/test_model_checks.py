@@ -1248,7 +1248,7 @@ def _openai_catalog_behind_a_catch_all(
         ("model_name_team-x_gpt-4o", {"team_id": "team-x", "team_public_model_name": "gpt-4o"}, "team-x"),
     ],
 )
-def test_catch_all_wildcard_never_lists_a_name_a_concrete_deployment_serves(
+def test_catch_all_wildcard_lists_a_name_a_concrete_deployment_serves_once(
     monkeypatch: pytest.MonkeyPatch, concrete_name: str, concrete_model_info: Mapping[str, str], team_id: str | None
 ) -> None:
     from litellm.proxy.auth.model_checks import get_complete_model_list
@@ -1280,6 +1280,64 @@ def test_catch_all_wildcard_model_info_keeps_only_the_concrete_row_for_a_deploye
     assert sorted((row["model_name"], row["litellm_params"]["model"]) for row in rows) == [
         ("gpt-4o", "openrouter/openai/gpt-4o"),
         ("gpt-4o-mini", "openai/gpt-4o-mini"),
+    ]
+
+
+@contextmanager
+def _openrouter_catalog_beside_a_named_deployment(
+    monkeypatch: pytest.MonkeyPatch, wildcard_name: str, named: str
+) -> Generator[Router, None, None]:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.get("https://openrouter.ai/api/v1/models/user").mock(
+            return_value=httpx.Response(
+                200, json={"data": [{"id": "openai/gpt-5.4-mini"}, {"id": "anthropic/claude-haiku-5-5"}]}
+            )
+        )
+        yield Router(
+            model_list=[
+                {
+                    "model_name": wildcard_name,
+                    "litellm_params": {"model": "openrouter/*", "api_key": f"sk-or-wildcard-{wildcard_name}"},
+                },
+                {
+                    "model_name": named,
+                    "litellm_params": {"model": "openrouter/openai/gpt-5.4-mini", "api_key": "sk-or-named"},
+                },
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("wildcard_name", "named"),
+    [("openrouter/*", "openrouter/openai/gpt-5.4-mini"), ("or-team/*", "or-team/openai/gpt-5.4-mini")],
+)
+def test_provider_wildcard_lists_a_name_a_named_deployment_serves_once(
+    monkeypatch: pytest.MonkeyPatch, wildcard_name: str, named: str
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    with _openrouter_catalog_beside_a_named_deployment(monkeypatch, wildcard_name, named) as router:
+        listed: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=list(router.model_names),
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        rows: Final = expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or ()], llm_router=router
+        )
+
+    vendor_prefix: Final = wildcard_name.removesuffix("*")
+    assert sorted(listed) == [f"{vendor_prefix}anthropic/claude-haiku-5-5", named]
+    assert sorted((row["model_name"], row["litellm_params"]["api_key"]) for row in rows) == [
+        (f"{vendor_prefix}anthropic/claude-haiku-5-5", f"sk-or-wildcard-{wildcard_name}"),
+        (named, "sk-or-named"),
     ]
 
 

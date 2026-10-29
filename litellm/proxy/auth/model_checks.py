@@ -267,9 +267,7 @@ def get_complete_model_list(
         expand_wildcard_routes=expand_wildcard_routes,
     )
 
-    complete_model_list: Final = unique_models + all_wildcard_models
-
-    return complete_model_list
+    return list(dict.fromkeys(unique_models + all_wildcard_models))
 
 
 def _hydrate_litellm_credential_name(
@@ -399,18 +397,15 @@ def _deployment_team_id(deployment: Mapping[str, object]) -> str | None:
 
 
 def _cached_wildcard_routing(llm_router: Router | None) -> Callable[[str, str | None], frozenset[str]] | None:
+    return None if llm_router is None else functools.cache(llm_router.wildcard_routed_models)
+
+
+def _deployed_by_name(llm_router: Router | None) -> Callable[[str, str | None], bool]:
     if llm_router is None:
-        return None
+        return lambda _model, _team_id: False
     deployed_names: Final = frozenset(llm_router.model_names)
     team_deployed_names: Final = frozenset(llm_router.team_model_to_deployment_indices)
-    wildcard_routed_models: Final = llm_router.wildcard_routed_models
-
-    def routed_models(model: str, team_id: str | None) -> frozenset[str]:
-        if model in deployed_names or (team_id, model) in team_deployed_names:
-            return frozenset()
-        return wildcard_routed_models(model, team_id)
-
-    return functools.cache(routed_models)
+    return lambda model, team_id: model in deployed_names or (team_id, model) in team_deployed_names
 
 
 def _routes_to_model(
@@ -522,6 +517,25 @@ def _routed_deployment_model(name_pattern: str, listed_name: str, deployment_mod
     )
 
 
+def _names_listed_under_wildcard(
+    deployment: Mapping[str, object],
+    wildcard_pattern: str,
+    litellm_params: LiteLLM_Params | None,
+    routed_models: Callable[[str, str | None], frozenset[str]] | None,
+    deployed_by_name: Callable[[str, str | None], bool],
+) -> tuple[str, ...]:
+    team_id: Final = _deployment_team_id(deployment)
+    return tuple(
+        name
+        for name in get_known_models_from_wildcard(
+            wildcard_model=wildcard_pattern,
+            litellm_params=litellm_params,
+            routes_to_model=_routes_to_model(routed_models, team_id),
+        )
+        if not deployed_by_name(name, team_id)
+    )
+
+
 def expand_wildcard_deployments_for_model_info(
     deployments: list[dict[str, object]],
     llm_router: Router | None = None,
@@ -535,6 +549,7 @@ def expand_wildcard_deployments_for_model_info(
     """
     expanded: Final[list[dict[str, object]]] = []
     routed_models: Final = _cached_wildcard_routing(llm_router)
+    deployed_by_name: Final = _deployed_by_name(llm_router)
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
@@ -559,10 +574,8 @@ def expand_wildcard_deployments_for_model_info(
         except Exception:
             expanded.append(deployment)
             continue
-        expanded_names = get_known_models_from_wildcard(
-            wildcard_model=wildcard_pattern,
-            litellm_params=litellm_params,
-            routes_to_model=_routes_to_model(routed_models, _deployment_team_id(deployment)),
+        expanded_names = _names_listed_under_wildcard(
+            deployment, wildcard_pattern, litellm_params, routed_models, deployed_by_name
         )
         if not expanded_names:
             expanded.append(deployment)
