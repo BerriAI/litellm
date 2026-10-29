@@ -2,6 +2,8 @@ import asyncio
 import base64
 import importlib
 import os
+import shutil
+import tempfile
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -215,6 +217,38 @@ def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     _reset_aws_auth_caches()
+
+
+_MACOS_LONGEST_SOCKET_PATH: Final = 103
+_LONGEST_SOCKET_SUFFIX: Final = len("/sock12345678/d/litellm-pgbouncer-12345678/.s.PGSQL.65535")
+
+
+def _socket_root() -> str:
+    default: Final = tempfile.gettempdir()
+    fits: Final = len(os.fsencode(default)) + _LONGEST_SOCKET_SUFFIX <= _MACOS_LONGEST_SOCKET_PATH
+    return default if fits else "/tmp"
+
+
+@pytest.fixture
+def socket_dir(tmp_path: Path) -> Iterator[Path]:
+    """``tmp_path`` behind a short link, so unix socket paths fit the sun_path limit that it exceeds on macOS."""
+    link_dir: Final = Path(tempfile.mkdtemp(prefix="sock", dir=_socket_root()))
+    link: Final = link_dir / "d"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    yield link
+    shutil.rmtree(link_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def socket_path(socket_dir: Path) -> Path:
+    return socket_dir / "spend.sock"
+
+
+@pytest.fixture
+def socket_tempdir(socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point ``tempfile``'s default directory at ``socket_dir``, for code that picks its own socket directory."""
+    monkeypatch.setattr(tempfile, "tempdir", str(socket_dir))
+    return socket_dir
 
 
 @pytest.fixture(autouse=True, scope="session")
