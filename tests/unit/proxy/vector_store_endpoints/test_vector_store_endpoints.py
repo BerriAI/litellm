@@ -3036,14 +3036,21 @@ class TestAzureAIAnalyzeNamedIndexClassification:
 
 @pytest.mark.parametrize(
     "blocked_key",
-    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
+    [
+        "embedding_model",
+        "litellm_embedding_model",
+        "litellm_embedding_config",
+        "litellm_credential_name",
+        "opensearch_index_name",
+    ],
 )
-def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_key):
+def test_vector_store_search_rejects_caller_store_selection_params(blocked_key):
     """
-    Regression: the search request body must not pick the embedding model or
-    credential used to embed the query. Those resolve through the Router with
-    the proxy's credentials, bypassing the key's model permissions, so they may
-    only come from the managed store's server-side registration.
+    Regression: the search request body must not pick the embedding model,
+    credential, or index used to search. The model and credential resolve through
+    the Router with the proxy's credentials, bypassing the key's model permissions,
+    and the index can be one no store grants the key, so they may only come from
+    the managed store's server-side registration.
     """
     from fastapi.testclient import TestClient
 
