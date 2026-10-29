@@ -30,7 +30,7 @@ import time
 import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
-from functools import lru_cache, wraps
+from functools import lru_cache, partial, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -2684,48 +2684,67 @@ _HuggingFaceTokenizerKey: TypeAlias = tuple[HuggingFaceTokenizerKind, Decision]
 _HuggingFaceTokenizerLoadOutcome: TypeAlias = _HuggingFaceTokenizerLoaded | _HuggingFaceTokenizerLoadFailure
 
 
+def _start_in_daemon_thread(work: Callable[[], None]) -> None:
+    threading.Thread(target=work, name="litellm-huggingface-tokenizer-retry", daemon=True).start()
+
+
 @dataclass(slots=True)
 class _HuggingFaceTokenizerLoadOutcomes:
+    clock: Callable[[], float] = time.monotonic
+    start_retry: Callable[[Callable[[], None]], None] = _start_in_daemon_thread
     lock: threading.Lock = field(default_factory=threading.Lock)
     by_tokenizer: Mapping[_HuggingFaceTokenizerKey, _HuggingFaceTokenizerLoadOutcome] = field(
         default_factory=lambda: MappingProxyType({})
     )
 
-    def claim(self, key: _HuggingFaceTokenizerKey) -> _HuggingFaceTokenizerLoadOutcome | None:
+    def known(
+        self, key: _HuggingFaceTokenizerKey, retry_when_due: Callable[[], None]
+    ) -> _HuggingFaceTokenizerLoadOutcome | None:
         with self.lock:
             known: Final = self.by_tokenizer.get(key)
-            now: Final = time.monotonic()
-            match known:
-                case _HuggingFaceTokenizerLoadFailure(retry_at=retry_at, retrying=False) if now >= retry_at:
-                    self._remember(key, replace(known, retrying=True))
-                    return None
-                case _:
-                    return known
+            if (
+                not isinstance(known, _HuggingFaceTokenizerLoadFailure)
+                or known.retrying
+                or self.clock() < known.retry_at
+            ):
+                return known
+            retrying: Final = replace(known, retrying=True)
+            self._remember(key, retrying)
+        self.start_retry(retry_when_due)
+        return retrying
 
-    def remember_loaded(self, key: _HuggingFaceTokenizerKey, tokenizer: HuggingFace) -> None:
+    def remember_loaded(self, key: _HuggingFaceTokenizerKey, tokenizer: HuggingFace) -> _HuggingFaceTokenizerLoaded:
+        loaded: Final = _HuggingFaceTokenizerLoaded(tokenizer)
         with self.lock:
-            self._remember(key, _HuggingFaceTokenizerLoaded(tokenizer))
+            self._remember(key, loaded)
+        return loaded
 
-    def remember_failure(self, key: _HuggingFaceTokenizerKey, reason: str) -> _HuggingFaceTokenizerLoadOutcome:
-        failure: Final = _HuggingFaceTokenizerLoadFailure(
-            reason=reason, retry_at=time.monotonic() + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
-        )
+    def remember_first_failure(self, key: _HuggingFaceTokenizerKey, reason: str) -> _HuggingFaceTokenizerLoadOutcome:
+        with self.lock:
+            known: Final = self.by_tokenizer.get(key)
+            if known is not None:
+                return known
+            failure: Final = self._failure(reason)
+            self._remember(key, failure)
+            return failure
+
+    def remember_failed_retry(self, key: _HuggingFaceTokenizerKey, reason: str) -> _HuggingFaceTokenizerLoadOutcome:
         with self.lock:
             known: Final = self.by_tokenizer.get(key)
             if isinstance(known, _HuggingFaceTokenizerLoaded):
                 return known
+            failure: Final = self._failure(reason)
             self._remember(key, failure)
-        return failure
-
-    def end_retry(self, key: _HuggingFaceTokenizerKey) -> None:
-        with self.lock:
-            known: Final = self.by_tokenizer.get(key)
-            if isinstance(known, _HuggingFaceTokenizerLoadFailure) and known.retrying:
-                self._remember(key, replace(known, retrying=False))
+            return failure
 
     def flush_cache(self) -> None:
         with self.lock:
             self.by_tokenizer = MappingProxyType({})
+
+    def _failure(self, reason: str) -> _HuggingFaceTokenizerLoadFailure:
+        return _HuggingFaceTokenizerLoadFailure(
+            reason=reason, retry_at=self.clock() + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        )
 
     def _remember(self, key: _HuggingFaceTokenizerKey, outcome: _HuggingFaceTokenizerLoadOutcome) -> None:
         self.by_tokenizer = MappingProxyType({**self.by_tokenizer, key: outcome})
@@ -2743,24 +2762,25 @@ def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
     )
 
 
-def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
+def _return_huggingface_tokenizer(
+    model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
         return None
-    backend: Final = _huggingface_tokenizer_backend()
+    key: Final = (kind, _huggingface_tokenizer_backend())
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        known: Final = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.claim((kind, backend))
-        if isinstance(known, _HuggingFaceTokenizerLoadFailure):
-            return known
-        tokenizer: Final = (
-            known.tokenizer
-            if isinstance(known, _HuggingFaceTokenizerLoaded)
-            else _load_huggingface_tokenizer_remembering_outcome(kind, backend)
+        known: Final = outcomes.known(key, partial(_retry_huggingface_tokenizer_load, model, key, outcomes))
+        outcome: Final = (
+            known
+            if known is not None
+            else _load_huggingface_tokenizer_remembering_outcome(model, key, outcomes, outcomes.remember_first_failure)
         )
-    if isinstance(tokenizer, _HuggingFaceTokenizerLoadFailure):
-        _warn_huggingface_tokenizer_fallback(model, tokenizer.reason)
-        return tokenizer
-    return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    match outcome:
+        case _HuggingFaceTokenizerLoaded(tokenizer=tokenizer):
+            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+        case _HuggingFaceTokenizerLoadFailure():
+            return outcome
 
 
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
@@ -2784,9 +2804,12 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
 
 
 def _load_huggingface_tokenizer_remembering_outcome(
-    kind: HuggingFaceTokenizerKind, backend: Decision
-) -> HuggingFace | _HuggingFaceTokenizerLoadFailure:
-    key: Final = (kind, backend)
+    model: str,
+    key: _HuggingFaceTokenizerKey,
+    outcomes: _HuggingFaceTokenizerLoadOutcomes,
+    remember_failure: Callable[[_HuggingFaceTokenizerKey, str], _HuggingFaceTokenizerLoadOutcome],
+) -> _HuggingFaceTokenizerLoadOutcome:
+    kind, _ = key
     try:
         tokenizer: Final = _load_huggingface_tokenizer(kind)
     except Exception as error:
@@ -2794,13 +2817,22 @@ def _load_huggingface_tokenizer_remembering_outcome(
 
         if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
-        outcome: Final = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.remember_failure(key, str(error))
-        return outcome.tokenizer if isinstance(outcome, _HuggingFaceTokenizerLoaded) else outcome
-    else:
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.remember_loaded(key, tokenizer)
-        return tokenizer
-    finally:
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.end_retry(key)
+        outcome: Final = remember_failure(key, str(error))
+        if isinstance(outcome, _HuggingFaceTokenizerLoadFailure):
+            _warn_huggingface_tokenizer_fallback(model, outcome.reason)
+        return outcome
+    return outcomes.remember_loaded(key, tokenizer)
+
+
+def _retry_huggingface_tokenizer_load(
+    model: str, key: _HuggingFaceTokenizerKey, outcomes: _HuggingFaceTokenizerLoadOutcomes
+) -> None:
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+    try:
+        _load_huggingface_tokenizer_remembering_outcome(model, key, outcomes, outcomes.remember_failed_retry)
+    except (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking) as error:
+        outcomes.remember_failed_retry(key, str(error))
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):

@@ -978,6 +978,9 @@ import unittest
 
 from litellm.utils import (
     _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
+    _HuggingFaceTokenizerLoadFailure,
+    _HuggingFaceTokenizerLoadOutcomes,
+    _return_huggingface_tokenizer,
     _select_tokenizer_helper,
     claude_json_str,
     encoding,
@@ -1085,56 +1088,19 @@ class TestTokenizerSelection(unittest.TestCase):
     ):
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
         try:
-            with patch("litellm.utils.time.monotonic", return_value=0.0):
-                mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
-                model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-                text: Final = "Count the tokens for this message."
-                expected: Final = len(encoding.encode(text, disallowed_special=()))
-
-                first_count: Final = litellm.token_counter(model=model, text=text)
-                first_attempts: Final = mock_from_pretrained.call_count
-                second_count: Final = litellm.token_counter(model=model, text=text)
-
-                assert first_attempts > 0
-                assert mock_from_pretrained.call_count == first_attempts
-                assert first_count == expected
-                assert second_count == expected
-        finally:
-            _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
-
-    @patch("litellm.utils.time.monotonic", return_value=299.0)
-    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
-    def test_failed_huggingface_tokenizer_download_is_retried_after_retry_window(
-        self, mock_from_pretrained: MagicMock, mock_monotonic: MagicMock
-    ):
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
-        try:
-            def from_pretrained_side_effect(_: str) -> object:
-                if mock_from_pretrained.call_count == 1:
-                    mock_monotonic.return_value = 322.0
-                    raise RuntimeError("HF unavailable")
-                return sentinel.tokenizer
-
-            mock_from_pretrained.side_effect = from_pretrained_side_effect
+            mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
             model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+            text: Final = "Count the tokens for this message."
+            expected: Final = len(encoding.encode(text, disallowed_special=()))
 
-            first_result: Final = _select_tokenizer_helper(model)
-            assert first_result["type"] == "openai_tokenizer"
-            mock_monotonic.return_value = 323.0
-            second_result: Final = _select_tokenizer_helper(model)
-            assert second_result["type"] == "openai_tokenizer", "tokenizer was retried at t=323"
-            assert mock_from_pretrained.call_count == 1
+            first_count: Final = litellm.token_counter(model=model, text=text)
+            first_attempts: Final = mock_from_pretrained.call_count
+            second_count: Final = litellm.token_counter(model=model, text=text)
 
-            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 1
-            third_result: Final = _select_tokenizer_helper(model)
-            assert third_result["type"] == "openai_tokenizer"
-            assert mock_from_pretrained.call_count == 1
-
-            mock_monotonic.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1
-            retried_result: Final = _select_tokenizer_helper(model)
-            assert retried_result["type"] == "huggingface_tokenizer"
-            assert retried_result["tokenizer"] is sentinel.tokenizer
-            assert mock_from_pretrained.call_count == 2
+            assert first_attempts > 0
+            assert mock_from_pretrained.call_count == first_attempts
+            assert first_count == expected
+            assert second_count == expected
         finally:
             _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
@@ -1298,128 +1264,212 @@ def test_loaded_tokenizer_serves_later_counts_without_downloading_it_again():
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
-def test_counts_during_a_retry_after_the_window_use_tiktoken_instead_of_downloading_again():
-    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+def _run_now(retry: Callable[[], None]) -> None:
+    retry()
+
+
+def _start_retry_resolving(ended: Future[None]) -> Callable[[Callable[[], None]], None]:
+    def start(retry: Callable[[], None]) -> None:
+        def run_then_resolve() -> None:
+            retry()
+            ended.set_result(None)
+
+        threading.Thread(target=run_then_resolve, daemon=True).start()
+
+    return start
+
+
+def _eventually(probe: Callable[[], bool]) -> bool:
+    deadline: Final = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if probe():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_failed_download_is_retried_once_per_window_until_it_loads():
     model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-    retry_started: Final = threading.Event()
-    other_counts_finished: Final = threading.Event()
+    clock: Final = MagicMock(return_value=299.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_run_now)
 
     def download(_: str) -> object:
-        if threading.current_thread().name.startswith("retry"):
-            retry_started.set()
-            other_counts_finished.wait(timeout=5)
-            return sentinel.tokenizer
-        raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 1:
+            clock.return_value = 322.0
+            raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF rate limited")
+        return sentinel.tokenizer
 
-    try:
-        with (
-            patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
-            patch("litellm.utils.time.monotonic", return_value=0.0) as clock,
-        ):
-            first_type: Final = _select_tokenizer_helper(model)["type"]
-            clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="retry") as pool:
-                retry: Final = pool.submit(_select_tokenizer_helper, model)
-                assert retry_started.wait(timeout=5)
-                types_during_retry: Final = tuple(_select_tokenizer_helper(model)["type"] for _ in range(3))
-                other_counts_finished.set()
-                retried: Final = retry.result(timeout=5)
-            downloads: Final = from_pretrained.call_count
-        assert first_type == "openai_tokenizer"
-        assert types_during_retry == ("openai_tokenizer",) * 3
-        assert downloads == 2
-        assert retried["tokenizer"] is sentinel.tokenizer
-    finally:
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained:
+        first: Final = _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS - 1
+        inside_the_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        downloads_inside_the_window: Final = from_pretrained.call_count
+        clock.return_value = 322.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        claimant: Final = _return_huggingface_tokenizer(model, outcomes)
+        inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        downloads_inside_the_next_window: Final = from_pretrained.call_count
+        clock.return_value = 322.0 + 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        after_the_second_retry: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert isinstance(first, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_window, _HuggingFaceTokenizerLoadFailure)
+    assert downloads_inside_the_window == 1
+    assert isinstance(claimant, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert downloads_inside_the_next_window == 2
+    assert from_pretrained.call_count == 3
+    assert after_the_second_retry == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
-def test_retry_slower_than_the_window_stays_the_only_download_until_it_ends():
-    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+def test_retry_after_the_window_runs_in_the_background_while_every_count_answers_at_once():
     model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock)
     retry_started: Final = threading.Event()
-    other_counts_finished: Final = threading.Event()
-
-    def download(_: str) -> object:
-        if threading.current_thread().name.startswith("retry"):
-            retry_started.set()
-            other_counts_finished.wait(timeout=5)
-            return sentinel.tokenizer
-        raise RuntimeError("HF unavailable")
-
-    try:
-        with (
-            patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
-            patch("litellm.utils.time.monotonic", return_value=0.0) as clock,
-        ):
-            _select_tokenizer_helper(model)
-            clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
-            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="retry") as pool:
-                retry: Final = pool.submit(_select_tokenizer_helper, model)
-                assert retry_started.wait(timeout=5)
-                clock.return_value = 5 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
-                types_while_retry_runs: Final = tuple(_select_tokenizer_helper(model)["type"] for _ in range(3))
-                downloads_while_retry_runs: Final = from_pretrained.call_count
-                other_counts_finished.set()
-                retried: Final = retry.result(timeout=5)
-        assert types_while_retry_runs == ("openai_tokenizer",) * 3
-        assert downloads_while_retry_runs == 2
-        assert retried["tokenizer"] is sentinel.tokenizer
-    finally:
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
-
-
-def test_fork_guard_error_during_a_retry_leaves_the_next_count_free_to_retry():
-    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-
-    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
-    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-    try:
-        with (
-            patch(
-                "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
-            ) as from_pretrained,
-            patch("litellm.utils.time.monotonic", return_value=0.0) as clock,
-        ):
-            _select_tokenizer_helper(model)
-            clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
-            from_pretrained.side_effect = ForkedAfterNativeRuntimeStarted("native runtime started before fork")
-            with pytest.raises(ForkedAfterNativeRuntimeStarted):
-                _select_tokenizer_helper(model)
-            from_pretrained.side_effect = None
-            from_pretrained.return_value = sentinel.tokenizer
-            retried: Final = _select_tokenizer_helper(model)
-        assert retried["tokenizer"] is sentinel.tokenizer
-    finally:
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
-
-
-def test_counts_after_an_idle_stretch_of_several_windows_still_share_one_retry_download():
-    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
-    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
-    count_during_retry: Final = Future[SelectTokenizerResponse]()
+    retry_released: Final = threading.Event()
 
     def download(_: str) -> object:
         if from_pretrained.call_count == 1:
             raise RuntimeError("HF unavailable")
-        if from_pretrained.call_count == 2:
-            count_during_retry.set_result(_select_tokenizer_helper(model))
+        retry_started.set()
+        retry_released.wait(timeout=5)
         return sentinel.tokenizer
 
-    try:
-        with (
-            patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
-            patch("litellm.utils.time.monotonic", return_value=0.0) as clock,
-        ):
-            first_type: Final = _select_tokenizer_helper(model)["type"]
-            clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
-            retried: Final = _select_tokenizer_helper(model)
-            downloads: Final = from_pretrained.call_count
-        assert first_type == "openai_tokenizer"
-        assert count_during_retry.result(timeout=0)["type"] == "openai_tokenizer"
-        assert downloads == 2
-        assert retried["tokenizer"] is sentinel.tokenizer
-    finally:
-        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 3 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(4))
+        assert retry_started.wait(timeout=5)
+        clock.return_value = 9 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        later_counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(2))
+        downloads_while_retry_runs: Final = from_pretrained.call_count
+        retry_released.set()
+        retried: Final = _eventually(
+            lambda: _return_huggingface_tokenizer(model, outcomes)
+            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+        )
+    assert all(
+        isinstance(count, _HuggingFaceTokenizerLoadFailure)
+        for count in counts_while_retry_runs + later_counts_while_retry_runs
+    )
+    assert downloads_while_retry_runs == 2
+    assert retried
+    assert from_pretrained.call_count == 2
+
+
+def test_download_from_before_the_first_failure_ending_during_a_retry_leaves_it_the_only_retry():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock)
+    early_download_started: Final = threading.Event()
+    early_download_released: Final = threading.Event()
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            early_download_started.set()
+            early_download_released.wait(timeout=5)
+            raise RuntimeError("HF unavailable")
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        return sentinel.tokenizer
+
+    with (
+        patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
+        ThreadPoolExecutor(max_workers=1) as early_pool,
+    ):
+        early_count: Final = early_pool.submit(_return_huggingface_tokenizer, model, outcomes)
+        assert early_download_started.wait(timeout=5)
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 1.0
+        _return_huggingface_tokenizer(model, outcomes)
+        assert retry_started.wait(timeout=5)
+        early_download_released.set()
+        early: Final = early_count.result(timeout=5)
+        clock.return_value = 5 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        counts_while_retry_runs: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
+        downloads_while_retry_runs: Final = from_pretrained.call_count
+        retry_released.set()
+        retried: Final = _eventually(
+            lambda: _return_huggingface_tokenizer(model, outcomes)
+            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+        )
+    assert isinstance(early, _HuggingFaceTokenizerLoadFailure)
+    assert all(isinstance(count, _HuggingFaceTokenizerLoadFailure) for count in counts_while_retry_runs)
+    assert downloads_while_retry_runs == 3
+    assert retried
+
+
+def test_retry_failing_after_an_earlier_download_loaded_the_tokenizer_keeps_it():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    retry_ended: Final = Future[None]()
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_start_retry_resolving(retry_ended))
+    early_download_started: Final = threading.Event()
+    early_download_released: Final = threading.Event()
+    retry_started: Final = threading.Event()
+    retry_released: Final = threading.Event()
+
+    def download(_: str) -> object:
+        if from_pretrained.call_count == 1:
+            early_download_started.set()
+            early_download_released.wait(timeout=5)
+            return sentinel.tokenizer
+        if from_pretrained.call_count == 2:
+            raise RuntimeError("HF unavailable")
+        retry_started.set()
+        retry_released.wait(timeout=5)
+        raise RuntimeError("HF rate limited")
+
+    with (
+        patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=download) as from_pretrained,
+        ThreadPoolExecutor(max_workers=1) as early_pool,
+    ):
+        early_count: Final = early_pool.submit(_return_huggingface_tokenizer, model, outcomes)
+        assert early_download_started.wait(timeout=5)
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        assert retry_started.wait(timeout=5)
+        early_download_released.set()
+        early: Final = early_count.result(timeout=5)
+        retry_released.set()
+        retry_ended.result(timeout=5)
+        later_counts: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
+    loaded: Final = {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+    assert early == loaded
+    assert from_pretrained.call_count == 3
+    assert later_counts == (loaded,) * 3
+
+
+def test_fork_guard_error_in_a_retry_waits_out_the_next_window_like_any_failed_retry():
+    from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=_run_now)
+    with patch(
+        "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+    ) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        from_pretrained.side_effect = ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+        _return_huggingface_tokenizer(model, outcomes)
+        from_pretrained.side_effect = None
+        from_pretrained.return_value = sentinel.tokenizer
+        inside_the_next_window: Final = tuple(_return_huggingface_tokenizer(model, outcomes) for _ in range(3))
+        downloads_inside_the_next_window: Final = from_pretrained.call_count
+        clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert all(isinstance(count, _HuggingFaceTokenizerLoadFailure) for count in inside_the_next_window)
+    assert downloads_inside_the_next_window == 2
+    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
 def test_fork_guard_error_while_loading_a_tokenizer_is_raised_and_not_remembered():
