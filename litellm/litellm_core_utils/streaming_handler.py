@@ -96,7 +96,6 @@ def _stamp_usage_cost(
     usage_chunk: ModelResponse | TextCompletionResponse | ModelResponseStream,
     complete_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
 ) -> None:
-    """The usage chunk the client receives carries the bill the builder priced for the spend row."""
     bill: Final = (get_hidden_params(complete_response) or {}).get("response_cost")
     usage: Final[object] = getattr(usage_chunk, "usage", None)
     if usage is None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
