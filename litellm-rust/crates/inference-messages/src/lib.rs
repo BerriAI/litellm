@@ -9,10 +9,11 @@ use litellm_auth::AuthServices;
 use litellm_host::interceptors::Interceptors;
 use litellm_inference::context::CallContext;
 use litellm_inference::provider::resolve_llm_provider;
-use litellm_secrets::source::SecretSource;
+use litellm_llms_types::formats::messages::CountTokensResponse;
+use litellm_secrets::source::{SecretSource, Secrets};
 use std::sync::Arc;
 
-use crate::common_utils::messages_provider;
+use crate::common_utils::{MessagesProvider, messages_provider};
 
 pub use litellm_inference::Error;
 pub use types::{
@@ -75,24 +76,48 @@ impl MessagesRoute {
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
         litellm_inference::diagnostic::call(async {
-            let provider = resolve_llm_provider(
-                &call.body.model,
-                call.custom_llm_provider.as_deref(),
-                "messages",
-            )?;
-            let config = messages_provider(provider.provider, provider.model).ok_or_else(|| {
-                Error::InvalidProvider(<&str>::from(provider.provider).to_string())
-            })?;
-            litellm_inference::diagnostic::provider(
-                provider.model,
-                <&'static str>::from(provider.provider),
-            );
-            let model = provider.model.to_owned();
-            let secrets = self.secrets.resolve(config.config().secret_names()).await?;
-            handler::execute(self, config, model, call, secrets, &context)
+            let (provider, model, secrets) = self.resolve_provider(&call).await?;
+            handler::execute(self, provider, model, call, secrets, &context)
                 .boxed()
                 .await
         })
         .await
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "messages_count_tokens",
+        model = %call.body.model,
+        provider,
+        resolved_model,
+        stream = false,
+        outcome
+    ))]
+    pub async fn count_tokens(&self, call: MessagesCall) -> Result<CountTokensResponse, Error> {
+        litellm_inference::diagnostic::unary(async {
+            let (provider, model, secrets) = self.resolve_provider(&call).await?;
+            handler::count_tokens(self, provider, model, call, secrets.as_ref())
+                .boxed()
+                .await
+        })
+        .await
+    }
+
+    async fn resolve_provider(
+        &self,
+        call: &MessagesCall,
+    ) -> Result<(MessagesProvider, String, Secrets), Error> {
+        let provider = resolve_llm_provider(
+            &call.body.model,
+            call.custom_llm_provider.as_deref(),
+            "messages",
+        )?;
+        let config = messages_provider(provider.provider, provider.model)
+            .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider.provider).to_string()))?;
+        litellm_inference::diagnostic::provider(
+            provider.model,
+            <&'static str>::from(provider.provider),
+        );
+        let secrets = self.secrets.resolve(config.config().secret_names()).await?;
+        Ok((config, provider.model.to_owned(), secrets))
     }
 }

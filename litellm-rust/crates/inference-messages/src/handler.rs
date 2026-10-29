@@ -19,7 +19,9 @@ use litellm_llms::base_llm::{
         transformation::BaseMessagesConfig,
     },
 };
-use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
+use litellm_llms_types::formats::messages::{
+    CountTokensResponse, MessagesRequest, MessagesResponse,
+};
 use litellm_secrets::source::Secrets;
 use litellm_tracing::ByteChunk;
 use serde_json::Value;
@@ -208,6 +210,92 @@ async fn provider_call(
         signer: authenticated.signer,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         stream,
+    })
+}
+
+pub(super) async fn count_tokens(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: String,
+    call: MessagesCall,
+    secrets: &(dyn Lookup + Send + Sync),
+) -> Result<CountTokensResponse, Error> {
+    let MessagesCall {
+        body,
+        api_key,
+        api_base,
+        litellm_params,
+        extra_headers,
+        provider_specific_header,
+        timeout,
+        shaping,
+        ..
+    } = call;
+    let connection_params = litellm_router_types::LitellmParams {
+        api_base: api_base.clone().or(litellm_params.api_base.clone()),
+        ..litellm_params
+    };
+    let config = provider.config();
+    let env_lookup = |key: &str| secrets.get(key);
+    let url = config
+        .get_count_tokens_url(api_base.as_deref(), &connection_params, &env_lookup)
+        .ok_or_else(|| {
+            Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedOperation {
+                operation: "token counting",
+                provider: provider.as_str(),
+            })
+        })??;
+
+    let sanitized = config.shape_request(
+        MessagesRequest {
+            model: config.count_tokens_model(&model).to_string(),
+            ..body
+        },
+        shaping.settings.reasoning_auto_summary,
+    )?;
+    let request =
+        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
+
+    let scoped =
+        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
+    let forwarded = string_headers(Some(
+        extra_headers.into_iter().flatten().chain(scoped).collect(),
+    ))?;
+    let validated = config.validate_environment(
+        forwarded,
+        api_key.as_deref(),
+        &request.model,
+        &request.params,
+        &connection_params,
+        &env_lookup,
+    )?;
+    let environment = ValidatedEnvironment {
+        headers: config.request_headers(
+            with_default_headers(validated.headers, config.default_headers()),
+            &request,
+        ),
+        auth: validated.auth,
+    };
+    let authenticated =
+        resolve_auth(&route.auth, environment, &|key| std::env::var(key).ok()).await?;
+
+    let response = send(
+        &route.http,
+        authenticated,
+        &url,
+        &serde_json::to_value(&request).map_err(serialize_failure)?,
+        timeout.or_else(|| shaping.settings.request_timeout()),
+    )
+    .await?;
+    if !response.status().is_success() {
+        return Err(provider_error(response).await);
+    }
+    let text = response.text().await.map_err(litellm_http::Error::from)?;
+    serde_json::from_str(&text).map_err(|err| {
+        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+            "count_tokens response JSON",
+            err,
+        ))
     })
 }
 

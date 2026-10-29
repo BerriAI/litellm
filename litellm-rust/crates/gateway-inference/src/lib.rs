@@ -91,6 +91,7 @@ impl Gateway {
 pub fn router(gateway: Arc<Gateway>) -> Router {
     Router::new()
         .route("/v1/messages", post(messages::create))
+        .route("/v1/messages/count_tokens", post(messages::count_tokens))
         .route("/ocr", post(ocr::create))
         .route("/v1/ocr", post(ocr::create))
         .route("/chat/completions", post(chat_completions::create))

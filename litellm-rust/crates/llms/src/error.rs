@@ -166,6 +166,11 @@ pub enum ErrorDetail {
     HostCall,
     #[error("{0} is not handled by the rust path")]
     Unhandled(&'static str),
+    #[error("{operation} is not supported for provider {provider}")]
+    UnsupportedOperation {
+        operation: &'static str,
+        provider: &'static str,
+    },
     #[error("invalid {subject} on line {line}")]
     InvalidLine {
         subject: &'static str,

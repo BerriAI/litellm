@@ -27,6 +27,19 @@ pub trait BaseMessagesConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
+    fn get_count_tokens_url(
+        &self,
+        _api_base: Option<&str>,
+        _litellm_params: &LitellmParams,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<Result<String, Error>> {
+        None
+    }
+
+    fn count_tokens_model<'a>(&self, model: &'a str) -> &'a str {
+        model
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,

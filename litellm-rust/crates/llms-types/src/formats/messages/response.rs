@@ -18,6 +18,13 @@ pub struct MessagesResponse {
     pub extra: Map<String, Value>,
 }
 
+#[macro_rules_attribute::apply(crate::wire_type)]
+pub struct CountTokensResponse {
+    pub input_tokens: u64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

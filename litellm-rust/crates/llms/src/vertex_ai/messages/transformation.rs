@@ -32,10 +32,12 @@ use crate::{
     vertex_ai::common_utils::get_vertex_base_url,
 };
 use litellm_llms_types::providers::vertex_ai::{
-    ANTHROPIC_VERSION, DEFAULT_LOCATION, RAW_PREDICT, STREAM_RAW_PREDICT,
+    ANTHROPIC_VERSION, COUNT_TOKENS_DEFAULT_LOCATION, DEFAULT_LOCATION, RAW_PREDICT,
+    STREAM_RAW_PREDICT,
 };
 
 const WEB_SEARCH_TOOL_PREFIX: &str = "web_search";
+const COUNT_TOKENS_LOCATION_PARAM: &str = "vertex_count_tokens_location";
 const VERSIONS_SERVED_AS_VERTEX_DEFAULT: [&str; 3] = ["", "2023-01-01", "2023-06-01"];
 const VERSIONS_VERTEX_ACCEPTS_IN_BODY: [&str; 2] = [ANTHROPIC_VERSION, "2026-10-21"];
 
@@ -64,12 +66,23 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let config = VertexConfig::from_params(&litellm_params.vertex);
-        let project = get_vertex_ai_project(&config, env_lookup)
-            .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
-            .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
+        let project = vertex_project(&config, env_lookup)?;
         let location = get_vertex_ai_location(&config, env_lookup)
             .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
+    }
+
+    fn get_count_tokens_url(
+        &self,
+        api_base: Option<&str>,
+        litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<Result<String, Error>> {
+        Some(count_tokens_url(api_base, litellm_params, env_lookup))
+    }
+
+    fn count_tokens_model<'a>(&self, model: &'a str) -> &'a str {
+        model.split_once('@').map_or(model, |(name, _)| name)
     }
 
     fn transform_anthropic_messages_request(
@@ -209,6 +222,40 @@ pub fn complete_vertex_anthropic_url(
         true => format!("{url}&alt=sse"),
         false => format!("{url}?alt=sse"),
     })
+}
+
+fn vertex_project(
+    config: &VertexConfig,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, Error> {
+    get_vertex_ai_project(config, env_lookup)
+        .or_else(|| get_vertex_ai_project_from_credentials(config, env_lookup))
+        .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))
+}
+
+fn count_tokens_url(
+    api_base: Option<&str>,
+    litellm_params: &LitellmParams,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, Error> {
+    let config = VertexConfig::from_params(&litellm_params.vertex);
+    let project = vertex_project(&config, env_lookup)?;
+    let location = litellm_params
+        .extra
+        .get(COUNT_TOKENS_LOCATION_PARAM)
+        .and_then(Value::as_str)
+        .filter(|location| !location.is_empty())
+        .map(str::to_string)
+        .or_else(|| get_vertex_ai_location(&config, env_lookup))
+        .unwrap_or_else(|| COUNT_TOKENS_DEFAULT_LOCATION.to_string());
+    let base = match api_base.map(str::trim).filter(|base| !base.is_empty()) {
+        Some(custom) => custom.to_string(),
+        None => get_vertex_base_url(&location)?,
+    };
+    Ok(format!(
+        "{}/v1/projects/{project}/locations/{location}/publishers/anthropic/models/count-tokens:{RAW_PREDICT}",
+        base.trim_end_matches('/')
+    ))
 }
 
 /// Python's `sanitize_vertex_anthropic_output_params`: `effort` only reaches models whose
@@ -455,6 +502,105 @@ mod tests {
             url(None, &litellm_params, false, &lookup)
                 .unwrap()
                 .starts_with(prefix)
+        );
+    }
+
+    fn count_tokens_params(fields: Value) -> LitellmParams {
+        let (Value::Object(base), Value::Object(fields)) = (
+            json!({"model": "vertex_ai/claude-sonnet-4-5", "vertex_project": "proj"}),
+            fields,
+        ) else {
+            panic!("litellm params are a json object");
+        };
+        serde_json::from_value(Value::Object(base.into_iter().chain(fields).collect())).unwrap()
+    }
+
+    const COUNT_PATH: &str = "/publishers/anthropic/models/count-tokens:rawPredict";
+
+    #[rstest]
+    #[case::count_location_wins(
+        None,
+        json!({"vertex_count_tokens_location": "europe-west1", "vertex_location": "asia-southeast1"}),
+        &[],
+        "https://europe-west1-aiplatform.googleapis.com/v1/projects/proj/locations/europe-west1"
+    )]
+    #[case::deployment_location(
+        None,
+        json!({"vertex_location": "asia-southeast1"}),
+        &[],
+        "https://asia-southeast1-aiplatform.googleapis.com/v1/projects/proj/locations/asia-southeast1"
+    )]
+    #[case::empty_count_location_is_unset(
+        None,
+        json!({"vertex_count_tokens_location": "", "vertex_location": "asia-southeast1"}),
+        &[],
+        "https://asia-southeast1-aiplatform.googleapis.com/v1/projects/proj/locations/asia-southeast1"
+    )]
+    #[case::environment_location(
+        None,
+        json!({}),
+        &[("VERTEXAI_LOCATION", "europe-west1")],
+        "https://europe-west1-aiplatform.googleapis.com/v1/projects/proj/locations/europe-west1"
+    )]
+    #[case::count_default_location(
+        None,
+        json!({}),
+        &[],
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/proj/locations/us-east5"
+    )]
+    #[case::global(
+        None,
+        json!({"vertex_location": "global"}),
+        &[],
+        "https://aiplatform.googleapis.com/v1/projects/proj/locations/global"
+    )]
+    #[case::custom_base(
+        Some("https://proxy.example/prefix/"),
+        json!({"vertex_location": "global"}),
+        &[],
+        "https://proxy.example/prefix/v1/projects/proj/locations/global"
+    )]
+    fn count_tokens_url_follows_the_python_location_precedence(
+        #[case] api_base: Option<&str>,
+        #[case] fields: Value,
+        #[case] env: &[(&str, &str)],
+        #[case] prefix: &str,
+    ) {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        assert_eq!(
+            VERTEX_ANTHROPIC_MESSAGES_CONFIG.get_count_tokens_url(
+                api_base,
+                &count_tokens_params(fields),
+                &lookup
+            ),
+            Some(Ok(format!("{prefix}{COUNT_PATH}")))
+        );
+    }
+
+    #[rstest]
+    fn count_tokens_without_a_project_fails_before_sending() {
+        assert!(matches!(
+            VERTEX_ANTHROPIC_MESSAGES_CONFIG.get_count_tokens_url(
+                None,
+                &LitellmParams::default(),
+                &no_env
+            ),
+            Some(Err(Error::Auth(_)))
+        ));
+    }
+
+    #[rstest]
+    #[case::versioned("claude-sonnet-4-5@20250929", "claude-sonnet-4-5")]
+    #[case::default_version("claude-sonnet-4-5@default", "claude-sonnet-4-5")]
+    #[case::unversioned("claude-sonnet-4-5", "claude-sonnet-4-5")]
+    fn count_tokens_model_drops_the_version(#[case] model: &str, #[case] expected: &str) {
+        assert_eq!(
+            VERTEX_ANTHROPIC_MESSAGES_CONFIG.count_tokens_model(model),
+            expected
         );
     }
 

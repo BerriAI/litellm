@@ -50,6 +50,18 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
+    fn get_count_tokens_url(
+        &self,
+        api_base: Option<&str>,
+        _litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<Result<String, Error>> {
+        Some(Ok(format!(
+            "{}/count_tokens",
+            complete_anthropic_url(api_base, env_lookup)
+        )))
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
@@ -872,6 +884,34 @@ mod tests {
                 &env(vars),
             ),
             Ok(expected.to_string())
+        );
+    }
+
+    #[rstest]
+    #[case::default_base(None, &[], "https://api.anthropic.com/v1/messages/count_tokens")]
+    #[case::env_base(
+        None,
+        &[(ANTHROPIC_API_BASE_ENV, "https://env.example.com")],
+        "https://env.example.com/v1/messages/count_tokens"
+    )]
+    #[case::custom_base(Some("https://proxy.internal/"), &[], "https://proxy.internal/v1/messages/count_tokens")]
+    #[case::complete_messages_endpoint(
+        Some("https://proxy.internal/v1/messages"),
+        &[],
+        "https://proxy.internal/v1/messages/count_tokens"
+    )]
+    fn count_tokens_url_is_under_the_messages_endpoint(
+        #[case] api_base: Option<&str>,
+        #[case] vars: Env,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.get_count_tokens_url(
+                api_base,
+                &LitellmParams::default(),
+                &env(vars)
+            ),
+            Some(Ok(expected.to_string()))
         );
     }
 

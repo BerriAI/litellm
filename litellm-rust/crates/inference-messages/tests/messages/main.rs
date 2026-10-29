@@ -19,6 +19,7 @@ use wiremock::ResponseTemplate;
 mod support;
 use support::*;
 
+mod count_tokens;
 mod host;
 mod request;
 mod response;

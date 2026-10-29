@@ -25,7 +25,7 @@
 ## Providers
 
 - A provider with more than one endpoint format puts shared endpoint paths, default headers and wire types used by several of its formats in `providers/<provider>/`
-- Projections that only one adapter decodes (`InvokeChunkPayload`, the count-tokens and batches adapter structs, `ReplayedWebSearchResult`) stay in `llms/src/<provider>/<format>/`
+- Projections that only one adapter decodes (`InvokeChunkPayload`, the batches adapter structs, `ReplayedWebSearchResult`) stay in `llms/src/<provider>/<format>/`
 - A typed provider extension of a format (MiniMax media blocks) belongs here once a consumer must construct or interpret it
 - Provider types may use format types. Format types never depend on provider types
 

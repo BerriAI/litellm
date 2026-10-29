@@ -121,18 +121,20 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
 }
 
 #[rstest]
+#[case::messages("/v1/messages")]
+#[case::count_tokens("/v1/messages/count_tokens")]
 #[tokio::test]
-async fn hosted_provider_failure_preserves_status_body_and_request_id() {
+async fn hosted_provider_failure_preserves_status_body_and_request_id(#[case] route: &str) {
     let upstream = MockServer::start().await;
     let error =
         json!({"type": "error", "error": {"type": "rate_limit_error", "message": "retry later"}});
     Mock::given(method("POST"))
-        .and(path("/v1/messages"))
+        .and(path(route))
         .respond_with(ResponseTemplate::new(429).set_body_json(error.clone()))
         .expect(1)
         .mount(&upstream)
         .await;
-    let request = Request::post("/v1/messages")
+    let request = Request::post(route)
         .header("content-type", "application/json")
         .header("x-request-id", "host-http-request")
         .body(Body::from(json!({
@@ -151,7 +153,89 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
 }
 
 #[rstest]
+#[tokio::test]
+async fn count_tokens_answers_with_the_providers_count_for_the_deployment_model() {
+    let upstream = MockServer::start().await;
+    let messages = json!([{"role": "user", "content": "hi"}]);
+    let tools = json!([{"name": "lookup", "input_schema": {"type": "object"}}]);
+    let counted = json!({"input_tokens": 14, "context_management": {"original_input_tokens": 20}});
+    Mock::given(method("POST"))
+        .and(path("/v1/messages/count_tokens"))
+        .and(header("x-api-key", "test-key"))
+        .and(header("anthropic-version", "test-version"))
+        .and(body_json(json!({
+            "model": "test-model", "messages": messages, "system": "be brief", "tools": tools,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(counted.clone()))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages/count_tokens")
+        .header("content-type", "application/json")
+        .header("anthropic-version", "test-version")
+        .body(Body::from(
+            json!({"model": "public/model", "messages": messages, "system": "be brief", "tools": tools})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(support::json(response).await, counted);
+}
+
+#[rstest]
+#[tokio::test]
+async fn count_tokens_for_a_provider_without_a_count_api_is_an_invalid_request() {
+    let upstream = MockServer::start().await;
+    let response = support::post(
+        support::app("deepseek/test-model", &upstream.uri()),
+        "/v1/messages/count_tokens",
+        json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("deepseek")),
+        "{body}"
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_unknown_model_is_refused_alike_on_messages_and_count_tokens(
+    #[values("/v1/messages", "/v1/messages/count_tokens")] route: &str,
+) {
+    let upstream = MockServer::start().await;
+    let response = support::post(
+        support::app("anthropic/test-model", &upstream.uri()),
+        route,
+        json!({"model": "other/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("other/model")),
+        "{body}"
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
 #[case::messages("/v1/messages")]
+#[case::count_tokens("/v1/messages/count_tokens")]
 #[case::chat("/v1/chat/completions")]
 #[case::model_path("/engines/path-model/chat/completions")]
 #[case::ocr("/ocr")]
