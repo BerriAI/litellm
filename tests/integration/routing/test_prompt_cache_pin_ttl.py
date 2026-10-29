@@ -270,7 +270,7 @@ def test_chat_pin_lifetime_follows_the_longest_breakpoint_ttl_in_the_cacheable_p
     spend_row_lands(response_id)
 
 
-def test_chat_one_hour_mark_on_a_tool_definition_alone_writes_no_pin(rig: _Rig) -> None:
+def test_chat_one_hour_mark_on_a_tool_definition_alone_pins_the_served_deployment_for_an_hour(rig: _Rig) -> None:
     before: Final = _before(rig)
     marker: Final = new_marker()
     tool: Final[dict[str, JsonValue]] = {
@@ -281,8 +281,10 @@ def test_chat_one_hour_mark_on_a_tool_definition_alone_writes_no_pin(rig: _Rig) 
     response_id, served = post_chat(
         rig.owned.gateway, chat_body(_CLAUDE, _first_turn(new_marker(), marker, None), tools=[tool])
     )
-    assert served == rig.served_by(marker), served
-    no_pin_written(rig.redis, before, response_id)
+    _, pin = one_new_pin(rig.redis, before)
+    assert served == rig.served_by(marker) == pin.model_id, (served, pin)
+    assert lives_one_hour(pin), pin
+    spend_row_lands(response_id)
 
 
 def _openai_client(rig: _Rig) -> openai.OpenAI:

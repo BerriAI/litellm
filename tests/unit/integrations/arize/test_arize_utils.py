@@ -1,5 +1,6 @@
 import json
-from typing import Optional
+from collections.abc import Mapping
+from typing import Final, Optional
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 
@@ -7,6 +8,7 @@ import asyncio
 
 import httpx
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 
 import litellm
 from litellm.integrations._types.open_inference import (
@@ -17,7 +19,7 @@ from litellm.integrations._types.open_inference import (
 from litellm.integrations.arize._utils import _coerce_response_obj_for_attrs, _parse_passthrough_response
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import Choices, StandardCallbackDynamicParams
+from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
 
 
 def test_arize_set_attributes():
@@ -1013,6 +1015,55 @@ def test_arize_emits_response_cost():
     attrs = _collect_calls(span)
     assert attrs["llm.cost.total"] == 0.0012345
     assert attrs["llm.response.cost"] == 0.0012345  # legacy key still emitted
+
+
+_PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
+
+
+@pytest.mark.parametrize(
+    ("cost_fields", "expected_cost"),
+    [
+        pytest.param({"response_cost": 0.0}, 0.0, id="free-model"),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            None,
+            id="unpriced",
+        ),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED, "cache_hit": True},
+            0.0,
+            id="unpriced-cache-hit",
+        ),
+        pytest.param({"response_cost": "not-a-number"}, None, id="malformed-cost"),
+        pytest.param(
+            {"response_cost": 0.002, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            None,
+            id="unpriced-with-guardrail-fee",
+        ),
+    ],
+)
+def test_arize_cost_attrs_tell_unpriced_call_from_free_call(
+    cost_fields: Mapping[str, object], expected_cost: float | None
+) -> None:
+    span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+    kwargs: Final = {
+        "model": "unpriced-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "standard_logging_object": {"model_parameters": {}, "metadata": {}, "call_type": "completion", **cost_fields},
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj: Final = ModelResponse(
+        usage={"total_tokens": 30, "completion_tokens": 20, "prompt_tokens": 10},
+        choices=[Choices(message={"role": "assistant", "content": "ok"})],
+        model="unpriced-model",
+        id="r4",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    assert span.attributes.get("llm.cost.total") == expected_cost
+    assert span.attributes.get("llm.response.cost") == expected_cost
 
 
 def test_arize_passthrough_bedrock_anthropic_normalization():

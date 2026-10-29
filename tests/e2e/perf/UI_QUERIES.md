@@ -1,92 +1,59 @@
-# SpendLog UI query performance
+# Admin UI journey latency on the 1TB SpendLogs restore
 
-Run `test_ui_queries.py` against a dedicated proxy and a disposable database restored from the metadata-only performance seed. These tests do not call an LLM or measure browser rendering
+Run `test_ui_journeys.py` against a dedicated proxy, its Admin UI and a disposable database restored from the metadata-only performance seed. A headless Chromium logs into the dashboard and performs the journeys below, timing each one from the user's click or navigation until the data is on screen. No LLM is called. The test does not look at which routes, SQL or tables served the page, so it stays valid whether the backend gets faster queries or new aggregate tables
 
-The suite measures 42 request shapes across 20 routes used by current dashboard screens. It replays direct HTTP requests against the existing bulk seed, with the seed anchor replacing the wall clock and a UTC browser timezone. It does not run a browser or claim to cover every dashboard request
+## Journeys
 
-## UI callers
+| name | what the user does | timer stops when |
+| --- | --- | --- |
+| `logs_open_24h` | opens Logs (default Last 24 Hours) | request rows are rendered and the refresh control is idle |
+| `logs_last_7_days` | switches the time range to Last 7 Days | same |
+| `logs_next_page` | clicks the next page control | same |
+| `logs_filter_key_hash` | filters by the seeded key hash and applies | same |
+| `logs_filter_key_alias` | picks the first key alias in the filter drawer and applies | same |
+| `logs_filter_team` | picks the first team in the filter drawer and applies | same |
+| `logs_filter_model` | picks the first model in the filter drawer and applies | same |
+| `usage_open` | opens Usage | summary tiles show dollar values with no skeletons left |
+| `usage_last_30_days` | picks Last 30 days in the Usage date picker | same |
+| `usage_team_view` | switches the Usage view to Team Usage | same |
+| `usage_customer_view` | switches the Usage view to Customer Usage | same |
+| `usage_model_activity_30_days` | on the Model Activity tab, picks Last 30 days | same |
+| `cache_open` | opens Caching | the Cache Hits tile is visible and the Cache Hits vs API Requests chart has bars |
+| `models_open` | opens Models + Endpoints | model rows are rendered and the loading state is gone |
+| `keys_open` | opens Virtual Keys | key rows are rendered and the loading state is gone |
 
-All paths below are relative to `ui/litellm-dashboard/src/`. Each case requires an authenticated admin session with access to that screen, and selected resources must exist in the fixture
+The mix follows what customers report as slow: the Logs page on `LiteLLM_SpendLogs`, the Usage page on the `LiteLLM_Daily*Spend` rollups (30 day ranges, Customer and Model views), and the Models and Keys pages.
 
-| Cases | UI action and source |
-| --- | --- |
-| `logs_*` | Logs > Request Logs, change date range, filter, sort or next page. `components/logs/request/useLogFilterLogic.ts` and `RequestLogsFilters.tsx` |
-| `usage_*` | Usage overview or entity tab, open key activity, search keys, expand a model group. `app/(dashboard)/usage/_components/components/UsagePageView.tsx`, `EntityUsage/EntityUsage.tsx`, `EntityUsage/entityFetchFns.ts`, `components/UsagePage/components/KeyActivityPanel.tsx` |
-| `team_users_*` | Team Usage. `EntityUsage/EntityUsage.tsx` passes selected teams or all available non-dashboard teams to `TeamUserSpendCard.tsx` |
-| `cache_activity_*` | Caching > Cache Analytics, optionally filter aliases/models. `app/(dashboard)/hooks/caching/useCacheActivity.ts` |
-| `cache_leakage_keys` | Cost Optimization, switch cache leakage to Keys. `app/(dashboard)/cost-optimization/_components/useCacheLeakageKeys.ts` |
+## Seeded rows
 
-Request serialization lives in `components/networking.tsx`. Logs use page size 25 and session grouping, including the next-session cursor returned by page one. Individual Logs filters use a 30-day window to exercise larger matching datasets. Their case names end in `_30d` so the measurements do not share history with the old 24-hour filters. The synthetic cursorless page-three request is excluded
+The snapshot carries the SpendLogs rows and their Daily* rollups. `setup/ui_query_fixture.py` checks that `LiteLLM_DailyUserSpend` and `LiteLLM_DailyTeamSpend` have rows in the week before the anchor, then fills the tables the snapshot does not have so the Keys, Models and filter journeys see realistic counts: 100 teams (`perf-team-N`), 2,000 users (`perf-user-N`), 5,000 keys whose token hashes and `perf-key-N` aliases match the seeded log rows, and 200 DB models pointed at the perf mock provider. Every insert is `ON CONFLICT DO NOTHING`, so reruns on the same restore are no-ops. Nothing here runs outside the disposable restore
 
-Usage list, search and model drilldown requests do not inject an `api_key` filter. Team activity excludes `litellm-dashboard`. Cache leakage supplies `include_current_utc_day=true`. Dates and filter values are deterministic fixture values, not captured production traffic
+Each journey is measured once cold, then `E2E_UI_JOURNEY_REPEATS` more times (default 9) from the same starting state, inside one logged-in tab whose clock is pinned to the seed anchor so relative windows land on seeded rows. The browser timezone is UTC to match the seed
 
-Old Usage is excluded because its expensive-query gate normally hides those calls at this database size. LiteAdmin's agent-selected reports are excluded from this deterministic dashboard set. Missing-token alias recovery is backend functional coverage, not a separate UI action, and its artificial requests and orphan fixtures are removed
+## Safety
 
-This mapping is source-verified, not browser-recorded. Recheck the named callers when changing cases. Neither browser capture nor an automatic UI-drift checker is installed by this suite
+The seeded source is never the target. `E2E_UI_PERF_DISPOSABLE=1`, `E2E_RESET_SPEND_LOGS=0` and a hostname matching `db-perf-perf-<id>.litellm.svc` are all required, and in-flight SQL is cancelled only on that disposable restore between journeys (see `setup/ui_query_isolation.py`)
 
-## Dataset scope
+## Running
 
-Logs, team-user spend and cache activity query the bulk SpendLogs data. User, team, tag and customer usage, plus cache leakage, query daily tables aggregated from that dataset. These are sequential large-dataset queries, not concurrent traffic or saturation tests
-
-A read-only restore of `db-perf-v1-105-1tb` gave exact request totals from daily aggregates: 9,442,606 across 24 hours, 66,077,435 across seven days and 283,189,684 across 30 days. The retained 30-day key filter matches 1,134,559 requests, user filter 11,316,454, team filter 113,298,119 and model filter 94,395,473. These describe matching requests, not rows scanned or returned by the API, and are documentation rather than performance assertions
-
-PostgreSQL table-wide estimates (`pg_class.reltuples`) are approximately 2.70 million daily user rows, 2.70 million daily team rows, 5.40 million daily tag rows and 78.27 million daily end-user rows. These are not exact counts within each Usage case's seven-day window
-
-The individual end-user filter is excluded because it matched only 104 requests in 24 hours and 8,616 across all dates. User/end-user dropdown requests are also excluded because their queries cap the input at 10,000 matching SpendLogs before extracting distinct values. Neither is a broad matching-data workload in this seed
-
-Excluded because they only had tiny matching fixtures or individual-record lookups: organization/agent usage, guardrail/tool logs, request-ID lookup, payload/session drawers, session/search filters for `perf-ui-*`, the OAuth-token filter, and all prompt-caching request cases. The seed has response-cache hits but no prompt-cache usage or injection metadata, so the prompt-caching cases only matched the 320 added rows. No UI-specific rows are inserted anymore
-
-| Remaining cases | Count | Variations |
-| --- | ---: | --- |
-| Logs | 21 | 24h/7d/30d, page 2 with session cursor, 12 individual filters over 30 days, five additional descending sorts |
-| User/team/tag/customer usage | 16 | Aggregated totals, keys, key search, model top keys for each |
-| Team-user spend | 2 | All 100 seeded teams or `perf-team-0` |
-| Cache activity | 2 | All or selected aliases/model |
-| Cache leakage keys | 1 | 30-day window |
-
-## Deployment prerequisites
-
-Use a fresh proxy against the disposable restore, never the active seed source or a shared test database. Apply the target migrations and wait for readiness first. The source seed's `litellm_perf_seed.checkpoint` must exist and contain rows
-
-Configure `litellm_settings.service_callback: [prometheus_system]` and expose metrics for every proxy worker/pod. Set `E2E_DATABASE_METRICS_URLS` to their comma-separated URLs, not a load-balanced endpoint that can miss a pod. Absent failure counters count as zero only when the endpoint exposes a positive PostgreSQL request counter. Missing instrumentation stops the run
-
-No expensive-query override or legacy view creation is needed for these cases. Keep the normal large-database UI restrictions
-
-The cases use explicit dates from the seed anchor where the UI supplies dates. A missing nonempty fixture result records a contract failure rather than reporting a fast empty query as success
-
-## Run
-
-Set `DATABASE_URL` and `LITELLM_MASTER_KEY` securely for this disposable deployment. The URL must name the same database used by the proxy, with hostname `db-perf-perf-<run>.litellm.svc`. The explicit disposable confirmation permits cancellation of leftover queries in this database. Setup reads the existing seed checkpoint without adding UI-specific rows. Destroy the disposable database after the run
+The componentized perf stack serves the dashboard behind the same router as the proxy, so `LITELLM_PROXY_URL` covers `/ui`. Set `E2E_UI_BASE_URL` only if the UI lives elsewhere. The admin login uses `E2E_UI_USERNAME` (default `admin`) and `E2E_UI_PASSWORD` (default the master key)
 
 ```bash
-export LITELLM_PROXY_URL=http://localhost:4000
-export E2E_DATABASE_METRICS_URLS=http://localhost:4000/metrics
-export E2E_PERF_TESTS=1
-export E2E_UI_PERF_DISPOSABLE=1
-export E2E_RESET_SPEND_LOGS=0
-export E2E_ARTIFACT_DIR="$PWD/ui-query-results"
-mkdir -p "$E2E_ARTIFACT_DIR"
-uv run pytest tests/e2e/perf/test_ui_queries.py --reruns 0 --junitxml="$E2E_ARTIFACT_DIR/junit.xml" -q
+export E2E_PERF_TESTS=1 E2E_UI_PERF_DISPOSABLE=1 E2E_RESET_SPEND_LOGS=0
+export DATABASE_URL=postgresql://...@db-perf-perf-<id>.litellm.svc:5432/litellm
+export E2E_DATABASE_METRICS_URLS=http://<backend-pod>:4000/metrics
+export E2E_ARTIFACT_DIR=/tmp/e2e-artifacts
+uv run pytest tests/e2e/perf/test_ui_journeys.py --reruns 0 --junitxml="$E2E_ARTIFACT_DIR/junit.xml" -q
 ```
 
-Do not enable SpendLog retention or run other traffic on this stack. The `quiet_stack` marker coordinates local pytest callers but cannot stop external traffic. Use one pytest worker for comparable timings
+`E2E_UI_JOURNEY_TIMEOUT_SECONDS` (default 120) bounds one journey. A journey that never settles is recorded as a `timeout` sample and a journey whose page rendered empty or threw in the browser as a `ui` sample. The test fails when any sample failed, or when the p50 or p90 across all samples is over the journey's `Ceiling` in `UI_JOURNEY_LIMITS` (`setup/ui_journeys.py`, 10s/20s for Logs journeys, 20s/40s for Usage and Caching, 5s/10s for the Models and Keys tables, generous until the first 1TB run sets real numbers). The artifacts are written before the assertion so a failed run still ships its samples
 
-`E2E_UI_QUERY_REPEATS` defaults to 9, giving ten measured requests including the first, and `E2E_UI_QUERY_TIMEOUT_SECONDS` defaults to 120. Every request is issued once without transport retries. A failed first request stops that case's repeated samples. Cursor prerequisites are recorded separately, and failed prerequisites stop that case's measurements
+## Artifacts
 
-## Reading results
+Each JUnit testcase `test_ui_journey_latency[<name>]` carries `perf_ui_journeys`, `perf_ui_failures`, `perf_ui_seconds_p50`, `perf_ui_seconds_p90`, `perf_ui_seconds_max`, `perf_ui_first_seconds`, `perf_ui_repeated_seconds_p50`, `perf_ui_repeated_seconds_max` and `perf_ui_database_failures`. `ui-journey-<name>.json` holds every sample with its on-screen row count and `ui-isolation-<name>.jsonl` the SQL isolation evidence
 
-Each case writes `ui-query-<name>.json` with its exact method, path, parameters and body, response status counts, elapsed times, row counts, errors and before/after PostgreSQL failure counters. Response bodies and authentication headers are not saved
+The Buildkite `ui_queries` lane restores the pinned snapshot, waits for migrations and indexes, runs these journeys with no retries and uploads the JUnit and JSON artifacts. Validate selectors on a small restore first, then take numbers from the completed 1TB snapshot
 
-The dashboard's `perf_ui_seconds_p50`, `_p90` and `_max` include all successful measured requests, including the first. `perf_ui_samples` is their sample count. p50 is the median and p90 uses nearest rank, the ninth sorted value with ten successes. Failures and cursor prerequisites contribute no latency. Pass percentage is `(perf_ui_requests - perf_ui_failures) / perf_ui_requests * 100`, including cursor prerequisites in the request counts
+To measure a released version on the same snapshot, create the litellm-perf build with `perf_gateway_version=<tag>` (for example `v1.106.1`) next to `litellm_sha`. The gateway, backend and the restore's schema upgrade then come from `ghcr.io/berriai/litellm-{gateway,backend,migrations}:<tag>`, where the migrations image runs `prisma migrate deploy` and builds the request-log indexes the way a customer upgrade does, while the runner and these journeys come from `litellm_sha`. The fixture skips its upgrade-worker wait when `_LiteLLMPerfUpgrade` is absent. The snapshot's schema is v1.105.1 and the restore only migrates forward, so older tags cannot be measured
 
-The first-request and repeated-request metrics are retained for existing consumers. This is not a cold-cache claim: previous cases and previous runs can warm database buffers or application caches. Restart the disposable proxy between independent runs when comparing independent runs
-
-Repeated p50 is reported for successful samples, p95 only with at least 20 and p99 only with at least 100. First-request latency is omitted when that request fails. HTTP, JSON, response-shape, nonempty-result, cursor failures are recorded, never asserted. Endpoint failures, database counter increases and latency do not fail CI
-
-Each JUnit testcase `test_ui_query_performance[<case>]` carries `perf_ui_requests`, `perf_ui_failures`, `perf_ui_repeated_samples`, and nonzero `perf_ui_error_<code>` counts. Codes distinguish `http_400`, `http_500`, `http_503`, other HTTP statuses, `timeout`, `network`, `invalid_json` and `contract`. Successful latency properties are `perf_ui_first_seconds` and `perf_ui_repeated_seconds_p50`, `_p95`, `_p99`, `_max`. A failed cursor prerequisite is counted once and contributes no latency
-
-Before every case the runner requires three idle database observations and stable failure counters. After each case it cancels leftover SQL, terminates idle transactions and waits for idle and stable counters again. `ui-isolation-<case>.jsonl` retains active SQL, waits, elapsed times, raw samples and counter observations. `perf_ui_database_failures` measures the increase before cleanup, while `perf_ui_cleanup_database_failures` measures the increase observed afterward, including cancellations and potentially delayed request failures. Isolation, instrumentation or setup failures still stop the run rather than publish contaminated measurements. Disk and process caches are not reset between cases
-
-The Buildkite `ui_queries` lane restores the pinned snapshot independently, waits for migrations and indexes to complete, runs these cases with no retries, uploads JUnit and JSON artifacts, and removes the temporary resources. It follows the nightly regular perf and database-upgrade builds using the same LiteLLM SHA. Shinkiro ingestion is a separate change
-
-Validate a small restore first. Small-database numbers validate the runner only, not full-size performance. Run the same cases against the completed full-size snapshot before publishing large-database results
+Each sample in `ui-journey-<name>.json` also records the `status` and `request` (method and path) of the data request the page issued, the first non-2xx one when there is one, so a failed sample names what the gateway answered. A failed sample with a 4xx or 5xx status is counted as `perf_ui_error_http_<status>` instead of `perf_ui_error_ui`. Each journey is also bounded by a wall clock of `E2E_UI_JOURNEY_TIMEOUT_SECONDS x (repeats + 2)`, so one hung browser call ends the journey with a `wall_clock` sample instead of eating the lane.

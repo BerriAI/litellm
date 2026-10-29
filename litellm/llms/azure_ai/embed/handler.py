@@ -5,6 +5,7 @@ from urllib.parse import urlsplit, urlunsplit
 from openai import OpenAI
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.azure_ai.common_utils import is_foundry_model_inference_base
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -74,13 +75,18 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         api_base: str | None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
     ) -> EmbeddingResponse:
+        if api_base is None:
+            raise ValueError(
+                "api_base is None. Please set AZURE_AI_API_BASE or dynamically via `api_base` param, "
+                "to make the request."
+            )
         if client is None or not isinstance(client, AsyncHTTPHandler):
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.AZURE_AI,
                 params={"timeout": timeout},
             )
 
-        url: Final = f"{api_base}/images/embeddings"
+        url: Final = join_api_base(api_base, "images/embeddings")
 
         response: Final = await client.post(
             url=url,
@@ -123,7 +129,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         if client is None or not isinstance(client, HTTPHandler):
             client = HTTPHandler(timeout=timeout, concurrent_limit=1)
 
-        url: Final = f"{api_base}/images/embeddings"
+        url: Final = join_api_base(api_base, "images/embeddings")
 
         response: Final = client.post(
             url=url,

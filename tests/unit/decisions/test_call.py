@@ -1,3 +1,4 @@
+import base64
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -111,4 +112,23 @@ def test_decisions_request_is_logged_even_when_its_questions_fail_validation():
         )
 
     logged: Final = _logged_request(logging_obj)
+    assert logged["questions"][0]["instructions"] == QUESTION_TEXT
+
+
+def test_non_utf8_bytes_in_the_request_are_logged_and_rejected_with_a_400():
+    logging_obj: Final = _logging_obj("adecisions")
+    raw_input: Final = b"\xff\xfe not utf-8"
+
+    with pytest.raises(litellm.BadRequestError):
+        _prepare_decisions_call(
+            **CONNECTION,
+            decision_input=raw_input,
+            questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
+            audio=None,
+            videos=None,
+            kwargs={"litellm_logging_obj": logging_obj},
+        )
+
+    logged: Final = _logged_request(logging_obj)
+    assert base64.urlsafe_b64decode(logged["input"]) == raw_input
     assert logged["questions"][0]["instructions"] == QUESTION_TEXT

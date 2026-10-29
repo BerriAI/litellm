@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import httpx
 import pytest
 import yaml
+from anthropic import Anthropic
 from anthropic.types import Message
 from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually, gateway_from_environment
@@ -397,7 +398,31 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
                 "anthropic-beta": cc.CLI_BETA,
                 "x-claude-code-session-id": f"oauth-{user_id}",
             }
-            request_body: Final = {**request_template, "model": model_a}
+            standard_listing: Final = enabled_gateway.client.get("/v1/models", headers=bearer_headers)
+            gateway_listing: Final = enabled_gateway.client.get(
+                "/claude_code_gateway/v1/models", headers=bearer_headers
+            )
+            assert standard_listing.status_code == 200, standard_listing.text
+            assert gateway_listing.status_code == 200, gateway_listing.text
+            assert gateway_listing.json() == standard_listing.json()
+            with Anthropic(
+                base_url=f"{str(enabled_gateway.client.base_url).rstrip('/')}/claude_code_gateway",
+                auth_token=access_token.access_token,
+            ) as sdk:
+                discovered_models: Final = tuple(sdk.models.list())
+            assert {model.id for model in discovered_models} == {model_a, model_c}
+            discovered_model: Final = next(model for model in discovered_models if model.id == model_a)
+            openai_listing: Final = enabled_gateway.client.get(
+                "/claude_code_gateway/v1/models",
+                headers={"authorization": f"Bearer {access_token.access_token}"},
+            )
+            assert openai_listing.status_code == 200, openai_listing.text
+            assert openai_listing.json()["object"] == "list"
+            assert {model["id"] for model in openai_listing.json()["data"]} == {model_a, model_c}
+            unauthenticated: Final = enabled_gateway.client.get("/claude_code_gateway/v1/models")
+            assert unauthenticated.status_code == 401, unauthenticated.text
+            assert upstream.drain() == ()
+            request_body: Final = {**request_template, "model": discovered_model.id}
             expected_message: Final = _MESSAGE.validate_python(
                 {
                     **_JSON_OBJECT.validate_json(

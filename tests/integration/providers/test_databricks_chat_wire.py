@@ -3,6 +3,7 @@ import json
 import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, TypeAlias
 
@@ -757,8 +758,6 @@ class _OutputItem(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     type: str
     content: tuple[_OutputPart, ...] = ()
-    name: str | None = None
-    arguments: str | None = None
 
 
 class _ResponsesBody(BaseModel):
@@ -787,7 +786,6 @@ class _MessagesDelta(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     type: str | None = None
     text: str | None = None
-    partial_json: str | None = None
 
 
 class _MessagesEvent(BaseModel):
@@ -796,20 +794,9 @@ class _MessagesEvent(BaseModel):
     delta: _MessagesDelta | None = None
 
 
-class _FunctionDelta(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-    arguments: str | None = None
-
-
-class _ToolCallDelta(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-    function: _FunctionDelta | None = None
-
-
 class _StreamDelta(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     content: str | None = None
-    tool_calls: tuple[_ToolCallDelta, ...] | None = None
 
 
 class _StreamChoice(BaseModel):
@@ -910,32 +897,15 @@ def _outage_or_reply(request: Request) -> Reply:
 
 
 def _item_text(item: _OutputItem) -> str:
-    match item.type:
-        case "message":
-            return "".join(part.text or "" for part in item.content)
-        case "function_call" if item.name == "json_tool_call":
-            return item.arguments or ""
-        case _:
-            return ""
+    return "".join(part.text or "" for part in item.content) if item.type == "message" else ""
 
 
 def _responses_text(body: _ResponsesBody) -> str:
     return "".join(_item_text(item) for item in body.output)
 
 
-def _chat_delta_text(delta: _StreamDelta) -> str:
-    calls: Final = delta.tool_calls or ()
-    return (delta.content or "") + "".join(call.function.arguments or "" for call in calls if call.function is not None)
-
-
 def _messages_delta_text(delta: _MessagesDelta) -> str:
-    match delta.type:
-        case "text_delta":
-            return delta.text or ""
-        case "input_json_delta":
-            return delta.partial_json or ""
-        case _:
-            return ""
+    return delta.text or "" if delta.type == "text_delta" else ""
 
 
 def _final_text(endpoint: _Endpoint, content: bytes) -> str:
@@ -954,7 +924,7 @@ def _streamed_text(endpoint: _Endpoint, data: tuple[str, ...]) -> str:
             assert data[-1] == "[DONE]", data
             chunks: Final = tuple(_StreamChunk.model_validate_json(line) for line in data[:-1])
             choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
-            return "".join(_chat_delta_text(choice.delta) for choice in choices)
+            return "".join(choice.delta.content or "" for choice in choices)
         case "responses":
             events: Final = tuple(_ResponsesEvent.model_validate_json(line) for line in data if line != "[DONE]")
             completed: Final = tuple(event.response for event in events if event.type == "response.completed")
@@ -1485,3 +1455,577 @@ def test_databricks_non_string_text_block_is_rejected_before_reaching_upstream(g
     assert response.status_code == 400, response.text
     assert "'int' object has no attribute 'strip'" in response.text
     assert received == ()
+
+
+_JSON_ANSWER_FRAGMENTS: Final = ('{"p":', '{"name":"Ada"}', "}")
+_PROSE_FRAGMENTS: Final = ("I will check ", "the weather first.")
+_WEATHER_FRAGMENTS: Final = ('{"city": ', '"Paris"}')
+_WEATHER_PARAMETERS: Final[Mapping[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_FORCED_JSON_TOOL_CHOICE: Final[Mapping[str, JsonValue]] = {"type": "function", "function": {"name": "json_tool_call"}}
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+@dataclass(frozen=True, slots=True)
+class _Reasoning:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Text:
+    fragments: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolUse:
+    index: int
+    name: str
+    fragments: tuple[str, ...]
+
+
+_Part: TypeAlias = _Reasoning | _Text | _ToolUse
+
+
+@dataclass(frozen=True, slots=True)
+class _Answer:
+    text: str
+    tools: tuple[tuple[str, JsonValue], ...]
+    finish: str
+    thought: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _Shape:
+    parts: tuple[_Part, ...]
+    upstream_finish: str
+    thinking: bool
+    user_tools: bool
+    json_schema: bool
+    expected: _Answer
+
+
+_THINKING: Final = _Reasoning("The caller wants Ada.")
+_PROSE: Final = _Text(_PROSE_FRAGMENTS)
+_WEATHER: Final = ("get_weather", _JSON_VALUE.validate_json("".join(_WEATHER_FRAGMENTS)))
+_JSON_ONLY: Final = _Answer(_JSON_CONTENT, (), "stop", True)
+_JSON_AND_WEATHER: Final = _Answer(_JSON_CONTENT, (_WEATHER,), "tool_calls", True)
+_PROSE_AND_WEATHER: Final = _Answer("".join(_PROSE_FRAGMENTS), (_WEATHER,), "tool_calls", True)
+
+
+def _json_tool(index: int) -> _ToolUse:
+    return _ToolUse(index, "json_tool_call", _JSON_ANSWER_FRAGMENTS)
+
+
+def _weather_tool(index: int) -> _ToolUse:
+    return _ToolUse(index, "get_weather", _WEATHER_FRAGMENTS)
+
+
+_SHAPES: Final[Mapping[str, _Shape]] = {
+    "json-only": _Shape((_json_tool(0),), "tool_calls", False, False, True, _Answer(_JSON_CONTENT, (), "stop", False)),
+    "prose-then-json": _Shape((_THINKING, _PROSE, _json_tool(0)), "tool_calls", True, False, True, _JSON_ONLY),
+    "json-then-user-tool": _Shape(
+        (_THINKING, _json_tool(0), _weather_tool(1)), "tool_calls", True, True, True, _JSON_AND_WEATHER
+    ),
+    "user-tool-then-json": _Shape(
+        (_THINKING, _weather_tool(0), _json_tool(1)), "tool_calls", True, True, True, _JSON_AND_WEATHER
+    ),
+    "prose-user-tool-json": _Shape(
+        (_THINKING, _PROSE, _weather_tool(0), _json_tool(1)), "tool_calls", True, True, True, _JSON_AND_WEATHER
+    ),
+    "text-answer": _Shape((_THINKING, _Text(_JSON_ANSWER_FRAGMENTS)), "stop", True, False, True, _JSON_ONLY),
+    "prose-then-user-tool": _Shape(
+        (_THINKING, _PROSE, _weather_tool(0)), "tool_calls", True, True, True, _PROSE_AND_WEATHER
+    ),
+    "no-json-schema-prose-then-user-tool": _Shape(
+        (_THINKING, _PROSE, _weather_tool(0)), "tool_calls", True, True, False, _PROSE_AND_WEATHER
+    ),
+}
+
+
+def _reasoning_block(text: str) -> JsonValue:
+    return {"type": "reasoning", "summary": [{"type": "summary_text", "text": text, "signature": "signature"}]}
+
+
+def _text_delta(fragment: str) -> Mapping[str, JsonValue]:
+    return {"content": fragment}
+
+
+def _part_deltas(part: _Part) -> tuple[Mapping[str, JsonValue], ...]:
+    match part:
+        case _Reasoning(text=text):
+            return ({"content": [_reasoning_block(text)]},)
+        case _Text(fragments=fragments):
+            return tuple(_text_delta(fragment) for fragment in fragments)
+        case _ToolUse(index=index, name=name, fragments=fragments):
+            opening: Final[Mapping[str, JsonValue]] = {
+                "tool_calls": [
+                    {
+                        "index": index,
+                        "id": f"toolu_{name}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": ""},
+                    }
+                ]
+            }
+            arguments: Final[tuple[Mapping[str, JsonValue], ...]] = tuple(
+                {"tool_calls": [{"index": index, "function": {"arguments": fragment}}]} for fragment in fragments
+            )
+            return (opening, *arguments)
+
+
+def _answer_message(parts: tuple[_Part, ...]) -> JsonValue:
+    reasoning: Final = tuple(_reasoning_block(part.text) for part in parts if isinstance(part, _Reasoning))
+    texts: Final[tuple[JsonValue, ...]] = tuple(
+        {"type": "text", "text": "".join(part.fragments)} for part in parts if isinstance(part, _Text)
+    )
+    tool_calls: Final[tuple[JsonValue, ...]] = tuple(
+        {
+            "id": f"toolu_{part.name}",
+            "type": "function",
+            "function": {"name": part.name, "arguments": "".join(part.fragments)},
+        }
+        for part in parts
+        if isinstance(part, _ToolUse)
+    )
+    return {"role": "assistant", "content": [*reasoning, *texts], "tool_calls": list(tool_calls)}
+
+
+def _answer_reply(shape: _Shape, stream: bool) -> Reply:
+    identity: Final = f"databricks-json-answer-{uuid.uuid4().hex}"
+    if not stream:
+        completion: Final = {
+            "id": identity,
+            "object": "chat.completion",
+            "created": 1,
+            "model": _CLAUDE_BACKEND,
+            "choices": [{"index": 0, "message": _answer_message(shape.parts), "finish_reason": shape.upstream_finish}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return Reply(body=json.dumps(completion).encode())
+    deltas: Final = ({"role": "assistant"}, *itertools.chain.from_iterable(_part_deltas(part) for part in shape.parts))
+    frames: Final = (
+        *(
+            _frame(identity, [{"index": 0, "delta": delta, "finish_reason": None}], model=_CLAUDE_BACKEND)
+            for delta in deltas
+        ),
+        _frame(identity, [{"index": 0, "delta": {}, "finish_reason": shape.upstream_finish}], model=_CLAUDE_BACKEND),
+        b"data: [DONE]\n\n",
+    )
+    return Reply(content_type="text/event-stream", chunks=frames)
+
+
+def _answer_request(
+    endpoint: _Endpoint, model: str, stream: bool, shape: _Shape, marker: str
+) -> Mapping[str, JsonValue]:
+    prompt: Final = f"{_JSON_SCHEMA_PROMPT} {marker}"
+    match endpoint:
+        case "chat":
+            return {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2048,
+                "stream": stream,
+                **({"response_format": _json_schema_format(_PERSON_SCHEMA)} if shape.json_schema else {}),
+                **(
+                    {
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {"name": "get_weather", "parameters": dict(_WEATHER_PARAMETERS)},
+                            }
+                        ]
+                    }
+                    if shape.user_tools
+                    else {}
+                ),
+                **({"reasoning_effort": "low"} if shape.thinking else {}),
+            }
+        case "responses":
+            return {
+                "model": model,
+                "input": prompt,
+                "max_output_tokens": 2048,
+                "stream": stream,
+                **(
+                    {
+                        "text": {
+                            "format": {
+                                "type": "json_schema",
+                                "name": "P",
+                                "strict": True,
+                                "schema": dict(_PERSON_SCHEMA),
+                            }
+                        }
+                    }
+                    if shape.json_schema
+                    else {}
+                ),
+                **(
+                    {"tools": [{"type": "function", "name": "get_weather", "parameters": dict(_WEATHER_PARAMETERS)}]}
+                    if shape.user_tools
+                    else {}
+                ),
+                **({"reasoning": {"effort": "low"}} if shape.thinking else {}),
+            }
+        case "messages":
+            return {
+                "model": model,
+                "max_tokens": 2048,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": stream,
+                **(
+                    {"output_format": {"type": "json_schema", "schema": dict(_PERSON_SCHEMA)}}
+                    if shape.json_schema
+                    else {}
+                ),
+                **(
+                    {"tools": [{"name": "get_weather", "input_schema": dict(_WEATHER_PARAMETERS)}]}
+                    if shape.user_tools
+                    else {}
+                ),
+                **({"thinking": {"type": "enabled", "budget_tokens": 1024}} if shape.thinking else {}),
+            }
+
+
+class _OutboundFunction(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    name: str
+
+
+class _OutboundTool(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    function: _OutboundFunction
+
+
+class _OutboundBody(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    model: str
+    stream: bool | None = None
+    tools: tuple[_OutboundTool, ...] = ()
+    tool_choice: JsonValue = None
+
+
+def _assert_answer_outbound(request: Request, shape: _Shape, stream: bool, marker: str) -> None:
+    assert (request.method, request.target) == ("POST", "/chat/completions")
+    assert marker.encode() in request.body
+    body: Final = _OutboundBody.model_validate_json(request.body)
+    tool_names: Final = (
+        *(("get_weather",) if shape.user_tools else ()),
+        *(("json_tool_call",) if shape.json_schema else ()),
+    )
+    assert (body.model, body.stream is True, sorted(tool.function.name for tool in body.tools)) == (
+        _CLAUDE_BACKEND,
+        stream,
+        sorted(tool_names),
+    )
+    assert (body.tool_choice == _FORCED_JSON_TOOL_CHOICE) == (shape.json_schema and not shape.thinking), body
+
+
+class _ChatToolFunction(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    name: str | None = None
+    arguments: str | None = None
+
+
+class _ChatToolCallDelta(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    index: int
+    function: _ChatToolFunction | None = None
+
+
+class _ChatAnswerDelta(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    content: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: tuple[_ChatToolCallDelta, ...] | None = None
+
+
+class _ChatAnswerStreamChoice(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    delta: _ChatAnswerDelta
+    finish_reason: str | None = None
+
+
+class _ChatAnswerChunk(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    choices: tuple[_ChatAnswerStreamChoice, ...]
+
+
+class _ChatToolCall(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    function: _ChatToolFunction
+
+
+class _ChatAnswerMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    content: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: tuple[_ChatToolCall, ...] | None = None
+
+
+class _ChatAnswerChoice(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    message: _ChatAnswerMessage
+    finish_reason: str | None = None
+
+
+class _ChatAnswer(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    choices: tuple[_ChatAnswerChoice, ...]
+
+
+class _ResponsesAnswerPart(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    type: str | None = None
+    text: str | None = None
+
+
+class _ResponsesAnswerItem(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    type: str
+    name: str | None = None
+    arguments: str | None = None
+    content: tuple[_ResponsesAnswerPart, ...] | None = None
+
+
+class _ResponsesAnswer(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    status: str | None = None
+    output: tuple[_ResponsesAnswerItem, ...]
+
+
+class _ResponsesAnswerEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    type: str
+    response: _ResponsesAnswer | None = None
+
+
+class _MessagesAnswerBlock(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    type: str
+    text: str | None = None
+    name: str | None = None
+    input: JsonValue = None
+
+
+class _MessagesAnswer(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    content: tuple[_MessagesAnswerBlock, ...]
+    stop_reason: str | None = None
+
+
+class _MessagesAnswerDelta(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    type: str | None = None
+    text: str | None = None
+    partial_json: str | None = None
+    stop_reason: str | None = None
+
+
+class _MessagesAnswerEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    type: str
+    index: int | None = None
+    content_block: _MessagesAnswerBlock | None = None
+    delta: _MessagesAnswerDelta | None = None
+
+
+def _only(values: tuple[str, ...]) -> str:
+    assert len(values) == 1, values
+    return values[0]
+
+
+def _arguments(arguments: str | None) -> JsonValue:
+    return _JSON_VALUE.validate_json(arguments or "{}")
+
+
+def _chat_answer(body: _ChatAnswer) -> _Answer:
+    assert len(body.choices) == 1, body
+    message: Final = body.choices[0].message
+    return _Answer(
+        text=message.content or "",
+        tools=tuple(
+            (call.function.name or "", _arguments(call.function.arguments)) for call in message.tool_calls or ()
+        ),
+        finish=body.choices[0].finish_reason or "",
+        thought=bool(message.reasoning_content),
+    )
+
+
+def _chat_stream_tool(fragments: tuple[_ChatToolCallDelta, ...]) -> tuple[str, JsonValue]:
+    functions: Final = tuple(fragment.function for fragment in fragments if fragment.function is not None)
+    names: Final = tuple(function.name for function in functions if function.name)
+    return _only(names), _arguments("".join(function.arguments or "" for function in functions))
+
+
+def _chat_stream_answer(data: tuple[str, ...]) -> _Answer:
+    assert data[-1] == "[DONE]", data
+    choices: Final = tuple(
+        itertools.chain.from_iterable(_ChatAnswerChunk.model_validate_json(line).choices for line in data[:-1])
+    )
+    deltas: Final = tuple(choice.delta for choice in choices)
+    tool_deltas: Final = tuple(itertools.chain.from_iterable(delta.tool_calls or () for delta in deltas))
+    indexes: Final = tuple(dict.fromkeys(tool_delta.index for tool_delta in tool_deltas))
+    assert indexes == tuple(range(len(indexes))), indexes
+    return _Answer(
+        text="".join(delta.content or "" for delta in deltas),
+        tools=tuple(
+            _chat_stream_tool(tuple(tool_delta for tool_delta in tool_deltas if tool_delta.index == index))
+            for index in indexes
+        ),
+        finish=_only(tuple(choice.finish_reason for choice in choices if choice.finish_reason)),
+        thought=any(delta.reasoning_content for delta in deltas),
+    )
+
+
+def _responses_item_text(item: _ResponsesAnswerItem) -> str:
+    return "".join(part.text or "" for part in item.content or ()) if item.type == "message" else ""
+
+
+def _responses_answer(body: _ResponsesAnswer) -> _Answer:
+    return _Answer(
+        text="".join(_responses_item_text(item) for item in body.output),
+        tools=tuple(
+            (item.name or "", _arguments(item.arguments)) for item in body.output if item.type == "function_call"
+        ),
+        finish=body.status or "",
+        thought=any(item.type == "reasoning" for item in body.output),
+    )
+
+
+def _responses_stream_answer(data: tuple[str, ...]) -> _Answer:
+    events: Final = tuple(_ResponsesAnswerEvent.model_validate_json(line) for line in data if line != "[DONE]")
+    completed: Final = tuple(event.response for event in events if event.type == "response.completed")
+    assert len(completed) == 1 and completed[0] is not None, data
+    return _responses_answer(completed[0])
+
+
+def _messages_answer(body: _MessagesAnswer) -> _Answer:
+    return _Answer(
+        text="".join(block.text or "" for block in body.content if block.type == "text"),
+        tools=tuple((block.name or "", block.input) for block in body.content if block.type == "tool_use"),
+        finish=body.stop_reason or "",
+        thought=any(block.type == "thinking" for block in body.content),
+    )
+
+
+def _messages_streamed_block(
+    start: _MessagesAnswerEvent, events: tuple[_MessagesAnswerEvent, ...]
+) -> _MessagesAnswerBlock:
+    assert start.content_block is not None, start
+    block_events: Final = tuple(
+        event for event in events if event.type == "content_block_delta" and event.index == start.index
+    )
+    deltas: Final = tuple(event.delta for event in block_events if event.delta is not None)
+    partial_json: Final = "".join(delta.partial_json or "" for delta in deltas)
+    return start.content_block.model_copy(
+        update={
+            "text": "".join(delta.text or "" for delta in deltas),
+            "input": _JSON_VALUE.validate_json(partial_json) if partial_json else start.content_block.input,
+        }
+    )
+
+
+def _messages_stream_answer(data: tuple[str, ...]) -> _Answer:
+    events: Final = tuple(_MessagesAnswerEvent.model_validate_json(line) for line in data)
+    assert events[-1].type == "message_stop", data
+    starts: Final = tuple(event for event in events if event.type == "content_block_start")
+    stop_reasons: Final = tuple(
+        event.delta.stop_reason for event in events if event.type == "message_delta" and event.delta is not None
+    )
+    return _messages_answer(
+        _MessagesAnswer(
+            content=tuple(_messages_streamed_block(start, events) for start in starts),
+            stop_reason=_only(tuple(reason for reason in stop_reasons if reason)),
+        )
+    )
+
+
+def _final_answer(endpoint: _Endpoint, payload: bytes) -> _Answer:
+    match endpoint:
+        case "chat":
+            return _chat_answer(_ChatAnswer.model_validate_json(payload))
+        case "responses":
+            return _responses_answer(_ResponsesAnswer.model_validate_json(payload))
+        case "messages":
+            return _messages_answer(_MessagesAnswer.model_validate_json(payload))
+
+
+def _streamed_answer(endpoint: _Endpoint, data: tuple[str, ...]) -> _Answer:
+    match endpoint:
+        case "chat":
+            return _chat_stream_answer(data)
+        case "responses":
+            return _responses_stream_answer(data)
+        case "messages":
+            return _messages_stream_answer(data)
+
+
+def _call_for_answer(gateway: Gateway, endpoint: _Endpoint, body: Mapping[str, JsonValue]) -> _Answer:
+    stream: Final = body["stream"] is True
+    if not stream:
+        response: Final = gateway.request("POST", _PATHS[endpoint], body)
+        assert response.status_code == 200, response.text
+        return _final_answer(endpoint, response.content)
+    with gateway.client.stream(
+        "POST", _PATHS[endpoint], json=dict(body), headers={"Authorization": f"Bearer {gateway.key}"}
+    ) as streamed:
+        assert streamed.status_code == 200, streamed.read()
+        data: Final = tuple(line.removeprefix("data: ") for line in streamed.iter_lines() if line.startswith("data: "))
+    return _streamed_answer(endpoint, data)
+
+
+_ANTHROPIC_STOP_REASONS: Final[Mapping[str, str]] = {"stop": "end_turn", "tool_calls": "tool_use"}
+
+
+def _endpoint_answer(endpoint: _Endpoint, answer: _Answer) -> _Answer:
+    match endpoint:
+        case "chat":
+            return answer
+        case "responses":
+            return _Answer(answer.text, answer.tools, "completed", answer.thought)
+        case "messages":
+            return _Answer(answer.text, answer.tools, _ANTHROPIC_STOP_REASONS[answer.finish], answer.thought)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "stream", "shape"),
+    [
+        pytest.param("chat", True, "json-only", id="chat-stream-json-only"),
+        pytest.param("chat", True, "prose-then-json", id="chat-stream-prose-then-json"),
+        pytest.param("chat", True, "json-then-user-tool", id="chat-stream-json-then-user-tool"),
+        pytest.param("chat", True, "user-tool-then-json", id="chat-stream-user-tool-then-json"),
+        pytest.param("chat", True, "prose-user-tool-json", id="chat-stream-prose-user-tool-json"),
+        pytest.param("chat", True, "text-answer", id="chat-stream-text-answer"),
+        pytest.param("chat", True, "prose-then-user-tool", id="chat-stream-prose-then-user-tool"),
+        pytest.param("chat", True, "no-json-schema-prose-then-user-tool", id="chat-stream-no-json-schema"),
+        pytest.param("responses", True, "prose-then-json", id="responses-stream-prose-then-json"),
+        pytest.param("responses", True, "json-then-user-tool", id="responses-stream-json-then-user-tool"),
+        pytest.param("responses", True, "prose-user-tool-json", id="responses-stream-prose-user-tool-json"),
+        pytest.param("responses", True, "prose-then-user-tool", id="responses-stream-prose-then-user-tool"),
+        pytest.param("messages", True, "json-only", id="messages-stream-json-only"),
+        pytest.param("messages", True, "prose-then-json", id="messages-stream-prose-then-json"),
+        pytest.param("messages", True, "json-then-user-tool", id="messages-stream-json-then-user-tool"),
+        pytest.param("messages", True, "prose-user-tool-json", id="messages-stream-prose-user-tool-json"),
+        pytest.param("messages", True, "prose-then-user-tool", id="messages-stream-prose-then-user-tool"),
+        pytest.param("messages", True, "no-json-schema-prose-then-user-tool", id="messages-stream-no-json-schema"),
+        pytest.param("chat", False, "prose-user-tool-json", id="chat-prose-user-tool-json"),
+        pytest.param("responses", False, "prose-user-tool-json", id="responses-prose-user-tool-json"),
+        pytest.param("messages", False, "prose-user-tool-json", id="messages-prose-user-tool-json"),
+    ],
+)
+def test_databricks_claude_json_schema_answer_reaches_every_endpoint_as_text(
+    gateway: Gateway, endpoint: _Endpoint, stream: bool, shape: str
+) -> None:
+    scripted: Final = _SHAPES[shape]
+    marker: Final = uuid.uuid4().hex
+    with wire_server(lambda _request: _answer_reply(scripted, stream)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"databricks/{_CLAUDE_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        answer: Final = _call_for_answer(gateway, endpoint, _answer_request(endpoint, model, stream, scripted, marker))
+        received: Final = wire.drain()
+    assert len(received) == 1, received
+    _assert_answer_outbound(received[0], scripted, stream, marker)
+    assert answer == _endpoint_answer(endpoint, scripted.expected)

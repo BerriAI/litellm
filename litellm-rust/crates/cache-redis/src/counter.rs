@@ -100,7 +100,7 @@ fn increment(
             .arg(amount)
             .arg(ttl)
             .query(connection)
-            .map_err(|_| Error::Unavailable);
+            .map_err(Error::unavailable);
     }
     connection
         .query_pipeline(
@@ -140,7 +140,7 @@ where
 }
 
 fn count(value: redis::Value) -> Result<Option<i64>, Error> {
-    redis::from_redis_value(value).map_err(|_| Error::InvalidEntry)
+    redis::from_redis_value(value).map_err(Error::invalid_entry)
 }
 
 impl<S, C> BoundedCounterCache for RedisCache<S, C>
@@ -182,7 +182,7 @@ where
                 .arg(value)
                 .arg(ttl)
                 .query(connection)
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })
         .await
     }
@@ -201,5 +201,5 @@ fn increment_with_floor(
         .arg(amount)
         .arg(ttl)
         .query(connection)
-        .map_err(|_| Error::Unavailable)
+        .map_err(Error::unavailable)
 }

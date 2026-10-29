@@ -23,7 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
+    response_format_answer_json,
     response_format_schema,
     split_response_format_answer,
     type_to_response_format_param,
@@ -163,6 +164,7 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -829,6 +831,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "else": "conditional (else): {}",
             "not": "must not match: {}",
         }
+        schema_fields: Final[Mapping[str, object]] = MappingProxyType(schema)
         min_items: Final = schema.get("minItems")
         enforced_min_items: Final = (
             isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
@@ -843,7 +846,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         for field, label in constraint_labels.items():
             if field not in schema or field not in unsupported_fields:
                 continue
-            value = schema[field]
+            value = schema_fields[field]
             # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
             # real requirement, so don't add a misleading advisory note for it.
             if isinstance(value, bool) and not value:
@@ -867,7 +870,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         drops_conflicting_type: Final = _enum_conflicts_with_declared_type(schema)
 
-        for key, value in schema.items():
+        for key, value in schema_fields.items():
             if key in unsupported_fields:
                 continue
             if key == "type" and drops_conflicting_type:
@@ -2265,6 +2268,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
+        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
@@ -2291,7 +2296,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
             optional_params=optional_params,
-            drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            drop_params=drop_params,
             custom_llm_provider=self.custom_llm_provider,
         )
 
@@ -2349,6 +2354,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 messages=list(conversation),
                 llm_provider=self._resolved_provider,
+                drop_params=drop_params,
             )
         except Exception as e:
             raise AnthropicError(
@@ -2380,7 +2386,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         ## Load Config
-        config: Final = litellm.AnthropicConfig.get_config(model=model)
+        config: Final[Mapping[str, object]] = MappingProxyType(litellm.AnthropicConfig.get_config(model=model))
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -2436,6 +2442,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=litellm_params.get("drop_params") is True,
                 output_key="top_k",
             )
+        output_format: Final = request_params.get("output_format")
+        if (
+            output_format is not None
+            and not isinstance(output_format, Mapping)
+            and drops_unsupported_params(_LITELLM_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params"))
+        ):
+            request_params.pop("output_format")
 
         data: Final = {
             "model": model,
@@ -3166,7 +3179,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         )
         if split_answer is not None:
-            return litellm.Message(content=json.dumps(split_answer))
+            return litellm.Message(content=response_format_answer_json(split_answer))
         try:
             payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
         except (json.JSONDecodeError, RecursionError):
@@ -3174,7 +3187,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return litellm.Message(content=json_mode_content_str)
         if response_format_schema is not None:
             return litellm.Message(
-                content=json.dumps(
+                content=response_format_answer_json(
                     unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
                 )
             )
