@@ -5453,6 +5453,40 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
 
 
+@pytest.mark.parametrize(
+    ("title", "expected_filename"),
+    [(None, "document.pdf"), ("Quarterly report", "Quarterly report")],
+)
+def test_user_pdf_document_reaches_openai_compatible_providers_as_file_part(
+    title: str | None, expected_filename: str
+) -> None:
+    document: Final = _base64_pdf_block() | ({"title": title} if title else {})
+    request_messages: Final = _run_chat_completions_pipeline(
+        [
+            AnthropicMessagesUserMessageParam(
+                role="user",
+                content=[document, {"type": "text", "text": "What is the codeword?"}],
+            )
+        ]
+    )
+
+    assert request_messages == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": expected_filename,
+                        "file_data": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}",
+                    },
+                },
+                {"type": "text", "text": "What is the codeword?"},
+            ],
+        }
+    ]
+
+
 @pytest.fixture
 def _chat_bridge_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

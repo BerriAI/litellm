@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import LlmProviders
+from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
 from litellm.llms.vertex_ai.request_labels import (
     VERTEX_LABELS_HEADER,
     vertex_partner_labels_header,
@@ -255,7 +256,7 @@ class VertexAIPartnerModels(VertexBase):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,
-                    messages=messages,
+                    messages=list(messages_with_file_parts_as_image_urls(messages)),
                     acompletion=acompletion,
                     api_base=api_base,
                     model_response=model_response,
