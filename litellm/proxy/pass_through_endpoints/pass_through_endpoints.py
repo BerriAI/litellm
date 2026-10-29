@@ -3403,6 +3403,39 @@ class InitPassThroughEndpointHelpers:
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
 
     @staticmethod
+    def _llm_api_routes_of_route(route_info: Mapping[str, object]) -> tuple[str, ...]:
+        path: Final = route_info.get("path")
+        if not isinstance(path, str):
+            return ()
+        if route_info.get("type") == "subpath":
+            return (path, path.rstrip("/") + "/*")
+        return (path,)
+
+    @staticmethod
+    def llm_api_routes_of_endpoint(endpoint_id: str) -> frozenset[str]:
+        route_infos: Final = (
+            route_info
+            for route_info in _registered_pass_through_routes.values()
+            if route_info["endpoint_id"] == endpoint_id
+        )
+        return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
+
+    @staticmethod
+    def auth_enforced_llm_api_routes_of_endpoint(endpoint_id: str) -> frozenset[str]:
+        route_infos: Final = (
+            route_info
+            for route_info in _registered_pass_through_routes.values()
+            if route_info["endpoint_id"] == endpoint_id and route_info.get("auth") is True
+        )
+        return frozenset(chain.from_iterable(map(InitPassThroughEndpointHelpers._llm_api_routes_of_route, route_infos)))
+
+    @staticmethod
+    def drop_llm_api_routes(routes: frozenset[str]) -> None:
+        openai_routes: Final = LiteLLMRoutes.openai_routes.value
+        for route in routes.intersection(openai_routes):
+            openai_routes.remove(route)
+
+    @staticmethod
     def clear_all_pass_through_routes():
         """Clear all pass-through routes from the registry"""
         _registered_pass_through_routes.clear()
@@ -4002,6 +4035,7 @@ async def update_pass_through_endpoints(
 
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
+    replaced_llm_api_routes: Final = InitPassThroughEndpointHelpers.llm_api_routes_of_endpoint(endpoint_id)
 
     ## Update db
     updated_data: Final = ConfigFieldUpdate(
@@ -4017,7 +4051,6 @@ async def update_pass_through_endpoints(
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)
-    InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
     if updated_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=route_app,
@@ -4052,6 +4085,10 @@ async def update_pass_through_endpoints(
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
         )
+    InitPassThroughEndpointHelpers.drop_llm_api_routes(
+        replaced_llm_api_routes
+        - InitPassThroughEndpointHelpers.auth_enforced_llm_api_routes_of_endpoint(updated_endpoint.id or endpoint_id)
+    )
 
     return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
 
