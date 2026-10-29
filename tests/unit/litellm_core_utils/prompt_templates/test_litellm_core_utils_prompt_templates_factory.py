@@ -8157,24 +8157,7 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
 
 
 
-@pytest.mark.parametrize(
-    "thinking_blocks",
-    [
-        None,
-        [{"type": "thinking", "thinking": "Search first", "signature": "sig_1"}],
-        [
-            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
-            {"type": "thinking", "thinking": "Search again", "signature": "sig_2"},
-            {"type": "thinking", "thinking": "Search once more", "signature": "sig_3"},
-            {"type": "thinking", "thinking": "Wrap up later", "signature": "sig_4"},
-        ],
-    ],
-    ids=["without_thinking", "fewer_thinking_than_searches", "more_thinking_than_searches"],
-)
-def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinking_blocks):
-    """A pause_turn response resent as-is must end on its unrun server_tool_use:
-    Anthropic reads a turn ending on text as prefill, which newer models reject,
-    and a tool_use without a tool_result is a 400."""
+def _paused_web_search_turn(thinking_blocks):
     assistant_message = {
         "role": "assistant",
         "content": "Step 1 is Tokyo.",
@@ -8209,11 +8192,35 @@ def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinkin
             ],
         },
     }
-    if thinking_blocks is not None:
-        assistant_message["thinking_blocks"] = thinking_blocks
+    if thinking_blocks is None:
+        return assistant_message
+    return {**assistant_message, "thinking_blocks": thinking_blocks}
 
+
+_PAUSED_TURN_THINKING_CASES = pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        None,
+        [{"type": "thinking", "thinking": "Search first", "signature": "sig_1"}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "thinking", "thinking": "Search again", "signature": "sig_2"},
+            {"type": "thinking", "thinking": "Search once more", "signature": "sig_3"},
+            {"type": "thinking", "thinking": "Wrap up later", "signature": "sig_4"},
+        ],
+    ],
+    ids=["without_thinking", "fewer_thinking_than_searches", "more_thinking_than_searches"],
+)
+
+
+@_PAUSED_TURN_THINKING_CASES
+def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinking_blocks):
+    """A pause_turn response resent as-is must end on its unrun server_tool_use:
+    Anthropic reads a turn ending on text as prefill, which newer models reject,
+    and a tool_use without a tool_result is a 400. Its thinking blocks are dropped,
+    since chat cannot say where Claude wrote them and Anthropic rejects moved ones."""
     result = anthropic_messages_pt(
-        [{"role": "user", "content": "Play the sister city chain game."}, assistant_message],
+        [{"role": "user", "content": "Play the sister city chain game."}, _paused_web_search_turn(thinking_blocks)],
         model="claude-sonnet-4-5",
         llm_provider="anthropic",
     )
@@ -8230,11 +8237,40 @@ def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinkin
         "srvtoolu_02Done",
         "srvtoolu_01Paused",
     ]
-    assert "tool_use" not in [block["type"] for block in content]
+    assert [block["type"] for block in content if block["type"] in ("tool_use", "thinking")] == []
     assert [block.get("tool_use_id") for block in content if block["type"] == "web_search_tool_result"] == [
         "srvtoolu_01Done",
         "srvtoolu_02Done",
     ]
+
+
+@_PAUSED_TURN_THINKING_CASES
+def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_search(thinking_blocks):
+    """A client may answer a paused turn with a new user message instead of resending it.
+    Anthropic then rejects a server_tool_use without its result, so the unrun search is dropped."""
+    result = anthropic_messages_pt(
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks),
+            {"role": "user", "content": "Please continue."},
+        ],
+        model="claude-sonnet-4-5",
+        llm_provider="anthropic",
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    content = result[1]["content"]
+    assert [block["id"] for block in content if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert [block["type"] for block in content if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in content if block["type"] == "web_search_tool_result"] == [
+        "srvtoolu_01Done",
+        "srvtoolu_02Done",
+    ]
+    assert {"type": "text", "text": "Step 1 is Tokyo."} in content
+
 
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
     """

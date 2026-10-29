@@ -2082,6 +2082,36 @@ def _split_unrun_server_tool_uses(
     return completed, unrun
 
 
+def _block_id(block: Mapping[str, object]) -> object:
+    return block.get("id")
+
+
+def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
+    result_ids: Final = frozenset(block.get("tool_use_id") for block in blocks if _is_server_tool_result(block))
+    return frozenset(
+        _block_id(block)
+        for block in blocks
+        if block.get("type") == "server_tool_use" and _block_id(block) not in result_ids
+    )
+
+
+def _paused_turn_replay(
+    tool_invokes: Sequence[_AnthropicToolInvokeItem],
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    *,
+    is_final_message: bool,
+) -> tuple[
+    tuple[_AnthropicToolInvokeItem, ...],
+    tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
+]:
+    unrun_ids: Final = _unrun_server_tool_use_ids(tool_invokes)
+    if not unrun_ids:
+        return tuple(tool_invokes), tuple(thinking_blocks)
+    if is_final_message:
+        return tuple(tool_invokes), ()
+    return tuple(block for block in tool_invokes if _block_id(block) not in unrun_ids), ()
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
@@ -3166,13 +3196,16 @@ def anthropic_messages_pt(
                     tool_results=_tool_results_tc,
                     answered_tool_ids=client_answered_tool_ids,
                 )
+                replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
+                    tool_invoke_results, thinking_blocks, is_final_message=msg_i == len(messages) - 1
+                )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
                 # and separate regular tool_use blocks
                 server_tool_groups: list[list[_AnthropicToolInvokeItem]] = []
                 regular_tool_uses: list[_AnthropicToolInvokeItem] = []
                 _current_group: list[_AnthropicToolInvokeItem] = []
-                for item in tool_invoke_results:
+                for item in replayed_tool_invokes:
                     item_type = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "")
                     if item_type == "server_tool_use":
                         if _current_group:
@@ -3212,13 +3245,13 @@ def anthropic_messages_pt(
                 # Any remaining groups (after all thinking blocks) go after.
                 tb_idx = 0
                 grp_idx = 0
-                num_tb = len(thinking_blocks) if thinking_blocks else 0
+                num_tb = len(replayed_thinking_blocks)
                 num_grp = len(completed_server_tool_groups)
 
                 while tb_idx < num_tb or grp_idx < num_grp:
                     if tb_idx < num_tb and grp_idx < num_grp:
                         # Emit thinking block then its tool group
-                        assistant_content.append(thinking_blocks[tb_idx])
+                        assistant_content.append(replayed_thinking_blocks[tb_idx])
                         tb_idx += 1
                         for block in completed_server_tool_groups[grp_idx]:
                             item_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
@@ -3230,7 +3263,7 @@ def anthropic_messages_pt(
                         grp_idx += 1
                     elif tb_idx < num_tb:
                         # More thinking blocks than tool groups - emit before text
-                        assistant_content.append(thinking_blocks[tb_idx])
+                        assistant_content.append(replayed_thinking_blocks[tb_idx])
                         tb_idx += 1
                     else:
                         # More tool groups than thinking blocks - emit remaining
@@ -3334,10 +3367,13 @@ def anthropic_messages_pt(
                     tool_results=_tool_results,
                     answered_tool_ids=client_answered_tool_ids,
                 )
+                resent_tool_invokes, _ = _paused_turn_replay(
+                    tool_invoke_results, (), is_final_message=msg_i == len(messages) - 1
+                )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates
                 # This can happen when merging history that already contains the tool calls
-                for item in tool_invoke_results:
+                for item in resent_tool_invokes:
                     # tool_use items are typically dicts, but handle objects just in case
                     item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
 
