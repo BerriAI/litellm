@@ -158,8 +158,16 @@ fn scored(timestamp: f64, similarity: f64) -> Result<SemanticLookup<CacheEntry>,
 )]
 #[case::no_search(Ok(SemanticLookup::miss(None)), true, Ok(SemanticLookup::miss(None)))]
 #[case::disabled_reads_skip_the_backend(scored(95.0, 0.95), false, Ok(SemanticLookup::miss(None)))]
-#[case::invalid_entry_is_a_miss(Err(Error::InvalidEntry), true, Ok(SemanticLookup::miss(None)))]
-#[case::backend_errors_propagate(Err(Error::Unavailable), true, Err(Error::Unavailable))]
+#[case::invalid_entry_is_a_miss(
+    Err(Error::InvalidEntry(None)),
+    true,
+    Ok(SemanticLookup::miss(None))
+)]
+#[case::backend_errors_propagate(
+    Err(Error::Unavailable(None)),
+    true,
+    Err(Error::Unavailable(None))
+)]
 #[tokio::test]
 async fn semantic_lookup_applies_freshness_to_the_value_only(
     #[case] backend: Result<SemanticLookup<CacheEntry>, Error>,
@@ -768,7 +776,7 @@ async fn gcs() -> (wiremock::MockServer, Gcs) {
             path_service_account: None,
             endpoint: server.uri(),
         },
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         litellm_cache_response::ResponseCacheCodec,
         Arc::new(litellm_cache_gcs::StaticTokenSource("token".into())),
     )));

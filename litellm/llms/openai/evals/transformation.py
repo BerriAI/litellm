@@ -2,10 +2,10 @@
 OpenAI Evals API configuration and transformations
 """
 
-from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
@@ -32,9 +32,11 @@ from litellm.types.llms.openai_evals import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+_DECODED_JSON: Final = TypeAdapter(object)
 
-def _parsed_response_json(raw_response: httpx.Response) -> Mapping[str, object]:
-    return raw_response.json()
+
+def _parsed_response_json(raw_response: httpx.Response) -> object:
+    return _DECODED_JSON.validate_python(raw_response.json())
 
 
 class OpenAIEvalsConfig(BaseEvalsAPIConfig):

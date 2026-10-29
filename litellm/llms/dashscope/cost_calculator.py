@@ -55,10 +55,9 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     )
 
 
-def _flat_rate(model_info: ModelInfo, cost_key: str, fallback_cost_key: str) -> float:
-    value: Final = model_info.get(cost_key)
+def _flat_rate(value: float | None, fallback_value: float | None) -> float:
     if value is None:
-        return float(model_info.get(fallback_cost_key) or 0.0)
+        return float(fallback_value or 0.0)
     return float(value)
 
 
@@ -66,8 +65,12 @@ def _flat_rates(model_info: ModelInfo) -> TokenRates:
     reasoning_rate: Final = model_info.get("output_cost_per_reasoning_token")
     return TokenRates(
         input_rate=float(model_info.get("input_cost_per_token") or 0.0),
-        cache_read_rate=_flat_rate(model_info, "cache_read_input_token_cost", "input_cost_per_token"),
-        cache_creation_rate=_flat_rate(model_info, "cache_creation_input_token_cost", "input_cost_per_token"),
+        cache_read_rate=_flat_rate(
+            model_info.get("cache_read_input_token_cost"), model_info.get("input_cost_per_token")
+        ),
+        cache_creation_rate=_flat_rate(
+            model_info.get("cache_creation_input_token_cost"), model_info.get("input_cost_per_token")
+        ),
         output_rate=float(model_info.get("output_cost_per_token") or 0.0),
         reasoning_rate=None if reasoning_rate is None else float(reasoning_rate),
     )
