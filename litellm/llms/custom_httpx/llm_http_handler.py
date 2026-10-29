@@ -2145,6 +2145,7 @@ class BaseLLMHTTPHandler:
         asearch: bool = False,
         headers: dict[str, object] | None = None,
         provider_config: BaseSearchConfig | None = None,
+        auth_params: dict[str, object] | None = None,  # mutable-ok: search signing hooks require a mutable params dict
     ) -> SearchResponse | Coroutine[object, object, SearchResponse]:
         """
         Sync Search handler.
@@ -2164,6 +2165,7 @@ class BaseLLMHTTPHandler:
                 client=client,
                 headers=headers,
                 provider_config=provider_config,
+                auth_params=auth_params,
             )
 
         # Validate environment and get headers
@@ -2189,7 +2191,10 @@ class BaseLLMHTTPHandler:
 
         signed_headers, signed_json_body = provider_config.sign_request(
             headers=headers,
-            optional_params=optional_params,
+            optional_params={  # mutable-ok: sign_request requires one merged dict
+                **optional_params,
+                **(auth_params or {}),  # mutable-ok: absent auth params contribute no entries
+            },
             request_data=data,
             api_base=complete_url,
             api_key=api_key,
@@ -2253,6 +2258,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         headers: dict[str, object] | None = None,
         provider_config: BaseSearchConfig | None = None,
+        auth_params: dict[str, object] | None = None,  # mutable-ok: search signing hooks require a mutable params dict
     ) -> SearchResponse:
         """
         Async Search handler.
@@ -2292,7 +2298,10 @@ class BaseLLMHTTPHandler:
             provider_config,
             provider_config.sign_request,
             headers=headers,
-            optional_params=optional_params,
+            optional_params={  # mutable-ok: sign_request requires one merged dict
+                **optional_params,
+                **(auth_params or {}),  # mutable-ok: absent auth params contribute no entries
+            },
             request_data=data,
             api_base=complete_url,
             api_key=api_key,
