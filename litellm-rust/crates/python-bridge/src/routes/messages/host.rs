@@ -2,7 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, to_py};
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -94,11 +94,12 @@ impl MessagesPythonHost {
             argument(name)?.map(|value| value.extract()).transpose()
         };
         let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
-        let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
+        argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
+        let messages = self.messages(py, arguments)?;
         let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
-            ("messages".to_string(), from_py(&messages)?),
+            ("messages".to_string(), messages),
         ]
         .into_iter()
         .chain(fields)
@@ -127,6 +128,15 @@ impl MessagesPythonHost {
                 shaping,
             })
         }))
+    }
+
+    fn messages(&self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<Value> {
+        let request = effective_py_args(self.view.request(py)?, arguments)?;
+        from_py(
+            &py.import(ROUTE_HOST_MODULE)?
+                .getattr("messages")?
+                .call1((request,))?,
+        )
     }
 
     fn merged_headers(

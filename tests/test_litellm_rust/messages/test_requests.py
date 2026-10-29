@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
@@ -152,40 +153,61 @@ def _user_text(*texts: object) -> tuple[dict[str, object], ...]:
     return ({"role": "user", "content": [{"type": "text", "text": text} for text in texts]},)
 
 
+FAILURE_EVENTS: Final = {True: "async_log_failure_event", False: "log_failure_event"}
+BOTH_MODES: Final = pytest.mark.parametrize("asynchronous", (True, False), ids=("async", "sync"))
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("messages", "error"),
-    (
-        (_user_text("hi", None), r"messages\.0\.content\.1\.text: Input should be a valid string"),
-        (_user_text("hi", 42), r"messages\.0\.content\.1\.text: Input should be a valid string"),
-    ),
-)
-async def test_sync_call_rejects_non_string_user_text_before_io_without_drop_params(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, messages: tuple[dict[str, object], ...], error: str
+@BOTH_MODES
+@pytest.mark.parametrize("malformed", (None, 42))
+async def test_non_string_user_text_answers_400_before_io_and_reaches_the_failure_callback(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool, malformed: object
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     server.expected_requests = 0
+    recorder: Final = RecordingLogger()
 
-    with pytest.raises(litellm.BadRequestError, match=error):
-        await call(server, asynchronous=False, messages=messages)
+    with pytest.raises(litellm.BadRequestError, match=r"messages\.0\.content\.1\.text: Input should be a valid string") as raised:
+        await call(server, asynchronous=asynchronous, messages=_user_text("hi", malformed), callbacks=[recorder])
+    events: Final = await recorder.wait_for_async(FAILURE_EVENTS[asynchronous])
 
     assert server.requests == []
+    assert raised.value.llm_provider == "anthropic"
+    assert isinstance(events[0].kwargs, dict)
+    assert events[0].kwargs["exception"] is raised.value
 
 
 @pytest.mark.asyncio
+@BOTH_MODES
 @pytest.mark.parametrize("malformed", (None, 42))
-async def test_sync_call_drops_non_string_user_text_with_drop_params(server: RecordingServer, malformed: object) -> None:
-    await call(server, asynchronous=False, messages=_user_text("hi", malformed), drop_params=True)
+async def test_drop_params_drops_non_string_user_text(server: RecordingServer, asynchronous: bool, malformed: object) -> None:
+    await call(server, asynchronous=asynchronous, messages=_user_text("hi", malformed), drop_params=True)
 
     body, _ = sent(server)
     assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 
 
 @pytest.mark.asyncio
-async def test_sync_call_rejects_messages_emptied_by_drop_params(server: RecordingServer) -> None:
+@BOTH_MODES
+async def test_messages_emptied_by_drop_params_answer_400_before_io(server: RecordingServer, asynchronous: bool) -> None:
     server.expected_requests = 0
+    recorder: Final = RecordingLogger()
 
     with pytest.raises(litellm.BadRequestError, match="no message has content left"):
-        await call(server, asynchronous=False, messages=_user_text(None), drop_params=True)
+        await call(server, asynchronous=asynchronous, messages=_user_text(None), drop_params=True, callbacks=[recorder])
+    await recorder.wait_for_async(FAILURE_EVENTS[asynchronous])
+
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@BOTH_MODES
+async def test_drop_params_leaves_a_malformed_message_list_for_the_request_validation(
+    server: RecordingServer, asynchronous: bool
+) -> None:
+    server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match="invalid Anthropic messages request"):
+        await call(server, asynchronous=asynchronous, messages=[*_user_text("hi", 42), "stray"], drop_params=True)
 
     assert server.requests == []

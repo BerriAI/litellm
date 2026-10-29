@@ -8,14 +8,20 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+from litellm.llms.anthropic.messages.convertible_blocks import (
+    drop_non_string_texts,
+    emptied_messages_error,
+    malformed_text_error,
+)
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import known_params, optional_str
+from litellm.rust_bridge.public_call import known_params, optional_sequence, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 _DROP_PATHS: Final = TypeAdapter(list[object])
+_MESSAGE_LIST: Final = TypeAdapter(list[dict[str, object]])
 _BODY_FIELDS: Final = frozenset(
     {
         "max_tokens",
@@ -44,6 +50,10 @@ _BODY_FIELDS: Final = frozenset(
 )
 
 
+class _RejectedMessages(ValueError):
+    messages_request_error: Final = True
+
+
 @dataclass(frozen=True, slots=True)
 class MessagesSettings:
     drop_params: bool
@@ -61,6 +71,24 @@ def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
 
 def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
     return known_params(_BODY_FIELDS, request)
+
+
+def messages(request: Mapping[str, object]) -> object:
+    sent: Final = request.get("messages")
+    error: Final = malformed_text_error(optional_sequence(sent) or ())
+    if error is None:
+        return sent
+    if not drops_unsupported_params(request.get("drop_params")):
+        raise _RejectedMessages(error)
+    try:
+        listed: Final = _MESSAGE_LIST.validate_python(sent)
+    except ValidationError:
+        return sent
+    kept: Final = drop_non_string_texts(listed, request.get("drop_params"))
+    emptied: Final = emptied_messages_error(listed, kept)
+    if emptied is not None:
+        raise _RejectedMessages(emptied)
+    return kept
 
 
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:

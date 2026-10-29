@@ -48,12 +48,6 @@ def tool_custom_field(request: NativeCall) -> bool:
     return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
 
 
-def malformed_text(request: NativeCall) -> bool:
-    from litellm.llms.anthropic.messages.convertible_blocks import malformed_text_error
-
-    return malformed_text_error(optional_sequence(request.resolved.get("messages")) or ()) is not None
-
-
 def stream_cost_injection(request: NativeCall) -> bool:
     """Python adds response cost to streaming usage when the global setting is truthy."""
     return streaming(request) and bool(litellm.include_cost_in_streaming_usage)

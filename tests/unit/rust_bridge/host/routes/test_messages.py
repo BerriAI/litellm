@@ -138,3 +138,60 @@ def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handl
     assert additional["llm_provider-request-id"] == "req_upstream_123"
     assert additional["x-ratelimit-remaining-requests"] == "41"
     assert additional["request-id"] == additional["llm_provider-request-id"]
+
+
+def _user_text(*texts: object) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "text", "text": text} for text in texts]}]
+
+
+def _rejection(request: dict[str, object], error: str) -> litellm.BadRequestError:
+    with pytest.raises(ValueError, match=error) as raised:
+        messages_host.messages(request)
+    mapped: Final = messages_host.map_failure(raised.value, request, "anthropic")
+    assert isinstance(mapped, litellm.BadRequestError)
+    return mapped
+
+
+def test_messages_with_string_text_are_sent_as_the_caller_passed_them() -> None:
+    sent: Final = _user_text("hi")
+
+    assert messages_host.messages({"model": "anthropic/claude-haiku-5-5", "messages": sent}) is sent
+
+
+@pytest.mark.parametrize("malformed", (None, 42))
+def test_non_string_user_text_without_drop_params_maps_to_a_400_naming_the_field(
+    monkeypatch: pytest.MonkeyPatch, malformed: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    rejected: Final = _rejection(
+        {"model": "anthropic/claude-haiku-5-5", "messages": _user_text("hi", malformed)},
+        r"messages\.0\.content\.1\.text: Input should be a valid string",
+    )
+
+    assert "messages.0.content.1.text: Input should be a valid string" in rejected.message
+    assert (rejected.model, rejected.llm_provider) == ("claude-haiku-5-5", "anthropic")
+
+
+@pytest.mark.parametrize("malformed", (None, 42))
+def test_drop_params_drops_non_string_user_text(malformed: object) -> None:
+    kept: Final = messages_host.messages(
+        {"model": "anthropic/claude-haiku-5-5", "messages": _user_text("hi", malformed), "drop_params": True}
+    )
+
+    assert kept == _user_text("hi")
+
+
+def test_messages_emptied_by_drop_params_map_to_a_400() -> None:
+    rejected: Final = _rejection(
+        {"model": "anthropic/claude-haiku-5-5", "messages": _user_text(None), "drop_params": True},
+        "no message has content left",
+    )
+
+    assert "no message has content left" in rejected.message
+
+
+def test_drop_params_leaves_a_message_list_with_a_non_object_entry_for_the_native_validation() -> None:
+    sent: Final = [*_user_text("hi", 42), "stray"]
+
+    assert messages_host.messages({"model": "anthropic/claude-haiku-5-5", "messages": sent, "drop_params": True}) is sent
