@@ -4295,7 +4295,14 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "model", "requested_thinking", "rejected_keys", "expected_thinking"),
+    (
+        "custom_llm_provider",
+        "model",
+        "requested_thinking",
+        "rejected_keys",
+        "expected_thinking",
+        "provider_rejects_block_binding",
+    ),
     (
         (
             "anthropic",
@@ -4303,6 +4310,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4310,6 +4318,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4317,6 +4326,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4324,6 +4334,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "adaptive", "display": "updates"},
             {"not_a_thinking_key": True, "budget_tokens": 2048},
             {"type": "adaptive", "display": "updates"},
+            False,
         ),
         (
             "vertex_ai",
@@ -4331,6 +4342,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "databricks",
@@ -4338,6 +4350,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            True,
         ),
     ),
     ids=(
@@ -4356,6 +4369,7 @@ def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     requested_thinking: dict[str, object],
     rejected_keys: dict[str, object],
     expected_thinking: dict[str, object],
+    provider_rejects_block_binding: bool,
     drop_params_source: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4370,7 +4384,10 @@ def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     )
 
     kept_rejected_keys: Final = {} if drop_params_source else rejected_keys
-    assert optional_params["thinking"] == {**expected_thinking, "block_binding": block_binding, **kept_rejected_keys}
+    kept_block_binding: Final = (
+        {} if drop_params_source and provider_rejects_block_binding else {"block_binding": block_binding}
+    )
+    assert optional_params["thinking"] == {**expected_thinking, **kept_block_binding, **kept_rejected_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
