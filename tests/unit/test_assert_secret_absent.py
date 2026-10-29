@@ -19,7 +19,7 @@ scanner: Final = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = scanner
 _spec.loader.exec_module(scanner)
 
-SECRET: Final = "lic/ense+KEY:9f8e7d6c5b4a3210-zz"
+SECRET: Final = "lic/ense+KEY:9f8e~~??>>~?7d6c5b4a3210-zz"
 PREFIXES: Final = ("", "x", "xy")
 ENCODERS: Final = (base64.b64encode, base64.urlsafe_b64encode)
 
