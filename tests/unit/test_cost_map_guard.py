@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -379,7 +380,10 @@ def _git_commit(repo: Path, message: str) -> str:
     ).stdout.strip()
 
 
-def _run_guard(repo: Path, base: str, head: str, head_ref: str) -> subprocess.CompletedProcess[str]:
+def _run_guard(
+    repo: Path, base: str, head: str, head_ref: str, *, target: str | None = None, target_env: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    target_args: Final = () if target_env is not None else ("--target", target or base)
     return subprocess.run(
         (
             sys.executable,
@@ -388,8 +392,7 @@ def _run_guard(repo: Path, base: str, head: str, head_ref: str) -> subprocess.Co
             base,
             "--head",
             head,
-            "--target",
-            base,
+            *target_args,
             "--head-ref",
             head_ref,
         ),
@@ -397,6 +400,7 @@ def _run_guard(repo: Path, base: str, head: str, head_ref: str) -> subprocess.Co
         capture_output=True,
         text=True,
         check=False,
+        env=None if target_env is None else {**os.environ, guard.TARGET_ENV: target_env},
     )
 
 
@@ -469,3 +473,38 @@ def test_main_reads_the_pins_from_the_head_revision(tmp_path: Path, head_ref: st
     assert result.returncode == 1, result.stdout + result.stderr
     pin_line: Final = f"- {guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: "
     assert [line for line in result.stdout.splitlines() if line.startswith(pin_line)]
+
+
+@pytest.mark.parametrize("head_ref", [BOT_REF, "litellm_fix_pricing"])
+def test_main_holds_a_pin_the_base_branch_added_after_the_pr_branched(tmp_path: Path, head_ref: str) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    merge_base: Final = _commit(tmp_path, BASE_MAP, "merge base")
+    target: Final = _commit(tmp_path, BASE_MAP, "pin on the base branch", pins=PINS)
+    subprocess.run(("git", "checkout", "-q", merge_base), cwd=tmp_path, check=True)
+    head: Final = _commit(tmp_path, NO_VISION_MAP, "branch cut before the pin lowers it", pins=NO_PINS)
+    result: Final = _run_guard(tmp_path, merge_base, head, head_ref, target_env=target)
+    assert result.returncode == 1, result.stdout + result.stderr
+    pin_line: Final = f"- {guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: "
+    assert [line for line in result.stdout.splitlines() if line.startswith(pin_line)]
+
+
+def test_main_reports_a_failed_merge_apart_from_a_conflict(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    base: Final = _commit(tmp_path, BASE_MAP, "base")
+    head: Final = _commit(tmp_path, {**BASE_MAP, "openrouter/c": _entry()}, "head")
+    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing", target="0" * 40)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert result.stdout.startswith(f"cost map guard failed: git merge-tree into {'0' * 40} failed: ")
+
+
+def test_main_tells_a_conflicting_pr_to_merge_the_base_branch_in(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    merge_base: Final = _commit(tmp_path, BASE_MAP, "merge base")
+    target: Final = _commit(tmp_path, {**BASE_MAP, "openrouter/b": _entry(3e-06)}, "base branch reprices b")
+    subprocess.run(("git", "checkout", "-q", merge_base), cwd=tmp_path, check=True)
+    head: Final = _commit(tmp_path, {**BASE_MAP, "openrouter/b": _entry(4e-06)}, "pr reprices b differently")
+    result: Final = _run_guard(tmp_path, merge_base, head, "litellm_fix_pricing", target=target)
+    assert result.returncode == 1, result.stdout + result.stderr
+    conflict_line: Final = "- the pull request does not merge cleanly into its base branch; merge the base branch in first"
+    assert conflict_line in result.stdout.splitlines()
+

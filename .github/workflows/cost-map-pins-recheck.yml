@@ -22,22 +22,50 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.ref_name }}
+          COST_MAP_PATHS: '["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json", "ci_cd/cost_map_pins.json"]'
         run: |
-          gh api graphql --paginate -F owner="${GITHUB_REPOSITORY_OWNER}" -F name="${GITHUB_REPOSITORY#*/}" -F base="$BASE_REF" \
+          candidates="$(gh api graphql --paginate -F owner="${GITHUB_REPOSITORY_OWNER}" -F name="${GITHUB_REPOSITORY#*/}" -F base="$BASE_REF" \
             -f query='query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
               repository(owner: $owner, name: $name) {
                 pullRequests(states: OPEN, baseRefName: $base, first: 25, after: $endCursor) {
-                  nodes { headRefOid files(first: 100) { nodes { path } } }
+                  nodes { number headRefOid changedFiles files(first: 100) { nodes { path } } }
                   pageInfo { hasNextPage endCursor }
                 }
               }
             }' \
-            --jq '.data.repository.pullRequests.nodes[] | select(any(.files.nodes[].path; IN("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json", "ci_cd/cost_map_pins.json"))) | .headRefOid' |
-          while read -r head_sha; do
-            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow cost-map-guard.yml --commit "$head_sha" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
-            if [ -z "$run_id" ]; then
-              echo "::warning::no cost map guard run found for $head_sha"
+            --jq '(env.COST_MAP_PATHS | fromjson) as $paths | .data.repository.pullRequests.nodes[]
+              | {number, headRefOid, listed: any(.files.nodes[].path; IN($paths[])), unlisted: (.changedFiles > 100)}
+              | select(.listed or .unlisted) | "\(.number) \(.headRefOid) \(.listed)"')"
+          failed=0
+          declare -A rerun_heads
+          while read -r number head_sha listed; do
+            [ -n "$number" ] || continue
+            if [ "$listed" = false ]; then
+              if ! changed="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${number}/files?per_page=100" \
+                --jq '(env.COST_MAP_PATHS | fromjson) as $paths | .[].filename | select(IN($paths[]))')"; then
+                echo "::error::could not list the files of #$number"
+                failed=1
+                continue
+              fi
+              [ -n "$changed" ] || continue
+            fi
+            [ -z "${rerun_heads[$head_sha]:-}" ] || continue
+            rerun_heads[$head_sha]=1
+            if ! run_ids="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow cost-map-guard.yml --commit "$head_sha" --limit 100 --json databaseId --jq '.[].databaseId')"; then
+              echo "::error::could not list the cost map guard runs of #$number"
+              failed=1
               continue
             fi
-            gh run rerun "$run_id" --repo "$GITHUB_REPOSITORY" || echo "::warning::could not re-run cost map guard run $run_id for $head_sha"
-          done
+            if [ -z "$run_ids" ]; then
+              echo "::warning::no cost map guard run found for #$number"
+              continue
+            fi
+            for run_id in $run_ids; do
+              gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" > /dev/null || true
+              if ! gh run rerun "$run_id" --repo "$GITHUB_REPOSITORY"; then
+                echo "::error::could not re-run cost map guard run $run_id for #$number"
+                failed=1
+              fi
+            done
+          done <<< "$candidates"
+          exit "$failed"

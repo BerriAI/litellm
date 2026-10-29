@@ -40,8 +40,8 @@ jobs:
       - name: Run the guard
         env:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
-          TARGET: ${{ steps.revisions.outputs.target }}
+          COST_MAP_GUARD_TARGET: ${{ steps.revisions.outputs.target }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          uv run --no-project python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --target "$TARGET" --head-ref "$HEAD_REF"
+          uv run --no-project python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Iterator, Mapping, Sequence
@@ -30,6 +31,8 @@ GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
 CHECKED_PATHS: Final = (*GUARDED_PATHS, PINS_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 PRICE_SYNC_BRANCH_PREFIX: Final = "litellm-providers/price-sync"
+TARGET_ENV: Final = "COST_MAP_GUARD_TARGET"
+MERGE_CONFLICT_EXIT_CODE: Final = 1
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -42,6 +45,11 @@ class Snapshot:
     cost_map: str
     backup: str
     pins: str
+
+
+@dataclass(frozen=True, slots=True)
+class MergeFailed:
+    stderr: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,9 +248,19 @@ def snapshot(revision: str) -> Snapshot:
     return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in CHECKED_PATHS))
 
 
-def merged_tree(merge_base: str, target: str, head: str) -> str | None:
-    output: Final = _git("merge-tree", "--write-tree", f"--merge-base={merge_base}", target, head)
-    return None if output is None else output.split("\n", 1)[0]
+def merged_tree(merge_base: str, target: str, head: str) -> str | MergeFailed | None:
+    result: Final = subprocess.run(
+        ("git", "merge-tree", "--write-tree", f"--merge-base={merge_base}", target, head),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    tree: Final = result.stdout.split("\n", 1)[0]
+    if result.returncode == 0:
+        return tree
+    if result.returncode == MERGE_CONFLICT_EXIT_CODE and tree:
+        return None
+    return MergeFailed(result.stderr.strip())
 
 
 def changed_files(base: str, head: str) -> tuple[str, ...] | None:
@@ -254,7 +272,13 @@ def main(argv: Sequence[str]) -> int:
     parser: Final = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, help="merge base of the pull request")
     parser.add_argument("--head", required=True, help="head commit of the pull request")
-    parser.add_argument("--target", required=True, help="tip of the base branch the pull request merges into")
+    env_target: Final = os.environ.get(TARGET_ENV)
+    parser.add_argument(
+        "--target",
+        default=env_target,
+        required=env_target is None,
+        help=f"tip of the base branch the pull request merges into, defaulting to ${TARGET_ENV}",
+    )
     parser.add_argument("--head-ref", required=True, help="head branch name of the pull request")
     args: Final = parser.parse_args(argv)
     bot: Final = args.head_ref.startswith(BOT_BRANCH_PREFIX)
@@ -263,6 +287,9 @@ def main(argv: Sequence[str]) -> int:
         print(f"cost map guard failed: git diff {args.base} {args.head} failed, so the changed files are unknown")
         return 1
     merged: Final = merged_tree(args.base, args.target, args.head)
+    if isinstance(merged, MergeFailed):
+        print(f"cost map guard failed: git merge-tree into {args.target} failed: {merged.stderr}")
+        return 1
     failures: Final = (
         *guard_failures(
             snapshot(args.base), snapshot(args.head), None if merged is None else snapshot(merged), changed, bot
