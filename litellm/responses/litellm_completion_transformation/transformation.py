@@ -126,8 +126,10 @@ from litellm.types.utils import (
 )
 
 from .claude_hosted_tools import (
+    claude_code_execution_command,
     claude_computer_member_call_message,
     claude_tools_for_openai_hosted_tools,
+    is_claude_code_execution_use,
     is_computer_member_call,
     openai_computer_call,
     requests_openai_computer_use,
@@ -887,6 +889,34 @@ def _code_interpreter_call_replacing(
             return code_interpreter_calls.get(call_id)
         case _:
             return None
+
+
+def code_interpreter_calls_in(results: object) -> tuple[OutputCodeInterpreterCall, ...]:
+    return tuple(OutputCodeInterpreterCall.model_validate(result) for result in parts_of(results))
+
+
+def _code_execution_call_awaiting_result(tool_call: object) -> OutputCodeInterpreterCall | None:
+    if not isinstance(tool_call, ChatCompletionMessageToolCall) or not is_claude_code_execution_use(
+        tool_call.id, tool_call.function.name or ""
+    ):
+        return None
+    return OutputCodeInterpreterCall(
+        type="code_interpreter_call",
+        id=tool_call.id,
+        code=claude_code_execution_command(tool_call.function.arguments) or "",
+        container_id=None,
+        status="incomplete",
+        outputs=None,
+    )
+
+
+def _code_execution_calls_awaiting_result(
+    chat_completion_response: ModelResponse,
+) -> Iterator[OutputCodeInterpreterCall]:
+    tool_calls: Final = chain.from_iterable(
+        choice.message.tool_calls or () for choice in chat_completion_response.choices
+    )
+    return filter(None, map(_code_execution_call_awaiting_result, tool_calls))
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -3463,7 +3493,12 @@ class LiteLLMCompletionResponsesConfig:
         extracted: Final = parts_of(
             LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(chat_completion_response)
         )
-        return MappingProxyType({item.id: item for item in extracted if isinstance(item, OutputCodeInterpreterCall)})
+        return MappingProxyType(
+            {
+                **{call.id: call for call in _code_execution_calls_awaiting_result(chat_completion_response)},
+                **{item.id: item for item in extracted if isinstance(item, OutputCodeInterpreterCall)},
+            }
+        )
 
     @staticmethod
     def _extract_compaction_output_items(choices: Sequence[Choices]) -> tuple[ResponseCompactionItem, ...]:

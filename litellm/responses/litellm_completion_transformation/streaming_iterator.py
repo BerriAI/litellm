@@ -1,6 +1,6 @@
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from itertools import filterfalse
 from typing import Any, Final, cast
 
@@ -11,6 +11,7 @@ from openai.types.responses import (
     ResponseCodeInterpreterCallInProgressEvent,
     ResponseCodeInterpreterCallInterpretingEvent,
 )
+from pydantic import BaseModel
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.claude_hosted_tools import (
+    claude_code_execution_command,
     is_claude_code_execution_use,
     is_computer_member_call,
     openai_computer_call,
@@ -39,6 +41,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    code_interpreter_calls_in,
 )
 from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
@@ -214,7 +217,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search_call_ids: frozenset[str] = frozenset()
         self._computer_use_requested: bool = requests_openai_computer_use(request_tools)
         self._computer_call_ids: frozenset[str] = frozenset()
-        self._code_execution_call_ids: frozenset[str] = frozenset()
+        self._code_interpreter_calls_added: frozenset[str] = frozenset()
+        self._code_interpreter_calls_coded: frozenset[str] = frozenset()
+        self._code_interpreter_calls_completed: frozenset[str] = frozenset()
 
     def _is_tool_search_call(self, call_id: str, fn_name: str) -> bool:
         if call_id in self._tool_search_call_ids:
@@ -233,12 +238,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return True
 
     def _is_code_execution_call(self, call_id: str, fn_name: str) -> bool:
-        if call_id in self._code_execution_call_ids:
-            return True
-        if not is_claude_code_execution_use(call_id, fn_name):
-            return False
-        self._code_execution_call_ids = self._code_execution_call_ids | {call_id}
-        return True
+        return call_id in self._code_interpreter_calls_added or is_claude_code_execution_use(call_id, fn_name)
 
     def _streamed_code_interpreter_call(self, call: OutputCodeInterpreterCall) -> BaseLiteLLMOpenAIResponseObject:
         item: Final = BaseLiteLLMOpenAIResponseObject(**call.model_dump())
@@ -249,63 +249,105 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         return item
 
-    def _queued_code_interpreter_call_events(
-        self, call_id: str, output_index: int, code_interpreter_calls: Mapping[str, OutputCodeInterpreterCall]
-    ) -> bool:
-        call: Final = code_interpreter_calls.get(call_id)
-        if call is None:
-            return False
-        in_progress: Final = call.model_copy(update={"status": "in_progress", "code": "", "outputs": None})
-        self._queue_output_item_added(output_index, self._streamed_code_interpreter_call(in_progress))
-        code: Final = call.code or ""
-        first: Final = self._sequence_number + 1
-        progress_events: Final = (
+    def _next_sequence_number(self) -> int:
+        self._sequence_number += 1
+        return self._sequence_number
+
+    def _queue_tool_event(self, event: BaseModel) -> None:
+        self._pending_tool_events.append(BaseLiteLLMOpenAIResponseObject(**event.model_dump()))
+
+    def _queue_code_interpreter_call_added(self, call_id: str, output_index: int) -> None:
+        if call_id in self._code_interpreter_calls_added:
+            return
+        self._code_interpreter_calls_added = self._code_interpreter_calls_added | {call_id}
+        in_progress: Final = OutputCodeInterpreterCall(
+            type="code_interpreter_call", id=call_id, code="", container_id="", status="in_progress", outputs=None
+        )
+        self._queue_output_item_added(output_index, BaseLiteLLMOpenAIResponseObject(**in_progress.model_dump()))
+        self._queue_tool_event(
             ResponseCodeInterpreterCallInProgressEvent(
                 type="response.code_interpreter_call.in_progress",
                 item_id=call_id,
                 output_index=output_index,
-                sequence_number=first,
-            ),
+                sequence_number=self._next_sequence_number(),
+            )
+        )
+
+    def _queue_code_interpreter_call_code(self, call_id: str, output_index: int, code: str) -> None:
+        if call_id in self._code_interpreter_calls_coded:
+            return
+        self._code_interpreter_calls_coded = self._code_interpreter_calls_coded | {call_id}
+        self._queue_tool_event(
             ResponseCodeInterpreterCallCodeDeltaEvent(
                 type="response.code_interpreter_call_code.delta",
                 item_id=call_id,
                 output_index=output_index,
-                sequence_number=first + 1,
+                sequence_number=self._next_sequence_number(),
                 delta=code,
-            ),
+            )
+        )
+        self._queue_tool_event(
             ResponseCodeInterpreterCallCodeDoneEvent(
                 type="response.code_interpreter_call_code.done",
                 item_id=call_id,
                 output_index=output_index,
-                sequence_number=first + 2,
+                sequence_number=self._next_sequence_number(),
                 code=code,
-            ),
+            )
+        )
+        self._queue_tool_event(
             ResponseCodeInterpreterCallInterpretingEvent(
                 type="response.code_interpreter_call.interpreting",
                 item_id=call_id,
                 output_index=output_index,
-                sequence_number=first + 3,
-            ),
+                sequence_number=self._next_sequence_number(),
+            )
+        )
+
+    def _queue_code_interpreter_call_completed(self, call_id: str, output_index: int) -> None:
+        if call_id in self._code_interpreter_calls_completed:
+            return
+        self._code_interpreter_calls_completed = self._code_interpreter_calls_completed | {call_id}
+        self._queue_tool_event(
             ResponseCodeInterpreterCallCompletedEvent(
                 type="response.code_interpreter_call.completed",
                 item_id=call_id,
                 output_index=output_index,
-                sequence_number=first + 4,
-            ),
+                sequence_number=self._next_sequence_number(),
+            )
         )
-        self._pending_tool_events.extend(
-            BaseLiteLLMOpenAIResponseObject(**event.model_dump()) for event in progress_events
-        )
-        self._sequence_number = first + len(progress_events)
+
+    def _stream_code_interpreter_call_delta(self, call_id: str, output_index: int, args_delta: str) -> None:
+        self._queue_code_interpreter_call_added(call_id, output_index)
+        arguments: Final = self._tool_args_by_call_id.get(call_id, "") + args_delta
+        self._tool_args_by_call_id[call_id] = arguments
+        code: Final = claude_code_execution_command(arguments)
+        if code is not None:
+            self._queue_code_interpreter_call_code(call_id, output_index, code)
+
+    def _queue_code_interpreter_results(self) -> None:
+        if self._code_interpreter_calls_added <= self._code_interpreter_calls_completed:
+            return
+        results: Final = self._accumulated_provider_specific_fields.get("code_interpreter_results")
+        for call in code_interpreter_calls_in(results):
+            output_index = self._get_or_assign_tool_output_index(call.id)
+            self._queue_code_interpreter_call_added(call.id, output_index)
+            self._queue_code_interpreter_call_code(call.id, output_index, call.code or "")
+            self._queue_code_interpreter_call_completed(call.id, output_index)
+
+    def _queue_code_interpreter_call_done(self, output_index: int, call: OutputCodeInterpreterCall) -> None:
+        self._queue_code_interpreter_call_added(call.id, output_index)
+        self._queue_code_interpreter_call_code(call.id, output_index, call.code or "")
+        if call.status == "completed":
+            self._queue_code_interpreter_call_completed(call.id, output_index)
         self._pending_tool_events.append(
             OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
-                sequence_number=self._sequence_number,
+                sequence_number=self._next_sequence_number(),
                 item=self._streamed_code_interpreter_call(call),
             )
         )
-        return True
 
     def _queued_computer_call_events(self, call_id: str, output_index: int, member: str, arguments: str) -> bool:
         in_progress: Final = openai_computer_call(call_id, member, arguments, "in_progress")
@@ -548,12 +590,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
                 fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
+            if self._is_computer_call(call_id, tc):
+                continue
             output_index = self._get_or_assign_tool_output_index(call_id)
 
             if self._is_tool_search_call(call_id, fn_name):
                 self._queue_tool_search_call_added(call_id, output_index, fn_args_delta)
                 continue
-            if self._is_computer_call(call_id, tc) or self._is_code_execution_call(call_id, fn_name):
+            if self._is_code_execution_call(call_id, fn_name):
+                self._stream_code_interpreter_call_delta(call_id, output_index, fn_args_delta)
                 continue
             self._started_tool_call = True
 
@@ -631,9 +676,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 call_id, output_index, fn_name, fn_args
             ):
                 continue
-            if self._is_code_execution_call(call_id, fn_name) and self._queued_code_interpreter_call_events(
-                call_id, output_index, code_interpreter_calls
-            ):
+            if (code_interpreter_call := code_interpreter_calls.get(call_id)) is not None:
+                self._queue_code_interpreter_call_done(output_index, code_interpreter_call)
                 continue
 
             # Track if this is a new tool call that wasn't streamed
@@ -1364,6 +1408,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             if src and isinstance(src, dict):
                                 self._merge_provider_specific_fields(src)
                                 self._reserve_web_search_indexes(src)
+                        self._queue_code_interpreter_results()
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
@@ -1424,6 +1469,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         if src and isinstance(src, dict):
                             self._merge_provider_specific_fields(src)
                             self._reserve_web_search_indexes(src)
+                    self._queue_code_interpreter_results()
                     self._ensure_output_item_for_chunk(chunk)
                     # Always snapshot before returning any pending events so that
                     # finish_reason (e.g. content_filter) is captured even when

@@ -102,6 +102,12 @@ class _ClaudeMemberInput(LiteLLMBaseModel):
     scroll_amount: int | None = None
 
 
+class _ClaudeCodeExecutionInput(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    command: str
+
+
 def claude_tools_for_openai_hosted_tools(
     tools: Sequence[Mapping[str, object]], drop_params: bool
 ) -> tuple[Mapping[str, object], ...]:
@@ -175,6 +181,13 @@ def is_computer_member_call(tool_call: object) -> bool:
 
 def is_claude_code_execution_use(call_id: str, tool_name: str) -> bool:
     return call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name == CLAUDE_BASH_CODE_EXECUTION_TOOL_NAME
+
+
+def claude_code_execution_command(arguments: str) -> str | None:
+    try:
+        return _ClaudeCodeExecutionInput.model_validate_json(arguments).command
+    except ValidationError:
+        return None
 
 
 def openai_computer_call(

@@ -1,13 +1,24 @@
 import json
 from collections.abc import Mapping, Sequence
-from itertools import chain
+from itertools import accumulate, chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 import respx
-from openai.types.responses import ResponseCodeInterpreterToolCall, ResponseStreamEvent
+from openai import omit
+from openai.lib.streaming.responses import ResponseStreamState
+from openai.types.responses import (
+    ResponseCodeInterpreterToolCall,
+    ResponseCompletedEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
+    ResponseStreamEvent,
+)
+from openai.types.responses.parsed_response import ParsedResponse
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import BaseModel, TypeAdapter
 
@@ -1483,8 +1494,18 @@ def _content_block_events(index: int, block: Mapping[str, object]) -> tuple[Mapp
             )
 
 
-def _anthropic_code_execution_turn(stream: bool, *content: Mapping[str, object]) -> httpx.Response:
-    stop_reason: Final = "end_turn" if content[-1]["type"] == "text" else "pause_turn"
+def _stop_reason_after(last_block: Mapping[str, object]) -> str:
+    match last_block["type"]:
+        case "text":
+            return "end_turn"
+        case "tool_use":
+            return "tool_use"
+        case _:
+            return "pause_turn"
+
+
+def _anthropic_turn(stream: bool, *content: Mapping[str, object]) -> httpx.Response:
+    stop_reason: Final = _stop_reason_after(content[-1])
     if not stream:
         return httpx.Response(
             200,
@@ -1532,9 +1553,7 @@ def test_responses_code_interpreter_call_comes_before_the_answer_message(
     respx_mock: respx.MockRouter, stream: bool
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_code_execution_turn(
-            stream, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER
-        )
+        return_value=_anthropic_turn(stream, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER)
     )
 
     response: Final = litellm.responses(
@@ -1553,9 +1572,7 @@ def test_streamed_responses_code_interpreter_emit_the_code_interpreter_call_the_
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_code_execution_turn(
-            True, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER
-        )
+        return_value=_anthropic_turn(True, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER)
     )
 
     events: Final = tuple(
@@ -1596,11 +1613,50 @@ def test_streamed_responses_code_interpreter_emit_the_code_interpreter_call_the_
     }.isdisjoint(event.type for event in events)
 
 
-def test_streamed_code_execution_call_with_no_result_streams_what_the_response_completes_with(
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+def test_code_execution_with_no_result_yet_is_an_incomplete_code_interpreter_call(
+    respx_mock: respx.MockRouter, stream: bool
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(return_value=_anthropic_turn(stream, _CODE_EXECUTION_USE))
+
+    response: Final = litellm.responses(
+        model=_MODEL,
+        input="Use code to compute 2**100.",
+        tools=[_CODE_INTERPRETER],
+        stream=stream,
+        api_key="mock_api_key",
+    )
+
+    output: Final = tuple(response)[-1].response.output if stream else response.output
+    assert [(item.type, item.status, item.code) for item in output] == [
+        ("code_interpreter_call", "incomplete", _CODE_EXECUTION_USE["input"]["command"])
+    ]
+
+
+_OPENAI_SDK_BASE_URL: Final = "http://openai-sdk.test/v1"
+_CODE_EXECUTION_PREAMBLE: Final = {"type": "text", "text": "I will compute it with Python. "}
+_CLICK_NARRATION: Final = {"type": "text", "text": "Clicking the search box."}
+
+
+def _code_interpreter_timeline_entry(event: BaseModel) -> str | None:
+    match json.loads(event.model_dump_json()):
+        case {"type": "response.output_text.delta", "delta": str() as delta}:
+            return delta
+        case {"type": "response.output_item.added" | "response.output_item.done" as kind, "item": {"type": item_type}}:
+            return f"{kind} {item_type}"
+        case {"type": str() as kind} if kind.startswith("response.code_interpreter_call"):
+            return kind
+        case _:
+            return None
+
+
+def test_streamed_code_interpreter_call_starts_and_runs_between_the_texts_around_it(
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_code_execution_turn(True, _CODE_EXECUTION_USE)
+        return_value=_anthropic_turn(
+            True, _CODE_EXECUTION_PREAMBLE, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER
+        )
     )
 
     events: Final = tuple(
@@ -1613,5 +1669,86 @@ def test_streamed_code_execution_call_with_no_result_streams_what_the_response_c
         )
     )
 
-    done_items: Final = [event.item.type for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
-    assert done_items == [item.type for item in events[-1].response.output]
+    assert [entry for entry in map(_code_interpreter_timeline_entry, events) if entry is not None] == [
+        "response.output_item.added message",
+        _CODE_EXECUTION_PREAMBLE["text"],
+        "response.output_item.added code_interpreter_call",
+        "response.code_interpreter_call.in_progress",
+        "response.code_interpreter_call_code.delta",
+        "response.code_interpreter_call_code.done",
+        "response.code_interpreter_call.interpreting",
+        "response.code_interpreter_call.completed",
+        _CODE_EXECUTION_ANSWER["text"],
+        "response.output_item.done code_interpreter_call",
+        "response.output_item.done message",
+    ]
+
+
+class _SnapshotKeepingResponseStreamState(ResponseStreamState[None]):
+    snapshot: ParsedResponse[object] | None = None
+
+    def accumulate_event(self, event: ResponseStreamEvent) -> ParsedResponse[object]:
+        self.snapshot = super().accumulate_event(event)
+        return self.snapshot
+
+
+def _sse_body(events: Sequence[BaseModel]) -> bytes:
+    return b"".join(f"data: {event.model_dump_json()}\n\n".encode() for event in events)
+
+
+def _message_texts(items: Sequence[BaseModel]) -> list[list[str]]:
+    return [[part.text for part in item.content] for item in items if isinstance(item, ResponseOutputMessage)]
+
+
+@pytest.mark.parametrize(
+    ("tools", "content"),
+    [
+        pytest.param(
+            [_CODE_INTERPRETER],
+            (_CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER),
+            id="code_first",
+        ),
+        pytest.param(
+            [_CODE_INTERPRETER],
+            (_CODE_EXECUTION_PREAMBLE, _CODE_EXECUTION_USE, _CODE_EXECUTION_RESULT, _CODE_EXECUTION_ANSWER),
+            id="text_before_code",
+        ),
+        pytest.param([_CODE_INTERPRETER], (_CODE_EXECUTION_USE,), id="code_without_result"),
+        pytest.param([_COMPUTER_USE_PREVIEW], (_CTRL_CLICK_MEMBER_CALL, _CLICK_NARRATION), id="computer_call_first"),
+        pytest.param([_COMPUTER_USE_PREVIEW], (_CLICK_NARRATION, _CTRL_CLICK_MEMBER_CALL), id="text_first"),
+    ],
+)
+def test_openai_sdk_accumulates_a_streamed_hosted_tool_turn_into_its_completed_response(
+    respx_mock: respx.MockRouter, tools: list[Mapping[str, object]], content: tuple[Mapping[str, object], ...]
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(return_value=_anthropic_turn(True, *content))
+    bridged: Final = tuple(
+        litellm.responses(model=_MODEL, input="Go.", tools=tools, stream=True, api_key="mock_api_key")
+    )
+    respx_mock.post(f"{_OPENAI_SDK_BASE_URL}/responses").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_sse_body(bridged))
+    )
+
+    events: Final = tuple(
+        openai.OpenAI(api_key="mock_api_key", base_url=_OPENAI_SDK_BASE_URL, max_retries=0).responses.create(
+            model=_MODEL, input="Go.", stream=True
+        )
+    )
+    state: Final = _SnapshotKeepingResponseStreamState(input_tools=omit, text_format=omit)
+    sdk_events: Final = tuple(chain.from_iterable(state.handle_event(event) for event in events))
+
+    completed: Final = events[-1]
+    assert isinstance(completed, ResponseCompletedEvent) and state.snapshot is not None
+    assert sdk_events[-1].type == completed.type
+    added_indexes: Final = [event.output_index for event in events if isinstance(event, ResponseOutputItemAddedEvent)]
+    assert added_indexes == list(range(len(completed.response.output)))
+    items_added_so_far: Final = accumulate(isinstance(event, ResponseOutputItemAddedEvent) for event in events)
+    assert all(getattr(event, "output_index", -1) < added for event, added in zip(events, items_added_so_far))
+    done_items: Final = {
+        event.output_index: event.item for event in events if isinstance(event, ResponseOutputItemDoneEvent)
+    }
+    accumulated: Final = [done_items.get(index, item) for index, item in enumerate(state.snapshot.output)]
+    assert [item.to_dict(exclude_none=True) for item in accumulated] == [
+        item.to_dict(exclude_none=True) for item in completed.response.output
+    ]
+    assert _message_texts(state.snapshot.output) == _message_texts(completed.response.output)
