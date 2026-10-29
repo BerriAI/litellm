@@ -6,7 +6,6 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
-    _baseline_usage,
     _resolve_model,
     compute_autorouter_savings,
     compute_savings_spend,
@@ -61,9 +60,6 @@ def test_prompt_cache_estimate_uses_the_rollup_pricing_and_retains_write_premium
 def test_baseline_preserves_anthropic_pricing_fields(modifier: dict[str, str], continuing: bool) -> None:
     usage: Final = _usage(1000, 0, 1000, 100).model_copy(update=modifier)
     expected: Final = (_usage(1000, 1000, 0, 100) if continuing else usage).model_copy(update=modifier)
-    normalized: Final = _baseline_usage(expected)
-    cache_fields: Final = {"prompt_tokens_details", "cache_read_input_tokens", "cache_creation_input_tokens"}
-    assert normalized.model_dump(exclude=cache_fields) == usage.model_dump(exclude=cache_fields)
     assert usage.prompt_tokens_details.cached_tokens == 0
     selected_cost: Final = 0.013
     assert compute_autorouter_savings(
@@ -491,7 +487,6 @@ def test_supplied_baseline_usage_is_priced_independently(
     )
     assert result == pytest.approx(expected)
     assert result is not None and (result < 0) is loses_money
-    assert _baseline_usage(modeled).prompt_tokens_details == modeled.prompt_tokens_details
 
 
 @pytest.mark.parametrize("modifier, multiplier", [({}, 1.0), ({"inference_geo": "us"}, 1.1), ({"speed": "fast"}, 2.0)])
@@ -644,10 +639,9 @@ def test_unresolvable_baseline_remains_unknown():
 
 def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
     """OpenAI, Azure and Gemini entries carry no `cache_creation_input_token_cost`,
-    because those providers cache implicitly and charge nothing to write. Leaving this
-    request's written tokens in the creation bucket priced them at the 0.0 the cost
-    resolver falls back to, so the baseline carried a 20k prompt for free and a first
-    turn that saved money reported a loss. Those tokens are plain input on such a model.
+    because those providers cache implicitly and charge nothing to write. The cost
+    resolver bills such writes at the input rate, so the baseline pays for its 20k prompt
+    and a first turn that saved money reports a saving, not a loss.
     """
     first_turn = _usage(fresh=0, cached=0, written=20_000, out=1_000)
     reported = compute_autorouter_savings(
@@ -698,9 +692,9 @@ def _priced_chat_model_without_cache_read_rate() -> tuple[str, str, str]:
 
 
 def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
-    """The same hole on the other bucket. A baseline whose entry has no
-    `cache_read_input_token_cost` reads for 0.0, so a continuing turn priced the whole
-    prompt at nothing and every switch away from it reported a loss.
+    """The same rule on the other bucket. A baseline whose entry has no
+    `cache_read_input_token_cost` bills its reads at the input rate, so a continuing turn
+    does not price the whole prompt at nothing and report every switch away as a loss.
     """
     baseline_key, baseline_name, baseline_provider = _priced_chat_model_without_cache_read_rate()
     continuing = _usage(fresh=0, cached=0, written=20_000, out=1_000)
@@ -718,6 +712,28 @@ def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
     baseline_pays_input = 20_000 * baseline["input_cost_per_token"] + 1_000 * baseline["output_cost_per_token"]
     actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
+
+
+@pytest.mark.parametrize("cache_rates", [
+    pytest.param({"cache_creation_input_token_cost": 1.25e-6}, id="write-rate-only"),
+    pytest.param({"cache_read_input_token_cost": 0.0, "cache_creation_input_token_cost": 1.25e-6}, id="free-reads"),
+    pytest.param({"cache_read_input_token_cost": 1e-7, "cache_creation_input_token_cost": 0.0}, id="free-writes"),
+])
+def test_the_baseline_is_charged_what_the_biller_would_charge_it(cache_rates: dict[str, float]) -> None:
+    info: Final = {
+        **litellm.get_model_info("gpt-4o", "openai"),
+        "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": None, "cache_creation_input_token_cost": None,
+        **cache_rates,
+    }
+    usage: Final = _usage(fresh=200, cached=1000, written=500, out=50)
+    selected_cost: Final = 0.013
+    reported: Final = compute_autorouter_savings(
+        "gpt-4o", "claude-haiku-4-5", "anthropic", usage, baseline_info=info, baseline_usage=usage,
+        cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
+    )
+    billed: Final = sum(generic_cost_per_token(model="gpt-4o", usage=usage, custom_llm_provider="openai", model_info=info))
+    assert reported == pytest.approx(billed - selected_cost)
 
 
 def _breakdown(input_cost: float, output_cost: float = 0.0, **extra: object) -> dict:

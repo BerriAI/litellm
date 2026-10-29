@@ -33,7 +33,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
-from litellm.types.utils import ModelInfo, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelInfo, Usage
 
 
 class SavingsSpend(NamedTuple):
@@ -278,56 +278,6 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
     return int(read), int(created)
 
 
-def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
-    """Whether the baseline model has a ``(cache read, cache write)`` rate of its own.
-
-    A missing rate is not a free bucket. `_get_token_base_cost` resolves an absent
-    `cache_read_input_token_cost` or `cache_creation_input_token_cost` to 0.0, so a
-    baseline whose provider prices caching implicitly, which is every OpenAI, Azure and
-    Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
-    profitable route into a reported loss. Such a model pays its plain input rate for
-    those tokens, so the buckets it cannot price become ordinary input below.
-    """
-    if baseline_info is None:
-        return True, True
-    return bool(baseline_info.get("cache_read_input_token_cost")), bool(
-        baseline_info.get("cache_creation_input_token_cost")
-    )
-
-
-def _baseline_usage(usage: Usage, baseline_info: ModelInfo | None = None) -> Usage:
-    cache_read, cache_creation = _cache_token_split(usage)
-    details: Final = usage.prompt_tokens_details
-    if details is None or (cache_read <= 0 and cache_creation <= 0):
-        return usage
-    prices_reads, prices_writes = _baseline_cache_rate_keys(baseline_info)
-    reads: Final = cache_read if prices_reads else 0
-    writes: Final = cache_creation if prices_writes else 0
-    if (reads, writes) == (cache_read, cache_creation):
-        return usage
-    other_modalities: Final = sum(
-        (getattr(details, field, 0) or 0) for field in ("audio_tokens", "image_tokens", "video_tokens")
-    )
-    return Usage(
-        **{
-            **usage.model_dump(),
-            # Rebuild through Usage so private fallback counts agree with the public buckets.
-            "cache_read_input_tokens": reads,
-            "cache_creation_input_tokens": writes,
-            "prompt_tokens_details": PromptTokensDetailsWrapper(
-                **{
-                    **details.model_dump(),
-                    "cached_tokens": reads,
-                    "cache_creation_tokens": writes,
-                    "cache_write_tokens": writes,
-                    "cache_creation_token_details": details.cache_creation_token_details if writes else None,
-                    "text_tokens": max(usage.prompt_tokens - reads - writes - other_modalities, 0),
-                }
-            ),
-        },
-    )
-
-
 def compute_autorouter_savings(
     baseline_model: str | None,
     selected_model: str | None,
@@ -352,9 +302,7 @@ def compute_autorouter_savings(
     basis: Final = _pricing_basis(cost_breakdown)
     effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
     modeled_usage: Final = baseline_usage if baseline_usage is not None else usage
-    baseline_cost: Final = _cost_of_usage(
-        baseline, _baseline_usage(modeled_usage, effective_baseline_info), effective_baseline_info, basis
-    )
+    baseline_cost: Final = _cost_of_usage(baseline, modeled_usage, effective_baseline_info, basis)
     recorded_selected_cost: Final = _recorded_token_cost(cost_breakdown)
     selected_cost: Final = (
         recorded_selected_cost
