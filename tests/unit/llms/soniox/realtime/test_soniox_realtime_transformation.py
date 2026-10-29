@@ -291,10 +291,29 @@ def test_manual_finalization_completes_the_turn_without_speech_stopped_and_start
     assert second[0]["item_id"] != first[0]["item_id"]
 
 
-def test_finalization_without_speech_emits_nothing():
-    transformer = SonioxEventTransformer(drops_originals=False)
+def test_a_commit_without_speech_answers_with_an_empty_turn_billed_for_the_silence():
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(_append(), MODEL)
+    config.transform_realtime_request(_event("input_audio_buffer.commit"), MODEL)
 
-    assert transformer.transform(_response([_token("<fin>")])) == ()
+    events = tuple(
+        config.transform_realtime_response(
+            _response([_token("<fin>")], total_audio_proc_ms=2000), MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT
+        )["response"]
+    )
+
+    assert _types(events) == ["conversation.item.input_audio_transcription.completed"]
+    assert events[0]["transcript"] == ""
+    assert events[0]["usage"] == {"type": "duration", "seconds": 2.0}
+    assert _events(config, [_token("Next"), _token("<end>")])[0]["item_id"] != events[0]["item_id"]
+
+
+def test_a_clear_without_speech_still_answers_nothing():
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(_append(), MODEL)
+    config.transform_realtime_request(_event("input_audio_buffer.clear"), MODEL)
+
+    assert _events(config, [_token("<fin>")]) == ()
 
 
 def test_translation_sessions_transcribe_only_the_translated_tokens():

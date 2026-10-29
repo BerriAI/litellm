@@ -237,6 +237,10 @@ def _segments(tokens: tuple[_SonioxToken, ...]) -> tuple[SonioxTranscriptSegment
     return tuple(_segment(tuple(run)) for _, run in groupby(tokens, key=lambda token: (token.speaker, token.language)))
 
 
+def _new_item_id() -> str:
+    return f"item_{uuid.uuid4().hex}"
+
+
 def _completed(
     item_id: str, tokens: tuple[_SonioxToken, ...], usage: RealtimeInputAudioTranscriptionUsage | None
 ) -> OpenAIRealtimeInputAudioTranscriptionCompleted:
@@ -323,12 +327,16 @@ class SonioxEventTransformer:
 
     def _finalized(self) -> tuple[OpenAIRealtimeEvents, ...]:
         discarded: Final = self._finalizes.popleft() if self._finalizes else False
-        return () if discarded else self._complete(speech_stopped=False)
+        if discarded:
+            return ()
+        if self._item_id is None:
+            return (_completed(_new_item_id(), (), self.take_unbilled_usage()),)
+        return self._complete(speech_stopped=False)
 
     def _start(self) -> tuple[OpenAIRealtimeEvents, ...]:
         if self._item_id is not None:
             return ()
-        item_id: Final = f"item_{uuid.uuid4().hex}"
+        item_id: Final = _new_item_id()
         self._item_id = item_id
         return (speech_event("input_audio_buffer.speech_started", item_id),)
 
