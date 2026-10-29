@@ -541,8 +541,12 @@ def test_a_rejected_explicit_key_fails_cleanly_without_opening_a_browser(
 
 @pytest.mark.parametrize(
     ("command", "method", "path"),
-    [(["users", "list"], "GET", "/user/list"), (["keys", "generate"], "POST", "/key/generate")],
-    ids=["users", "keys"],
+    [
+        (["users", "list"], "GET", "/user/list"),
+        (["keys", "generate"], "POST", "/key/generate"),
+        (["teams", "list"], "GET", "/team/list"),
+    ],
+    ids=["users", "keys", "teams"],
 )
 def test_a_rejected_explicit_key_names_the_reason_the_proxy_gave_without_echoing_the_key(
     requests_mock: Mocker,
