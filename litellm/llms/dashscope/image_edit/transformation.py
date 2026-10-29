@@ -13,6 +13,8 @@ from litellm.llms.dashscope.common_utils import (
     DASHSCOPE_CHAT_COMPATIBLE_PATH,
     DASHSCOPE_MULTIMODAL_GENERATION_PATH,
     dashscope_api_root,
+    is_dashscope_native_endpoint_url,
+    resolve_dashscope_endpoints,
 )
 from litellm.llms.dashscope.image_generation.transformation import (
     DEFAULT_API_BASE,
@@ -37,6 +39,14 @@ def _dashscope_size(size: object) -> object:
     if not isinstance(size, str):
         return size
     return OPENAI_TO_DASHSCOPE_SIZE.get(size, size.replace("x", "*"))
+
+
+def _deployment_edit_url(api_base: str) -> str:
+    derives_from_root: Final = not is_dashscope_native_endpoint_url(api_base) and (
+        resolve_dashscope_endpoints(api_base) is not None
+        or api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH)
+    )
+    return f"{dashscope_api_root(api_base)}{DASHSCOPE_MULTIMODAL_GENERATION_PATH}" if derives_from_root else api_base
 
 
 class DashScopeImageEditConfig(BaseImageEditConfig):
@@ -87,10 +97,8 @@ class DashScopeImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> str:
-        if api_base is not None and not api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
-            return api_base
         if api_base is not None:
-            return f"{dashscope_api_root(api_base)}{DASHSCOPE_MULTIMODAL_GENERATION_PATH}"
+            return _deployment_edit_url(api_base)
         env_api_base: Final = get_secret_str("DASHSCOPE_API_BASE")
         derived: Final = (
             f"{dashscope_api_root(env_api_base)}{DASHSCOPE_MULTIMODAL_GENERATION_PATH}" if env_api_base else None

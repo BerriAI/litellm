@@ -219,6 +219,12 @@ def test_an_alibaba_cloud_audio_url_is_downloaded_over_https(
         ),
         (f"{INTL}{SYNTHESIZER_PATH}", None, "qwen3-tts-flash", f"{INTL}{MULTIMODAL_PATH}"),
         (
+            "https://dashscope.aliyuncs.com/apps/anthropic",
+            None,
+            "qwen3-tts-flash",
+            f"https://dashscope.aliyuncs.com{MULTIMODAL_PATH}",
+        ),
+        (
             "https://relay.example.com/dashscope/",
             None,
             "qwen3-tts-flash",

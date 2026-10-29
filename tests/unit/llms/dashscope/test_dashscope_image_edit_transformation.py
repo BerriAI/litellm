@@ -122,6 +122,9 @@ CHINA_ENDPOINT: Final = "https://dashscope.aliyuncs.com/api/v1/services/aigc/mul
     (
         ("https://dashscope.aliyuncs.com/compatible-mode/v1", None, None, CHINA_ENDPOINT),
         ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", None, None, INTL_ENDPOINT),
+        ("https://dashscope.aliyuncs.com", None, None, CHINA_ENDPOINT),
+        ("https://dashscope-intl.aliyuncs.com/apps/anthropic", None, None, INTL_ENDPOINT),
+        (None, "https://dashscope.aliyuncs.com/apps/anthropic", None, CHINA_ENDPOINT),
         (
             "https://gw.example.com/compatible-mode/v1",
             None,

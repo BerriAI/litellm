@@ -269,5 +269,28 @@
       "/v1/chat/completions",
       "/v1/responses"
     ]
+  },
+  "kyma": {
+    "base_url": "https://kymaapi.com/v1",
+    "api_key_env": "KYMA_API_KEY",
+    "provider_info": {
+      "supports_function_calling": true
+    }
+  },
+  "streamlake": {
+    "base_url": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+    "api_key_env": "STREAMLAKE_API_KEY",
+    "api_base_env": "STREAMLAKE_API_BASE",
+    "param_mappings": {
+      "max_tokens": "max_completion_tokens"
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "special_handling": {
+      "preserve_cache_control": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
