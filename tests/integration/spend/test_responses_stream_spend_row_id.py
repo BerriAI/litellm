@@ -1,10 +1,13 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from uuid import uuid4
 
+import httpx
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value, string_value
@@ -93,6 +96,10 @@ def _respond(request: Request) -> Reply:
         stored_id: Final = request.target.removeprefix("/v1/responses/")
         assert stored_id.startswith("resp_upstream-"), request.target
         return Reply(body=json.dumps(_native_completed(stored_id)).encode())
+    if request.target.endswith("/cancel"):
+        cancelled_id: Final = request.target.removeprefix("/v1/responses/").removesuffix("/cancel")
+        assert cancelled_id.startswith("resp_upstream-"), request.target
+        return Reply(body=json.dumps(response_object(cancelled_id, "cancelled")).encode())
     body: Final = JSON_OBJECT.validate_json(request.body)
     upstream_id: Final = f"upstream-{uuid4().hex}"
     if request.target == "/v1/responses" and body.get("stream") is not True:
@@ -104,8 +111,10 @@ def _respond(request: Request) -> Reply:
     return _chat_stream(f"chatcmpl-{upstream_id}", string_value(body["model"]))
 
 
-def _terminal_response_id(gateway: Gateway, key: str, body: dict[str, JsonValue]) -> str:
-    response: Final = gateway.request("POST", "/v1/responses", body, key=key)
+def _terminal_response_id(
+    gateway: Gateway, key: str, body: dict[str, JsonValue], headers: Mapping[str, str] | None = None
+) -> str:
+    response: Final = gateway.request("POST", "/v1/responses", body, key=key, headers=headers)
     assert response.status_code == 200, response.text
     frames: Final = tuple(
         JSON_OBJECT.validate_json(line.removeprefix("data: "))
@@ -120,10 +129,29 @@ def _terminal_response_id(gateway: Gateway, key: str, body: dict[str, JsonValue]
     return advertised[0]
 
 
-def _created_response_id(gateway: Gateway, key: str, body: dict[str, JsonValue]) -> str:
+def _created_response_id(
+    gateway: Gateway, key: str, body: dict[str, JsonValue], headers: Mapping[str, str] | None = None
+) -> str:
     if body.get("stream") is True:
-        return _terminal_response_id(gateway, key, body)
-    return string_value(gateway.post("/v1/responses", body, key=key)["id"])
+        return _terminal_response_id(gateway, key, body, headers)
+    response: Final = gateway.request("POST", "/v1/responses", body, key=key, headers=headers)
+    assert response.status_code == 200, response.text
+    return string_value(JSON_OBJECT.validate_json(response.content)["id"])
+
+
+def _read_and_cancel(
+    gateway: Gateway, key: str, response_id: str, headers: Mapping[str, str] | None = None
+) -> tuple[httpx.Response, ...]:
+    responses: Final = tuple(
+        gateway.request(method, path, key=key, headers=headers)
+        for method, path in (
+            ("GET", f"/v1/responses/{response_id}"),
+            ("GET", f"/v1/responses/{response_id}"),
+            ("POST", f"/v1/responses/{response_id}/cancel"),
+        )
+    )
+    assert [response.status_code for response in responses] == [200, 200, 200], [r.text for r in responses]
+    return responses
 
 
 def _spend_logs_lookup(gateway: Gateway, request_id: str) -> list[JsonValue]:
@@ -176,18 +204,27 @@ def test_streamed_responses_spend_row_is_filed_under_the_id_the_client_saw(
         assert _spend_logs_lookup(gateway, client_id) == [client_id]
 
 
-def _prompt_storing_config(directory: Path) -> Path:
+def _proxy_config(
+    directory: Path,
+    general_settings: Mapping[str, JsonValue],
+    litellm_settings: Mapping[str, JsonValue] = MappingProxyType({}),
+) -> Path:
     stock: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
-    path: Final = directory / "store-prompts.yaml"
+    path: Final = directory / "responses-spend.yaml"
     path.write_text(
         yaml.safe_dump(
             {
                 **stock,
-                "general_settings": {**object_value(stock["general_settings"]), "store_prompts_in_spend_logs": True},
+                "general_settings": {**object_value(stock["general_settings"]), **general_settings},
+                "litellm_settings": {**object_value(stock["litellm_settings"]), **litellm_settings},
             }
         )
     )
     return path
+
+
+def _prompt_storing_config(directory: Path) -> Path:
+    return _proxy_config(directory, {"store_prompts_in_spend_logs": True})
 
 
 def test_a_follow_up_turn_on_a_streamed_bridged_response_replays_the_first_turn(
@@ -243,8 +280,9 @@ def test_a_follow_up_through_the_id_a_retrieve_returned_replays_the_first_turn_o
         assert retrieved.status_code == 200, retrieved.text
         retrieved_id: Final = string_value(JSON_OBJECT.validate_json(retrieved.content)["id"])
         assert retrieved_id == first_id
-        read_row_id: Final = f"{first_id}_retrieve_{retrieved.headers['x-litellm-call-id']}"
-        assert sorted(_request_ids_for_key(storing, key, 2)) == sorted([first_id, read_row_id])
+        stored: Final = _request_ids_for_key(storing, key, 2)
+        assert stored.count(first_id) == 1, stored
+        assert len(set(stored)) == 2, stored
         assert _spend_logs_lookup(storing, first_id) == [first_id]
         wire.drain()
 
@@ -252,6 +290,93 @@ def test_a_follow_up_through_the_id_a_retrieve_returned_replays_the_first_turn_o
             storing,
             key,
             {"model": bridged, "input": "second turn", "previous_response_id": retrieved_id, "stream": True},
+        )
+
+        replayed: Final = _JSON_LIST.validate_python(JSON_OBJECT.validate_json(wire.drain()[-1].body)["messages"])
+        assert [(message["role"], message["content"]) for message in replayed] == [
+            ("user", first_prompt),
+            ("assistant", _ANSWER),
+            ("user", "second turn"),
+        ], replayed
+
+
+@pytest.mark.timeout(180)
+def test_each_read_and_cancel_reaches_callbacks_and_spend_logs_under_an_id_of_its_own(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    logged_call_types: Final = frozenset({"aresponses", "aget_responses", "acancel_responses"})
+    with (
+        wire_server(_respond) as wire,
+        wire_server(lambda _: Reply()) as sink,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"GENERIC_LOGGER_ENDPOINT": sink.url},
+            config=_proxy_config(tmp_path, {}, {"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1}),
+        ) as logging_proxy,
+        logging_proxy.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=_NATIVE_MODEL, api_base=f"{wire.url}/v1", api_key="synthetic-key")
+        key: Final = scenario.key(models=[model])
+        first_id: Final = _created_response_id(logging_proxy, key, {"model": model, "input": f"marker-{uuid4().hex}"})
+
+        reads: Final = _read_and_cancel(logging_proxy, key, first_id)
+
+        assert [string_value(JSON_OBJECT.validate_json(read.content)["id"]) for read in reads] == [first_id] * 3
+        batches: Final[list[bytes]] = []  # mutable-ok: drain() consumes, later polls keep earlier batches
+
+        def delivered() -> tuple[tuple[str, str], ...]:
+            batches.extend(batch.body for batch in sink.drain())
+            return tuple(
+                (string_value(event["call_type"]), string_value(event["id"]))
+                for event in (object_value(item) for batch in batches for item in _JSON_LIST.validate_json(batch))
+                if event["call_type"] in logged_call_types
+            )
+
+        events: Final = eventually(delivered, lambda found: len(found) >= 4, seconds=30)
+        read_ids: Final = [logged_id for call_type, logged_id in events if call_type != "aresponses"]
+        assert [logged_id for call_type, logged_id in events if call_type == "aresponses"] == [first_id], events
+        assert len(read_ids) == 3, events
+        assert first_id not in read_ids, events
+        assert len(set(read_ids)) == 3, events
+        assert sorted(_request_ids_for_key(logging_proxy, key, 4)) == sorted([first_id, *read_ids])
+
+
+@pytest.mark.timeout(240)
+def test_with_id_security_off_reads_and_cancels_add_no_rows_and_no_replayed_turns(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    first_prompt: Final = f"first turn {uuid4().hex}"
+    session: Final = {"x-litellm-session-id": f"session-{uuid4().hex}"}
+    with (
+        wire_server(_respond) as wire,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {},
+            config=_proxy_config(
+                tmp_path, {"store_prompts_in_spend_logs": True, "disable_responses_id_security": True}
+            ),
+        ) as insecure,
+        insecure.scenario() as scenario,
+    ):
+        native: Final = scenario.model(model=_NATIVE_MODEL, api_base=f"{wire.url}/v1", api_key="synthetic-key")
+        bridged: Final = scenario.model(model=_BRIDGED_MODEL, api_base=f"{wire.url}/v1", api_key="synthetic-key")
+        key: Final = scenario.key(models=[native, bridged])
+        first_id: Final = _created_response_id(insecure, key, {"model": native, "input": first_prompt}, session)
+
+        reads: Final = _read_and_cancel(insecure, key, first_id, session)
+
+        assert [string_value(JSON_OBJECT.validate_json(read.content)["id"]) for read in reads] == [first_id] * 3
+        later_id: Final = _created_response_id(insecure, key, {"model": native, "input": "a later request"})
+        assert _request_ids_for_key(insecure, key, 2) == [first_id, later_id]
+        wire.drain()
+
+        _terminal_response_id(
+            insecure,
+            key,
+            {"model": bridged, "input": "second turn", "previous_response_id": first_id, "stream": True},
+            session,
         )
 
         replayed: Final = _JSON_LIST.validate_python(JSON_OBJECT.validate_json(wire.drain()[-1].body)["messages"])

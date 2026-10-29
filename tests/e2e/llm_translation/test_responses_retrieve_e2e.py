@@ -69,9 +69,6 @@ def _retrieve_response(proxy: ProxyClient, key: str, response_id: str) -> Respon
 
 
 class TestResponsesRetrieve:
-    @pytest.mark.skip(
-        reason="stage red: product gap (LIT-5446), retrieve returns a different id than the stored response (non-idempotent response-id re-encryption)"
-    )
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
     @meta(
         Subject(

@@ -117,6 +117,16 @@ def _streams_response_ids(request_route: str | None) -> bool:
     return canonical in _RESPONSES_API_ROUTES or (parent in _RESPONSES_API_ROUTES and response_id != "")
 
 
+_NO_HELD_IDS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _issued_to(user_id: str | None, team_id: str | None, user_api_key_dict: "UserAPIKeyAuth") -> bool:
+    caller_user_id: Final = user_api_key_dict.user_id or ""
+    if (user_id or "") != caller_user_id:
+        return False
+    return caller_user_id != "" or (team_id or "") == (user_api_key_dict.team_id or "")
+
+
 class ResponsesIDSecurity(CustomLogger):
     def __init__(
         self,
@@ -325,22 +335,26 @@ class ResponsesIDSecurity(CustomLogger):
         if self._general_settings_reader().get("disable_responses_id_security", False):
             return None
         encrypt: Final = self._response_id_encrypter(user_api_key_dict, request_cache={})
+        if encrypt is None:
+            return None
         logging_obj: Final = request_data.get("litellm_logging_obj")
-        if encrypt is None or not isinstance(logging_obj, LiteLLMLoggingObj):
-            return encrypt
+        held_ids: Final = self._ids_the_caller_holds(request_data.get(ADDRESSED_RESPONSE_ID_FIELD), user_api_key_dict)
 
         def advertise(original_id: str) -> str:
-            advertised_id: Final = encrypt(original_id)
-            logging_obj.client_facing_response_id = advertised_id
-            return advertised_id
+            logged_id: Final = encrypt(original_id)
+            if isinstance(logging_obj, LiteLLMLoggingObj):
+                logging_obj.client_facing_response_id = logged_id
+            return held_ids.get(original_id, logged_id)
 
         return advertise
 
-    def _id_the_client_holds(self, response_id: str, addressed_id: object) -> str | None:
+    def _ids_the_caller_holds(self, addressed_id: object, user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, str]:
         if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
-            return None
-        original_response_id, _, _ = self._decrypt_response_id(addressed_id)
-        return addressed_id if original_response_id == response_id else None
+            return _NO_HELD_IDS
+        original_response_id, user_id, team_id = self._decrypt_response_id(addressed_id)
+        if not _issued_to(user_id, team_id, user_api_key_dict):
+            return _NO_HELD_IDS
+        return MappingProxyType({original_response_id: addressed_id})
 
     def _advertised_response(
         self,
@@ -348,10 +362,11 @@ class ResponsesIDSecurity(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         request_data: Mapping[str, object],
     ) -> BaseLiteLLMOpenAIResponseObject:
-        held_id: Final = self._id_the_client_holds(response.id, request_data.get(ADDRESSED_RESPONSE_ID_FIELD))
-        if held_id is None:
-            return self._encrypt_response_id(response, user_api_key_dict, request_cache=None)
-        return _rewrite_advertised_id(response, lambda _: held_id)
+        held_id: Final = self._ids_the_caller_holds(
+            request_data.get(ADDRESSED_RESPONSE_ID_FIELD), user_api_key_dict
+        ).get(response.id)
+        logged_response: Final = self._encrypt_response_id(response, user_api_key_dict, request_cache=None)
+        return logged_response if held_id is None else logged_response.model_copy(update={"id": held_id})
 
     async def async_post_call_success_hook(
         self,

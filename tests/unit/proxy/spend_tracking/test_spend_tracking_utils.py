@@ -69,7 +69,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
-    BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
@@ -5030,51 +5029,24 @@ def test_a_background_response_billing_event_writes_a_row_apart_from_the_read_th
         for call_id, metadata in (("call-read", read_metadata), ("call-bill", billing_metadata))
     )
 
-    assert request_ids == ("resp_shared_retrieve_call-read", "resp_shared_background_cost")
+    assert request_ids == ("resp_shared", "resp_shared_background_cost")
 
 
-def _response_row_id(call_type: str, call_id: str, metadata: Mapping[str, object]) -> str:
-    return get_logging_payload(
+@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+def test_a_read_or_cancel_row_carries_the_id_its_callbacks_logged(call_type: str):
+    row: Final = get_logging_payload(
         kwargs={
             "call_type": call_type,
             "model": "gpt-5.6",
-            "litellm_call_id": call_id,
-            "litellm_params": {"metadata": {"user_api_key": "test-key", **metadata}},
+            "litellm_call_id": "call-read",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
         },
-        response_obj={"id": "resp_client_held", "object": "response", "status": "completed"},
+        response_obj={"id": "resp_logged_by_callbacks", "object": "response", "status": "completed"},
         start_time=datetime.datetime.now(timezone.utc),
         end_time=datetime.datetime.now(timezone.utc),
-    )["request_id"]
-
-
-def test_reads_and_cancels_of_a_response_never_take_the_row_id_of_the_create_that_made_it():
-    """A GET or cancel answers with the id the client holds, which is the create row's id. Spend logs keep one row
-    per request id and drop the later duplicate, so a read written first would erase the create row a follow-up
-    turn replays its history from. Each read keeps a row of its own, as every poll is a separate request."""
-    calls: Final = (
-        ("aresponses", "call-create"),
-        ("aget_responses", "call-read-1"),
-        ("aget_responses", "call-read-2"),
-        ("acancel_responses", "call-cancel"),
     )
 
-    request_ids: Final = tuple(_response_row_id(call_type, call_id, {}) for call_type, call_id in calls)
-
-    assert request_ids[0] == "resp_client_held"
-    assert len(set(request_ids)) == len(calls), request_ids
-    assert all(request_id.startswith("resp_client_held_") for request_id in request_ids[1:]), request_ids
-
-
-def test_the_cost_polls_own_status_check_keeps_the_response_id_as_its_row_id():
-    """Only a client's read shares the create row's id. The cost poll's status check reads the response under its
-    managed id, which no create row carries, so it keeps the row id it had."""
-    status_poll: Final = {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN}
-
-    assert _response_row_id("aget_responses", "call-status-poll", status_poll) == "resp_client_held"
-
-
-def test_a_failed_read_keyed_by_its_own_call_id_keeps_that_id():
-    assert get_spend_logs_id("aget_responses", {}, {"litellm_call_id": "call-failed-read"}) == "call-failed-read"
+    assert row["request_id"] == "resp_logged_by_callbacks"
 
 
 @pytest.mark.parametrize("forged_marker", [True, BackgroundResponseSettlement.SETTLES.value])

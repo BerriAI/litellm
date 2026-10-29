@@ -12,7 +12,6 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.responses_id_security import (
     ResponsesIDSecurity,
     _streams_response_ids,
@@ -1121,21 +1120,59 @@ class TestReadsAnswerWithTheIdTheClientHolds:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
-    @pytest.mark.parametrize("caller", [_auth, _admin], ids=["owner", "proxy-admin"])
-    async def test_a_read_or_cancel_answers_with_the_exact_id_the_client_sent(
-        self, mock_cache, salt_key_env, call_type, caller
+    @pytest.mark.parametrize(
+        "issuer, reader",
+        [
+            (_auth(), _auth()),
+            (_auth(team_id=None), _auth(team_id="another-team")),
+            (_auth(user_id=None), _auth(user_id=None)),
+        ],
+        ids=["same-key", "same-user-new-team", "same-team-no-user"],
+    )
+    async def test_the_owner_gets_back_the_exact_id_they_sent(
+        self, mock_cache, salt_key_env, call_type, issuer, reader
     ):
         hook = _hook()
-        issued_id = _issue_managed_id(hook, _auth())
+        issued_id = _issue_managed_id(hook, issuer)
         data = await hook.async_pre_call_hook(
-            user_api_key_dict=caller(), cache=mock_cache, data={"response_id": issued_id}, call_type=call_type
+            user_api_key_dict=reader, cache=mock_cache, data={"response_id": issued_id}, call_type=call_type
         )
 
         result = await hook.async_post_call_success_hook(
-            data=data, user_api_key_dict=caller(), response=_provider_answer(data["response_id"])
+            data=data, user_api_key_dict=reader, response=_provider_answer(data["response_id"])
         )
 
         assert result.id == issued_id
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+    @pytest.mark.parametrize(
+        "issuer, admin",
+        [
+            (_auth(), _admin()),
+            (_auth(user_id=None), _auth(user_id=None, team_id="admin-team", user_role=_admin().user_role)),
+        ],
+        ids=["admin-user", "admin-without-user"],
+    )
+    async def test_an_admin_reading_someone_elses_response_gets_an_id_of_their_own(
+        self, mock_cache, salt_key_env, call_type, issuer, admin
+    ):
+        hook = _hook()
+        issued_id = _issue_managed_id(hook, issuer)
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=admin, cache=mock_cache, data={"response_id": issued_id}, call_type=call_type
+        )
+
+        result = await hook.async_post_call_success_hook(
+            data=data, user_api_key_dict=admin, response=_provider_answer(data["response_id"])
+        )
+
+        assert result.id != issued_id
+        assert hook._decrypt_response_id(result.id) == (
+            _FABRICATED_PROVIDER_RESPONSE_ID,
+            admin.user_id or "",
+            "admin-team",
+        )
 
     @pytest.mark.asyncio
     async def test_a_follow_up_gets_an_id_for_its_own_response_never_the_previous_one(self, mock_cache, salt_key_env):
@@ -1233,7 +1270,8 @@ class _SpendRowRecorder(CustomLogger):
         self.standard_logging_ids.append(kwargs["standard_logging_object"]["id"])
 
 
-async def _stream_logged_mid_stream(hook, route, logged_result):
+async def _stream_logged_mid_stream(hook, route, logged_result, caller=None, request_data=None):
+    streaming_caller = caller if caller is not None else _auth()
     recorder = _SpendRowRecorder()
     logging_obj = LiteLLMLoggingObj(
         model="gpt-5.1",
@@ -1255,9 +1293,9 @@ async def _stream_logged_mid_stream(hook, route, logged_result):
             yield frame
 
     client_stream = hook.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=UserAPIKeyAuth(user_id="owner-user", team_id="owner-team", request_route=route),
+        user_api_key_dict=streaming_caller.model_copy(update={"request_route": route}),
         response=frames(),
-        request_data={"litellm_logging_obj": logging_obj},
+        request_data={**(request_data or {}), "litellm_logging_obj": logging_obj},
     )
     first_frame = await anext(client_stream)
     now = datetime.datetime.now()
@@ -1297,3 +1335,100 @@ class TestStreamedSpendRowCarriesTheIdTheClientSaw:
         assert client_id == _LOGGED_MANAGED_ID
         assert recorder.spend_row_ids == [_LOGGED_MANAGED_ID]
         assert recorder.standard_logging_ids == [_LOGGED_MANAGED_ID]
+
+
+class TestStreamedReadAnswersWithTheIdTheClientHolds:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_prefix", ["/v1/responses", "/responses", "/openai/v1/responses"])
+    async def test_the_owner_sees_their_id_while_callbacks_log_one_of_the_reads_own(
+        self, mock_cache, salt_key_env, route_prefix
+    ):
+        hook = _hook()
+        owner = _auth()
+        issued_id = _issue_managed_id(hook, owner, provider_response_id=_LOGGED_MANAGED_ID)
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=owner, cache=mock_cache, data={"response_id": issued_id}, call_type="aget_responses"
+        )
+
+        client_id, recorder = await _stream_logged_mid_stream(
+            hook, f"{route_prefix}/{issued_id}", _native_logged_result(), caller=owner, request_data=data
+        )
+
+        assert client_id == issued_id
+        assert recorder.spend_row_ids == recorder.standard_logging_ids
+        assert len(recorder.standard_logging_ids) == 1
+        assert recorder.standard_logging_ids[0] != issued_id
+        assert hook._decrypt_response_id(recorder.standard_logging_ids[0]) == (
+            _LOGGED_MANAGED_ID,
+            "owner-user",
+            "owner-team",
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_admin_streamed_read_of_someone_elses_response_gets_and_logs_an_id_of_their_own(
+        self, mock_cache, salt_key_env
+    ):
+        hook = _hook()
+        admin = _admin()
+        issued_id = _issue_managed_id(hook, _auth(), provider_response_id=_LOGGED_MANAGED_ID)
+        data = await hook.async_pre_call_hook(
+            user_api_key_dict=admin, cache=mock_cache, data={"response_id": issued_id}, call_type="aget_responses"
+        )
+
+        client_id, recorder = await _stream_logged_mid_stream(
+            hook, f"/v1/responses/{issued_id}", _native_logged_result(), caller=admin, request_data=data
+        )
+
+        assert hook._decrypt_response_id(client_id) == (_LOGGED_MANAGED_ID, "admin-user", "admin-team")
+        assert recorder.spend_row_ids == [client_id]
+        assert recorder.standard_logging_ids == [client_id]
+
+
+async def _read_logged_by_callbacks(hook, caller, issued_id, call_type, cache):
+    recorder = _SpendRowRecorder()
+    now = datetime.datetime.now()
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-5.1",
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=now,
+        litellm_call_id=f"{call_type}-call",
+        function_id=f"{call_type}-fn",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.1", user="", optional_params={}, litellm_params={"api_base": ""}
+    )
+    data = await hook.async_pre_call_hook(
+        user_api_key_dict=caller, cache=cache, data={"response_id": issued_id}, call_type=call_type
+    )
+    provider_answer = _provider_answer(data["response_id"])
+
+    client_response = await hook.async_post_call_success_hook(
+        data=data, user_api_key_dict=caller, response=provider_answer
+    )
+    await logging_obj.async_success_handler(result=provider_answer, start_time=now, end_time=now, cache_hit=False)
+    return client_response.id, recorder
+
+
+class TestEveryReadLogsAnIdOfItsOwn:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+    async def test_callbacks_and_the_spend_row_log_a_new_id_per_read_never_the_one_the_client_holds(
+        self, mock_cache, salt_key_env, call_type
+    ):
+        hook = _hook()
+        owner = _auth()
+        issued_id = _issue_managed_id(hook, owner)
+
+        reads = [await _read_logged_by_callbacks(hook, owner, issued_id, call_type, mock_cache) for _ in range(2)]
+
+        assert [client_id for client_id, _ in reads] == [issued_id, issued_id]
+        logged_ids = [id_ for _, recorder in reads for id_ in recorder.standard_logging_ids]
+        assert [recorder.spend_row_ids for _, recorder in reads] == [[logged_id] for logged_id in logged_ids]
+        assert len(set(logged_ids)) == 2
+        assert issued_id not in logged_ids
+        assert {hook._decrypt_response_id(logged_id) for logged_id in logged_ids} == {
+            (_FABRICATED_PROVIDER_RESPONSE_ID, "owner-user", "owner-team")
+        }
