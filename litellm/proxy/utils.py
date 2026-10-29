@@ -759,20 +759,27 @@ def _stream_log_waits_for_its_pipelines(data: Mapping[str, object]) -> bool:
     return getattr(data.get("litellm_logging_obj"), "_on_deferred_stream_complete", None) is not None
 
 
+def _pipelines_settled_by(
+    pipelines: Sequence[tuple[str, "GuardrailPipeline"]], index: int, result: PipelineExecutionResult
+) -> Sequence[tuple[str, "GuardrailPipeline"]]:
+    """This pipeline, plus every later one when its verdict ends the request before they run."""
+    return pipelines[index:] if result.terminal_action != "allow" else pipelines[index : index + 1]
+
+
 def _drop_response_steps_that_did_not_run(
     data: dict[str, object],  # mutable-ok: the request's applied guardrails are trimmed in place
-    steps: Sequence["PipelineStep"],
+    pipelines: Sequence[tuple[str, "GuardrailPipeline"]],
     steps_that_ran: frozenset[str],
 ) -> None:
     """
-    Drop from the applied guardrails the steps of a response pipeline that no pipeline ran,
+    Drop from the applied guardrails the steps of these response pipelines that no pipeline ran,
     unless their guardrail also runs outside pipelines. Every step is named up front, so a
     log built before the pipeline finished, such as a cache hit's, still lists the steps
     that ran. The list is trimmed in place, since a route's logging object may hold a
     shallow copy of the metadata.
     """
     pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
-    post_call: Final = frozenset(step.guardrail for step in steps)
+    post_call: Final = _pipeline_step_guardrail_names(pipelines)
     not_run: Final = frozenset(
         name for name in post_call - steps_that_ran if _runs_only_in_pipelines(name, data, pre_call, post_call)
     )
@@ -2796,7 +2803,7 @@ class ProxyLogging:
         steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
         request: Final = cast(dict[str, object], data)  # cast-ok: request payload, updated in place by every pipeline
         log_waits: Final = event_hook == "post_call" and _whole_response_log_waits_for_its_pipelines(request, call_type)
-        for policy_name, pipeline in pipelines:
+        for index, (policy_name, pipeline) in enumerate(pipelines):
             if pipeline.mode != event_hook:
                 continue
 
@@ -2814,7 +2821,9 @@ class ProxyLogging:
 
             steps_that_ran = steps_that_ran | _steps_that_ran(result)
             if log_waits:
-                _drop_response_steps_that_did_not_run(request, pipeline.steps, steps_that_ran)
+                _drop_response_steps_that_did_not_run(
+                    request, _pipelines_settled_by(pipelines, index, result), steps_that_ran
+                )
 
             data = self._handle_pipeline_result(
                 result=result,
@@ -4734,7 +4743,7 @@ class ProxyLogging:
         call_type, endpoint_translation = translation
 
         steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
-        for policy_name, pipeline in pipelines:
+        for index, (policy_name, pipeline) in enumerate(pipelines):
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
                 mode="post_call",
@@ -4747,7 +4756,9 @@ class ProxyLogging:
             )
             steps_that_ran = steps_that_ran | _steps_that_ran(result)
             if _stream_log_waits_for_its_pipelines(request_data):
-                _drop_response_steps_that_did_not_run(request_data, pipeline.steps, steps_that_ran)
+                _drop_response_steps_that_did_not_run(
+                    request_data, _pipelines_settled_by(pipelines, index, result), steps_that_ran
+                )
             try:
                 ProxyLogging._handle_pipeline_result(
                     result, data=request_data, policy_name=policy_name, original_response=buffered

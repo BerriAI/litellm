@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator, Iterator
+from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 import logging
 from typing import Any, Callable, Dict, Final, List
@@ -1494,6 +1495,86 @@ async def test_held_stream_pipeline_keeps_a_step_an_earlier_pipeline_ran_that_a_
     assert len(delivered) == 2
     assert [guardrail.calls for guardrail in guardrails] == [1, 1, 1]
     assert data["metadata"]["applied_guardrails"] == ["first", "second", "third"]
+
+
+def _ends_before_a_later_pipeline_data(ending: str) -> dict[str, object]:
+    ends: Final = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="first", on_pass=ending)])
+    never_reached: Final = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="second")])
+    return {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "guardrails": ["first", "second"],
+            "_guardrail_pipelines": [("ends", ends), ("never-reached", never_reached)],
+            "_pipeline_managed_guardrails": {"first", "second"},
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("ending", "raised"), [("block", HTTPException), ("modify_response", ModifyResponseException)])
+async def test_post_call_pipeline_that_ends_the_request_drops_the_steps_of_a_later_pipeline(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    ending: str,
+    raised: type[Exception],
+) -> None:
+    first: Final = _PipelineStepGuardrail("first", "post_call")
+    second: Final = _PipelineStepGuardrail("second", "post_call")
+    monkeypatch.setattr(litellm, "callbacks", [first, second])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={**_ends_before_a_later_pipeline_data(ending), "litellm_logging_obj": _logging_obj(log_parked=True)},
+        call_type="completion",
+    )
+
+    with pytest.raises(raised):
+        await proxy_logging.post_call_success_hook(
+            data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+        )
+
+    assert (first.calls, second.calls) == (1, 0)
+    assert data["metadata"]["applied_guardrails"] == ["first"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ending", "stream_end"), [("block", pytest.raises(HTTPException)), ("modify_response", nullcontext())]
+)
+async def test_held_stream_pipeline_that_ends_the_stream_drops_the_steps_of_a_later_pipeline(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    ending: str,
+    stream_end: AbstractContextManager[object],
+) -> None:
+    first: Final = _PipelineStepGuardrail("first", "post_call")
+    second: Final = _PipelineStepGuardrail("second", "post_call")
+    monkeypatch.setattr(litellm, "callbacks", [first, second])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    logging_obj: Final = _logging_obj(log_parked=False)
+
+    async def stream_log(*args: object) -> None:
+        return None
+
+    logging_obj._on_deferred_stream_complete = stream_log
+    auth: Final = make_user_api_key_auth(request_route="/v1/chat/completions")
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=auth,
+        data={**_ends_before_a_later_pipeline_data(ending), "stream": True, "litellm_logging_obj": logging_obj},
+        call_type="completion",
+    )
+
+    with stream_end:
+        async for _item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=_async_chunk_iter(_stream_chunks()), request_data=data
+        ):
+            pass
+
+    assert (first.calls, second.calls) == (1, 0)
+    assert data["metadata"]["applied_guardrails"] == ["first"]
 
 
 @pytest.mark.asyncio
