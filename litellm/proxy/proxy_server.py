@@ -380,6 +380,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_texts,
+    emptied_messages_error,
     malformed_text_count_error,
 )
 from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
@@ -14793,7 +14794,11 @@ def _counted_request_messages(
         return None
     if messages_format != "anthropic":
         return list(messages)
-    return list(drop_non_string_texts(normalize_native_messages(messages), deployment_drops_params(deployment)))
+    kept: Final = list(drop_non_string_texts(normalize_native_messages(messages), deployment_drops_params(deployment)))
+    emptied_error: Final = emptied_messages_error(messages, kept)
+    if emptied_error is not None:
+        raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
+    return kept
 
 
 async def _try_provider_token_count(

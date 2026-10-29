@@ -1060,3 +1060,68 @@ async def test_native_anthropic_still_strips_empty_user_text_and_non_string_assi
         {"role": "assistant", "content": [{"type": "text", "text": _JOKE}]},
         {"role": "user", "content": [{"type": "text", "text": "again"}]},
     ]
+
+
+_EMPTIED_MESSAGES_ERROR: Final = (
+    "litellm.BadRequestError: messages: no message has content left after dropping empty or non-string text blocks"
+)
+_EMPTIED_REQUESTS: Final = (
+    pytest.param(
+        [{"role": "user", "content": [{"type": "text", "text": None}]}], {"drop_params": True}, id="only-null-dropped"
+    ),
+    pytest.param([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, id="only-empty-string"),
+    pytest.param(
+        [
+            {"role": "user", "content": [{"type": "text", "text": 5}]},
+            {"role": "user", "content": [{"type": "text", "text": " "}, {"type": "text", "text": None}]},
+        ],
+        {"drop_params": True},
+        id="every-turn-emptied",
+    ),
+)
+_EVERY_MESSAGES_PATH: Final = (
+    pytest.param("anthropic/claude-opus-5-5", id="native-anthropic"),
+    pytest.param("openai/gpt-5.6", id="responses-bridge"),
+    pytest.param("gemini/gemini-3.8-flash", id="chat-completions-bridge"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
+@pytest.mark.parametrize(("messages", "request_params"), _EMPTIED_REQUESTS)
+@pytest.mark.parametrize("model", _EVERY_MESSAGES_PATH)
+async def test_a_request_left_with_no_message_after_text_cleanup_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter,
+    model: str,
+    messages: list[dict[str, object]],
+    request_params: Mapping[str, object],
+    stream: bool,
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+    router: Final = Router(
+        model_list=[{"model_name": _ALIAS, "litellm_params": {"model": model, "api_key": "fake-key"}}], num_retries=0
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await router.aanthropic_messages(
+            model=_ALIAS, max_tokens=64, messages=messages, stream=stream, **request_params
+        )
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.message.partition("\n\n")[0] == _EMPTIED_MESSAGES_ERROR
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(("messages", "request_params"), _EMPTIED_REQUESTS)
+def test_sync_messages_create_answers_the_same_400_when_text_cleanup_leaves_no_message(
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], request_params: Mapping[str, object]
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model="anthropic/claude-opus-5-5", api_key="fake-key", max_tokens=64, messages=messages, **request_params
+        )
+
+    assert rejected.value.message.partition("\n\n")[0] == _EMPTIED_MESSAGES_ERROR
+    assert upstream.call_count == 0

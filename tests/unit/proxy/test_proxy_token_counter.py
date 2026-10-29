@@ -1735,6 +1735,58 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_user_text_as
     assert dropped["input_tokens"] == clean["input_tokens"]
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "request_params"),
+    (
+        ([{"role": "user", "content": [{"type": "text", "text": None}]}], {"drop_params": True}),
+        ([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}),
+    ),
+    ids=("only-null-dropped", "only-empty-string"),
+)
+@pytest.mark.parametrize(
+    "model",
+    (
+        "anthropic/claude-sonnet-5-5",
+        "openai/gpt-5.6",
+        "gemini/gemini-3.8-flash",
+        "mistral/mistral-small-latest",
+    ),
+)
+async def test_anthropic_count_tokens_answers_the_inference_400_when_text_cleanup_leaves_no_message(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    messages: list[dict[str, JsonValue]],
+    request_params: Mapping[str, JsonValue],
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[{"model_name": "emptied-count", "litellm_params": {"model": model, "api_key": "sk-test"}}]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=False) as upstream_mock:
+        upstream: Final = upstream_mock.route().mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7, "totalTokens": 7})
+        )
+        response: Final = await anthropic_count_tokens(
+            _json_request({"model": "emptied-count", "messages": messages, **request_params}, "python-httpx/0.28.1"),
+            UserAPIKeyAuth(),
+        )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {
+        "type": "invalid_request_error",
+        "message": "messages: no message has content left after dropping empty or non-string text blocks",
+    }
+    assert upstream.call_count == 0
+
+
 class _ScriptedCounter(BaseTokenCounter):
     def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies

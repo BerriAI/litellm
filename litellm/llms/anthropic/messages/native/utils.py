@@ -11,7 +11,7 @@ from litellm.llms.anthropic.common_utils import (
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
 )
-from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_texts
+from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_texts, reject_emptied_messages
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequestOptionalParams,
@@ -242,6 +242,7 @@ def prepare_native_messages(
         if presanitized
         else list(drop_non_string_texts(normalize_native_messages(messages), kwargs.get("drop_params")))
     )
+    reject_emptied_messages(messages, normalized, model, custom_llm_provider)
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import chain, groupby, starmap
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, NoReturn, TypeAlias
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
@@ -357,6 +357,12 @@ def drop_non_string_texts(
     return [kept for message in messages if (kept := _without_non_string_texts(message)) is not None]
 
 
+def emptied_messages_error(sent: Sequence[object], kept: Sequence[object]) -> str | None:
+    if kept or not sent:
+        return None
+    return "messages: no message has content left after dropping empty or non-string text blocks"
+
+
 def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
     match deployment:
         case {"litellm_params": {"drop_params": object() as drop_params}}:
@@ -373,7 +379,17 @@ def reject_malformed_text(
     error: Final = malformed_text_error(messages)
     if error is None:
         return
-    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    _raise_bad_request(error, model, forwarded_kwargs.get("custom_llm_provider"))
+
+
+def reject_emptied_messages(sent: Sequence[object], kept: Sequence[object], model: str, provider: str | None) -> None:
+    error: Final = emptied_messages_error(sent, kept)
+    if error is None:
+        return
+    _raise_bad_request(error, model, provider)
+
+
+def _raise_bad_request(error: str, model: str, provider: object) -> NoReturn:
     raise litellm.BadRequestError(
         message=error, model=model, llm_provider=provider if isinstance(provider, str) else ""
     )
