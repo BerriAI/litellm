@@ -1456,6 +1456,7 @@ _WILDCARD_CATALOG: Final = MappingProxyType(
             "databricks/databricks-claude-fixture-b",
             "databricks/databricks-claude-fixture-a",
             "databricks/databricks-cheap-chat",
+            "databricks/databricks-claude-fixture-retired",
         ),
         "bedrock": ("meta.llama-fixture", "anthropic.claude-fixture"),
         "cloudflare": ("cloudflare/@cf/meta/fixture-chat",),
@@ -1464,6 +1465,7 @@ _WILDCARD_CATALOG: Final = MappingProxyType(
 )
 _WILDCARD_CATALOG_COST: Final = MappingProxyType(
     {
+        "databricks/databricks-claude-fixture-retired": 1e-10,
         "databricks/databricks-cheap-chat": 1e-9,
         "databricks/databricks-claude-fixture-a": 2e-9,
         "databricks/databricks-claude-fixture-b": 3e-9,
@@ -1489,6 +1491,7 @@ def wildcard_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
                 "max_tokens": 1024,
                 "input_cost_per_token": cost,
                 "output_cost_per_token": cost,
+                **({"deprecation_date": "2000-01-01"} if model.endswith("-retired") else {}),
             }
             for model, cost in _WILDCARD_CATALOG_COST.items()
         }
@@ -1506,7 +1509,6 @@ _BEDROCK_PROVIDER_PROBES: Final = ("bedrock/meta.llama-fixture", "bedrock/anthro
 _DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
     "databricks/databricks-claude-fixture-a",
     "databricks/databricks-claude-fixture-b",
-    "databricks/databricks-claude-fixture-c",
 )
 
 
@@ -1524,6 +1526,11 @@ _DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
             (*_DATABRICKS_SERVED_CLAUDE_PROBES, "databricks/databricks-cheap-chat"),
         ),
         ("databricks", "*", _DATABRICKS_PROVIDER_PROBES),
+        (
+            "databricks",
+            "databricks-claude-fixture-r*",
+            ("databricks/databricks-claude-fixture-retired", *_DATABRICKS_PROVIDER_PROBES[:2]),
+        ),
         ("databricks", "databricks-llama-*", _DATABRICKS_PROVIDER_PROBES),
         ("databricks", "*-fixture", _DATABRICKS_PROVIDER_PROBES),
         ("databricks", "team-endpoints/*", _DATABRICKS_PROVIDER_PROBES),
@@ -1534,7 +1541,7 @@ _DATABRICKS_SERVED_CLAUDE_PROBES: Final = (
             (
                 "bedrock/converse/meta.llama-fixture",
                 "bedrock/converse/anthropic.claude-fixture",
-                *_BEDROCK_PROVIDER_PROBES,
+                "bedrock/meta.llama-fixture",
             ),
         ),
         ("bedrock", "invoke/anthropic.*", ("bedrock/invoke/anthropic.claude-fixture", *_BEDROCK_PROVIDER_PROBES)),
@@ -1639,10 +1646,37 @@ async def test_partial_wildcard_health_check_whose_served_cost_map_models_are_go
     assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
         "databricks-claude-fixture-a",
         "databricks-claude-fixture-b",
-        "databricks-claude-fixture-c",
         "databricks-cheap-chat",
     ]
     assert response == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("wildcard_catalog")
+async def test_partial_wildcard_health_check_that_fails_on_every_probe_makes_no_more_upstream_calls_than_before(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").respond(
+        401, json={"error_code": "UNAUTHENTICATED", "message": "fixture bad token"}
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
+        "databricks-claude-fixture-a",
+        "databricks-claude-fixture-b",
+        "databricks-cheap-chat",
+    ]
+    assert "error" in response
 
 
 @pytest.mark.asyncio

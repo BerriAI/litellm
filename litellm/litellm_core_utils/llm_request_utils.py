@@ -1,5 +1,6 @@
 import datetime
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from typing import Final, cast
 
 from pydantic import TypeAdapter
@@ -155,16 +156,25 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     Returns:
         list[str]: A list of the n cheapest chat models.
     """
-    if custom_llm_provider not in litellm.models_by_provider:
-        return []
+    return [ranked_model.model for ranked_model in rank_chat_models_from_llm_provider(custom_llm_provider)[:n]]
 
+
+@dataclass(frozen=True, slots=True)
+class RankedChatModel:
+    model: str
+    is_past_deprecation_date: bool
+
+
+def rank_chat_models_from_llm_provider(custom_llm_provider: str) -> tuple[RankedChatModel, ...]:
     known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
     ranked_rows: Final = (
-        (route_rank, cost, model)
-        for model, cost in _chat_row_costs(known_models, custom_llm_provider)
-        if (route_rank := _route_rank(model, custom_llm_provider)) is not None
+        (route_rank, cost, ranked_model)
+        for ranked_model, cost in _chat_row_costs(known_models, custom_llm_provider)
+        if (route_rank := _route_rank(ranked_model.model, custom_llm_provider)) is not None
     )
-    return [model for _, _, model in sorted(ranked_rows)[:n]]
+    return tuple(
+        ranked_model for _, _, ranked_model in sorted(ranked_rows, key=lambda row: (row[0], row[1], row[2].model))
+    )
 
 
 class _CostMapDeprecation(TypedDict):
@@ -186,15 +196,18 @@ def _is_past_deprecation_date(cost_map_key: str) -> bool:
         return False
 
 
-def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float]]:
+def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[RankedChatModel, float]]:
     for model in models:
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
-        if model_info.get("mode") != "chat" or _is_past_deprecation_date(model_info["key"]):
+        if model_info.get("mode") != "chat":
             continue
-        yield model, (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
+        yield (
+            RankedChatModel(model=model, is_past_deprecation_date=_is_past_deprecation_date(model_info["key"])),
+            (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0),
+        )
 
 
 def _route_rank(model: str, custom_llm_provider: str) -> int | None:

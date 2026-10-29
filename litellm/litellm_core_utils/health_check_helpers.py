@@ -5,8 +5,7 @@ Helper functions for health check calls.
 import base64
 import itertools
 import re
-import sys
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -30,6 +29,7 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
 WILDCARD_HEALTH_CHECK_MODEL_COUNT: Final = 3
+WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT: Final = WILDCARD_HEALTH_CHECK_MODEL_COUNT - 1
 BEDROCK_ANY_MODEL_ROUTES: Final = frozenset({"converse", "invoke"})
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
@@ -112,8 +112,7 @@ def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segmen
 
 
 def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tuple[str, ...]:
-    from litellm.litellm_core_utils.health_check_utils import STR_TUPLE
-    from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
+    from litellm.litellm_core_utils.llm_request_utils import rank_chat_models_from_llm_provider
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 
     provider_prefix: Final = f"{custom_llm_provider}/"
@@ -128,19 +127,19 @@ def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tup
     )
     route_prefix: Final = "".join(f"{segments[segment_index]}/" for segment_index in route_segments)
     model_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex("/".join(segments[len(route_segments) :])))
-    chat_models: Final = STR_TUPLE.validate_python(
-        pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=sys.maxsize)
+    ranked_models: Final = sorted(
+        rank_chat_models_from_llm_provider(custom_llm_provider),
+        key=lambda ranked_model: ranked_model.is_past_deprecation_date,
     )
-    model_ids: Final = tuple(chat_model.removeprefix(provider_prefix) for chat_model in chat_models)
-    served_models: Final = _first_distinct(
-        f"{provider_prefix}{route_prefix}{model_id}" for model_id in model_ids if model_regex.fullmatch(model_id)
+    model_ids: Final = tuple(ranked_model.model.removeprefix(provider_prefix) for ranked_model in ranked_models)
+    served_probes: Final = itertools.islice(
+        dict.fromkeys(
+            f"{provider_prefix}{route_prefix}{model_id}" for model_id in model_ids if model_regex.fullmatch(model_id)
+        ),
+        WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT,
     )
-    provider_models: Final = _first_distinct(f"{provider_prefix}{model_id}" for model_id in model_ids)
-    return tuple(dict.fromkeys((*served_models, *provider_models)))
-
-
-def _first_distinct(models: Iterable[str]) -> tuple[str, ...]:
-    return tuple(itertools.islice(dict.fromkeys(models), WILDCARD_HEALTH_CHECK_MODEL_COUNT))
+    provider_probes: Final = (f"{provider_prefix}{model_id}" for model_id in model_ids)
+    return tuple(itertools.islice(dict.fromkeys((*served_probes, *provider_probes)), WILDCARD_HEALTH_CHECK_MODEL_COUNT))
 
 
 class HealthCheckHelpers:

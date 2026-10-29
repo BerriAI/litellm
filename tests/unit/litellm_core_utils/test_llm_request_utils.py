@@ -7,7 +7,9 @@ import litellm
 from litellm.litellm_core_utils.llm_request_utils import (
     ensure_extra_body_is_safe,
     flatten_form_field_values,
+    RankedChatModel,
     pick_cheapest_chat_models_from_llm_provider,
+    rank_chat_models_from_llm_provider,
     serialize_multipart_form_fields,
 )
 
@@ -174,17 +176,34 @@ def deepseek_rows_whose_cheapest_ids_route_elsewhere(monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, tuple(rows))
 
 
-def test_pick_cheapest_chat_models_prefers_provider_routed_ids_and_skips_ids_routed_elsewhere_or_retired(
+def test_pick_cheapest_chat_models_prefers_provider_routed_ids_skips_ids_routed_elsewhere_and_keeps_retired_ones(
     deepseek_rows_whose_cheapest_ids_route_elsewhere: None,
 ) -> None:
     assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=10) == [
+        "deepseek/fake-retired-chat",
         "deepseek/fake-cheap-chat",
         "deepseek/fake-retiring-chat",
         "deepseek/fake-misdated-chat",
         "deepseek/fake-pricey-chat",
         "fake-free-chat-without-provider",
     ]
-    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=1) == ["deepseek/fake-cheap-chat"]
+    assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=1) == ["deepseek/fake-retired-chat"]
+
+
+def test_rank_chat_models_flags_only_the_rows_whose_cost_map_deprecation_date_has_passed(
+    deepseek_rows_whose_cheapest_ids_route_elsewhere: None,
+) -> None:
+    assert {
+        ranked_model.model: ranked_model.is_past_deprecation_date
+        for ranked_model in rank_chat_models_from_llm_provider(PICKER_PROVIDER)
+    } == {
+        "deepseek/fake-retired-chat": True,
+        "deepseek/fake-cheap-chat": False,
+        "deepseek/fake-retiring-chat": False,
+        "deepseek/fake-misdated-chat": False,
+        "deepseek/fake-pricey-chat": False,
+        "fake-free-chat-without-provider": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -213,7 +232,7 @@ def test_pick_cheapest_chat_models_breaks_price_ties_by_model_id_whatever_the_pr
     ]
 
 
-def test_pick_cheapest_chat_models_skips_a_retired_model_the_provider_lists_without_its_cost_map_prefix(
+def test_rank_chat_models_flags_a_retired_model_the_provider_lists_without_its_cost_map_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rows: Final = {
@@ -226,4 +245,7 @@ def test_pick_cheapest_chat_models_skips_a_retired_model_the_provider_lists_with
         litellm.models_by_provider, "vertex_ai", tuple(name.removeprefix("vertex_ai/") for name in rows)
     )
 
-    assert pick_cheapest_chat_models_from_llm_provider("vertex_ai", n=2) == ["fake-live-vertex-chat"]
+    assert rank_chat_models_from_llm_provider("vertex_ai") == (
+        RankedChatModel(model="fake-retired-vertex-chat", is_past_deprecation_date=True),
+        RankedChatModel(model="fake-live-vertex-chat", is_past_deprecation_date=False),
+    )

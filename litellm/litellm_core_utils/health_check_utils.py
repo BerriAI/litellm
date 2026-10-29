@@ -13,7 +13,6 @@ from litellm.types.extraction import ExtractionCallParams
 DECISIONS_CALL_PARAMS: Final[TypeAdapter[DecisionsCallParams]] = TypeAdapter(DecisionsCallParams)
 EXTRACTION_CALL_PARAMS: Final[TypeAdapter[ExtractionCallParams]] = TypeAdapter(ExtractionCallParams)
 OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
-STR_TUPLE: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
 def _filter_model_params(model_params: dict) -> dict:
