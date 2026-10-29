@@ -5,6 +5,7 @@ Test for response_api_endpoints/endpoints.py
 import asyncio
 import contextlib
 import dataclasses
+import datetime
 import json
 import unittest
 from collections.abc import Callable, Mapping
@@ -22,6 +23,7 @@ import litellm
 from litellm.constants import EMPTY_MAPPING
 from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import app
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
 from tests._master_key import MASTER_KEY
@@ -1305,7 +1307,8 @@ async def test_a_streamed_read_bills_the_finished_job_once_before_the_client_see
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Reading a finished background job as a stream settles its bill like a plain read does, before
-    the terminal event reaches the client, and a later read of the same job bills nothing more."""
+    the terminal event reaches the client, while the replayed stream's own log carries no cost and a
+    later read of the same job bills nothing more."""
     from fastapi import Response as FastAPIResponse
 
     from litellm.proxy._types import UserAPIKeyAuth
@@ -1317,12 +1320,11 @@ async def test_a_streamed_read_bills_the_finished_job_once_before_the_client_see
     spend_events: Final = _capture_spend_events(monkeypatch)
     stored: Final = _one_pending_background_response()
     finished: Final = _background_response(stored.response_id, "completed", 100)
-    stream: Final = MagicMock(completed_response=None)
+    stream: Final = _replayed_stream(stored.response_id)
 
     async def replayed_events(**_: object):
-        yield "event: response.output_text.delta\n\n"
-        stream.completed_response = MagicMock(response=finished)
-        yield "event: response.completed\n\n"
+        async for event in stream:
+            yield f"data: {event.model_dump_json()}\n\n"
 
     status_before_each_event: Final[list[str]] = []
     with _proxy_over(stored.prisma_client, stored.proxy_logging, _configured_deployment_router(finished)):
@@ -1340,7 +1342,7 @@ async def test_a_streamed_read_bills_the_finished_job_once_before_the_client_see
         await _drain_spend_events()
 
     assert status_before_each_event == ["queued", "completed"]
-    (billed,) = spend_events.payloads
+    (billed,) = tuple(payload for payload in spend_events.payloads if payload["response_cost"])
     assert billed["prompt_tokens"] == 100
 
 
@@ -1363,6 +1365,32 @@ def _resumed_events(response_id: str) -> tuple[Mapping[str, object], ...]:
             "sequence_number": 5,
             "response": _background_response(response_id, "completed", 100).model_dump(mode="json"),
         },
+    )
+
+
+def _replayed_stream(response_id: str) -> ResponsesAPIStreamingIterator:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    wire: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _resumed_events(response_id)
+    )
+    return ResponsesAPIStreamingIterator(
+        response=httpx.Response(200, content=wire, headers={"content-type": "text/event-stream"}),
+        model="gpt-5.6",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=Logging(
+            model="gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="aresponses",
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+            litellm_call_id="resumed-read",
+            function_id="resumed-read",
+        ),
+        custom_llm_provider="openai",
+        request_data={"model": "gpt-5.6", "input": "hi", "stream": True},
+        replays_stored_stream=True,
     )
 
 
