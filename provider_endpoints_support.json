@@ -33,6 +33,36 @@
     }
   },
   "providers": {
+    "iteracompute": {
+      "display_name": "IteraCompute (`iteracompute`)",
+      "url": "https://docs.litellm.ai/docs/providers/iteracompute",
+      "endpoints": {
+        "chat_completions": true,
+        "systemone": false,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "skills": false,
+        "interactions": false,
+        "a2a_(Agent Gateway)": false,
+        "container": false,
+        "container_file": false,
+        "compact": false,
+        "files": false,
+        "image_edits": false,
+        "vector_stores_create": false,
+        "vector_stores_search": false,
+        "video_generations": false
+      }
+    },
     "refuseless": {
       "display_name": "Refuseless (`refuseless`)",
       "url": "https://docs.litellm.ai/docs/providers/refuseless",
