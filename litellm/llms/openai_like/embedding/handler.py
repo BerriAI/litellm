@@ -4,10 +4,11 @@
 
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import StrictFloat, StrictInt, StrictStr, TypeAdapter
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -19,7 +20,11 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
 
-_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, StrictStr | StrictInt | StrictFloat])
+
+
+def _as_header_text(headers: Mapping[str, str | int | float]) -> Mapping[str, str]:
+    return MappingProxyType({name: str(value) for name, value in headers.items()})
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
@@ -112,8 +117,10 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             "input": input,
             **{k: v for k, v in optional_params.items() if k != "extra_headers" and v not in (None, "")},
         }
-        extra_headers: Final = _HEADERS_ADAPTER.validate_python(optional_params.get("extra_headers") or {})
-        key_headers: Final = _HEADERS_ADAPTER.validate_python(headers)
+        extra_headers: Final = _as_header_text(
+            _HEADERS_ADAPTER.validate_python(optional_params.get("extra_headers") or {})
+        )
+        key_headers: Final = _as_header_text(_HEADERS_ADAPTER.validate_python(headers))
         extra_header_names: Final = frozenset(name.lower() for name in extra_headers)
         request_headers: Final = {
             **{name: value for name, value in key_headers.items() if name.lower() not in extra_header_names},

@@ -251,6 +251,20 @@ def test_hostinger_router_embeddings_extra_headers_replace_key_headers_of_any_ca
     assert request.headers.get_list("x-trace-id") == ["trace-1"]
 
 
+@pytest.mark.parametrize(("configured", "sent"), [(12345, "12345"), (1.5, "1.5")])
+def test_hostinger_router_embeddings_send_numeric_extra_headers_as_text(configured: int | float, sent: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            extra_headers={"X-Org-Id": configured},
+        )
+
+    assert route.calls.last.request.headers.get_list("x-org-id") == [sent]
+
+
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("HOSTINGER_ROUTER_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_LIKE_API_KEY", "other-provider-key")
@@ -315,6 +329,42 @@ async def test_hostinger_router_anthropic_messages_request(monkeypatch: pytest.M
     assert body["model"] == "claude-sonnet-5"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from Hostinger Router"
+
+
+@pytest.mark.asyncio
+async def test_hostinger_router_anthropic_messages_keep_one_hour_cache_ttl(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    cached_block: Final = {
+        "type": "text",
+        "text": "Long shared context",
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
+            200,
+            json={
+                "id": "msg_hostinger",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 4, "output_tokens": 1},
+            },
+        )
+        await litellm.anthropic.messages.acreate(
+            model="hostinger_router/claude-sonnet-5",
+            system=[cached_block],
+            messages=[{"role": "user", "content": [cached_block]}],
+            max_tokens=32,
+            api_key="hostinger-test-key",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["system"] == [cached_block]
+    assert body["messages"] == [{"role": "user", "content": [cached_block]}]
 
 
 CHAT_COMPLETION_RESPONSE: Final = {

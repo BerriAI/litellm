@@ -235,6 +235,9 @@
     "base_url": "https://router.hostinger.com/v1",
     "api_key_env": "HOSTINGER_ROUTER_API_KEY",
     "api_base_env": "HOSTINGER_ROUTER_API_BASE",
+    "constraints": {
+      "cache_control_ttl": true
+    },
     "supported_endpoints": ["/v1/chat/completions", "/v1/embeddings"]
   },
   "sail": {
