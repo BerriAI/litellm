@@ -617,6 +617,10 @@ def same_attempt_marker(first: object, second: object) -> bool:
     return first is second or first == second
 
 
+async def _attempt_failure_already_dispatched() -> None:
+    return None
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -641,6 +645,7 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
+    _failure_dispatched_attempt: object = None
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -2499,6 +2504,8 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> Coroutine[None, None, None]:
         shared_payload: Final = self.model_call_details.get("standard_logging_object")
         attempt_marker: Final = self.model_call_details.get("current_attempt_api_call_start_time")
+        if not self._claim_attempt_failure_dispatch(attempt_marker):
+            return _attempt_failure_already_dispatched()
         attempt: Final = self.attempt_scoped_copy()
 
         def publish() -> None:
@@ -2517,6 +2524,14 @@ class Logging(LiteLLMLoggingBaseClass):
             await attempt.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
 
         return dispatch()
+
+    def _claim_attempt_failure_dispatch(self, attempt_marker: object) -> bool:
+        if attempt_marker is None:
+            return True
+        if same_attempt_marker(self._failure_dispatched_attempt, attempt_marker):
+            return False
+        self._failure_dispatched_attempt = attempt_marker
+        return True
 
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its

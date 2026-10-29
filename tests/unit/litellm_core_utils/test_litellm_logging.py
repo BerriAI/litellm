@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import pytest_asyncio
+import respx
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
@@ -1943,6 +1944,119 @@ async def test_streaming_sync_and_async_failure_dedupe_independently(
 
     assert failure_logger.async_failure_events.qsize() == 1
     assert failure_logger.sync_failure_events.qsize() == 1
+
+
+class _FailureRowsByDeployment(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: tuple[tuple[object, object], ...] = ()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        assert isinstance(payload, dict)
+        self.rows = (*self.rows, (payload["model_id"], payload["error_str"]))
+
+
+_PEER_DROP_MESSAGE: Final = "peer closed connection without sending complete message body"
+
+
+class _SseStreamDroppedByPeer(httpx.AsyncByteStream):
+    def __init__(self, events: tuple[Mapping[str, object], ...]) -> None:
+        self._events: Final = events
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for event in self._events:
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.RemoteProtocolError(_PEER_DROP_MESSAGE)
+
+
+def _responses_stream_dropped_by_peer() -> httpx.Response:
+    opened: Final = {
+        "id": "resp_dropped",
+        "object": "response",
+        "created_at": 1790000000,
+        "status": "in_progress",
+        "model": "gpt-5.6",
+        "output": [],
+    }
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        stream=_SseStreamDroppedByPeer(
+            (
+                {"type": "response.created", "sequence_number": 0, "response": opened},
+                {"type": "response.in_progress", "sequence_number": 1, "response": opened},
+            )
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backup_drops_mid_stream", [False, True])
+async def test_chat_stream_bridged_to_responses_logs_each_failed_attempt_once(
+    monkeypatch: pytest.MonkeyPatch,
+    backup_drops_mid_stream: bool,
+) -> None:
+    recorder: Final = _FailureRowsByDeployment()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    messages: Final = [{"role": "user", "content": "Write a 300 word story about the sea."}]
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "primary-key",
+                    "api_base": "https://primary.example/v1",
+                },
+                "model_info": {"id": "primary-deployment", "mode": "responses"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-luna",
+                    "api_key": "backup-key",
+                    "api_base": "https://backup.example/v1",
+                },
+                "model_info": {"id": "backup-deployment", "mode": "responses"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    shared_logging_obj, _ = litellm.utils.function_setup(
+        "acompletion",
+        litellm.utils.Rules(),
+        datetime_unit_test.now(),
+        model="primary",
+        messages=messages,
+        stream=True,
+        litellm_call_id="bridged-chat-dropped-attempt",
+    )
+
+    with respx.mock() as upstream:
+        upstream.post("https://primary.example/v1/responses").mock(return_value=_responses_stream_dropped_by_peer())
+        upstream.post("https://backup.example/v1/responses").mock(
+            return_value=(
+                _responses_stream_dropped_by_peer()
+                if backup_drops_mid_stream
+                else httpx.Response(503, json={"error": {"message": "backup is down"}})
+            )
+        )
+        with pytest.raises(httpx.RemoteProtocolError):
+            await router.acompletion(
+                model="primary", messages=messages, stream=True, litellm_logging_obj=shared_logging_obj
+            )
+
+    assert [model_id for model_id, _ in recorder.rows] == ["primary-deployment", "backup-deployment"]
+    assert recorder.rows[0][1] == _PEER_DROP_MESSAGE
 
 
 def test_streaming_success_is_not_marked_complete(logging_obj: LitellmLogging) -> None:
