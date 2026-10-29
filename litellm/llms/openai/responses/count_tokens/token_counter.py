@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import openai
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -41,6 +41,7 @@ from litellm.types.utils import CountContextManagement, LlmProviders, TokenCount
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
+_SYSTEM: Final = TypeAdapter(str | list[dict[str, object]])
 
 
 def _workload_identity_config(
@@ -97,10 +98,18 @@ def _count_error(model_to_use: str, request_model: str, message: str, status_cod
     )
 
 
+def _clearing_system(system: object) -> str | Sequence[Mapping[str, object]] | None:
+    try:
+        return _SYSTEM.validate_python(system)
+    except ValidationError:
+        return None
+
+
 async def _sent_messages(
     model: str,
     messages: Sequence[Mapping[str, object]],
     tools: Sequence[Mapping[str, object]] | None,
+    system: object,
     messages_format: TokenCountMessagesFormat,
     context_management: CountContextManagement | None,
 ) -> Sequence[Mapping[str, object]] | AnthropicContextManagementError:
@@ -110,7 +119,11 @@ async def _sent_messages(
         case "anthropic":
             try:
                 return await count_view_messages(
-                    model=model, messages=messages, tools=tools, context_management=context_management
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    system=_clearing_system(system),
+                    context_management=context_management,
                 )
             except AnthropicContextManagementError as error:
                 return error
@@ -198,7 +211,9 @@ class OpenAITokenCounter(BaseTokenCounter):
                 rejected_before_provider_call=True,
             )
 
-        sent_messages: Final = await _sent_messages(model_to_use, messages, tools, messages_format, context_management)
+        sent_messages: Final = await _sent_messages(
+            model_to_use, messages, tools, system, messages_format, context_management
+        )
         if isinstance(sent_messages, AnthropicContextManagementError):
             return TokenCountResponse(
                 total_tokens=0,

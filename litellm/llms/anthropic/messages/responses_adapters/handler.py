@@ -88,7 +88,7 @@ async def _polyfilled(
     model: str,
     messages: AnthropicRequestMessages,
     tools: Sequence[AllAnthropicToolsValues | Mapping[str, object]] | None,
-    system: str | None,
+    system: str | Sequence[Mapping[str, object]] | None,
     edits: Sequence[Mapping[str, object]],
     kwargs: Mapping[str, object],
 ) -> PolyfillResult | None:
@@ -102,7 +102,7 @@ async def _polyfilled(
             model=model,
             messages=_BLOCK_LIST.validate_python(messages),
             tools=_BLOCK_LIST.validate_python(tools) if tools else None,
-            system=system,
+            system=system if system is None or isinstance(system, str) else _BLOCK_LIST.validate_python(system),
             context_management_spec={"edits": [dict(edit) for edit in edits]},
             drop_invalid_edits=drop_invalid_edits,
         )
@@ -120,6 +120,7 @@ async def count_view_messages(
     model: str,
     messages: Sequence[Mapping[str, object]],
     tools: Sequence[Mapping[str, object]] | None,
+    system: str | Sequence[Mapping[str, object]] | None,
     context_management: CountContextManagement | None,
 ) -> Sequence[Mapping[str, object]]:
     """The messages /v1/messages sends the Responses API once the polyfill has run the edits it can't run natively."""
@@ -130,7 +131,7 @@ async def count_view_messages(
         model=model,
         messages=_BLOCK_LIST.validate_python(messages),
         tools=tools,
-        system=None,
+        system=system,
         edits=edits,
         kwargs={"drop_params": context_management.drop_invalid_edits},
     )

@@ -503,7 +503,7 @@ TOOL_PAIRS: Final[list[dict[str, object]]] = [
 
 
 async def _count_with_edit(
-    monkeypatch: pytest.MonkeyPatch, edit: dict[str, JsonValue], drop_invalid_edits: bool
+    monkeypatch: pytest.MonkeyPatch, edit: dict[str, JsonValue], drop_invalid_edits: bool, system: object = None
 ) -> tuple[TokenCountResponse | None, respx.Route]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
@@ -514,6 +514,7 @@ async def _count_with_edit(
             contents=None,
             deployment={"litellm_params": {"api_key": "sk-test"}},
             request_model="openai/gpt-4o",
+            system=system,
             messages_format="anthropic",
             context_management=CountContextManagement(spec={"edits": [edit]}, drop_invalid_edits=drop_invalid_edits),
         )
@@ -541,6 +542,33 @@ async def test_anthropic_format_counts_the_history_the_clear_edit_leaves_for_inf
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 9)
     assert _sent_outputs(route) == {
+        "toolu_0": CLEARED_TOOL_RESULT_PLACEHOLDER,
+        "toolu_1": CLEARED_TOOL_RESULT_PLACEHOLDER,
+        "toolu_2": "log 2 " * 40,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system",
+    ["Follow the policy. " * 1500, [{"type": "text", "text": "Follow the policy. " * 1500}]],
+    ids=["string", "blocks"],
+)
+async def test_anthropic_format_input_tokens_trigger_counts_the_system_prompt_like_inference(
+    monkeypatch: pytest.MonkeyPatch, system: object
+) -> None:
+    message_tokens: Final = litellm.token_counter(model="gpt-4o", messages=TOOL_PAIRS)
+    trigger_between_messages_and_system: Final = message_tokens + 1000
+    edit: Final[dict[str, JsonValue]] = {
+        **CLEAR_EDIT,
+        "trigger": {"type": "input_tokens", "value": trigger_between_messages_and_system},
+    }
+
+    _, without_system = await _count_with_edit(monkeypatch, edit, drop_invalid_edits=False)
+    _, with_system = await _count_with_edit(monkeypatch, edit, drop_invalid_edits=False, system=system)
+
+    assert _sent_outputs(without_system)["toolu_0"] == "log 0 " * 40
+    assert _sent_outputs(with_system) == {
         "toolu_0": CLEARED_TOOL_RESULT_PLACEHOLDER,
         "toolu_1": CLEARED_TOOL_RESULT_PLACEHOLDER,
         "toolu_2": "log 2 " * 40,
