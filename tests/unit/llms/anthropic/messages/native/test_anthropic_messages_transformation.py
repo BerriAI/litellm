@@ -241,22 +241,25 @@ _CLEARING_EDIT_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_202
 
 
 @pytest.mark.parametrize(
-    ("edits", "betas"),
+    ("context_management", "betas"),
     (
-        pytest.param([{"type": "compact_20260112"}], {_COMPACT_EDIT_BETA}, id="compact"),
-        pytest.param([{"type": "clear_tool_uses_20250919"}], {_CLEARING_EDIT_BETA}, id="clearing"),
+        pytest.param({"edits": [{"type": "compact_20260112"}]}, {_COMPACT_EDIT_BETA}, id="compact"),
+        pytest.param({"edits": [{"type": "clear_tool_uses_20250919"}]}, {_CLEARING_EDIT_BETA}, id="clearing"),
         pytest.param(
-            [{"type": "compact_20260112"}, {"type": "clear_thinking_20251015"}],
+            {"edits": [{"type": "compact_20260112"}, {"type": "clear_thinking_20251015"}]},
             {_COMPACT_EDIT_BETA, _CLEARING_EDIT_BETA},
             id="both",
+        ),
+        pytest.param(
+            [{"type": "compaction", "compact_threshold": 150000}], {_COMPACT_EDIT_BETA}, id="openai_list_form"
         ),
     ),
 )
 def test_context_management_edits_add_the_beta_each_edit_needs(
-    edits: list[dict[str, str]], betas: set[str], local_beta_headers_config: None
+    context_management: JsonValue, betas: set[str], local_beta_headers_config: None
 ) -> None:
     headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
-        headers={}, optional_params={"context_management": {"edits": edits}}, messages=[]
+        headers={}, optional_params={"context_management": context_management}, messages=[]
     )
 
     assert set(headers["anthropic-beta"].split(",")) == betas

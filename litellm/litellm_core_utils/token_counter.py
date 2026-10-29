@@ -871,7 +871,10 @@ def _compaction_summaries(provider_specific_fields: object) -> tuple[str, ...]:
     return tuple(
         content
         for block in block_fields
-        if block is not None and block.get("type") == "compaction" and isinstance(content := block.get("content"), str)
+        if block is not None
+        and block.get("type") == "compaction"
+        and isinstance(content := block.get("content"), str)
+        and content
     )
 
 

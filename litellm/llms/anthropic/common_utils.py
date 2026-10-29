@@ -13,7 +13,7 @@ from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote, urlparse
 
 import httpx
-from pydantic import BeforeValidator, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictBool, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -119,6 +119,7 @@ _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_VALUE: Final = TypeAdapter(JsonValue)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -158,8 +159,19 @@ def requires_native_compaction_beta(
     )
 
 
-def context_management_betas(context_management: object) -> tuple[str, ...]:
-    spec: Final = as_str_mapping(context_management)
+def anthropic_context_management(context_management: JsonValue) -> JsonValue:
+    if not isinstance(context_management, list):
+        return context_management
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    edits: Final = AnthropicConfig.map_openai_context_management_to_anthropic(
+        [entry for entry in context_management if isinstance(entry, dict)]
+    )
+    return context_management if edits is None else _JSON_VALUE.validate_python(edits)
+
+
+def context_management_betas(context_management: JsonValue) -> tuple[str, ...]:
+    spec: Final = as_str_mapping(anthropic_context_management(context_management))
     edits: Final = validated_object_list(spec.get("edits")) if spec is not None else None
     edit_types: Final = tuple(edit.get("type") for edit in map(as_str_mapping, edits or ()) if edit is not None)
     return tuple(

@@ -895,26 +895,37 @@ async def test_handler_sends_the_compaction_beta_with_a_compacted_history(httpx_
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @pytest.mark.parametrize(
-    ("edit_type", "sent_beta", "unsent_beta"),
+    ("context_management", "forwarded", "sent_beta", "unsent_beta"),
     (
-        (
-            "compact_20260112",
+        pytest.param(
+            {"edits": [{"type": "compact_20260112"}]},
+            {"edits": [{"type": "compact_20260112"}]},
             ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
             ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+            id="compact",
         ),
-        (
-            "clear_tool_uses_20250919",
+        pytest.param(
+            {"edits": [{"type": "clear_tool_uses_20250919"}]},
+            {"edits": [{"type": "clear_tool_uses_20250919"}]},
             ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
             ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+            id="clearing",
+        ),
+        pytest.param(
+            [{"type": "compaction", "compact_threshold": 150000}],
+            {"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 150000}}]},
+            ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+            ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+            id="openai_list_form",
         ),
     ),
 )
 async def test_counter_forwards_context_management_with_the_beta_inference_sends(
-    edit_type: str, sent_beta: str, unsent_beta: str
+    context_management: JsonValue, forwarded: JsonValue, sent_beta: str, unsent_beta: str
 ) -> None:
     """Anthropic counts an unsigned compaction block only under the compact_20260112 edit that inference sends,
-    and a clearing edit changes the count, so the count carries the request's context_management and its beta."""
-    context_management: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
+    and a clearing edit changes the count, so the count carries the request's context_management as inference
+    sends it, the OpenAI list form mapped to edits, and its beta."""
     with respx.mock:
         route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
             return_value=httpx.Response(200, json={"input_tokens": 259})
@@ -930,5 +941,5 @@ async def test_counter_forwards_context_management_with_the_beta_inference_sends
     sent: Final = route.calls.last.request
     betas: Final = sent.headers["anthropic-beta"].split(",")
     assert result is not None and result.total_tokens == 259
-    assert TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)["context_management"] == context_management
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)["context_management"] == forwarded
     assert (sent_beta in betas, unsent_beta in betas) == (True, False)

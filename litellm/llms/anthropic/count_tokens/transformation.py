@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
+    anthropic_context_management,
     carries_signed_compaction_block,
     context_management_betas,
     merge_anthropic_beta_headers,
@@ -400,7 +401,7 @@ class AnthropicCountTokensConfig:
                             for key, value in (
                                 ("system", counted_system),
                                 ("tools", tools),
-                                ("context_management", context_management),
+                                ("context_management", anthropic_context_management(context_management)),
                             )
                             if value is not None
                         }

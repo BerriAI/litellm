@@ -1670,6 +1670,34 @@ def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
     assert token_counter(model=model, messages=replayed) == token_counter(model=model, messages=as_text)
 
 
+class _BosEncoder:
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        return [[0] * (len(text.split()) + 1) for text in texts]
+
+
+def test_token_counter_charges_nothing_for_a_chat_compaction_block_with_no_summary():
+    """
+    A tokenizer that prepends a BOS token charges one token for the empty string, so a replayed
+    compaction block with an empty summary must not reach it, like an empty thinking block.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    tokenizer = {"type": "huggingface_tokenizer", "tokenizer": _BosEncoder()}
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    replayed = [
+        {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {"compaction_blocks": [{"type": "compaction", "content": ""}]},
+        },
+        follow_up,
+    ]
+    bare = [{"role": "assistant", "content": None}, follow_up]
+
+    assert token_counter(model=model, messages=replayed, custom_tokenizer=tokenizer) == token_counter(
+        model=model, messages=bare, custom_tokenizer=tokenizer
+    )
+
+
 def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
     """
     An empty thinking block, a redacted_thinking block (no thinking text at all) and a compaction
