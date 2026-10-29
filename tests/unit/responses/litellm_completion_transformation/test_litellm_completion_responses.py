@@ -5064,6 +5064,47 @@ def test_anthropic_server_web_call_without_a_result_is_an_in_progress_hosted_cal
     assert [item.name for item in response.output if item.type == "function_call"] == ["get_weather"]
 
 
+def test_anthropic_code_execution_is_never_a_client_function_call_on_responses() -> None:
+    response: Final = _anthropic_turn_on_responses(
+        (
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01Bash",
+                "name": "bash_code_execution",
+                "input": {"command": "ls"},
+            },
+            {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01Bash",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "notes.txt\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_02Edit",
+                "name": "text_editor_code_execution",
+                "input": {"command": "view", "path": "notes.txt"},
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_03Bash",
+                "name": "bash_code_execution",
+                "input": {"command": "pwd"},
+            },
+            _WEATHER_TOOL_USE,
+        )
+    )
+
+    assert [(item.type, getattr(item, "call_id", item.id)) for item in response.output if item.type != "message"] == [
+        ("code_interpreter_call", "srvtoolu_01Bash"),
+        ("function_call", "toolu_01Weather"),
+    ]
+
+
 class TestHostedWebSearchReplay:
     def test_emitted_hosted_search_output_round_trips_with_client_tool_result(self) -> None:
         search_result: Final = {

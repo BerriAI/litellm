@@ -3370,7 +3370,22 @@ class LiteLLMCompletionResponsesConfig:
                 for item in responses_output
             ]
 
-        return responses_output
+        server_tool_call_ids: Final = LiteLLMCompletionResponsesConfig._server_tool_call_ids(choices)
+        return [
+            item
+            for item in responses_output
+            if not (
+                getattr(item, "type", None) == "function_call"
+                and getattr(item, "call_id", None) in server_tool_call_ids
+            )
+        ]
+
+    @staticmethod
+    def _server_tool_call_ids(choices: Sequence[Choices]) -> frozenset[str]:
+        server_tool_calls: Final = chain.from_iterable(
+            anthropic_server_tool_calls(choice.message) for choice in choices
+        )
+        return frozenset(tool_call.id for tool_call in server_tool_calls)
 
     @staticmethod
     def _extract_tool_result_output_items(

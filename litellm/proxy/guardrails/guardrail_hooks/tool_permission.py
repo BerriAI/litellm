@@ -19,6 +19,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params, anthropic_server_tool_calls
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
@@ -515,7 +516,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         for choice_index, choice in enumerate(response.choices):
             if isinstance(choice, Choices):
-                for tool in choice.message.tool_calls or []:
+                for tool in (*(choice.message.tool_calls or ()), *anthropic_server_tool_calls(choice.message)):
                     tool_calls.append(tool)
                 legacy_tool_call = self._legacy_function_call_to_tool_call(
                     getattr(choice.message, "function_call", None), choice_index
@@ -783,6 +784,23 @@ class ToolPermissionGuardrail(CustomGuardrail):
                         filtered_tool_calls.append(tool_call)
 
                 choice.message.tool_calls = filtered_tool_calls if filtered_tool_calls else None
+
+                if (server_tool_calls := anthropic_server_tool_call_params(choice.message)) and any(
+                    server_tool_call["id"] in error_results for server_tool_call in server_tool_calls
+                ):
+                    error_messages.extend(
+                        error_results[server_tool_call["id"]].content
+                        for server_tool_call in server_tool_calls
+                        if server_tool_call["id"] in error_results
+                    )
+                    choice.message.provider_specific_fields = {
+                        **(choice.message.provider_specific_fields or {}),
+                        "server_tool_calls": [
+                            server_tool_call
+                            for server_tool_call in server_tool_calls
+                            if server_tool_call["id"] not in error_results
+                        ],
+                    }
 
                 legacy_tool_call = self._legacy_function_call_to_tool_call(
                     getattr(choice.message, "function_call", None), choice_index

@@ -471,15 +471,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         try:
             message: Final = litellm_complete_object.choices[0].message
-            tool_calls = [
-                *anthropic_server_tool_calls(message),
-                *(getattr(message, "tool_calls", None) or ()),
-            ]
+            server_tool_calls: Final = anthropic_server_tool_calls(message)
+            tool_calls: Final = [*server_tool_calls, *(getattr(message, "tool_calls", None) or ())]
         except Exception:
-            tool_calls = None
+            return
 
         if not tool_calls:
             return
+
+        server_tool_call_ids: Final = frozenset(tool_call.id for tool_call in server_tool_calls)
 
         for tc in tool_calls:
             call_id_raw = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
@@ -505,6 +505,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 continue
             if self._is_tool_search_call(call_id, fn_name):
                 self._queue_tool_search_call_done(call_id, output_index, fn_args)
+                continue
+            if call_id in server_tool_call_ids:
                 continue
 
             # Track if this is a new tool call that wasn't streamed
@@ -580,10 +582,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             ),
         )
+        finished_events: Final = (
+            ()
+            if item.status == "in_progress"
+            else ((ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED, WebSearchCallCompletedEvent),)
+        )
         for event_type, event_class in (
             (ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS, WebSearchCallInProgressEvent),
             (ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING, WebSearchCallSearchingEvent),
-            (ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED, WebSearchCallCompletedEvent),
+            *finished_events,
         ):
             self._sequence_number += 1
             event = event_class(type=event_type, output_index=output_index, item_id=item.id)

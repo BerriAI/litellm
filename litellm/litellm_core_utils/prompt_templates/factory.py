@@ -2029,6 +2029,14 @@ def _assistant_tool_calls_with_server_tool_calls(
     )
 
 
+def _server_tool_call_ids(message: object) -> frozenset[str]:
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    return frozenset(
+        tool_call["id"] for tool_call in anthropic_server_tool_call_params(message) if tool_call["id"] is not None
+    )
+
+
 def _server_tool_answers_replaced_after(messages: Sequence[object], index: int) -> frozenset[str]:
     kept_server_result_ids: Final = _tool_call_ids_with_a_kept_server_result(messages[index])
     if not kept_server_result_ids:
@@ -2092,6 +2100,7 @@ def convert_to_anthropic_tool_invoke(
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    server_tool_call_ids: Container[str] = frozenset(),
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2169,6 +2178,10 @@ def convert_to_anthropic_tool_invoke(
             anthropic_tool_invoke.append(server_tool_result)
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
+        elif tool_id in server_tool_call_ids and tool_id not in answered_tool_ids:
+            anthropic_tool_invoke.append(
+                {"type": "server_tool_use", "id": tool_id, "name": tool_name, "input": tool_input}
+            )
         else:
             sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
@@ -3161,6 +3174,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
                     answered_tool_ids=client_answered_tool_ids,
+                    server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -3326,6 +3340,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
                     answered_tool_ids=client_answered_tool_ids,
+                    server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates

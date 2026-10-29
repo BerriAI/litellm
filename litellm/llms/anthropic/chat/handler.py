@@ -1128,6 +1128,15 @@ class ModelResponseIterator:
                             except (json.JSONDecodeError, TypeError):
                                 pass
                         server_tool_input: Final = self._server_tool_inputs.get(self._current_server_tool_id, {})
+                        if self._current_server_tool_id in self._web_search_calls:
+                            self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
+                                self._current_server_tool_id,
+                                server_tool_input,
+                                {"content": []},
+                                status="in_progress",
+                                tool_name=self._current_server_tool_name,
+                            )
+                            provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                         self._server_tool_calls = (
                             *self._server_tool_calls,
                             ChatCompletionToolCallChunk(

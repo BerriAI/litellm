@@ -3735,6 +3735,33 @@ def test_server_tool_result_round_trips_right_after_its_call(
     assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
 
 
+_FETCH_STILL_WAITING_ON_ITS_RESULT: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_01Fetch",
+    "name": "web_fetch",
+    "input": {"url": "https://example.com/"},
+}
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_server_call_still_waiting_on_its_result_is_replayed_as_a_server_call(
+    modify_params: bool, monkeypatch: pytest.MonkeyPatch
+):
+    content: Final = [_FETCH_STILL_WAITING_ON_ITS_RESULT, _WEATHER_CALL]
+    message: Final = _parsed_assistant_message(content, "tool_use")
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Fetch example.com, then tell me the weather in Paris"},
+        message.model_dump(),
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+    )
+
+    assert replayed[1]["content"] == content
+    assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
+
+
 _PARIS_TEXT: Final = "Paris is the capital of France."
 _PARIS_ANSWER: Final[Mapping[str, str]] = {"type": "text", "text": _PARIS_TEXT}
 
