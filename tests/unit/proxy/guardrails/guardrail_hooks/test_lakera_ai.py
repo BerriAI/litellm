@@ -83,3 +83,22 @@ async def test_clean_scan_of_string_input_lists_the_guardrail() -> None:
     )
 
     assert _applied_guardrails(data) == ("lakera-v1",)
+
+
+@pytest.mark.asyncio
+async def test_clean_scan_of_chat_messages_keeps_the_header_as_before() -> None:
+    scans: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        scans.append(request)
+        return httpx.Response(200, json={"results": [{"flagged": False}]})
+
+    guardrail: Final = _lakera(httpx.MockTransport(respond))
+    data: Final[dict[str, object]] = {"model": "m", "messages": [{"role": "user", "content": "is this a refund?"}]}
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"), cache=DualCache(), data=data, call_type="completion"
+    )
+
+    assert len(scans) == 1
+    assert _applied_guardrails(data) == ()

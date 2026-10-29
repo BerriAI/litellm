@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from itertools import chain
 from typing import Final, Literal
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -13,7 +14,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import ModelArmorGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import ToolPermissionGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.decisions import OpenAIDecisionResponse
@@ -1197,6 +1200,57 @@ async def test_pre_call_hook_keeps_request_tags_where_the_router_reads_them(
         tags=("prod",), requester_ip_address="10.0.0.7", user_api_key_key_alias="billing"
     )
     assert _applied_guardrails(result) == ("keeps_native",)
+
+
+class _ModelArmorAnswering(AsyncHTTPHandler):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:
+        clean: Final = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND", "filterResults": {}}}
+        return httpx.Response(self.status_code, json=clean, request=httpx.Request("POST", url))
+
+
+async def _model_armor_token() -> tuple[str, str]:
+    return ("test-token", "test-project")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status_code", "applied"), ((200, ("model-armor",)), (503, ())))
+@pytest.mark.parametrize(
+    ("call_type", "request_fields"),
+    (
+        ("aextraction", {"state": "refund order 4411", "fields": {"total": {"type": "number"}}}),
+        ("asystemone", {"state": {"ticket": "refund order 4411"}, "questions": {"q": {"type": "noul"}}}),
+        ("adecisions", {"input": "refund order 4411", "questions": [{"type": "predicate", "instructions": "Refund?"}]}),
+    ),
+)
+async def test_pre_call_hook_lists_model_armor_only_when_it_answered(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: CallTypesLiteral,
+    request_fields: Mapping[str, object],
+    status_code: int,
+    applied: tuple[str, ...],
+) -> None:
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+        fail_on_error=False,
+        async_handler=_ModelArmorAnswering(status_code),
+        access_token_provider=_model_armor_token,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    result: Final[dict[str, object]] = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+        data={"model": "m", **request_fields},
+        call_type=call_type,
+    )
+
+    assert _applied_guardrails(result) == applied
 
 
 @pytest.mark.asyncio

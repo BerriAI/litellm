@@ -306,7 +306,11 @@ class UnifiedLLMGuardrails(CustomLogger):
             litellm_logging_obj=data.get("litellm_logging_obj"),
         )
 
-        if not guardrail_to_apply.records_own_guardrail_information and not translation.lists_guardrail_when_called:
+        if not (
+            guardrail_to_apply.records_own_guardrail_information
+            or guardrail_to_apply.adds_itself_to_applied_guardrails
+            or translation.lists_guardrail_when_called
+        ):
             add_guardrail_to_applied_guardrails_header(
                 request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
             )
@@ -447,7 +451,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             if e.original_response is None:
                 e.original_response = response
             raise
-        if not guardrail_to_apply.records_own_guardrail_information:
+        if not (
+            guardrail_to_apply.records_own_guardrail_information or guardrail_to_apply.adds_itself_to_applied_guardrails
+        ):
             add_guardrail_to_applied_guardrails_header(
                 request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
             )

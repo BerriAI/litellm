@@ -15,6 +15,7 @@ import respx
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.guardrails.guardrail_hooks.dynamoai import DynamoAIGuardrails
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -209,15 +210,15 @@ async def test_post_call_hook_skips_dynamoai_when_the_reply_has_no_text(respx_mo
 _INPUT_HOOKS = [
     pytest.param(
         "pre_call",
-        lambda guardrail, data: guardrail.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="completion"
+        lambda guardrail, data, call_type: guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type=call_type
         ),
         id="pre_call",
     ),
     pytest.param(
         "during_call",
-        lambda guardrail, data: guardrail.async_moderation_hook(
-            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+        lambda guardrail, data, call_type: guardrail.async_moderation_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
         ),
         id="during_call",
     ),
@@ -228,17 +229,19 @@ _INPUT_HOOKS = [
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(("event_hook", "run_hook"), _INPUT_HOOKS)
 @pytest.mark.parametrize(
-    ("request_fields", "applied"),
+    ("request_fields", "call_type", "applied"),
     [
-        pytest.param({"messages": [{"role": "user", "content": "hi"}]}, ["test-dynamoai"], id="messages"),
-        pytest.param({"state": "hi"}, None, id="no-messages"),
+        pytest.param({"messages": [{"role": "user", "content": "hi"}]}, "completion", ["test-dynamoai"], id="messages"),
+        pytest.param({"state": "hi"}, "aextraction", None, id="no-messages-on-extraction"),
+        pytest.param({"state": "hi"}, "completion", ["test-dynamoai"], id="no-messages-on-chat"),
     ],
 )
 async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
     respx_mock: respx.MockRouter,
     event_hook: str,
-    run_hook: Callable[[DynamoAIGuardrails, Mapping[str, object]], Awaitable[object]],
+    run_hook: Callable[[DynamoAIGuardrails, Mapping[str, object], CallTypesLiteral], Awaitable[object]],
     request_fields: Mapping[str, object],
+    call_type: CallTypesLiteral,
     applied: Sequence[str] | None,
 ) -> None:
     respx_mock.post(_ANALYZE_URL).respond(json={"finalAction": "NONE", "appliedPolicies": []})
@@ -251,7 +254,7 @@ async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
     )
     metadata: Final[dict[str, object]] = {}
 
-    await run_hook(guardrail, {**request_fields, "metadata": metadata})
+    await run_hook(guardrail, {**request_fields, "metadata": metadata}, call_type)
 
     assert metadata.get("applied_guardrails") == applied
 
@@ -259,21 +262,35 @@ async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(
-    ("response", "applied"),
+    ("response", "request_route", "applied"),
     [
-        pytest.param(_assistant_reply("Hello, how are you?"), ["test-dynamoai"], id="chat-reply"),
-        pytest.param({"answers": {"aws_key": {"type": "text", "value": None}}}, None, id="no-choices"),
+        pytest.param(_assistant_reply("Hello, how are you?"), "/v1/chat/completions", ["test-dynamoai"], id="chat-reply"),
+        pytest.param(
+            {"answers": {"aws_key": {"type": "text", "value": None}}},
+            "/v1/extraction",
+            None,
+            id="no-choices-on-extraction",
+        ),
+        pytest.param(
+            {"answers": {"aws_key": {"type": "text", "value": None}}},
+            "/v1/responses",
+            ["test-dynamoai"],
+            id="no-choices-on-responses",
+        ),
     ],
 )
 async def test_post_call_hook_lists_the_guardrail_only_when_it_scanned_text(
-    respx_mock: respx.MockRouter, response: litellm.ModelResponse | Mapping[str, object], applied: Sequence[str] | None
+    respx_mock: respx.MockRouter,
+    response: litellm.ModelResponse | Mapping[str, object],
+    request_route: str,
+    applied: Sequence[str] | None,
 ) -> None:
     respx_mock.post(_ANALYZE_URL).respond(json={"finalAction": "NONE", "appliedPolicies": []})
     metadata: Final[dict[str, object]] = {}
 
     await _post_call_guardrail().async_post_call_success_hook(
         data={"messages": [{"role": "user", "content": "hi"}], "metadata": metadata},
-        user_api_key_dict=UserAPIKeyAuth(),
+        user_api_key_dict=UserAPIKeyAuth(request_route=request_route),
         response=response,
     )
 

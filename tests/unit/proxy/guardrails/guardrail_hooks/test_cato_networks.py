@@ -2800,6 +2800,7 @@ async def test_cato_still_inspects_every_conversational_call_type(call_type: str
             "adecisions", {"input": [{"role": "user", "content": "Is this a refund?"}]}, 1, ["cato"], id="decisions"
         ),
         pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
+        pytest.param("acompletion", {"messages": [{"role": "user", "content": "Refund?"}]}, 1, None, id="chat"),
     ],
 )
 async def test_cato_calls_cato_and_lists_itself_only_when_the_request_has_text(

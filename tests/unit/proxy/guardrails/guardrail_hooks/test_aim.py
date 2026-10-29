@@ -829,6 +829,7 @@ async def test_aim_streaming_block_stops_after_verified_chunks(monkeypatch: pyte
             "adecisions", {"input": [{"role": "user", "content": "Is this a refund?"}]}, 1, ["aim"], id="decisions"
         ),
         pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
+        pytest.param("acompletion", {"messages": [{"role": "user", "content": "Refund?"}]}, 1, None, id="chat"),
     ],
 )
 async def test_aim_calls_aim_and_lists_itself_only_when_the_request_has_text(

@@ -84,12 +84,18 @@ def _entry_text(key: str, value: str | float | None) -> str:
     return json.dumps({key: value}, ensure_ascii=False)[1:-1]
 
 
+def _escaped_texts(text: str, key: str, item: JsonValue) -> tuple[str, ...]:
+    return tuple(form for form in (key, item) if isinstance(form, str) and form not in text)
+
+
 def _entry_text_forms(key: str, item: JsonValue) -> Iterator[str]:
     if isinstance(item, (list, dict)):
         yield key
         yield from _json_text_forms(item)
     else:
-        yield _entry_text(key, item)
+        text: Final = _entry_text(key, item)
+        yield text
+        yield from _escaped_texts(text, key, item)
 
 
 def _json_text_forms(value: JsonValue) -> Iterator[str]:
@@ -163,6 +169,10 @@ def _rewritten_entry(rewritten: str, guardrail_name: str | None) -> tuple[str, J
     return _KEY_ADAPTER.validate_json(key.group(1)), _rewritten_value(rewritten[key.end() :])
 
 
+def _decoded_text(text: str, form: str, guardrailed: Mapping[str, str]) -> str:
+    return form if form in text else guardrailed.get(form, form)
+
+
 def _guardrailed_entry(
     key: str, item: JsonValue, guardrailed: Mapping[str, str], guardrail_name: str | None
 ) -> tuple[str, JsonValue]:
@@ -170,7 +180,16 @@ def _guardrailed_entry(
         return guardrailed.get(key, key), _guardrailed_json(item, guardrailed, guardrail_name)
     text: Final = _entry_text(key, item)
     rewritten: Final = guardrailed.get(text, text)
-    return (key, item) if rewritten == text else _rewritten_entry(rewritten, guardrail_name)
+    decoded: Final = (
+        _decoded_text(text, key, guardrailed),
+        _decoded_text(text, item, guardrailed) if isinstance(item, str) else item,
+    )
+    if rewritten == text:
+        return decoded
+    entry: Final = _rewritten_entry(rewritten, guardrail_name)
+    if decoded not in ((key, item), entry):
+        raise unappliable_request_rewrite(guardrail_name)
+    return entry
 
 
 def _instruction_texts(question: Mapping[str, JsonValue]) -> tuple[str, ...]:
@@ -260,7 +279,9 @@ async def _guardrailed_texts(
         input_type="request",
         logging_obj=litellm_logging_obj,
     )
-    if not guardrail_to_apply.records_own_guardrail_information:
+    if not (
+        guardrail_to_apply.records_own_guardrail_information or guardrail_to_apply.adds_itself_to_applied_guardrails
+    ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
         )

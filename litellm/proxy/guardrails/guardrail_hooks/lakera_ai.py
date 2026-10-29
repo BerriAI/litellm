@@ -19,6 +19,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
+    APPLY_GUARDRAIL_ONLY_CALL_TYPES,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -292,7 +293,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             }
             """
             self._check_response_flagged(response=response.json())
-            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+            if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
     @log_guardrail_information
     async def async_pre_call_hook(

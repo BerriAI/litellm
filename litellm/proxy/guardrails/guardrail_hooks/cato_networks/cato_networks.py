@@ -22,7 +22,7 @@ from websockets.exceptions import ConnectionClosed
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import APPLY_GUARDRAIL_ONLY_CALL_TYPES, CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -176,6 +176,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             hook="pre_call",
             key_alias=user_api_key_dict.key_alias,
             user_email=self._resolve_cato_user_email(user_api_key_dict),
+            call_type=call_type,
         )
 
     async def async_moderation_hook(
@@ -193,6 +194,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             hook="moderation",
             key_alias=user_api_key_dict.key_alias,
             user_email=self._resolve_cato_user_email(user_api_key_dict),
+            call_type=call_type,
         )
 
     @classmethod
@@ -297,11 +299,13 @@ class CatoNetworksGuardrail(CustomGuardrail):
         hook: str,
         key_alias: str | None,
         user_email: str | None = None,
+        call_type: CallTypesLiteral | None = None,
     ) -> dict:
         messages: Final = self._inspection_messages(data)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # hook request data is an untyped dict
         if not messages:
             return data  # pyright: ignore[reportUnknownVariableType]  # hook request data is an untyped dict
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_cato_headers(
             hook=hook,

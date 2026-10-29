@@ -10,6 +10,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.openai.decisions.guardrail_translation.handler import DecisionsHandler, SystemOneHandler
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+from litellm.types.guardrails import ContentFilterAction, ContentFilterPattern
 from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
@@ -210,6 +212,35 @@ async def test_systemone_secret_key_and_card_number_are_masked_before_the_provid
     result: Final = await SystemOneHandler().process_input_messages(data, _MasksSecrets(guardrail_name="mask"))
 
     assert result["state"] == {"<AWS_KEY>": "<X>", "card": "<CARD>", "items": 2}
+
+
+@pytest.mark.asyncio
+async def test_systemone_masks_a_card_number_that_json_escaping_splits() -> None:
+    guardrail: Final = ContentFilterGuardrail(
+        guardrail_name="cards",
+        patterns=[ContentFilterPattern(pattern_type="prebuilt", pattern_name="visa", action=ContentFilterAction.MASK)],
+    )
+    data: Final = {
+        "model": "judge",
+        "state": {"card": "4111\t1111\t1111\t1111", "4111\n1111\n1111\n1111": "on file", "note": "first\nsecond"},
+        "questions": {"q": {"type": "noul", "criteria": {}}},
+    }
+
+    result: Final = await SystemOneHandler().process_input_messages(data, guardrail)
+
+    assert result["state"] == {"card": "[VISA_REDACTED]", "[VISA_REDACTED]": "on file", "note": "first\nsecond"}
+
+
+@pytest.mark.asyncio
+async def test_systemone_rejects_an_escaped_entry_whose_two_scanned_forms_disagree() -> None:
+    data: Final = {
+        "model": "judge",
+        "state": {"note": "first\nsecond"},
+        "questions": {"q": {"type": "noul", "criteria": {}}},
+    }
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await SystemOneHandler().process_input_messages(data, _TaggingGuardrail())
 
 
 @pytest.mark.asyncio

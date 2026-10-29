@@ -9,6 +9,7 @@ import litellm
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.guardrails.guardrail_hooks.ibm_guardrails.ibm_detector import IBMGuardrailDetector
 
 pytestmark = pytest.mark.usefixtures("httpx_transport")
@@ -131,33 +132,35 @@ async def test_orchestrator_detection_blocks_the_request_and_names_the_detector(
 _INPUT_HOOKS = [
     pytest.param(
         "pre_call",
-        lambda guardrail, data: guardrail.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="completion"
+        lambda guardrail, data, call_type: guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type=call_type
         ),
         id="pre_call",
     ),
     pytest.param(
         "during_call",
-        lambda guardrail, data: guardrail.async_moderation_hook(
-            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+        lambda guardrail, data, call_type: guardrail.async_moderation_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
         ),
         id="during_call",
     ),
 ]
 _REQUEST_TEXT_CASES = [
-    pytest.param({"messages": [{"role": "user", "content": "hello there"}]}, ["ibm-guard"], id="messages"),
-    pytest.param({"state": "hello there"}, None, id="no-messages"),
+    pytest.param({"messages": [{"role": "user", "content": "hello there"}]}, "completion", ["ibm-guard"], id="messages"),
+    pytest.param({"state": "hello there"}, "aextraction", None, id="no-messages-on-extraction"),
+    pytest.param({"state": "hello there"}, "completion", ["ibm-guard"], id="no-messages-on-chat"),
 ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("event_hook", "run_hook"), _INPUT_HOOKS)
-@pytest.mark.parametrize(("request_fields", "applied"), _REQUEST_TEXT_CASES)
+@pytest.mark.parametrize(("request_fields", "call_type", "applied"), _REQUEST_TEXT_CASES)
 async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
     respx_mock: respx.MockRouter,
     event_hook: str,
-    run_hook: Callable[[IBMGuardrailDetector, Mapping[str, object]], Awaitable[object]],
+    run_hook: Callable[[IBMGuardrailDetector, Mapping[str, object], CallTypesLiteral], Awaitable[object]],
     request_fields: Mapping[str, object],
+    call_type: CallTypesLiteral,
     applied: Sequence[str] | None,
 ) -> None:
     respx_mock.post(_DETECTOR_SERVER_URL).respond(json=[[]])
@@ -172,27 +175,42 @@ async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
     )
     metadata: Final[dict[str, object]] = {}
 
-    await run_hook(guardrail, {**request_fields, "metadata": metadata})
+    await run_hook(guardrail, {**request_fields, "metadata": metadata}, call_type)
 
     assert metadata.get("applied_guardrails") == applied
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("response", "applied"),
+    ("response", "request_route", "applied"),
     [
         pytest.param(
             litellm.ModelResponse(
                 choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}]
             ),
+            "/v1/chat/completions",
             ["ibm-guard"],
             id="chat-reply",
         ),
-        pytest.param({"answers": {"aws_key": {"type": "text", "value": None}}}, None, id="no-choices"),
+        pytest.param(
+            {"answers": {"aws_key": {"type": "text", "value": None}}},
+            "/v1/extraction",
+            None,
+            id="no-choices-on-extraction",
+        ),
+        pytest.param(
+            {"answers": {"aws_key": {"type": "text", "value": None}}},
+            "/v1/responses",
+            ["ibm-guard"],
+            id="no-choices-on-responses",
+        ),
     ],
 )
 async def test_post_call_hook_lists_the_guardrail_only_when_it_scanned_text(
-    respx_mock: respx.MockRouter, response: litellm.ModelResponse | Mapping[str, object], applied: Sequence[str] | None
+    respx_mock: respx.MockRouter,
+    response: litellm.ModelResponse | Mapping[str, object],
+    request_route: str,
+    applied: Sequence[str] | None,
 ) -> None:
     respx_mock.post(_DETECTOR_SERVER_URL).respond(json=[[]])
     guardrail: Final = IBMGuardrailDetector(
@@ -208,7 +226,7 @@ async def test_post_call_hook_lists_the_guardrail_only_when_it_scanned_text(
 
     await guardrail.async_post_call_success_hook(
         data={"messages": [{"role": "user", "content": "hello"}], "metadata": metadata},
-        user_api_key_dict=UserAPIKeyAuth(),
+        user_api_key_dict=UserAPIKeyAuth(request_route=request_route),
         response=response,
     )
 
