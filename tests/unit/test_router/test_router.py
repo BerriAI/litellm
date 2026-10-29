@@ -31368,9 +31368,9 @@ def test_router_keeps_supported_fallback_shapes(
     assert router.fallbacks == expected_fallbacks
 
 
-def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog):
+def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
-        router = Router(
+        router: Final = Router(
             model_list=[
                 {
                     "model_name": "embed-from-config",
