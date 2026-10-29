@@ -1067,8 +1067,10 @@ def _extract_agent_progress(
     reaches the classifier. Harness reminders are stripped from tool output the same way they are from asks.
 
     A loop that overflows the budget has each entry cut to a quarter of it first, since one large file read
-    would otherwise fill the block alone and push out the result that described the task. A loop that fits
-    is quoted whole.
+    would otherwise fill the block alone. Its first tool result is kept even then, ahead of the newest entries
+    the rest of the budget buys, because that is usually the read that told the agent what the task is, and a
+    long loop of later reads would otherwise push it out and leave the classifier with routine output alone. A
+    loop that fits is quoted whole.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import tool_exchange_texts
 
@@ -1088,13 +1090,16 @@ def _extract_agent_progress(
         if per_turn_chars is None
         else tuple((kind, _truncate(text, per_turn_chars)) for kind, text in newest_first)
     )
-    overflows: Final = sum(len(text) for _, text in clamped) > budget_chars
-    shared: Final = (
-        tuple((kind, _truncate(text, budget_chars // _TOOL_ENTRY_SHARES_OF_BUDGET)) for kind, text in clamped)
-        if overflows
-        else clamped
-    )
-    return tuple(reversed(_turns_within_budget(shared, budget_chars)))
+    if sum(len(text) for _, text in clamped) <= budget_chars:
+        return tuple(reversed(clamped))
+    share: Final = budget_chars // _TOOL_ENTRY_SHARES_OF_BUDGET
+    oldest_first: Final = tuple((kind, _truncate(text, share)) for kind, text in reversed(clamped))
+    first_result: Final = next((index for index, (kind, _) in enumerate(oldest_first) if kind == "tool result"), None)
+    if first_result is None or share < _MIN_QUOTED_TURN_CHARS:
+        return tuple(reversed(_turns_within_budget(tuple(reversed(oldest_first)), budget_chars)))
+    anchor: Final = oldest_first[first_result]
+    newer: Final = tuple(reversed(oldest_first[first_result + 1 :]))
+    return (anchor, *reversed(_turns_within_budget(newer, budget_chars - len(anchor[1]))))
 
 
 def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bool:
@@ -2116,8 +2121,8 @@ class ComplexityRouter(CustomLogger):
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
 
-        A user_turn tool turn (`tool_turn`) trips a circuit breaker of its own: its failure only keeps the held
-        tier, so it must not switch the classifier off for every other session's new asks.
+        A tool turn (`tool_turn`) trips a circuit breaker of its own, since its classification carries the loop's
+        tool output and is the slower call: its timeouts must not switch the classifier off for new asks.
         """
         breaker: Final = self._tool_turn_circuit_breaker if tool_turn else self._classifier_circuit_breaker
         if self.config.classifier_type == "heuristic_v2":
@@ -3793,11 +3798,12 @@ class ComplexityRouter(CustomLogger):
         """Whether no configured tier outranks the plan-mode floor, i.e. the classifier's answer
         could never rise above it and classification would be pure spend."""
         floor: Final = self._resolve_plan_mode_floor()
-        if floor is None:
-            return False
+        return floor is not None and self._is_top_configured_tier(floor)
+
+    def _is_top_configured_tier(self, tier: ComplexityTier | str) -> bool:
         configured: Final = frozenset(self.config.tiers)
         names: Final = self.config.tier_names()
-        return all(name not in configured for name in names[self._active_tier_severity(floor) + 1 :])
+        return all(name not in configured for name in names[self._active_tier_severity(tier) + 1 :])
 
     def _matched_escalation_keyword(self, user_message: str) -> str | None:
         """The escalation keyword the prompt contains, or None when escalation is off.
@@ -4847,7 +4853,8 @@ class ComplexityRouter(CustomLogger):
         classified on the work done so far, and only a higher tier replaces the pin, so a loop moves up once a tool
         result shows harder work and does not drop back mid-task. The tier is compared before routing, so a turn
         that stays on the pin leaves no routing state behind, and it gets the classification back so the held turn
-        still reports the classifier call it paid for.
+        still reports the classifier call it paid for. A pin no classification could replace, the top configured tier
+        or the tier a keyword_tier_rules match on the ask decides before any classifier runs, is kept without one.
         """
         if (
             self.config.classification_mode != "user_turn"
@@ -4860,7 +4867,12 @@ class ComplexityRouter(CustomLogger):
         ask, system_prompt = _extract_current_ask_and_system_prompt(
             resolved_messages, self._reminder_markers_for_request(request_kwargs)
         )
-        if held_tier is None or ask is None:
+        if (
+            held_tier is None
+            or ask is None
+            or self._is_top_configured_tier(held_tier)
+            or await self._resolve_keyword_tier_override(ask, request_kwargs) is not None
+        ):
             return None
         classification: Final = await self.aclassify(
             ask, system_prompt, request_kwargs, resolved_messages, raw_messages=messages, tool_turn=True
@@ -5166,7 +5178,15 @@ class ComplexityRouter(CustomLogger):
             if housekeeping_tier is not None
             else classification
             if classification is not None
-            else await self.aclassify(ask, system_prompt, request_kwargs, resolved_messages, raw_messages=messages)
+            else await self.aclassify(
+                ask,
+                system_prompt,
+                request_kwargs,
+                resolved_messages,
+                raw_messages=messages,
+                tool_turn=self.config.classifier_context_include_tool_turns
+                and not _newest_turn_is_human_ask(resolved_messages, marker_pairs),
+            )
         )
         tier, score, signals = outcome.tier, outcome.score, outcome.signals
         classified_tier: Final = tier

@@ -5,7 +5,7 @@ import {
   type FuseSettings,
 } from "./forecast_classifier_config";
 import type { ModelGroup } from "../llm_calls/fetch_models";
-import { isHeuristicChain, type LocalHeuristic } from "./classifier_types";
+import { isHeuristicChain, readsToolTurns, type LocalHeuristic } from "./classifier_types";
 import { KeywordTierRule } from "./KeywordTierRules";
 import {
   type JevClassifierConfig,
@@ -127,6 +127,7 @@ export interface StoredComplexityRouterConfig {
   classifier_context_budget_chars?: unknown;
   classifier_context_per_turn_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
+  classifier_context_include_tool_turns?: unknown;
   classifier_fallback?: unknown;
   classification_mode?: unknown;
   tier_boundaries?: unknown;
@@ -182,6 +183,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextBudgetChars: number | undefined;
   classifierContextPerTurnChars?: number;
   classifierContextIncludeAssistantTurns: boolean | undefined;
+  classifierContextIncludeToolTurns?: boolean;
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
   classificationExamples: string | undefined;
@@ -266,6 +268,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
+  classifier_context_include_tool_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
   classification_examples?: string;
@@ -567,6 +570,19 @@ export const hydratePlanModeMinTier = (
   return tierRowByName(customTierSet.tiers, stored)?.id;
 };
 
+const toolTurnWireFields = (
+  effectiveType: ClassifierType,
+  {
+    classifierContextIncludeToolTurns,
+    sessionAffinity,
+    customTierSet,
+  }: Pick<BuildComplexityRouterConfigParams, "classifierContextIncludeToolTurns" | "sessionAffinity" | "customTierSet">,
+): Partial<ComplexityRouterConfigPayload> => {
+  const pinsSession = sessionAffinity && !customTierSet;
+  if (!readsToolTurns(effectiveType) || pinsSession || classifierContextIncludeToolTurns === undefined) return {};
+  return { classifier_context_include_tool_turns: classifierContextIncludeToolTurns };
+};
+
 const classifierWireFields = (
   effectiveType: ClassifierType,
   {
@@ -640,6 +656,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextBudgetChars,
   classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
+  classifierContextIncludeToolTurns,
   classifierFallback,
   classificationPrompt,
   classificationExamples,
@@ -768,6 +785,7 @@ export const buildComplexityRouterConfig = ({
       heuristic_v2_success_threshold: heuristicV2SuccessThreshold,
     }),
     ...classifierWireFields(effectiveType, classifierInputs),
+    ...toolTurnWireFields(effectiveType, { classifierContextIncludeToolTurns, sessionAffinity, customTierSet }),
     ...(effectiveType === "capability" &&
       capabilityClassifierConfig && { capability_classifier_config: capabilityClassifierConfig }),
     ...(effectiveType === "llm_v2" && { llm_v2_config: llmV2Config }),

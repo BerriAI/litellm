@@ -592,6 +592,52 @@ describe("buildUpdatedComplexityRouterConfig assistant turns", () => {
   });
 });
 
+const STORED_TOOL_TURNS = {
+  tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+  classifier_type: "llm" as const,
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_context_include_tool_turns: true,
+};
+
+describe("buildUpdatedComplexityRouterConfig tool turns", () => {
+  const hydrated = hydrateComplexityRouterConfig(STORED_TOOL_TURNS, undefined);
+
+  it("keeps a stored true through an unrelated edit", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_TOOL_TURNS, {
+      ...hydrated,
+      classifier_context_window_size: 5,
+    });
+    expect(result.classifier_context_window_size).toBe(5);
+    expect(result.classifier_context_include_tool_turns).toBe(true);
+  });
+
+  it("persists turning tool turns back off", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_TOOL_TURNS, {
+      ...hydrated,
+      classifier_context_include_tool_turns: false,
+    });
+    expect(result.classifier_context_include_tool_turns).toBe(false);
+  });
+
+  it("drops a stored true when the edit switches the classifier to heuristic", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_TOOL_TURNS, {
+      ...hydrated,
+      classifier_type: "heuristic",
+    });
+    expect(result.classifier_type).toBe("heuristic");
+    expect(result).not.toHaveProperty("classifier_context_include_tool_turns");
+  });
+
+  it("drops a stored true when the edit turns session affinity on", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_TOOL_TURNS, {
+      ...hydrated,
+      session_affinity: true,
+    });
+    expect(result.session_affinity).toBe(true);
+    expect(result).not.toHaveProperty("classifier_context_include_tool_turns");
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig session affinity", () => {
   it("writes session_affinity=false when the toggle is off", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity: false });
@@ -974,11 +1020,13 @@ describe("managed keys survive an untouched open-and-save", () => {
   ]);
 
   // The stall keys are rejected beside the session pinning and user-turn classification this
-  // fixture sets, so they get their own round trip below rather than widening this one.
+  // fixture sets, and tool turns beside the session pinning, so they get their own round trips below
+  // rather than widening this one.
   const KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS = new Set([
     "stall_escalation_enabled",
     "stall_escalation_window",
     "stall_escalation_repeat_threshold",
+    "classifier_context_include_tool_turns",
   ]);
 
   // The opt-in fifth tier requires the LLM classifier, which this heuristic_first fixture is not,
@@ -1068,6 +1116,17 @@ describe("managed keys survive an untouched open-and-save", () => {
     expect(saved.stall_escalation_enabled).toBe(true);
     expect(saved.stall_escalation_window).toBe(8);
     expect(saved.stall_escalation_repeat_threshold).toBe(4);
+  });
+
+  it("carries tool turns through their own round trip", () => {
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      session_affinity: false,
+      classifier_context_include_tool_turns: true,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+
+    expect(saved.classifier_context_include_tool_turns).toBe(true);
   });
 
   it("leaves the stall keys out of a saved config that never had them on", () => {

@@ -11734,6 +11734,42 @@ class TestAgentProgressReachesClassifier:
         assert "balance = 0" in client.states[-1]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("reads,read_chars", [(4, 3000), (6, 1500), (20, 400)])
+    async def test_long_loop_keeps_the_read_that_described_the_task(self, reads: int, read_chars: int) -> None:
+        """Every later read in a long loop is routine on its own, so once they overflow the budget the classifier
+        must still see the task file the loop opened with, or every_request drops the loop to the cheap tier."""
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(client, classifier_context_include_tool_turns=True)
+        later_reads: Final = tuple(
+            turn
+            for i in range(reads)
+            for turn in (
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"call_read_{i}",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": f'{{"path": "src/module_{i}.py"}}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": f"call_read_{i}", "content": f"# module {i}\n" + "x = 1\n" * (read_chars // 6)},
+            )
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[*_tool_loop_continuation("chat_completions"), *later_reads],
+        )
+
+        assert response is not None
+        assert response.model == "strong"
+        assert f"# module {reads - 1}" in client.states[-1]
+
+    @pytest.mark.asyncio
     async def test_zero_context_window_turns_tool_context_off(self) -> None:
         client: Final = _TaskAwareJevClient()
         router: Final = self._jev_router(
@@ -11858,6 +11894,59 @@ class TestAgentProgressReachesClassifier:
         decisions: Final = [response.routing_decision if response is not None else None for response in responses]
         assert decisions[1] is not None and decisions[1].get("classifier_failure_reason") == "timeout"
         assert decisions[3] is not None and decisions[3].get("classifier_failure_reason") == "circuit_open"
+
+    @pytest.mark.asyncio
+    async def test_every_request_tool_turn_timeout_leaves_new_asks_classifying(self) -> None:
+        """A long loop's tool turn is the slow classification, so its timeout must not switch the classifier off
+        for another session's new ask, while the loop's next tool turn skips the call that just timed out."""
+        client: Final = _ScriptedJevClient(("TIMEOUT", "COMPLEX"))
+        router: Final = self._jev_router(
+            client, classification_mode="every_request", classifier_context_include_tool_turns=True
+        )
+        loop: Final = _tool_loop_continuation("chat_completions")
+        new_ask: Final = [{"role": "user", "content": "Design a lock-free MPMC queue and prove linearizability"}]
+
+        responses: Final = [
+            await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=turn)
+            for turn in (loop, new_ask, [*loop, *_RUN_TESTS_TURNS])
+        ]
+
+        assert len(client.states) == 2
+        assert responses[1] is not None and responses[1].model == "strong"
+        decisions: Final = [response.routing_decision if response is not None else None for response in responses]
+        assert decisions[0] is not None and decisions[0].get("classifier_failure_reason") == "timeout"
+        assert decisions[2] is not None and decisions[2].get("classifier_failure_reason") == "circuit_open"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "overrides,ask_tier,held_model",
+        [
+            pytest.param({}, ("REASONING",), "top", id="held-top-tier"),
+            pytest.param(
+                {"keyword_tier_rules": [{"keywords": ["TASK.md"], "tier": "MEDIUM"}]}, (), "mid", id="keyword-rule"
+            ),
+        ],
+    )
+    async def test_user_turn_skips_the_classifier_when_nothing_could_replace_the_pin(
+        self, overrides: dict[str, object], ask_tier: tuple[str, ...], held_model: str
+    ) -> None:
+        """A tool turn whose classification could never move the session, because it holds the top tier or a
+        keyword rule decides its ask before any classifier runs, must route on the pin without paying for a call."""
+        client: Final = _ScriptedJevClient(ask_tier)
+        router: Final = self._jev_router(
+            client, classification_mode="user_turn", classifier_context_include_tool_turns=True, **overrides
+        )
+        loop: Final = _tool_loop_continuation("chat_completions")
+
+        responses: Final = [
+            await router.async_pre_routing_hook(
+                model="test-router", request_kwargs={"metadata": {"session_id": "agent-loop"}}, messages=turn
+            )
+            for turn in (loop[:1], loop, [*loop, *_RUN_TESTS_TURNS])
+        ]
+
+        assert [response.model for response in responses if response is not None] == [held_model] * 3
+        assert len(client.states) == len(ask_tier)
 
     @pytest.mark.asyncio
     async def test_user_turn_escalation_never_samples_below_the_held_tier(self) -> None:

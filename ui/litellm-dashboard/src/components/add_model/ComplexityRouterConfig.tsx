@@ -382,6 +382,7 @@ export interface ComplexityRouterConfigValue {
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
+  classifier_context_include_tool_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
   /** Classification instructions only; the router appends derived tier bullets after them. */
   classification_prompt?: string;

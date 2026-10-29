@@ -40,6 +40,7 @@ export const builderParamsFromValue = (
   classifierContextBudgetChars: value.classifier_context_budget_chars,
   classifierContextPerTurnChars: value.classifier_context_per_turn_chars,
   classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
+  classifierContextIncludeToolTurns: value.classifier_context_include_tool_turns,
   classifierFallback: value.classifier_fallback,
   sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
   sessionAffinityTtlSeconds: value.session_affinity_ttl_seconds,

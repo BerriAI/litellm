@@ -110,6 +110,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
+  "classifier_context_include_tool_turns",
   "classifier_fallback",
   "classification_prompt",
   "classification_examples",

@@ -9,10 +9,12 @@ import {
   NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
   usesLlmClassifier,
   usesClassifierContext,
+  effectiveClassifierType,
 } from "./ComplexityRouterConfig";
 import { defaultJevClassifierConfig } from "./jev_classifier_config";
 import { isForecastClassifier, prepareForecastClassifier } from "./forecast_classifier_config";
 import { nonReasoningTierFields } from "./nonReasoningTierFields";
+import { readsToolTurns } from "./classifier_types";
 
 export const transitionClassifierType = (
   value: ComplexityRouterConfigValue,
@@ -45,6 +47,11 @@ export const transitionClassifierType = (
       : undefined,
     classifier_context_include_assistant_turns: usesClassifierContext(classifierType)
       ? value.classifier_context_include_assistant_turns
+      : undefined,
+    classifier_context_include_tool_turns: readsToolTurns(
+      effectiveClassifierType({ custom_tier_set: value.custom_tier_set, classifier_type: classifierType }),
+    )
+      ? value.classifier_context_include_tool_turns
       : undefined,
     classifier_fallback: usesClassifierContext(classifierType) ? value.classifier_fallback : undefined,
     heuristic_first_max_tier:

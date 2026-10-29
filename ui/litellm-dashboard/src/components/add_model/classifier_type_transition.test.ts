@@ -99,6 +99,20 @@ describe("transitionClassifierType", () => {
     expect(result.llm_v2_config).toBeUndefined();
   });
 
+  it.each([
+    ["jev", true],
+    ["heuristic_first", true],
+    ["hybrid", true],
+    ["heuristic", undefined],
+    ["heuristic_v2", undefined],
+    ["capability", undefined],
+    ["llm_v2", undefined],
+    ["custom", undefined],
+  ] as const)("carries tool turns into %s only when it can read them", (target, expected) => {
+    const result = transitionClassifierType({ ...standard, classifier_context_include_tool_turns: true }, target);
+    expect(result.classifier_context_include_tool_turns).toBe(expected);
+  });
+
   it("clears the inactive non-reasoning pool and plan floor when switching to local classification", () => {
     const initial: ComplexityRouterConfigValue = {
       ...standard,

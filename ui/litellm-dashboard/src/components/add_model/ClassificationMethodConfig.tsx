@@ -24,7 +24,7 @@ import { getHeuristicV2SuccessThresholdError } from "./build_complexity_router_c
 import ClassifierPluginTimeoutField from "./ClassifierPluginTimeoutField";
 import ClassifierTypeRadios from "./ClassifierTypeRadios";
 import { ClassifierMenu, ClassifierOption } from "./AutoRouterClassifierTabs";
-import { isHeuristicChain } from "./classifier_types";
+import { isHeuristicChain, readsToolTurns } from "./classifier_types";
 import HeuristicKeywordOverrides from "./HeuristicKeywordOverrides";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
@@ -49,6 +49,7 @@ import {
   DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
+  classificationFrequency,
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
@@ -358,6 +359,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({
       ...value,
       classifier_context_include_assistant_turns: includeAssistantTurns,
+    });
+  };
+
+  const handleClassifierContextIncludeToolTurnsChange = (includeToolTurns: boolean) => {
+    onChange({
+      ...value,
+      classifier_context_include_tool_turns: includeToolTurns,
     });
   };
 
@@ -735,6 +743,26 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               last N user turns.
             </span>
           </div>
+          {readsToolTurns(classifierType) && classificationFrequency(value) !== "session" && (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Switch
+                  checked={value.classifier_context_include_tool_turns ?? false}
+                  onCheckedChange={handleClassifierContextIncludeToolTurnsChange}
+                  size="sm"
+                  aria-label="Include Tool Turns"
+                />
+                <strong className="font-semibold">Include Tool Turns</strong>
+                <SimpleTooltip content="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends tool output to the classifier model, which may be a different provider than the routed model.">
+                  <Info className="size-4 text-muted-foreground" />
+                </SimpleTooltip>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                Let the classifier read the tool calls and results that followed the current ask, so an agent loop is
+                classified on what its tools turned up, such as the file that describes the task.
+              </span>
+            </div>
+          )}
         </div>
       )}
 
