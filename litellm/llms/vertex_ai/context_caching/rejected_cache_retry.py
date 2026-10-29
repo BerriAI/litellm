@@ -26,7 +26,7 @@ def cache_rebuild(
     return partial(build, messages=deepcopy(messages), optional_params=independent_snapshot(optional_params))
 
 
-def _status_and_message(error: httpx.HTTPStatusError | BaseLLMException) -> tuple[int, str]:
+def status_and_message(error: httpx.HTTPStatusError | BaseLLMException) -> tuple[int, str]:
     match error:
         case httpx.HTTPStatusError():
             return error.response.status_code, error.response.text
@@ -35,7 +35,7 @@ def _status_and_message(error: httpx.HTTPStatusError | BaseLLMException) -> tupl
 
 
 def _cache_rejected(body: RequestBody, error: httpx.HTTPStatusError | BaseLLMException) -> bool:
-    return body.get("cachedContent") is not None and names_rejected_cache(*_status_and_message(error))
+    return body.get("cachedContent") is not None and names_rejected_cache(*status_and_message(error))
 
 
 async def post_with_fresh_cache_async(
