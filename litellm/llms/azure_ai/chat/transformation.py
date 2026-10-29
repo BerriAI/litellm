@@ -1,16 +1,20 @@
 import copy
 import enum
 import re
-from collections.abc import AsyncIterator, Collection, Iterator
+from collections.abc import AsyncIterator, Collection, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from httpx import Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     audio_or_image_in_message_content,
+    chat_completion_prompt_cache_breakpoints_for_wire,
     convert_content_list_to_str,
     drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
@@ -45,6 +49,7 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "provider_specific_fields",
     "cache_control",
 )
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
@@ -315,7 +320,15 @@ class AzureAIStudioConfig(OpenAIConfig):
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        trims_breakpoints: Final = drops_unsupported_params(
+            _LITELLM_PARAMS.validate_python(litellm_params).get("drop_params")
+        ) and AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, "azure_ai")
+        wire_messages: Final = (
+            [chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params=True) for message in messages]
+            if trims_breakpoints
+            else messages
+        )
+        return super().transform_request(model, wire_messages, optional_params, litellm_params, headers)
 
     def transform_response(
         self,

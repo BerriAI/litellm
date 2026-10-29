@@ -906,6 +906,60 @@ def test_azure_ai_reference_only_tool_result_is_sent_as_empty_text():
     assert request["messages"][2] == {"role": "tool", "tool_call_id": "call_1", "content": ""}
 
 
+_MARKED_FOUNDRY_PARTS: Final = (
+    {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+    {"type": "text", "text": "Implicit", "prompt_cache_breakpoint": {"mode": "implicit"}},
+    {"type": "image_url", "image_url": {"url": "https://example.com/chart.png"}},
+)
+
+
+@pytest.fixture
+def registered_foundry_breakpoint_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/unit-breakpoint-reader",
+        {"litellm_provider": "azure_ai", "mode": "chat", "supports_prompt_cache_breakpoint": True},
+    )
+    monkeypatch.setitem(litellm.model_cost, "azure_ai/unit-plain", {"litellm_provider": "azure_ai", "mode": "chat"})
+
+
+def _foundry_request_parts(model: str, litellm_params: dict[str, object]) -> object:
+    request: Final = AzureAIStudioConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": list(_MARKED_FOUNDRY_PARTS)}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return request["messages"][0]["content"]
+
+
+def test_azure_ai_drop_params_cuts_part_breakpoints_down_to_what_foundry_chat_accepts(
+    registered_foundry_breakpoint_models: None,
+) -> None:
+    """Foundry chat answered 400 for a content part's breakpoint ttl and for implicit mode on 2026-10-29,
+    the same as OpenAI chat completions."""
+    assert _foundry_request_parts("unit-breakpoint-reader", {"drop_params": True}) == [
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        {"type": "text", "text": "Implicit"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/chart.png"}},
+    ]
+
+
+@pytest.mark.parametrize(
+    "model, litellm_params",
+    [
+        ("unit-breakpoint-reader", {}),
+        ("unit-breakpoint-reader", {"drop_params": False}),
+        ("unit-plain", {"drop_params": True}),
+    ],
+)
+def test_azure_ai_sends_part_breakpoints_as_written_without_drop_params_or_a_breakpoint_reader(
+    registered_foundry_breakpoint_models: None, model: str, litellm_params: dict[str, object]
+) -> None:
+    assert _foundry_request_parts(model, litellm_params) == list(_MARKED_FOUNDRY_PARTS)
+
+
 @pytest.mark.parametrize(
     "api_base, expected_url",
     [

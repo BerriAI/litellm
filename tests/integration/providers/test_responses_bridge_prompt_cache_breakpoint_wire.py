@@ -27,8 +27,9 @@ _MALFORMED: Final[tuple[tuple[str, JsonValue], ...]] = (
     ("5kb-string", "x" * 5000),
     ("empty-object", {}),
     ("bogus-mode", {"mode": "bogus"}),
-    ("bad-ttl", {"mode": "explicit", "ttl": "1h"}),
+    ("bogus-mode-with-ttl", {"mode": "bogus", "ttl": "30m"}),
 )
+_UNSUPPORTED_TTL: Final[Mapping[str, JsonValue]] = {"mode": "explicit", "ttl": "1h"}
 _MALFORMED_IDS: Final = tuple(name for name, _ in _MALFORMED)
 _MALFORMED_VALUES: Final = tuple(value for _, value in _MALFORMED)
 _CASES: Final[tuple[tuple[str, Mode, JsonValue, JsonValue], ...]] = (
@@ -188,6 +189,16 @@ def test_valid_marker_shapes_reach_the_wire_unchanged(bridge: _Bridge, mode: Mod
 def test_marker_with_an_unknown_key(bridge: _Bridge, mode: Mode, expected: JsonValue) -> None:
     marker: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(marker, _UNKNOWN_KEY)]), marker)
+    pcb.assert_marker(_user_block_on_wire(bridge, marker), expected)
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"), (("on", pcb.EXPLICIT), ("off", _UNSUPPORTED_TTL)), ids=("ttl-dropped-on", "verbatim-off")
+)
+def test_marker_with_an_unsupported_ttl(bridge: _Bridge, mode: Mode, expected: JsonValue) -> None:
+    marker: Final = uuid.uuid4().hex
+    call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(marker, _UNSUPPORTED_TTL)]), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), expected)
     bridge.spend.landed(bridge.model(mode), call_id, marker)
 

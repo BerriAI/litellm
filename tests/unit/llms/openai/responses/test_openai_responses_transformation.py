@@ -4348,8 +4348,9 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert request_body["custom_field"] == "custom_value"
 
 
-_MALFORMED_MARKERS: Final = ("yes", 1, {"mode": "bogus"}, {"mode": "explicit", "ttl": "1h"})
-_MALFORMED_MARKER_IDS: Final = ("string", "int", "bogus-mode", "bad-ttl")
+_MALFORMED_MARKERS: Final = ("yes", 1, {"mode": "bogus"}, {"mode": "bogus", "ttl": "30m"})
+_MALFORMED_MARKER_IDS: Final = ("string", "int", "bogus-mode", "bogus-mode-with-ttl")
+_UNSUPPORTED_TTL_MARKER: Final = {"mode": "explicit", "ttl": "1h"}
 _VALID_MARKERS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
 _VALID_MARKER_IDS: Final = ("explicit", "explicit-30m")
 _PARTS: Final[Mapping[str, Mapping[str, object]]] = {
@@ -4433,6 +4434,18 @@ def test_valid_prompt_cache_breakpoint_reaches_the_wire_under_both_settings(
     monkeypatch.setattr(litellm, "drop_params", False)
     input: Final = _marked_message("input_text", marker)
     assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
+
+
+@pytest.mark.parametrize("config", _CONFIGS, ids=_CONFIG_IDS)
+@pytest.mark.parametrize("part_type", tuple(_PARTS))
+def test_an_unsupported_ttl_is_dropped_and_the_explicit_mode_kept_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, part_type: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message(part_type, _UNSUPPORTED_TTL_MARKER)
+    trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
+    assert _single_part(trimmed) == {**_PARTS[part_type], "prompt_cache_breakpoint": {"mode": "explicit"}}
+    assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
 
 
 def test_prompt_cache_breakpoint_unknown_key_is_trimmed_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4524,7 +4537,7 @@ def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_b
     monkeypatch.setattr(litellm, "drop_params", False)
     litellm_params: Final = GenericLiteLLMParams(drop_params=True)
     valid: Final = _marked_message("input_text", {"mode": "explicit"})
-    malformed: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "1h"})
+    malformed: Final = _marked_message("input_text", {"mode": "bogus"})
     assert _transformed_input_for("litellm-qa-sol-alias", valid, litellm_params, config) == valid
     dropped: Final = _transformed_input_for("litellm-qa-sol-alias", malformed, litellm_params, config)
     assert _single_part(dropped) == _PARTS["input_text"]
@@ -4570,10 +4583,10 @@ def test_a_model_that_takes_markers_sends_kept_parts_byte_for_byte_and_drops_onl
         {"prompt_cache_breakpoint": {"mode": "explicit"}, "type": "input_text", "text": "b"},
     ]
     rejected: Final = {"type": "input_text", "text": "c"}
-    bad_ttl: Final = {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+    bogus_mode: Final = {"prompt_cache_breakpoint": {"mode": "bogus"}}
     input: Final = [
         {"type": "message", "role": "user", "content": kept},
-        {"type": "message", "role": "user", "content": [{**bad_ttl, **rejected}]},
+        {"type": "message", "role": "user", "content": [{**bogus_mode, **rejected}]},
     ]
     transformed: Final = _transformed_input_for("gpt-6.1-sol", input, GenericLiteLLMParams(drop_params=True))
     assert json.dumps(transformed) == json.dumps(

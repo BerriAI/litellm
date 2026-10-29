@@ -14,7 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
@@ -546,7 +546,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
             return messages, tools
-        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+        drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
         drops_breakpoints: Final = not reads_breakpoints and drop_params
         renamed: Final = (
             [

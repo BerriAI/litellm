@@ -5847,7 +5847,8 @@ _HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS: Final = (
 
 def test_convert_chat_completion_messages_to_responses_api_drops_malformed_prompt_cache_breakpoint_under_drop_params():
     """OpenAI's Responses API answered "Supported values are: '30m'" for a 1h breakpoint ttl on 2026-10-07,
-    so an unsupported ttl drops the marker as a unit while an unknown key is dropped from a valid one."""
+    so an unsupported ttl is dropped and the explicit mode kept, as on plain chat completions, while an unknown key
+    is dropped from a valid one."""
     handler = LiteLLMResponsesTransformationHandler()
     messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
 
@@ -5860,12 +5861,12 @@ def test_convert_chat_completion_messages_to_responses_api_drops_malformed_promp
         None,
         None,
         None,
-        None,
+        {"mode": "explicit"},
         {"mode": "explicit"},
         {"mode": "explicit", "ttl": "30m"},
         {"mode": "explicit"},
     ]
-    assert all("prompt_cache_breakpoint" not in block for block in content[:4])
+    assert all("prompt_cache_breakpoint" not in block for block in content[:3])
 
 
 def test_convert_chat_completion_messages_to_responses_api_keeps_malformed_prompt_cache_breakpoint_by_default():

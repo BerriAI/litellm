@@ -2075,16 +2075,42 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
 
 
 _PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
+_AcceptedBreakpointT: Final = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
+
+
+def _accepted_prompt_cache_breakpoint(
+    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
+) -> _AcceptedBreakpointT | None:
+    try:
+        return accepted.validate_python(marker)
+    except ValidationError:
+        return None
+
+
+def _prompt_cache_breakpoint_within(
+    accepted: TypeAdapter[_AcceptedBreakpointT], marker: object
+) -> _AcceptedBreakpointT | None:
+    """The client's marker cut down to the ``accepted`` shape: an unsupported ttl is dropped and the mode kept,
+    and a marker whose mode the target cannot read is dropped whole."""
+    whole: Final = _accepted_prompt_cache_breakpoint(accepted, marker)
+    if whole is not None:
+        return whole
+    fields: Final = _breakpoint_fields_or_none(marker)
+    without_ttl: Final = (
+        None
+        if fields is None
+        else _accepted_prompt_cache_breakpoint(accepted, {key: item for key, item in fields.items() if key != "ttl"})
+    )
+    if without_ttl is None:
+        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
+    return without_ttl
 
 
 def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
     if marker is None or not drop_params:
         return marker
-    try:
-        return _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
-    except ValidationError:
-        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
-        return None
+    return _prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
 
 
 def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
@@ -2100,6 +2126,13 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
 _BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
 _BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _breakpoint_fields_or_none(value: object) -> Mapping[str, object] | None:
+    try:
+        return _BREAKPOINT_FIELDS.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def _without_prompt_cache_breakpoint(value: object) -> object:
@@ -2124,17 +2157,6 @@ def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
     return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
 
 
-_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
-
-
-def _chat_completion_prompt_cache_breakpoint(marker: object) -> ChatCompletionPromptCacheBreakpoint | None:
-    try:
-        return _CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT.validate_python(marker)
-    except ValidationError:
-        verbose_logger.debug("Dropping malformed chat completions prompt_cache_breakpoint %r under drop_params", marker)
-        return None
-
-
 def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
     if not isinstance(part, Mapping):
         return part
@@ -2143,7 +2165,9 @@ def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
     if marker is None:
         return fields
     unmarked: Final = {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
-    return with_prompt_cache_breakpoint(unmarked, _chat_completion_prompt_cache_breakpoint(marker))
+    return with_prompt_cache_breakpoint(
+        unmarked, _prompt_cache_breakpoint_within(_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT, marker)
+    )
 
 
 def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_params: bool) -> _MarkedT:
