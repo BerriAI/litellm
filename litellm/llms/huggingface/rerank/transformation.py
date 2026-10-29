@@ -78,6 +78,8 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             "documents",
             "top_n",
             "return_documents",
+            "truncate",
+            "truncation_direction",
         ]
 
     def map_cohere_rerank_params(
@@ -104,6 +106,10 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
                     optional_rerank_params["return_text"] = v
                 elif k == "top_n" and v is not None:
                     optional_rerank_params["top_n"] = v
+                elif k == "truncate" and isinstance(v, bool):
+                    optional_rerank_params["truncate"] = v
+                elif k == "truncation_direction" and v is not None:
+                    optional_rerank_params["truncation_direction"] = v
                 elif k == "documents" and v is not None:
                     optional_rerank_params["texts"] = v
                 elif k == "query" and v is not None:
@@ -151,7 +157,6 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         # HuggingFace API expects return_text parameter, corresponding to our return_documents parameter
         request_body: Final = {
             "raw_scores": False,
-            "truncate": False,
             "truncation_direction": "Right",
         }
 

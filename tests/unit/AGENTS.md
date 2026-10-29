@@ -8,6 +8,10 @@ the same tests against Google's live spec
 Unit tests must not depend on the current time or execution speed. Use fixed timestamps for fixtures
 and controlled clocks for time-dependent behavior. Incidental clock reads inside production code are allowed
 
+A unix socket goes under the `socket_dir` or `socket_path` fixture, never `tmp_path`, whose paths run past macOS's
+104-byte AF_UNIX limit and fail only on a Mac. Code that opens a socket in its own `tempfile` directory runs under
+`socket_tempdir`
+
 ## What good looks like
 
 ```python

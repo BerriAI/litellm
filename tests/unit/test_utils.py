@@ -576,7 +576,7 @@ def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
     )
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama.transformation import (
         VertexAILlama3Config,
     )
 
@@ -1086,6 +1086,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
                     "chat",
                     "completion",
                     "container",
+                    "decisions",
                     "image_edit",
                     "embedding",
                     "evaluation",
@@ -1194,6 +1195,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
                 "type": "array",
                 "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
             },
+            "reasoning_modes": {"type": "array", "items": {"type": "string"}},
+            "reasoning_contexts": {"type": "array", "items": {"type": "string"}},
             "default_reasoning_effort": {
                 "type": "string",
                 "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
@@ -2259,6 +2262,45 @@ class TestProxyFunctionCalling:
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_get_model_info_derives_max_tokens_from_the_output_limit() -> None:
+    model: Final = "derived-max-tokens-chat-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_input_tokens": 400000,
+                "max_output_tokens": 128000,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 128000
+    assert litellm.get_max_tokens(model) == 128000
+
+
+def test_get_model_info_derives_max_tokens_from_the_input_limit_when_the_row_has_no_output_limit() -> None:
+    model: Final = "derived-max-tokens-embedding-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "embedding",
+                "max_input_tokens": 8191,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    info: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+    assert info["max_tokens"] == 8191
+    assert info["max_output_tokens"] is None
+
+
 def test_register_model_price_is_used_for_completion_cost() -> None:
     model: Final = "migration-custom-pricing-model"
     price: Final = {
@@ -2570,7 +2612,7 @@ def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
 
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -5116,7 +5158,7 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fal_ai.cost_calculator import _keyed_rows
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
-    from litellm.llms.openai.chat.gpt_5_transformation import _catalogue_declares_default_effort
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
     from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
@@ -8628,7 +8670,7 @@ def test_basic_trimming_no_max_tokens_specified():
     trimmed_messages = trim_messages(messages, model="gpt-4")
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
-    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_input_tokens"]
 
 
 def test_multiple_messages_trimming():
@@ -10827,6 +10869,44 @@ def test_get_optional_params_keeps_a_tool_config_cache_point_out_of_the_openai_e
     assert "cache_control_injection_points" not in optional_params
 
 
+@pytest.mark.parametrize(
+    ("cost_map_declared", "deployment_declared", "expected"),
+    [
+        (None, None, None),
+        (False, None, False),
+        (True, None, True),
+        (True, False, False),
+        (False, True, True),
+        (None, False, False),
+    ],
+)
+def test_declared_mid_conversation_system_support_prefers_the_deployment_over_the_cost_map(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    cost_map_declared: bool | None,
+    deployment_declared: bool | None,
+    expected: bool | None,
+) -> None:
+    if cost_map_declared is not None:
+        declare_mid_conversation_system("hosted_vllm/mid-conversation-probe", cost_map_declared)
+    deployment_model_info: Final = (
+        {"id": "deployment-1"}
+        if deployment_declared is None
+        else {"id": "deployment-1", "supports_mid_conversation_system": deployment_declared}
+    )
+    assert (
+        litellm.utils.declared_mid_conversation_system_support(
+            "mid-conversation-probe", "hosted_vllm", deployment_model_info
+        )
+        is expected
+    )
+
+
+def test_declared_mid_conversation_system_support_is_none_when_the_model_lookup_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, "hosted_vllm/unreadable-probe", "not a model info entry")
+    litellm.get_model_info.cache_clear()
+    assert litellm.utils.declared_mid_conversation_system_support("unreadable-probe", "hosted_vllm", None) is None
+
+
 def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_litellm_proxy():
     """A litellm_proxy deployment calls the downstream proxy through the OpenAI SDK, and that proxy
     applies cache_control_injection_points itself, so the point must ride along in extra_body."""
@@ -10840,3 +10920,23 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     )
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_warnings"),
+    (("streamlake", 1), ("veniceai", 1), ("my-own-llm", 0)),
+)
+def test_custom_provider_named_like_a_built_in_warns_once(
+    provider: str, expected_warnings: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": provider, "custom_handler": litellm.CustomLLM()}])
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", [])
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        litellm.utils.custom_llm_setup()
+        litellm.utils.custom_llm_setup()
+
+    warnings: Final = [r for r in caplog.records if f"provider '{provider}'" in r.getMessage()]
+    assert len(warnings) == expected_warnings
+    assert provider in litellm._custom_providers

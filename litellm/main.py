@@ -123,6 +123,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
     bedrock_route_for_request,
+    bedrock_strict_tools_fallback,
     deployment_model_info,
     without_bedrock_native_output_opt_in,
     without_bedrock_route_prefix,
@@ -130,7 +131,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -154,6 +155,7 @@ from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    AgenticLoopParams,
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
@@ -206,7 +208,12 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, safe_deep_copy
+from .litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    normalize_drop_params,
+    safe_deep_copy,
+)
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -228,6 +235,7 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -237,7 +245,7 @@ from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import AmazonAnthropicClaudeConfig
 from .llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, call_with_native_output_fallback
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
@@ -677,7 +685,11 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
-            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+            "dict[str, object]",
+            {
+                **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+                "extra_headers": extra_headers,
+            },
         )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -1125,17 +1137,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 _ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
 
 
-def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
-    if custom_llm_provider == "anthropic":
-        return True
-    model_lower: Final = model.lower()
-    if custom_llm_provider == "bedrock":
-        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
-        return "claude" in model_lower
-    return False
-
-
 def _history_without_unanswered_tool_search_calls(
     messages: Sequence[object], custom_llm_provider: str | None, provider_config: BaseConfig
 ) -> tuple[object, ...] | None:
@@ -1270,6 +1271,16 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
         if deployment_id is not None:
             return str(deployment_id)
     return None
+
+
+def _record_agentic_loop_params(
+    logging_obj: object, requested_model: str, custom_llm_provider: str, owns_agentic_loop: bool
+) -> None:
+    if not owns_agentic_loop or not isinstance(logging_obj, LiteLLMLoggingObj):
+        return
+    logging_obj.record_agentic_loop_params(
+        AgenticLoopParams(model=requested_model, custom_llm_provider=custom_llm_provider)
+    )
 
 
 def _register_custom_pricing_for_request(
@@ -2662,10 +2673,13 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
+    if custom_llm_provider == "bigmodel" and not api_key:
+        raise litellm.AuthenticationError(
+            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+        )
     organization = (
         organization
-        or litellm.organization
-        or get_secret("OPENAI_ORGANIZATION")
+        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
@@ -4219,6 +4233,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
@@ -4374,6 +4389,11 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 else None
             ),
             converse_model,
+            strict_tools_fallback=(
+                partial(bedrock_strict_tools_fallback, converse_model, converse_params, dict(litellm_params))
+                if drops_unsupported_params(litellm_params.get("drop_params"))
+                else None
+            ),
         )
     elif bedrock_route == "converse_like":
         model = model.replace("converse_like/", "")
@@ -5678,7 +5698,11 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        _supplemental_provider_params: Final = {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        _supplemental_provider_params: Final = {
+            **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
+            "extra_headers": extra_headers,
+        }
+        requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -5690,16 +5714,23 @@ def completion(
                 else None
             ),
         )
+        _record_agentic_loop_params(
+            logging_obj=logging,
+            requested_model=requested_model,
+            custom_llm_provider=custom_llm_provider,
+            owns_agentic_loop=not skip_responses_api_bridge,
+        )
 
+        deployment_model_info: Final = str_keyed_mapping(
+            cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+        )
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
-            deployment_model_info=str_keyed_mapping(
-                cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
-            ),
+            deployment_model_info=deployment_model_info,
         )
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         drop_unsupported_reasoning: Final = (
@@ -5730,7 +5761,7 @@ def completion(
             }
         )
 
-        if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
+        if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:
@@ -5796,7 +5827,15 @@ def completion(
             )
 
         if provider_config is not None:
-            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
+            translated_messages: Final = list(
+                provider_config.translate_developer_role_to_system_role(
+                    messages=messages,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
+                    model_info=deployment_model_info,
+                )
+            )
             history_for_route: Final = _history_without_unanswered_tool_search_calls(
                 translated_messages, custom_llm_provider, provider_config
             )
@@ -5998,6 +6037,7 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            chatgpt_auth_file=routing_kwargs.get("chatgpt_auth_file"),
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),
@@ -6054,7 +6094,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_id=optional_params.get("model_id"),
         )
-        if mock_response or mock_tool_calls or mock_timeout:
+        if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             return mock_completion(
                 model,
@@ -6104,7 +6144,18 @@ def completion(
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
-            if isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
+            if custom_llm_provider == "openai" and isinstance(resolved_reasoning_effort, dict):
+                from litellm.responses.utils import openai_bridge_reasoning
+
+                optional_params["reasoning_effort"] = openai_bridge_reasoning(
+                    requested=resolved_reasoning_effort,
+                    effort_kept="reasoning_effort" in optional_params,
+                    summary_alias=rs_val,
+                    model=model,
+                    drop_params=drop_unsupported_reasoning,
+                    additional_drop_params=routing_kwargs.get("additional_drop_params"),
+                )
+            elif isinstance(resolved_reasoning_effort, dict) and "summary" in resolved_reasoning_effort:
                 optional_params["reasoning_effort"] = resolved_reasoning_effort
             elif rs_val is not None:
                 eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
@@ -6268,6 +6319,7 @@ def completion(
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
+            or custom_llm_provider == "bigmodel"
             or custom_llm_provider in litellm.openai_compatible_providers
             or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
@@ -6318,7 +6370,7 @@ def completion(
             response = _complete_vercel_ai_gateway(_dispatch_ctx)
         elif custom_llm_provider == "palm":
             raise ValueError(
-                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
+                "Palm was decommissioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
             )
         elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
             response = _complete_vertex_ai_beta(_dispatch_ctx)
@@ -7169,6 +7221,7 @@ def embedding(
                 custom_llm_provider="gemini",
                 api_key=gemini_api_key,
                 api_base=api_base,
+                timeout=timeout,
                 client=client,
                 extra_headers=headers,
                 drop_params=drop_unsupported_params,
@@ -7222,6 +7275,7 @@ def embedding(
                     custom_llm_provider="vertex_ai",
                     api_key=None,
                     api_base=api_base,
+                    timeout=timeout,
                     client=client,
                     extra_headers=headers,
                     drop_params=drop_unsupported_params,
@@ -7299,6 +7353,9 @@ def embedding(
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+                api_key=api_key,
+                headers=_OLLAMA_EMBEDDING_HEADERS_ADAPTER.validate_python(headers),
+                timeout=timeout,
             )
         elif custom_llm_provider == "sagemaker":
             response = sagemaker_llm.embedding(
@@ -8365,7 +8422,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
+    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
@@ -8527,10 +8584,16 @@ def transcription(
             provider_config=provider_config,
             shared_session=shared_session,
         )
+    else:
+        raise litellm.UnsupportedEndpointError(
+            message=f"{custom_llm_provider}/{model} does not support audio transcription.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
-    if response is not None and not isinstance(response, Coroutine):
+    if not isinstance(response, Coroutine):
         existing_duration: Final = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration: Final = calculate_request_duration(file)
@@ -8540,8 +8603,6 @@ def transcription(
                 )
                 response_hidden_params["audio_transcription_duration"] = calculated_duration
 
-    if response is None:
-        raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
 
 
@@ -9140,6 +9201,7 @@ async def ahealth_check(
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
+            litellm_params=GenericLiteLLMParams(**model_params),
         )
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls

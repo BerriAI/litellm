@@ -1784,3 +1784,106 @@ def test_a_whole_number_request_size_limit_is_named_as_configured_in_the_413(
     assert response.status_code == 413, response.text
     assert response.json() == {"error": "Request size is too large. Max size is 1 MB"}
     assert not upstream.called
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
+@pytest.mark.parametrize("api_key", (None, "deployment-key"))
+def test_proxy_routes_lm_studio_decisions_with_optional_authentication(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    api_key: str | None,
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local-decision",
+                "litellm_params": {
+                    "model": "lm_studio/served-decision",
+                    "api_base": "http://lmstudio.local:1234/v1",
+                    "api_key": api_key,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    upstream: Final = respx_mock.post("http://lmstudio.local:1234/v1/systemone").respond(json=_RESPONSE)
+    fields: Final = (
+        {"state": "review", "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}}
+        if endpoint.endswith("systemone")
+        else {
+            "input": "review",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        }
+    )
+
+    response: Final = client.post(endpoint, json={"model": "local-decision", **fields})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "served-decision",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert upstream.calls.last.request.headers.get("authorization") == (f"Bearer {api_key}" if api_key else None)
+    expected: Final = (
+        _RESPONSE["answers"]
+        if endpoint.endswith("systemone")
+        else [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
+    )
+    assert response.json()["answers"] == expected
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
+@pytest.mark.parametrize("api_key", (None, "deployment-key"))
+def test_proxy_routes_ollama_decisions_with_optional_authentication(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    provider: str,
+    endpoint: str,
+    api_key: str | None,
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local-decision",
+                "litellm_params": {
+                    "model": f"{provider}/d3:4b",
+                    "api_base": "http://ollama.local:11434/v1",
+                    "api_key": api_key,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    upstream: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+    fields: Final = (
+        {"state": "review", "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}}
+        if endpoint.endswith("systemone")
+        else {
+            "input": "review",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        }
+    )
+
+    response: Final = client.post(endpoint, json={"model": "local-decision", **fields})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert upstream.calls.last.request.headers.get("authorization") == (f"Bearer {api_key}" if api_key else None)
+    expected: Final = (
+        _RESPONSE["answers"]
+        if endpoint.endswith("systemone")
+        else [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
+    )
+    assert response.json()["answers"] == expected
