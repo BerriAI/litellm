@@ -47,6 +47,11 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     build_blocked_response,
 )
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import (
+    get_team_object,
+    guardrail_modification_check,
+    requests_guardrail_modification,
+)
 from litellm.proxy.auth.auth_utils import carries_client_side_overrides
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
@@ -2062,7 +2067,6 @@ _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
 _METADATA_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config")
 _PROXY_ONLY_FRAME_FIELDS: Final = (*_CLIENT_GUARDRAIL_SELECTORS, "include_guardrail_response")
-_NESTED_BODY_ONLY_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, "guardrails", "policies")
 _UNFORWARDED_FRAME_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_FIELDS, "litellm_metadata")
 _OBJECTS: Final = TypeAdapter(list[object])
 _TURN_COPIED_CONTAINERS: Final = (list, dict)
@@ -2087,15 +2091,33 @@ class _GuardrailWalk(Protocol):
     ) -> object: ...
 
 
+async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    team_id: Final = user_api_key_dict.team_id
+    if team_id is None or team_id == UI_TEAM_ID:
+        return None
+    return await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: _GuardrailWalk,
     record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
+    *,
+    team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]] = _key_team_object,
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call and during_call guardrail walks the HTTP ``/v1/responses`` path runs on
-    its body. during_call runs before the frame is forwarded, since a forwarded frame cannot be recalled."""
+    its body. during_call runs before the frame is forwarded, since a forwarded frame cannot be recalled, and like HTTP,
+    which sends the model call beside during_call, the frame carries the pre_call output and not during_call rewrites."""
     metadata_key: Final = get_metadata_variable_name_from_kwargs(admitted)
     admitted_bucket: Final = admitted.get(metadata_key)
     bucket: Final = {
@@ -2110,16 +2132,17 @@ def _responses_ws_frame_guard(
     # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
 
+    async def rejection(exception: Exception, data: dict[str, object]) -> ResponsesWsFrameRejection:  # mutable-ok: billed
+        await _bill_rejected_frame(rejected_frame_auth, exception, data)
+        proxy_exception: Final = proxy_exception_from_route_error(exception)
+        return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields)
+
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         nested: Final = frame_obj.get("response")
-        stray: Final = _field_beside_nested_response(frame_obj) if isinstance(nested, dict) else None
-        if stray is not None:
-            raise ValueError(
-                f"response.create sends {stray} at the top level next to response; send it inside response"
-            )
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
-        frame_data: Final = guardrail_request_data_with_streaming(
+        selection_sources: Final = (frame_obj, body) if isinstance(nested, dict) else (body,)
+        turn_data: Final = guardrail_request_data_with_streaming(
             {
                 **{
                     key: _without_untrusted_metadata(key, value)
@@ -2128,23 +2151,35 @@ def _responses_ws_frame_guard(
                 },
                 "model": model,
                 "litellm_call_id": str(uuid.uuid4()),
-                metadata_key: await _metadata_with_frame_guardrails(
-                    bucket, body, model, metadata_key, user_api_key_dict
-                ),
+                metadata_key: {**bucket},
             },
             is_streaming=True,
         )
         try:
+            _reject_guarded_field_beside_nested_response(frame_obj, nested)
+            await _check_frame_may_modify_guardrails(selection_sources, user_api_key_dict, team_object)
+            frame_data: Final = {
+                **turn_data,
+                metadata_key: await _metadata_with_frame_guardrails(
+                    bucket, selection_sources, model, metadata_key, user_api_key_dict
+                ),
+            }
+        except Exception as e:
+            raise await rejection(e, turn_data) from e
+        try:
             guarded_data: Final = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
             )
+            # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
+            guarded_fields: Final = {
+                key: copy.deepcopy(guarded_data[key]) for key in _GUARDED_FRAME_FIELDS if key in guarded_data
+            }
+            pii_tokens: Final = _recorded_pii_tokens(guarded_data.get("metadata"))
             await proxy_logging_obj.during_call_hook(
                 data=guarded_data, user_api_key_dict=user_api_key_dict, call_type="aresponses"
             )
         except Exception as e:
-            await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
-            proxy_exception: Final = proxy_exception_from_route_error(e)
-            raise ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields) from e
+            raise await rejection(e, frame_data) from e
         if guarded_data.get("model") != model:
             rerouted: Final = ValueError(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
@@ -2152,39 +2187,47 @@ def _responses_ws_frame_guard(
             )
             await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
             raise rerouted
-        # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
-        guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
-        kept: Final = {
-            key: _without_guardrail_selection(value) if key == "metadata" else value
-            for key, value in body.items()
-            if key not in _UNFORWARDED_FRAME_FIELDS
-        }
         rewritten: Final = (
-            {
-                **{key: value for key, value in frame_obj.items() if key not in _PROXY_ONLY_FRAME_FIELDS},
-                "response": {**kept, **guarded_fields},
-            }
+            {**_forwarded_frame_fields(frame_obj), "response": {**_forwarded_frame_fields(body), **guarded_fields}}
             if isinstance(nested, dict)
-            else {**kept, **guarded_fields}
+            else {**_forwarded_frame_fields(body), **guarded_fields}
         )
         guardrail_information: Final = _recorded_guardrail_information(guarded_data.get(metadata_key))
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
             guardrail_information=guardrail_information,
-            pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
+            pii_tokens=pii_tokens,
             bill_refusal=partial(record_refused_turn, guardrail_information),
         )
 
     return guard
 
 
-def _field_beside_nested_response(frame: Mapping[str, object]) -> str | None:
-    metadata_picks: Final = (
-        f"{key}.guardrails"
-        for key, value in frame.items()
-        if key in _CLIENT_METADATA_KEYS and isinstance(value, dict) and "guardrails" in value
-    )
-    return next(chain((key for key in _NESTED_BODY_ONLY_FIELDS if key in frame), metadata_picks), None)
+def _reject_guarded_field_beside_nested_response(frame: Mapping[str, object], nested: object) -> None:
+    """Only the nested ``response`` body runs through the guardrails, so a guarded field beside it would go upstream
+    unguarded"""
+    stray: Final = next((key for key in _GUARDED_FRAME_FIELDS if key in frame), None) if isinstance(nested, dict) else None
+    if stray is not None:
+        raise ValueError(f"response.create sends {stray} at the top level next to response; send it inside response")
+
+
+async def _check_frame_may_modify_guardrails(
+    sources: tuple[Mapping[str, object], ...],
+    user_api_key_dict: UserAPIKeyAuth,
+    team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]],
+) -> None:
+    """A frame that picks guardrails needs the team permission an HTTP body that picks them needs"""
+    modifying_source: Final = next((source for source in sources if requests_guardrail_modification(source)), None)
+    if modifying_source is not None:
+        guardrail_modification_check(modifying_source, await team_object(user_api_key_dict))
+
+
+def _forwarded_frame_fields(source: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: _without_guardrail_selection(value) if key == "metadata" else value
+        for key, value in source.items()
+        if key not in _UNFORWARDED_FRAME_FIELDS
+    }
 
 
 class _FrameGuardrailSelection(TypedDict, total=False):
@@ -2198,18 +2241,21 @@ _FRAME_GUARDRAIL_SELECTION: Final = TypeAdapter(_FrameGuardrailSelection)
 
 async def _metadata_with_frame_guardrails(
     bucket: Mapping[str, object],
-    body: Mapping[str, object],
+    sources: tuple[Mapping[str, object], ...],
     model: object,
     metadata_key: str,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Mapping[str, object]:
     """A frame selects guardrails the way an HTTP ``/v1/responses`` body does, adding to the key, team and policy
-    guardrails the socket was admitted with, so a frame can never shrink that list"""
-    selections: Final = _frame_guardrail_selections(body)
-    policies: Final = selections[-1].get("policies")
+    guardrails the socket was admitted with, so a frame can never shrink that list. A nested frame selects at its top
+    level and in its ``response`` body, the body last so its ``guardrail_config`` wins"""
+    selections: Final = tuple(chain.from_iterable(_frame_guardrail_selections(source) for source in sources))
+    picked_policies: Final = tuple(selection["policies"] for selection in selections if "policies" in selection)
     metadata: Final = (
-        await _metadata_with_frame_policies(bucket, policies, model, metadata_key, user_api_key_dict)
-        if policies is not None
+        await _metadata_with_frame_policies(
+            bucket, tuple(chain.from_iterable(picked_policies)), model, metadata_key, user_api_key_dict
+        )
+        if picked_policies
         else bucket
     )
     selected_guardrails: Final = tuple(chain.from_iterable(selection.get("guardrails", ()) for selection in selections))

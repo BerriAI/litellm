@@ -73,6 +73,21 @@ class TestPassthroughGuardrailHandlerGetGuardrailNames:
         assert set(result) == {"pii-detection", "content-moderation"}
 
 
+class TestPassthroughGuardrailHandlerCollectGuardrails:
+    def test_inherits_a_key_guardrail_listed_with_settings_by_its_name(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        key = UserAPIKeyAuth(
+            api_key="hashed", metadata={"guardrails": [{"pii": {"extra_body": {"threshold": 1}}}, "toxic"]}
+        )
+
+        assert PassthroughGuardrailHandler.collect_guardrails(key, ["passthrough-guard"]) == {
+            "passthrough-guard": True,
+            "pii": True,
+            "toxic": True,
+        }
+
+
 class TestPassthroughGuardrailHandlerNormalizeConfig:
     """Tests for PassthroughGuardrailHandler.normalize_config method."""
 

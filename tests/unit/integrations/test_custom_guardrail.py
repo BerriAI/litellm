@@ -3788,11 +3788,14 @@ def test_default_on_guardrail() -> None:
     )
 
 
-def test_merged_guardrail_entries_keeps_the_first_entry_per_guardrail_and_any_entry_that_names_a_new_one():
+def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first_entry_with_settings():
     from litellm.integrations.custom_guardrail import merged_guardrail_entries
 
     assert merged_guardrail_entries(["a"], [{"a": {}, "b": {}}, {"a": {"x": 1}}], ["b", "c", "c"]) == [
-        "a",
         {"a": {}, "b": {}},
         "c",
+    ]
+    assert merged_guardrail_entries(["pii", {"pii": {"extra_body": {"threshold": 1}}}], ["model-guard"]) == [
+        {"pii": {"extra_body": {"threshold": 1}}},
+        "model-guard",
     ]
