@@ -516,6 +516,7 @@ _CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
 _MIN_QUOTED_TURN_CHARS: Final = 120
+_TOOL_ENTRY_SHARES_OF_BUDGET: Final = 4
 
 _CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
@@ -1064,6 +1065,10 @@ def _extract_agent_progress(
     needs on a continuation turn. Only what follows the newest human ask counts, since tool traffic
     before it served an earlier ask. Newest first is what the budget keeps, so the latest result always
     reaches the classifier. Harness reminders are stripped from tool output the same way they are from asks.
+
+    A loop that overflows the budget has each entry cut to a quarter of it first, since one large file read
+    would otherwise fill the block alone and push out the result that described the task. A loop that fits
+    is quoted whole.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import tool_exchange_texts
 
@@ -1083,7 +1088,13 @@ def _extract_agent_progress(
         if per_turn_chars is None
         else tuple((kind, _truncate(text, per_turn_chars)) for kind, text in newest_first)
     )
-    return tuple(reversed(_turns_within_budget(clamped, budget_chars)))
+    overflows: Final = sum(len(text) for _, text in clamped) > budget_chars
+    shared: Final = (
+        tuple((kind, _truncate(text, budget_chars // _TOOL_ENTRY_SHARES_OF_BUDGET)) for kind, text in clamped)
+        if overflows
+        else clamped
+    )
+    return tuple(reversed(_turns_within_budget(shared, budget_chars)))
 
 
 def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bool:
@@ -1649,6 +1660,9 @@ class ComplexityRouter(CustomLogger):
         self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
             _ClassifierCircuitBreaker(circuit_breaker_cooldown) if circuit_breaker_cooldown is not None else None
         )
+        self._tool_turn_circuit_breaker: _ClassifierCircuitBreaker | None = (
+            _ClassifierCircuitBreaker(circuit_breaker_cooldown) if circuit_breaker_cooldown is not None else None
+        )
         self._tier_success_predictor: TierSuccessPredictor | None = (
             TierSuccessPredictor(
                 resolve_tier_artifact(self.config.heuristic_v2_artifact),
@@ -2089,6 +2103,8 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: dict[str, object] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
         raw_messages: list[dict[str, object]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
+        *,
+        tool_turn: bool = False,
     ) -> ClassificationOutcome:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
@@ -2099,26 +2115,32 @@ class ComplexityRouter(CustomLogger):
         plugin fails, times out, or produces no usable tier, the configured fallback_tier wins on a
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
+
+        A user_turn tool turn (`tool_turn`) trips a circuit breaker of its own: its failure only keeps the held
+        tier, so it must not switch the classifier off for every other session's new asks.
         """
+        breaker: Final = self._tool_turn_circuit_breaker if tool_turn else self._classifier_circuit_breaker
         if self.config.classifier_type == "heuristic_v2":
             return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "oss_classifier":
-            return await self._jev_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+            return await self._jev_classifier_outcome(prompt, system_prompt, request_kwargs, messages, breaker=breaker)
         if self.config.classifier_type in ("heuristic_first", "hybrid") and _encrypted_classifier_task(
             request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
         ):
-            return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+            return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, breaker=breaker)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
-            return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
+            return await self._classify_heuristic_first(
+                prompt, system_prompt, request_kwargs, messages, breaker=breaker
+            )
         if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
-            return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages)
+            return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages, breaker=breaker)
         if self.config.classifier_type == "capability" and self.config.classifier_llm_config is not None:
-            return await self._capability_classifier_outcome(prompt, request_kwargs, messages)
+            return await self._capability_classifier_outcome(prompt, request_kwargs, messages, breaker=breaker)
         if self.config.classifier_type not in ("llm", "llm_v2") or self.config.classifier_llm_config is None:
             return self._classify_locally(prompt, system_prompt)
-        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, breaker=breaker)
 
     def _classify_locally(self, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
         if self._tier_success_predictor is not None:
@@ -2175,6 +2197,8 @@ class ComplexityRouter(CustomLogger):
         system_prompt: str | None,
         request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
         messages: Sequence[Mapping[str, object]] | None,
+        *,
+        breaker: _ClassifierCircuitBreaker | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier call when the scorer did not confidently
         place the request at or below heuristic_first_max_tier.
@@ -2201,7 +2225,9 @@ class ComplexityRouter(CustomLogger):
         )
         if decided_cheaply:
             return scored._replace(cause="heuristic_first_short_circuit")
-        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+        return await self._llm_classifier_outcome(
+            prompt, system_prompt, request_kwargs, messages, scored=scored, breaker=breaker
+        )
 
     async def _classify_hybrid(
         self,
@@ -2209,6 +2235,8 @@ class ComplexityRouter(CustomLogger):
         system_prompt: str | None,
         request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
         messages: Sequence[Mapping[str, object]] | None,
+        *,
+        breaker: _ClassifierCircuitBreaker | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier when the score sits near a tier boundary.
 
@@ -2229,7 +2257,9 @@ class ComplexityRouter(CustomLogger):
         )
         if decided:
             return scored._replace(cause="hybrid_short_circuit")
-        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+        return await self._llm_classifier_outcome(
+            prompt, system_prompt, request_kwargs, messages, scored=scored, breaker=breaker
+        )
 
     def _classifier_image_parts(
         self, messages: Sequence[Mapping[str, object]] | None
@@ -2263,9 +2293,10 @@ class ComplexityRouter(CustomLogger):
         prompt: str,
         request_kwargs: Mapping[str, object] | None,
         messages: Sequence[Mapping[str, object]] | None,
+        *,
+        breaker: _ClassifierCircuitBreaker | None,
     ) -> ClassificationOutcome:
         """Forecast efficient-tier success, then apply the deterministic boundary policy."""
-        breaker: Final = self._classifier_circuit_breaker
         permit: Final = breaker.acquire_permit() if breaker is not None else None
         if breaker is not None and permit is None:
             return self._capability_classifier_failure_outcome(
@@ -2340,13 +2371,14 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
         messages: Sequence[Mapping[str, object]] | None,
         scored: ClassificationOutcome | None = None,
+        *,
+        breaker: _ClassifierCircuitBreaker | None,
     ) -> ClassificationOutcome:
         """Call the LLM classifier and turn its verdict, or its failure, into an outcome.
 
         `scored` is the heuristic outcome the caller already computed, which only "heuristic_first"
         has. It is handed to the failure path so a classifier error does not re-run the scorer.
         """
-        breaker: Final = self._classifier_circuit_breaker
         permit: Final = breaker.acquire_permit() if breaker is not None else None
         if breaker is not None and permit is None:
             return self._classifier_failure_outcome(
@@ -2398,6 +2430,8 @@ class ComplexityRouter(CustomLogger):
         system_prompt: str | None,
         request_kwargs: Mapping[str, object] | None,
         messages: Sequence[Mapping[str, object]] | None,
+        *,
+        breaker: _ClassifierCircuitBreaker | None,
     ) -> ClassificationOutcome:
         config: Final = self.config.opensource_classifier_config
         client: Final = self._jev_client
@@ -2413,7 +2447,6 @@ class ComplexityRouter(CustomLogger):
                 system_prompt,
                 failure_reason="unsupported_input",
             )
-        breaker: Final = self._classifier_circuit_breaker
         permit: Final = breaker.acquire_permit() if breaker is not None else None
         if breaker is not None and permit is None:
             return self._classifier_failure_outcome(
@@ -4756,6 +4789,12 @@ class ComplexityRouter(CustomLogger):
                                         classifier_cost=tool_turn_escalation.classifier_cost
                                         if tool_turn_escalation is not None
                                         else None,
+                                        classifier_failure_reason=tool_turn_escalation.classifier_failure_reason
+                                        if tool_turn_escalation is not None
+                                        else None,
+                                        classifier_error_type=tool_turn_escalation.classifier_error_type
+                                        if tool_turn_escalation is not None
+                                        else None,
                                         conversation_continuing=conversation_continuing,
                                         tier_litellm_params=session_tier_litellm_params,
                                         context_escalation_original_tier=pin_context_original_tier,
@@ -4824,7 +4863,7 @@ class ComplexityRouter(CustomLogger):
         if held_tier is None or ask is None:
             return None
         classification: Final = await self.aclassify(
-            ask, system_prompt, request_kwargs, resolved_messages, raw_messages=messages
+            ask, system_prompt, request_kwargs, resolved_messages, raw_messages=messages, tool_turn=True
         )
         if classification.classifier_failure_reason is not None or self._active_tier_severity(
             classification.tier
@@ -4839,6 +4878,7 @@ class ComplexityRouter(CustomLogger):
             resolved_messages=resolved_messages,
             context_fit=context_fit,
             classification=classification,
+            held_tier=held_tier,
         )
         routed_tier: Final = (
             routed.routing_decision.get("tier") if routed is not None and routed.routing_decision is not None else None
@@ -4964,6 +5004,7 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None = None,
         context_fit: _RequestContextFit | None = None,
         classification: ClassificationOutcome | None = None,
+        held_tier: ComplexityTier | str | None = None,
     ) -> PreRoutingHookResponse | None:
         """
         Classifies the request by complexity and returns the appropriate model.
@@ -4981,6 +5022,8 @@ class ComplexityRouter(CustomLogger):
                 caller does not have to.
             classification: The classifier's verdict when the caller already ran it on this
                 request, so it is not asked twice.
+            held_tier: The session tier a user_turn tool turn escalates from, a hard floor for
+                the adaptive pick.
 
         Returns:
             PreRoutingHookResponse with the routed model, or None if no routing needed.
@@ -5198,11 +5241,20 @@ class ComplexityRouter(CustomLogger):
             housekeeping_ceiling: Final = tier if outcome.cause == "housekeeping" else None
             # A context-escalated tier becomes the hard floor: a floor the bandit can slide
             # under is not a floor.
-            adaptive_floor: Final = (
+            decided_floor: Final = (
                 tier
                 if context_original_tier is not None
                 or outcome.cause in ("capability_classifier", "capability_classifier_fallback")
                 else plan_floor
+            )
+            adaptive_floor: Final = (
+                held_tier
+                if decided_floor is None
+                or (
+                    held_tier is not None
+                    and self._active_tier_severity(held_tier) > self._active_tier_severity(decided_floor)
+                )
+                else decided_floor
             )
             adaptive_fit: Final = context_placement.holdable_models if context_placement is not None else None
             sampled_model: Final = self._soft_floor_pick(

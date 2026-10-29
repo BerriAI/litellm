@@ -11561,7 +11561,8 @@ class _TaskAwareJevClient:
 
 
 class _ScriptedJevClient:
-    """Answers the n-th classification with the n-th scripted tier, and fails it where the script says None."""
+    """Answers the n-th classification with the n-th scripted tier, fails it where the script says None, and
+    times it out where the script says TIMEOUT."""
 
     def __init__(self, tiers: tuple[str | None, ...]) -> None:
         self._tiers: Final = tiers
@@ -11574,6 +11575,8 @@ class _ScriptedJevClient:
         tier: Final = self._tiers[len(self.states) - 1]
         if tier is None:
             raise httpx.ConnectError("classifier unreachable")
+        if tier == "TIMEOUT":
+            raise TimeoutError("classifier timed out")
         return JevSystemOneResponse(
             model="jev-1.13.0",
             answers={"tier": JevChoiceAnswer(type="choice", choice=tier, probabilities={tier: 1.0}, confidence=0.9)},
@@ -11700,6 +11703,37 @@ class TestAgentProgressReachesClassifier:
         assert "listing 0" not in client.states[-1]
 
     @pytest.mark.asyncio
+    async def test_one_large_read_does_not_push_the_task_out(self) -> None:
+        """A file read larger than the whole budget must not leave the classifier with that file alone and
+        drop the result that described the task."""
+        client: Final = _TaskAwareJevClient()
+        router: Final = self._jev_router(client, classifier_context_include_tool_turns=True)
+        large_read: Final = (
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_9",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path": "ledger.py"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_9", "content": "balance = 0\n" * 2000},
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[*_tool_loop_continuation("chat_completions"), *large_read],
+        )
+
+        assert response is not None
+        assert response.model == "strong"
+        assert "balance = 0" in client.states[-1]
+
+    @pytest.mark.asyncio
     async def test_zero_context_window_turns_tool_context_off(self) -> None:
         client: Final = _TaskAwareJevClient()
         router: Final = self._jev_router(
@@ -11741,7 +11775,7 @@ class TestAgentProgressReachesClassifier:
     async def test_user_turn_holds_the_ask_tier_as_a_floor_and_moves_up_on_tool_results(
         self, include_tool_turns: bool, expected_models: str
     ) -> None:
-        """The customer's ask: keep the current tier as a baseline and move up when the task turns out harder.
+        """A user_turn loop keeps its ask's tier as a floor and moves up when the task turns out harder.
         The third turn grades SIMPLE again, and the loop must stay where the second turn took it."""
         client: Final = _ScriptedJevClient(("SIMPLE", "COMPLEX", "SIMPLE"))
         router: Final = self._jev_router(
@@ -11786,6 +11820,107 @@ class TestAgentProgressReachesClassifier:
 
         assert [response.model for response in responses if response is not None] == ["cheap", "cheap"]
         assert len(client.states) == 2
+        held_decision: Final = responses[1].routing_decision if responses[1] is not None else None
+        assert held_decision is not None
+        assert held_decision.get("classifier_failure_reason") == "classifier_error"
+        assert held_decision.get("classifier_error_type") == "ConnectError"
+
+    @pytest.mark.asyncio
+    async def test_user_turn_tool_turn_timeout_leaves_new_asks_classifying(self) -> None:
+        """A tool turn's timeout only keeps its own held tier, so another session's new ask must still reach the
+        classifier, while the timed-out loop's next tool turn replays its pin without waiting on the call again."""
+        client: Final = _ScriptedJevClient(("SIMPLE", "TIMEOUT", "COMPLEX"))
+        router: Final = self._jev_router(
+            client, classification_mode="user_turn", classifier_context_include_tool_turns=True
+        )
+        loop: Final = _tool_loop_continuation("chat_completions")
+        new_ask: Final = [{"role": "user", "content": "Design a lock-free MPMC queue and prove linearizability"}]
+
+        responses: Final = [
+            await router.async_pre_routing_hook(
+                model="test-router", request_kwargs={"metadata": {"session_id": session}}, messages=turn
+            )
+            for session, turn in (
+                ("loop-a", loop[:1]),
+                ("loop-a", loop),
+                ("loop-b", new_ask),
+                ("loop-a", [*loop, *_RUN_TESTS_TURNS]),
+            )
+        ]
+
+        assert [response.model for response in responses if response is not None] == [
+            "cheap",
+            "cheap",
+            "strong",
+            "cheap",
+        ]
+        assert len(client.states) == 3
+        decisions: Final = [response.routing_decision if response is not None else None for response in responses]
+        assert decisions[1] is not None and decisions[1].get("classifier_failure_reason") == "timeout"
+        assert decisions[3] is not None and decisions[3].get("classifier_failure_reason") == "circuit_open"
+
+    @pytest.mark.asyncio
+    async def test_user_turn_escalation_never_samples_below_the_held_tier(self) -> None:
+        """An adaptive router scoring every model must not let an escalating tool turn land below the tier the
+        session holds, however strongly the bandit favors the cheap model."""
+        from itertools import product
+
+        from litellm.router_strategy.adaptive_router.bandit import BanditCell
+        from litellm.types.router import RequestType
+
+        instance: Final = MagicMock(cache=DualCache())
+        instance.model_list = [
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/{name}", "input_cost_per_token": cost},
+                "model_info": {"adaptive_router_preferences": {"quality_tier": quality, "strengths": []}},
+            }
+            for name, cost, quality in (
+                ("cheap", 0.00000015, 1),
+                ("mid", 0.000001, 2),
+                ("strong", 0.000005, 3),
+                ("top", 0.000015, 3),
+            )
+        ]
+        _answer_deployments_named(instance)
+        router: Final = ComplexityRouter(
+            "test-router",
+            instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": _AGENT_TIERS,
+                "classification_mode": "user_turn",
+                "classifier_context_include_tool_turns": True,
+                "adaptive": True,
+                "tier_distance_penalty": 0.1,
+            },
+            derive_savings_baseline=False,
+            jev_client=_ScriptedJevClient(("MEDIUM", "COMPLEX")),
+        )
+        adaptive: Final = router._ensure_adaptive_router()
+        assert adaptive is not None
+        adaptive._cells.update(
+            {
+                (request_type, name): BanditCell(alpha=20.0, beta=1.0) if name == "cheap" else BanditCell(alpha=1.0, beta=20.0)
+                for request_type, name in product(RequestType, _AGENT_TIERS.values())
+            }
+        )
+        loop: Final = _tool_loop_continuation("chat_completions")
+
+        with patch(
+            "litellm.router_strategy.adaptive_router.bandit.thompson_sample",
+            side_effect=lambda cell, rng=None: cell.alpha / (cell.alpha + cell.beta),
+        ):
+            responses: Final = [
+                await router.async_pre_routing_hook(
+                    model="test-router", request_kwargs={"metadata": {"session_id": "agent-loop"}}, messages=turn
+                )
+                for turn in (loop[:1], loop)
+            ]
+
+        assert [response.model for response in responses if response is not None][0] == "cheap"
+        assert responses[1] is not None and responses[1].model in ("mid", "strong", "top")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

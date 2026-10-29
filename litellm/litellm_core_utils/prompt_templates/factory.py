@@ -6577,8 +6577,9 @@ def tool_exchange_texts(message: Mapping[str, object]) -> tuple[tuple[ToolExchan
     Chat completions puts calls on an assistant turn's `tool_calls` and each result on its own `tool` role,
     while Anthropic Messages puts both inside content blocks, `tool_use` on the assistant turn and
     `tool_result` on the next user turn, so this reads both places. The legacy `function_call` field and
-    `function` role, and Anthropic's server and MCP tool blocks, read the same way. Responses API input reaches
-    callers already resolved to the chat-completions shape by `resolve_structured_messages`.
+    `function` role, Anthropic's server tool calls, and its MCP tool blocks read the same way, while server tool
+    results such as `web_search_tool_result` are not read. Responses API input reaches callers already resolved
+    to the chat-completions shape by `resolve_structured_messages`.
     """
     if message.get("role") in ("tool", "function"):
         result: Final = _exchange_content_text(message.get("content"))
