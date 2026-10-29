@@ -4073,3 +4073,20 @@ def test_granian_flag_notices_are_json_records_in_json_mode(
         "LiteLLM: --ciphers is not applied when using --run_granian.",
     ]
     assert {record["level"] for record in records} == {"INFO"}
+
+
+def test_migration_data_check_exits_zero_when_there_is_nothing_to_dry_run(monkeypatch, capfd):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example/litellm")
+
+    assert ProxyInitializationHelpers.run_migration_data_check(use_migrate=False) == 0
+
+    out, err = capfd.readouterr()
+    assert out == "LiteLLM Proxy: The schema is pushed rather than migrated, there is nothing to dry-run.\n"
+    assert err == ""
+
+
+def test_migration_data_check_requires_database_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(click.UsageError, match="requires DATABASE_URL"):
+        ProxyInitializationHelpers.run_migration_data_check(use_migrate=True)
