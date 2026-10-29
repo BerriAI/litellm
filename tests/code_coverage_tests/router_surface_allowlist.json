@@ -132,7 +132,6 @@
     "schedule_acompletion",
     "search_tools",
     "serve_through_request_logging",
-    "should_include_deployment",
     "split_request_priority",
     "team_model_to_deployment_indices",
     "team_pattern_routers",
