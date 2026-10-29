@@ -10472,3 +10472,89 @@ async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
     metadata = _update_metadata_with_tags_in_header(request, {})
     assert metadata["tags"] == ["existing", "usecase:a"]
     assert await read_request_body(request) == {"model": "qa-model"}
+
+
+def _client_request(method: str, headers: Mapping[str, str], body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/azure/openai/v1/responses/resp_1",
+            "query_string": b"",
+            "headers": [(name.encode(), value.encode()) for name, value in headers.items()],
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("method", "client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param("DELETE", {}, b"", None, id="delete-without-body"),
+        pytest.param(
+            "POST",
+            {"content-type": "application/x-www-form-urlencoded", "content-length": "0"},
+            b"",
+            None,
+            id="curl-empty-form",
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="explicit-empty-object"
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "8"}, b'{"a": 1}', {"a": 1}, id="json-object"
+        ),
+        pytest.param(
+            "POST",
+            {"content-type": "application/json", "transfer-encoding": "chunked"},
+            b"{}",
+            {},
+            id="chunked-empty-object",
+        ),
+    ],
+)
+async def test_pass_through_request_sends_a_body_upstream_only_when_the_client_sent_one(
+    stream: bool,
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    expected_upstream_json: object,
+):
+    received: Final[list[httpx.Request]] = []
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        received.append(upstream_request)
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data
+    )
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+    try:
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):  # test-quality-ok: read at call time
+            response = await pass_through_request(
+                request=_client_request(method, client_headers, client_body),
+                target="https://upstream.test/openai/v1/responses/resp_1",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                stream=stream,
+            )
+            if isinstance(response, StreamingResponse):
+                _ = [chunk async for chunk in response.body_iterator]
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 200
+    assert len(received) == 1
+    upstream_body: Final = received[0].content
+    assert (json.loads(upstream_body) if upstream_body else None) == expected_upstream_json

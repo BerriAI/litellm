@@ -102,6 +102,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
+    request_declares_body,
     safe_get_request_headers,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
@@ -487,7 +488,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         url: httpx.URL,
         headers: dict,
         requested_query_params: dict | None = None,
-        _parsed_body: dict | None = None,
+        _parsed_body: Mapping[str, object] | None = None,
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
@@ -1130,6 +1131,12 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+def _forwarded_json_body(
+    parsed_body: Mapping[str, object] | None, request_headers: Mapping[str, str]
+) -> Mapping[str, object] | None:
+    return parsed_body if parsed_body or request_declares_body(request_headers) else None
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1524,6 +1531,7 @@ async def pass_through_request(
             parsed_body=_parsed_body or {},
             stream=stream,
         )
+        forwarded_json_body: Final = _forwarded_json_body(_parsed_body, request.headers)
 
         if stream:
             logging_obj.stream = True
@@ -1555,7 +1563,7 @@ async def pass_through_request(
                         url,
                         params=requested_query_params,
                         headers=upstream_headers,
-                        json=_parsed_body,
+                        json=forwarded_json_body,
                     )
                 )
 
@@ -1650,7 +1658,7 @@ async def pass_through_request(
                 url=url,
                 headers=upstream_headers,
                 requested_query_params=requested_query_params,
-                _parsed_body=_parsed_body,
+                _parsed_body=forwarded_json_body,
                 forward_multipart=is_multipart,
             )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)

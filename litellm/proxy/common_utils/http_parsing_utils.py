@@ -179,6 +179,11 @@ def _declared_content_length(headers: Mapping[str, str]) -> int | None:
     return int(declared) if isinstance(declared, str) and declared.isdigit() else None
 
 
+def request_declares_body(headers: Mapping[str, str]) -> bool:
+    content_length: Final = _declared_content_length(headers)
+    return "transfer-encoding" in headers or (content_length is not None and content_length > 0)
+
+
 def _mark_body_received(byte_count: int | None) -> None:
     """Marks the end of body transfer on the request's server span, once per body read."""
     phase_event(
