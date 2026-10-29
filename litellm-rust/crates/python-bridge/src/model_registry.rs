@@ -10,8 +10,8 @@ use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, Installs, IntegrityLimits
 use parking_lot::Mutex;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
 use pyo3::pybacked::PyBackedBytes;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyModule};
 use serde::Serialize;
 use sha1::{Digest, Sha1};
