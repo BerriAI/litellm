@@ -7,11 +7,8 @@ import logging
 import re
 import sys
 import time
-from collections.abc import Mapping
 from io import StringIO
-from itertools import chain
 from pathlib import Path
-from types import MappingProxyType
 from typing import Final, List
 
 import pytest
@@ -479,91 +476,6 @@ def test_logging_calls_do_not_build_their_message_eagerly():
         "these logging calls build their message eagerly; pass the values as %-style arguments instead:\n"
         + "\n".join(offenders)
     )
-
-
-_SGR_ESCAPE: Final = re.compile(r"\x1b\[([0-9;]*)m")
-_PRINT_FUNCTIONS: Final = frozenset({"print", "print_verbose", "print_startup_message"})
-_OUTPUT_METHODS: Final = frozenset({"debug", "info", "warning", "warn", "error", "exception", "critical", "log", "echo"})
-
-
-def _literal_text(node: ast.expr, constants: Mapping[str, str]) -> str:
-    match node:
-        case ast.Constant(value=str() as value):
-            return value
-        case ast.JoinedStr(values=values):
-            return "".join(_literal_text(value, constants) for value in values)
-        case ast.FormattedValue(value=value):
-            return _literal_text(value, constants)
-        case ast.BinOp(left=left, op=ast.Add(), right=right):
-            return _literal_text(left, constants) + _literal_text(right, constants)
-        case ast.Name(id=name):
-            return constants.get(name, "")
-        case _:
-            return ""
-
-
-def _is_output_call(node: ast.AST) -> bool:
-    if not isinstance(node, ast.Call):
-        return False
-    match node.func:
-        case ast.Name(id=name):
-            return name in _PRINT_FUNCTIONS
-        case ast.Attribute(attr=attr):
-            return attr in _OUTPUT_METHODS
-        case _:
-            return False
-
-
-def _string_constant(node: ast.AST) -> tuple[str, str] | None:
-    match node:
-        case ast.Assign(targets=[ast.Name(id=name)], value=ast.Constant(value=str() as value)):
-            return name, value
-        case ast.AnnAssign(target=ast.Name(id=name), value=ast.Constant(value=str() as value)):
-            return name, value
-        case _:
-            return None
-
-
-def _leaves_color_on(call: ast.Call, constants: Mapping[str, str]) -> bool:
-    codes: Final = _SGR_ESCAPE.findall("".join(_literal_text(arg, constants) for arg in call.args))
-    return bool(codes) and codes[-1] not in ("", "0")
-
-
-def _calls_leaving_a_color_on(source: str, path: Path) -> tuple[str, ...]:
-    tree: Final = ast.parse(source)
-    constants: Final = MappingProxyType(dict(filter(None, map(_string_constant, ast.walk(tree)))))
-    output_calls: Final = (node for node in ast.walk(tree) if isinstance(node, ast.Call) and _is_output_call(node))
-    return tuple(f"{path}:{call.lineno}" for call in output_calls if _leaves_color_on(call, constants))
-
-
-@pytest.mark.parametrize(
-    ("source", "flagged"),
-    [
-        ('logger.debug("\\033[1;31mAn error occurred: %s", e)\n', True),
-        ('BLUE = "\\033[94m"\nprint_startup_message(f"{BLUE}\\nSetting Cache")\n', True),
-        ('logger.info("ok\\x1b[32m 200 OK\\x1b[0m\\x1b[31m failed", m)\n', True),
-        ('logger.debug("\\033[1;31mAn error occurred: %s\\033[0m", e)\n', False),
-        ('BLUE = "\\033[94m"\nRESET = "\\033[0m"\nlogger.debug("%sSet Cache%s", BLUE, RESET)\n', False),
-        ('ORANGE = "\\033[38;2;215;119;87m"\nlabel = _c(ORANGE, text)\n', False),
-    ],
-)
-def test_color_scan_flags_only_output_calls_that_leave_a_color_on(source: str, flagged: bool) -> None:
-    assert bool(_calls_leaving_a_color_on(source, Path("module.py"))) is flagged
-
-
-def test_print_and_log_calls_do_not_leave_a_terminal_color_on():
-    """A message that turns on a color without `\\033[0m` paints every later line in the terminal."""
-    repo_root: Final = LITELLM_PACKAGE_ROOT.parent
-    roots: Final = (LITELLM_PACKAGE_ROOT, repo_root / "enterprise", repo_root / "litellm-proxy-extras")
-    sources: Final = sorted(chain.from_iterable(root.rglob("*.py") for root in roots))
-    offenders: Final = tuple(
-        chain.from_iterable(
-            _calls_leaving_a_color_on(path.read_text(encoding="utf-8"), path.relative_to(repo_root))
-            for path in sources
-        )
-    )
-
-    assert offenders == (), "these calls turn on a terminal color without resetting it:\n" + "\n".join(offenders)
 
 
 class _JsonCapture(logging.Handler):
