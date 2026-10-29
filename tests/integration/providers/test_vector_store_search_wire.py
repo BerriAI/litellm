@@ -4,6 +4,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
+import pytest
 from integration._support.client import Gateway
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
@@ -145,8 +146,21 @@ def test_vector_store_search_forwards_all_search_fields_on_both_routes(gateway: 
         ]
 
 
-def test_vertex_search_api_vector_store_reuses_one_google_token_across_searches(gateway: Gateway) -> None:
-    store_id: Final = f"ds_search_{uuid.uuid4().hex}"
+@pytest.mark.parametrize(
+    ("api_type", "search_target", "search_reply"),
+    (
+        (
+            "search_api",
+            "/store:search",
+            {"results": [{"id": "doc-1", "document": {"id": "doc-1", "derivedStructData": {"title": "hit"}}}]},
+        ),
+        ("rag_api", "/store:retrieveContexts", {"contexts": {"contexts": []}}),
+    ),
+)
+def test_vertex_vector_store_reuses_one_google_token_across_searches(
+    gateway: Gateway, api_type: str, search_target: str, search_reply: dict[str, JsonValue]
+) -> None:
+    store_id: Final = f"vs_vertex_{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -154,13 +168,9 @@ def test_vertex_search_api_vector_store_reuses_one_google_token_across_searches(
             return Reply(
                 body=json.dumps({"access_token": _VERTEX_TOKEN, "token_type": "Bearer", "expires_in": 3600}).encode()
             )
-        assert request.target == "/search:search", request.target
+        assert request.target == search_target, request.target
         assert request.headers["authorization"] == f"Bearer {_VERTEX_TOKEN}"
-        return Reply(
-            body=json.dumps(
-                {"results": [{"id": "doc-1", "document": {"id": "doc-1", "derivedStructData": {"title": "hit"}}}]}
-            ).encode()
-        )
+        return Reply(body=json.dumps(search_reply).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         registered: Final = gateway.request(
@@ -168,9 +178,9 @@ def test_vertex_search_api_vector_store_reuses_one_google_token_across_searches(
             "/vector_store/new",
             {
                 "vector_store_id": store_id,
-                "custom_llm_provider": "vertex_ai/search_api",
+                "custom_llm_provider": f"vertex_ai/{api_type}",
                 "litellm_params": {
-                    "api_base": f"{wire.url}/search",
+                    "api_base": f"{wire.url}/store",
                     "vertex_project": _VERTEX_PROJECT,
                     "vertex_location": "global",
                     "vertex_credentials": service_account_json(_VERTEX_PROJECT, wire.url),
@@ -190,5 +200,5 @@ def test_vertex_search_api_vector_store_reuses_one_google_token_across_searches(
 
         assert [request.target for request in wire.drain()] == [
             "/_oauth/token",
-            *("/search:search",) * _VERTEX_SEARCH_COUNT,
+            *(search_target,) * _VERTEX_SEARCH_COUNT,
         ]
