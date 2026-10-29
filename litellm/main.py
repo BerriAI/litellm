@@ -155,6 +155,7 @@ from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    AgenticLoopParams,
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
@@ -1270,6 +1271,16 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
         if deployment_id is not None:
             return str(deployment_id)
     return None
+
+
+def _record_agentic_loop_params(
+    logging_obj: object, requested_model: str, custom_llm_provider: str, owns_agentic_loop: bool
+) -> None:
+    if not owns_agentic_loop or not isinstance(logging_obj, LiteLLMLoggingObj):
+        return
+    logging_obj.record_agentic_loop_params(
+        AgenticLoopParams(model=requested_model, custom_llm_provider=custom_llm_provider)
+    )
 
 
 def _register_custom_pricing_for_request(
@@ -5691,6 +5702,7 @@ def completion(
             **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
             "extra_headers": extra_headers,
         }
+        requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -5701,6 +5713,12 @@ def completion(
                 if _supplemental_provider_params
                 else None
             ),
+        )
+        _record_agentic_loop_params(
+            logging_obj=logging,
+            requested_model=requested_model,
+            custom_llm_provider=custom_llm_provider,
+            owns_agentic_loop=not skip_responses_api_bridge,
         )
 
         deployment_model_info: Final = str_keyed_mapping(

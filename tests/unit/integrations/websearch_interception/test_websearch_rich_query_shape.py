@@ -239,6 +239,7 @@ class TestCallSiteWiring:
             tool_calls=tool_calls,
             optional_params={},
             kwargs={},
+            logging_obj=None,
         )
 
         call_kwargs = mock_asearch.await_args.kwargs

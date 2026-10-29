@@ -37,6 +37,7 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -112,6 +113,18 @@ class _AgenticLoopParamsView(TypedDict):
 
 class _WebSearchSettingsView(TypedDict):
     websearch_interception_params: WebSearchInterceptionConfig
+
+
+def _caller_model(model: str, logging_obj: "LiteLLMLoggingObj | None", kwargs: Mapping[str, object]) -> str:
+    agentic_view: Final[_AgenticLoopParamsView] = {
+        "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params", {}) if logging_obj else {}
+    }
+    recorded_model: Final = agentic_view["agentic_loop_params"].get("model")
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    return qualify_provider_stripped_model(
+        recorded_model if isinstance(recorded_model, str) and recorded_model else model,
+        custom_llm_provider if isinstance(custom_llm_provider, str) else "",
+    )
 
 
 class _SearchToolLitellmParams(TypedDict, total=False):
@@ -1155,6 +1168,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             tool_calls=tool_calls,
             optional_params=optional_params,
             kwargs=kwargs,
+            logging_obj=logging_obj,
             response_format=response_format,
         )
         return AgenticLoopPlan(
@@ -1181,6 +1195,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             tool_calls=tool_calls,
             optional_params=optional_params,
             kwargs=kwargs,
+            logging_obj=logging_obj,
         )
         return AgenticLoopPlan(
             run_agentic_loop=True,
@@ -1195,6 +1210,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         tool_calls: list[dict],
         optional_params: dict,
         kwargs: dict,
+        logging_obj: "LiteLLMLoggingObj | None",
     ) -> AgenticLoopRequestPatch:
         """Execute litellm.asearch() and build a Responses API rerun patch."""
         search_tasks: Final = [
@@ -1254,9 +1270,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             }
         }
 
-        full_model_name = model
-        if "/" not in model and isinstance(kwargs.get("custom_llm_provider"), str):
-            full_model_name = f"{kwargs['custom_llm_provider']}/{model}"
+        full_model_name: Final = _caller_model(model, logging_obj, kwargs)
 
         verbose_logger.debug(
             "WebSearchInterception: Built responses request patch model=%s input_items=%d searches=%d",
@@ -1814,6 +1828,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             tool_calls=tool_calls,
             optional_params=dict[str, object](optional_params),
             kwargs=dict[str, object](kwargs),
+            logging_obj=logging_obj,
             response_format=response_format,
         )
         if request_patch.messages is None:
@@ -1836,7 +1851,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: list[dict],
         tool_calls: list[dict],
         optional_params: dict,
-        kwargs: dict,
+        kwargs: dict[str, object],
+        logging_obj: "LiteLLMLoggingObj | None",
         response_format: str = "openai",
     ) -> AgenticLoopRequestPatch:
         """Execute litellm.search() and build chat-completion rerun patch."""
@@ -1922,11 +1938,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             k: v for k, v in kwargs.items() if not k.startswith("_websearch_interception") and k not in internal_params
         }
 
-        full_model_name = model
-        if "custom_llm_provider" in kwargs:
-            custom_llm_provider: Final = kwargs["custom_llm_provider"]
-            if not model.startswith(custom_llm_provider) and "/" not in model:
-                full_model_name = f"{custom_llm_provider}/{model}"
+        full_model_name: Final = _caller_model(model, logging_obj, kwargs)
 
         verbose_logger.debug(
             "WebSearchInterception: Built chat completion request patch model=%s messages=%d",

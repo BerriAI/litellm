@@ -365,6 +365,49 @@ async def test_dispatcher_runs_followup_with_incremented_depth_and_patched_messa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,routed_model",
+    [
+        ("cohere/command-a-03-2025", "cohere_chat", "command-a-03-2025"),
+        ("anthropic/claude-2", "anthropic_text", "claude-2"),
+    ],
+)
+async def test_sdk_followup_keeps_a_model_whose_prefix_already_routes_to_its_provider(
+    model: str, custom_llm_provider: str, routed_model: str
+) -> None:
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
+    )
+    gate: Final = _GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-prefix",
+        function_id="fn-prefix",
+        dynamic_success_callbacks=[gate],
+    )
+
+    followup: Final = await maybe_run_chat_completion_agentic_loop(
+        response=_tool_call_model_response(),
+        model=model,
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={"mock_response": "done"},
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        stream=False,
+    )
+
+    assert isinstance(followup, ModelResponse)
+    assert followup.model == routed_model
+    assert followup._hidden_params["custom_llm_provider"] == custom_llm_provider
+
+
+@pytest.mark.asyncio
 async def test_dispatcher_followup_does_not_repeat_a_request_param_found_in_request_kwargs(
     restore_callbacks,
 ):
