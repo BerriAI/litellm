@@ -589,11 +589,11 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def extract_tool_calls_from_chat_response(response: ModelResponse) -> list[object]:
-        """Extract tool calls from a chat completion response."""
+        """Extract the first choice's tool calls, since the follow-up turn continues that choice alone."""
         tool_calls: Final[list[object]] = []
 
         try:
-            for choice in response.choices:
+            for choice in response.choices[:1]:
                 message: Message | None = getattr(choice, "message", None)
                 if message is None:
                     continue

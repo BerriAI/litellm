@@ -433,7 +433,11 @@ class ChunkProcessor:
             None,
         )
 
-    def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
+    def build_base_response(
+        self,
+        chunks: Sequence["_BaseChunk"],
+        choice_streams: Sequence[tuple[int, Sequence["_BaseChunk"]]],
+    ) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
         object: Final = chunk["object"]
@@ -465,13 +469,17 @@ class ChunkProcessor:
                     if service_tier is not None
                     else MappingProxyType({})
                 ),
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": role, "content": ""},
-                        "finish_reason": finish_reason,
-                    }
-                ],
+                "choices": (
+                    [ChunkProcessor.build_base_choice(index, choice_chunks) for index, choice_chunks in choice_streams]
+                    if len(choice_streams) > 1
+                    else [
+                        {
+                            "index": 0,
+                            "message": {"role": role, "content": ""},
+                            "finish_reason": finish_reason,
+                        }
+                    ]
+                ),
                 "usage": {
                     "prompt_tokens": 0,  # Modify as needed
                     "completion_tokens": 0,  # Modify as needed
@@ -1747,12 +1755,8 @@ def stream_chunk_builder(
         usage_model: Final = usage_tokenizer_model(
             model, get_base_model_from_metadata(logging_obj.model_call_details) if logging_obj is not None else None
         )
-        response: Final = processor.build_base_response(chunks)
         choice_streams: Final = _choice_streams(chunks)
-        if len(choice_streams) > 1:
-            response.choices = [
-                ChunkProcessor.build_base_choice(index, choice_chunks) for index, choice_chunks in choice_streams
-            ]
+        response: Final = processor.build_base_response(chunks, choice_streams)
         rebuilt_choices: Final = tuple(zip(response.choices, (choice_chunks for _, choice_chunks in choice_streams)))
 
         is_simple_text_stream: Final = all(

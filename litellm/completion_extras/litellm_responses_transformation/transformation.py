@@ -2124,6 +2124,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type == "response.reasoning_summary_part.added" and parsed_chunk.get("summary_index"):
+            return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=" "))])
         elif event_type == "response.reasoning_summary_text.delta":
             content_part = parsed_chunk.get("delta", None)
             if content_part:
