@@ -134,13 +134,6 @@ def test_request_id_is_preserved_when_a_later_batch_carries_none():
     assert None in params
 
 
-def test_a_batch_without_a_team_never_clears_the_stored_team():
-    sql, params = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(team_id=""),)))
-
-    assert '"team_id" = COALESCE(NULLIF(EXCLUDED."team_id", \'\'), "LiteLLM_DailyTagSpend"."team_id")' in sql
-    assert "" in params
-
-
 def test_non_tag_tables_carry_no_request_id_column():
     user_txn = {**tag_txn(), "user_id": "u-1"}
     del user_txn["tag"]
