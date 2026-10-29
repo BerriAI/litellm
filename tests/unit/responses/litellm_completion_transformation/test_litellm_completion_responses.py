@@ -2001,6 +2001,29 @@ class TestToolTransformation:
         assert [tool["function"]["name"] for tool in not_deferred] == ["finance__get_stock_price", "get_weather"]
         assert all("defer_loading" not in tool for tool in not_deferred)
 
+    def test_function_tools_carry_strict_only_when_the_caller_set_it(self) -> None:
+        strict_variants: Final = {"unset": {}, "null": {"strict": None}, "on": {"strict": True}, "off": {"strict": False}}
+        function_tools: Final = [
+            {"type": "function", "name": name, "parameters": {"type": "object"}, **strict}
+            for name, strict in strict_variants.items()
+        ]
+
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[*function_tools, {"type": "namespace", "name": "ns", "tools": function_tools}]
+        )
+
+        sent_strict: Final = {tool["function"]["name"]: tool["function"].get("strict", "absent") for tool in chat_tools}
+        assert sent_strict == {
+            "unset": "absent",
+            "null": "absent",
+            "on": True,
+            "off": False,
+            "ns__unset": "absent",
+            "ns__null": "absent",
+            "ns__on": True,
+            "ns__off": False,
+        }
+
     @pytest.mark.parametrize("global_drop_params", [False, True])
     def test_malformed_tool_flags_answer_400_unless_drop_params_drops_them(
         self, monkeypatch: pytest.MonkeyPatch, global_drop_params: bool

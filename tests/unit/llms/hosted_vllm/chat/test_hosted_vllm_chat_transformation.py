@@ -402,14 +402,14 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["parameters"] == input_schema
 
 
-def _strict_tools() -> list[dict[str, object]]:
+def _strict_tools(strict: bool = True) -> list[dict[str, object]]:
     return [
         {
             "type": "function",
             "function": {
                 "name": "record_code",
                 "description": "Record a ten letter code",
-                "strict": True,
+                "strict": strict,
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -428,9 +428,10 @@ def _strict_tools() -> list[dict[str, object]]:
     ]
 
 
+@pytest.mark.parametrize("strict", [True, False])
 @pytest.mark.parametrize("drop_params", [True, False])
-def test_hosted_vllm_forwards_strict_tool_schema_as_sent(drop_params: bool) -> None:
-    tools: Final = _strict_tools()
+def test_hosted_vllm_forwards_strict_tool_schema_as_sent(drop_params: bool, strict: bool) -> None:
+    tools: Final = _strict_tools(strict)
     sent: Final = copy.deepcopy(tools)
 
     optional_params: Final = get_optional_params(

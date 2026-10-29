@@ -37,7 +37,6 @@ def transform_mcp_tool_to_openai_tool(mcp_tool: MCPTool) -> ChatCompletionToolPa
             name=mcp_tool.name,
             description=mcp_tool.description or "",
             parameters=normalized_parameters,
-            strict=False,
         ),
     )
 

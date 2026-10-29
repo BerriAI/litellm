@@ -2708,7 +2708,7 @@ class LiteLLMCompletionResponsesConfig:
             return convert_custom_tool_to_function_tool({**namespace_tool, "description": description})
 
         raw_parameters: Final = namespace_tool.get("parameters")
-        parameters: Final = (
+        parameters: Final[Mapping[str, object]] = (
             MappingProxyType(raw_parameters) if isinstance(raw_parameters, Mapping) else MappingProxyType({})
         )
         normalized_parameters: Final = (
@@ -2716,11 +2716,16 @@ class LiteLLMCompletionResponsesConfig:
         )
         tool_name: Final = str(namespace_tool.get("name") or "")
         chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
-        function: Final = ChatCompletionToolParamFunctionChunk(
-            name=chat_tool_name,
-            description=description,
-            parameters=dict(normalized_parameters),
-            strict=bool(namespace_tool.get("strict", False)),
+        chat_parameters: Final = dict(normalized_parameters)
+        caller_strict: Final = namespace_tool.get("strict")
+        function: Final = (
+            ChatCompletionToolParamFunctionChunk(
+                name=chat_tool_name, description=description, parameters=chat_parameters, strict=caller_strict
+            )
+            if isinstance(caller_strict, bool)
+            else ChatCompletionToolParamFunctionChunk(
+                name=chat_tool_name, description=description, parameters=chat_parameters
+            )
         )
         return function_chat_tool(
             function,
@@ -2798,13 +2803,14 @@ class LiteLLMCompletionResponsesConfig:
             typed_tool: Final = cast(FunctionToolParam, tool)
             raw_parameters: Final = typed_tool.get("parameters", {}) or {}
             parameters: Final = {**raw_parameters} if "type" in raw_parameters else {**raw_parameters, "type": "object"}
+            caller_strict: Final = typed_tool.get("strict")
             chat_completion_tool: Final[dict[str, object]] = {
                 "type": "function",
                 "function": {
                     "name": typed_tool.get("name") or "",
                     "description": typed_tool.get("description") or "",
                     "parameters": parameters,
-                    "strict": typed_tool.get("strict", False) or False,
+                    **({"strict": caller_strict} if isinstance(caller_strict, bool) else {}),
                 },
             }
             if tool.get("cache_control"):
