@@ -1,3 +1,11 @@
+import { MCPBlockPolicySelect } from "../MCPBlockPolicyField";
+import {
+  hasMCPBlockMode,
+  mcpBlockAction,
+  mcpBlockPolicyCreate,
+  mcpBlockPolicyUpdate,
+  type MCPBlockAction,
+} from "../guardrail_info_helpers";
 import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
@@ -68,6 +76,12 @@ export interface EditGuardrailData {
   };
 }
 
+const effectiveMCPMode = (mode: string[], original: unknown): unknown => {
+  if (mode.length === 0 && original !== null && typeof original === "object" && !Array.isArray(original))
+    return original;
+  return mode;
+};
+
 interface CustomCodeModalProps {
   visible: boolean;
   onClose: () => void;
@@ -86,6 +100,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const [loggingOnlyScopeChoice, setLoggingOnlyScopeChoice] = useState<LoggingOnlyScopeChoice>("default");
   const [loggingOnlyContinue, setLoggingOnlyContinue] = useState(false);
   const [defaultOn, setDefaultOn] = useState(false);
+  const [mcpBlock, setMCPBlock] = useState<MCPBlockAction>("tool_error");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
   const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
   const [isSaving, setIsSaving] = useState(false);
@@ -221,6 +236,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         setLoggingOnlyScopeChoice(loggingOnlyScopeToChoice(editData.litellm_params?.logging_only_scope));
         setLoggingOnlyContinue(loggingOnlyContinueFromParams(editData.litellm_params));
         setDefaultOn(editData.litellm_params?.default_on || false);
+        setMCPBlock(mcpBlockAction(editData.litellm_params?.on_mcp_block));
         setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
         setSelectedTemplate(""); // No template selected in edit mode
       } else {
@@ -228,6 +244,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         setGuardrailName("");
         setMode(["pre_call"]);
         setStreamScopeByMode({});
+        setMCPBlock("tool_error");
         setLoggingOnlyScopeChoice("default");
         setLoggingOnlyContinue(false);
         setDefaultOn(false);
@@ -301,7 +318,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           updateData.guardrail_name = guardrailName;
         }
         const existingMode = normalizeMode(editData.litellm_params?.mode);
-        const modeChanged = mode.length !== existingMode.length || mode.some((m, i) => m !== existingMode[i]);
+        const modeChanged = JSON.stringify(mode) !== JSON.stringify(existingMode);
         if (modeChanged) {
           updateData.litellm_params.mode = mode;
         }
@@ -318,7 +335,17 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           updateData.litellm_params.stream_scope = nextStreamScope;
         }
 
-        await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
+        await updateGuardrailCall(accessToken, editData.guardrail_id, {
+          ...updateData,
+          litellm_params: {
+            ...updateData.litellm_params,
+            ...mcpBlockPolicyUpdate(
+              modeChanged ? mode : editData.litellm_params?.mode,
+              editData.litellm_params?.on_mcp_block,
+              mcpBlock,
+            ),
+          },
+        });
         toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
@@ -331,6 +358,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             default_on: defaultOn,
             custom_code: code,
             ...(streamScope !== undefined ? { stream_scope: streamScope } : {}),
+            ...mcpBlockPolicyCreate(mode, mcpBlock),
             ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice, loggingOnlyContinue),
           },
           guardrail_info: {},
@@ -535,6 +563,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         {mode.length > 0 && (
           <div className="border-b border-border py-4">
             <StreamScopeFields modes={mode} value={streamScopeByMode} onChange={setStreamScopeByMode} />
+          </div>
+        )}
+
+        {hasMCPBlockMode(effectiveMCPMode(mode, editData?.litellm_params?.mode)) && (
+          <div className="space-y-2 py-4">
+            <label htmlFor="custom-code-mcp-block" className="text-sm font-medium">
+              When an MCP tool is blocked
+            </label>
+            <MCPBlockPolicySelect id="custom-code-mcp-block" value={mcpBlock} onChange={setMCPBlock} />
           </div>
         )}
 

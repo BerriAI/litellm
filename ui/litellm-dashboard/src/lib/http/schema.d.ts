@@ -27187,6 +27187,13 @@ export interface components {
              */
             num_retries?: number | null;
             /**
+             * On Mcp Block
+             * @description How a pre_mcp_call or during_mcp_call refusal affects a LiteLLM-managed tool loop. tool_error lets the model receive the tool error and continue (default). raise ends a non-streaming Chat Completions or Responses request with HTTP 400. Streaming and native MCP do not support raise. Direct MCP REST errors are unchanged.
+             * @default tool_error
+             * @enum {string}
+             */
+            on_mcp_block: "raise" | "tool_error";
+            /**
              * On Sensitive Data
              * @description Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.
              */
@@ -37016,6 +37023,13 @@ export interface components {
              * @default monitor
              */
             on_flagged_action: string | null;
+            /**
+             * On Mcp Block
+             * @description How a pre_mcp_call or during_mcp_call refusal affects a LiteLLM-managed tool loop. tool_error lets the model receive the tool error and continue (default). raise ends a non-streaming Chat Completions or Responses request with HTTP 400. Streaming and native MCP do not support raise. Direct MCP REST errors are unchanged.
+             * @default tool_error
+             * @enum {string}
+             */
+            on_mcp_block: "raise" | "tool_error";
             /**
              * On Sensitive Data
              * @description Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.

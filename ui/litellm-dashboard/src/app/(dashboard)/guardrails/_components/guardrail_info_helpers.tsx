@@ -471,3 +471,28 @@ export const streamScopeForUpdate = (
   }
   return nextStreamScope ?? "both";
 };
+
+export type MCPBlockAction = "raise" | "tool_error";
+
+export const mcpBlockAction = (raw: unknown): MCPBlockAction => (raw === "raise" ? "raise" : "tool_error");
+
+export const hasMCPBlockMode = (raw: unknown): boolean => {
+  if (typeof raw === "string") return raw === "pre_mcp_call" || raw === "during_mcp_call";
+  if (Array.isArray(raw)) return raw.some(hasMCPBlockMode);
+  if (raw === null || typeof raw !== "object") return false;
+  const mode = raw as { tags?: unknown; default?: unknown };
+  const tags = mode.tags && typeof mode.tags === "object" ? Object.values(mode.tags) : [];
+  return hasMCPBlockMode(mode.default) || tags.some(hasMCPBlockMode);
+};
+
+export const mcpBlockPolicyCreate = (mode: unknown, raw: unknown): { on_mcp_block?: MCPBlockAction } =>
+  hasMCPBlockMode(mode) && raw === "raise" ? { on_mcp_block: "raise" } : {};
+
+export const mcpBlockPolicyUpdate = (
+  mode: unknown,
+  previous: unknown,
+  selected: unknown,
+): { on_mcp_block?: MCPBlockAction } => {
+  const next = hasMCPBlockMode(mode) ? mcpBlockAction(selected) : "tool_error";
+  return mcpBlockAction(previous) === next ? {} : { on_mcp_block: next };
+};

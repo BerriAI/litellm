@@ -1,3 +1,4 @@
+import { MCPBlockPolicyDetail } from "./MCPBlockPolicyField";
 import { Badge } from "@/components/ui/badge";
 import { DEFAULT_DECISION_THRESHOLD } from "./decision_model/decisionModelQuestion";
 import { GuardrailModeRows } from "./GuardrailModeDisplay";
@@ -59,6 +60,7 @@ export const GuardrailReadOnlyDetails = ({
   displayName: string;
   litellmParams: {
     mode?: unknown;
+    on_mcp_block?: unknown;
     logging_only_scope?: string | null;
     guardrail?: string;
     decision_model?: string;
@@ -87,6 +89,7 @@ export const GuardrailReadOnlyDetails = ({
       <div>{displayName}</div>
     </div>
     <GuardrailModeRows litellmParams={litellmParams} />
+    <MCPBlockPolicyDetail mode={litellmParams.mode} value={litellmParams.on_mcp_block} />
     <GuardrailStreamScopeDetail raw={streamScope} />
     <div>
       <p className="font-medium">Default On</p>

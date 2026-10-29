@@ -1,3 +1,5 @@
+import { MCPBlockPolicyField } from "./MCPBlockPolicyField";
+import { mcpBlockPolicyCreate } from "./guardrail_info_helpers";
 import React, { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch, type UseFormReturn } from "react-hook-form";
 import { toast } from "@/lib/toast";
@@ -195,6 +197,7 @@ const INITIAL_VALUES: GuardrailFormValues = {
   skip_system_message_choice: "inherit",
   skip_tool_message_choice: "inherit",
   stream_scope_by_mode: {},
+  on_mcp_block: "tool_error",
 };
 
 const ALWAYS_ON_ITEMS = [
@@ -526,6 +529,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           guardrail: guardrailProvider,
           mode: values.mode,
           default_on: values.default_on,
+          ...mcpBlockPolicyCreate(values.mode, values.on_mcp_block),
         },
         guardrail_info: {},
       };
@@ -876,6 +880,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </GuardrailField>
 
         <StreamScopeFormField control={form.control} modes={toModeArray(form.watch("mode"))} />
+        <MCPBlockPolicyField control={form.control} mode={form.watch("mode")} />
 
         <GuardrailField
           control={form.control}

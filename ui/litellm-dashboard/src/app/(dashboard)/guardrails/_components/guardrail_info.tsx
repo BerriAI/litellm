@@ -1,3 +1,5 @@
+import { MCPBlockPolicyField } from "./MCPBlockPolicyField";
+import { mcpBlockAction, mcpBlockPolicyUpdate } from "./guardrail_info_helpers";
 import {
   getGuardrailInfo,
   getGuardrailProviderSpecificParams,
@@ -18,12 +20,12 @@ import { FieldGroup } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip, TooltipProvider } from "@/components/ui/tooltip";
 import {
   asText,
   GuardrailField,
+  SectionHeading,
   labelWithHint,
   readRecord,
   requiredRule,
@@ -62,13 +64,6 @@ const DEFAULT_ON_ITEMS = [
   { label: "Yes", value: true },
   { label: "No", value: false },
 ];
-
-const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="my-6 flex items-center gap-3">
-    <span className="shrink-0 text-sm font-medium text-foreground">{children}</span>
-    <Separator className="flex-1" />
-  </div>
-);
 
 export interface GuardrailInfoProps {
   guardrailId: string;
@@ -234,6 +229,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     form.setValue("guardrail_name", guardrailData.guardrail_name);
     form.setValue("default_on", guardrailData.litellm_params?.default_on);
     const storedParams = guardrailData.litellm_params;
+    form.setValue("on_mcp_block", mcpBlockAction(storedParams?.on_mcp_block));
     form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedParams?.logging_only_scope));
     form.setValue("logging_only_continue_on_input_failure", loggingOnlyContinueFromParams(storedParams));
     form.setValue(
@@ -305,8 +301,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       if (!accessToken) return;
 
       const { logging_only_scope_choice: scopeChoice, logging_only_continue_on_input_failure: continueFlag } = values;
+      const params = guardrailData.litellm_params;
       const updateData: any = {
-        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, scopeChoice, continueFlag),
+        litellm_params: {
+          ...getLoggingOnlyScopeUpdate(params, scopeChoice, continueFlag),
+          ...mcpBlockPolicyUpdate(params?.mode, params?.on_mcp_block, values.on_mcp_block),
+        },
       };
 
       if (values.guardrail_name !== guardrailData.guardrail_name) {
@@ -744,6 +744,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           )}
                         </GuardrailField>
 
+                        <MCPBlockPolicyField control={form.control} mode={guardrailData.litellm_params?.mode} />
                         <StreamScopeFormField
                           control={form.control}
                           modes={toModeArray(guardrailData.litellm_params?.mode)}

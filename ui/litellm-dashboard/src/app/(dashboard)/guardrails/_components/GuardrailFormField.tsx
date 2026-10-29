@@ -11,6 +11,7 @@ import {
 } from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -221,3 +222,10 @@ export const LoggingOnlyScopeField: React.FC<{
     </>
   );
 };
+
+export const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="my-6 flex items-center gap-3">
+    <span className="shrink-0 text-sm font-medium text-foreground">{children}</span>
+    <Separator className="flex-1" />
+  </div>
+);

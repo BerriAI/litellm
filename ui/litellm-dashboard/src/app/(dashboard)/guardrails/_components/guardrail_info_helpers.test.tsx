@@ -1,5 +1,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  mcpBlockPolicyCreate,
+  mcpBlockPolicyUpdate,
+  hasMCPBlockMode,
   populateGuardrailProviders,
   populateGuardrailProviderMap,
   getGuardrailProviders,
@@ -446,5 +449,27 @@ describe("guardrail_info_helpers", () => {
         streamScopeForUpdate(["pre_call"], { pre_call: "both" }, { pre_call: "streaming", post_call: "non_streaming" }),
       ).toEqual({ post_call: "non_streaming" });
     });
+  });
+});
+
+describe("MCP block policy payloads", () => {
+  it("uses the legacy behavior unless an MCP hook explicitly opts into stopping", () => {
+    expect(mcpBlockPolicyCreate("pre_mcp_call", "raise")).toEqual({ on_mcp_block: "raise" });
+    expect(mcpBlockPolicyCreate(["pre_call", "during_mcp_call"], "raise")).toEqual({ on_mcp_block: "raise" });
+    expect(mcpBlockPolicyCreate("pre_mcp_call", undefined)).toEqual({});
+    expect(mcpBlockPolicyCreate("post_mcp_call", "raise")).toEqual({});
+  });
+
+  it("preserves an existing policy on unrelated edits and resets it when MCP hooks are removed", () => {
+    expect(mcpBlockPolicyUpdate("pre_mcp_call", "raise", "raise")).toEqual({});
+    expect(mcpBlockPolicyUpdate("during_mcp_call", "raise", "tool_error")).toEqual({ on_mcp_block: "tool_error" });
+    expect(mcpBlockPolicyUpdate("pre_call", "raise", "raise")).toEqual({ on_mcp_block: "tool_error" });
+  });
+
+  it("recognizes tag-selected MCP hooks without flattening their configuration", () => {
+    const mode = { tags: { tools: ["during_mcp_call"] }, default: "pre_call" };
+    expect(hasMCPBlockMode(mode)).toBe(true);
+    expect(mcpBlockPolicyUpdate(mode, "raise", "raise")).toEqual({});
+    expect(hasMCPBlockMode({ tags: { output: "post_mcp_call" }, default: "pre_call" })).toBe(false);
   });
 });
