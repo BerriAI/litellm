@@ -153,6 +153,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_item_done_event: bool = False
         self._annotation_index: int = 0
         self._annotations_awaiting_message: tuple[ChatCompletionAnnotation, ...] = ()
+        self._saw_content_delta: bool = False
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
         self.completed_response = None
         self.final_text: str = ""
@@ -422,6 +423,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
                 fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
+            if call_id not in self._tool_output_index_by_call_id:
+                self._queue_held_annotations(final_message_exists=self._saw_content_delta)
             output_index = self._get_or_assign_tool_output_index(call_id)
 
             if self._is_tool_search_call(call_id, fn_name):
@@ -775,8 +778,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return event
 
     def _queue_message_item_added_events(self) -> None:
-        if self._cached_item_id is None:
-            self._cached_item_id = f"msg_{uuid.uuid4()}"
+        item_id: Final = self._message_item_id()
         self.sent_message_item_added_event = True
         self.sent_content_part_added_event = True
         self._sequence_number += 1
@@ -785,7 +787,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             output_index=self._message_index(),
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
-                    "id": self._cached_item_id,
+                    "id": item_id,
                     "type": "message",
                     "role": "assistant",
                     "status": "in_progress",
@@ -1074,7 +1076,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self.litellm_model_response:
             self._queue_compaction_item_added()
             self._queue_compaction_item_done()
-            self._queue_annotations_awaiting_final_message(self.litellm_model_response)
+            self._queue_held_annotations(
+                final_message_exists=self.litellm_model_response.choices[0].message.content is not None
+            )
             if self._pending_response_events:
                 return self._pending_response_events.pop(0)
             # If tool calls exist, emit tool events before finishing/response.completed.
@@ -1324,11 +1328,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._annotations_awaiting_message = ()
         self._queue_annotation_added_events(annotations)
 
-    def _queue_annotations_awaiting_final_message(self, final_response: ModelResponse) -> None:
+    def _queue_held_annotations(self, final_message_exists: bool) -> None:
         annotations: Final = self._annotations_awaiting_message
-        self._annotations_awaiting_message = ()
-        if not annotations or final_response.choices[0].message.content is None:
+        if not annotations or not final_message_exists:
             return
+        self._annotations_awaiting_message = ()
         self._queue_reasoning_done_events()
         self._queue_annotation_added_events(annotations)
 
@@ -1373,9 +1377,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         This currently handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API
         and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         """
-        if self._cached_item_id is None:
-            self._cached_item_id = f"msg_{uuid.uuid4()}"
-        item_id: Final = self._cached_item_id
+        if chunk.choices and chunk.choices[0].delta.content is not None:
+            self._saw_content_delta = True
+        item_id: Final = self._message_item_id()
 
         # Priority 1: Handle reasoning content (highest priority)
         if (

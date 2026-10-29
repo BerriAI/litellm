@@ -12,7 +12,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import json
 from collections.abc import Callable
-from itertools import accumulate, islice
+from itertools import accumulate, chain, islice
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1727,8 +1727,9 @@ async def test_streamed_citations_match_the_completed_message(
 
     output: Final = events[-1].response.output
     completed_message_indexes: Final = [index for index, item in enumerate(output) if item.type == "message"]
+    completed_annotation_lists: Final = (output[index].content[0].annotations for index in completed_message_indexes)
     completed_annotations: Final = [
-        annotation.model_dump() for index in completed_message_indexes for annotation in output[index].content[0].annotations
+        annotation.model_dump() for annotation in chain.from_iterable(completed_annotation_lists)
     ]
     streamed_message_indexes: Final = [event.output_index for event in events if _is_message_item(event)]
     citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
@@ -1744,7 +1745,44 @@ async def test_streamed_citations_match_the_completed_message(
     assert sorted(set(streamed_message_indexes)) == completed_message_indexes
     assert all(event.output_index in completed_message_indexes for event in citations)
     assert len(reasoning_done) == sum(item.type == "reasoning" for item in output)
-    assert all(index < added for index in reasoning_done for added in message_added)
+    assert max(reasoning_done, default=-1) < min(message_added, default=len(events))
+
+
+def _empty_text_citation_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_chunk(""), *_citation_then_tool_call_finishing_chunks())
+
+
+def _reasoning_empty_text_citation_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me think"), *_empty_text_citation_then_tool_call_chunks())
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("stream_chunks", "expected_order"),
+    [
+        (_empty_text_citation_then_tool_call_chunks, ("message", "function_call")),
+        (_reasoning_empty_text_citation_then_tool_call_chunks, ("reasoning", "message", "function_call")),
+    ],
+    ids=["empty_text_citation_then_tool_call", "reasoning_empty_text_citation_then_tool_call"],
+)
+@pytest.mark.asyncio
+async def test_citation_before_a_tool_call_keeps_the_message_ahead_of_it(
+    stream_chunks: StreamChunks, expected_order: tuple[str, ...], sync_mode: bool
+) -> None:
+    events: Final = await _collect_events(_build_iterator(stream_chunks()), sync_mode)
+
+    added: Final = [event for event in events if event.type == "response.output_item.added"]
+    output: Final = events[-1].response.output
+    message_index: Final = expected_order.index("message")
+    citations: Final = [event for event in events if event.type == "response.output_text.annotation.added"]
+
+    assert tuple(event.item.type for event in added) == expected_order
+    assert [event.output_index for event in added] == list(range(len(expected_order)))
+    assert tuple(item.type for item in output) == expected_order
+    assert [event.output_index for event in citations] == [message_index]
+    assert [event.annotation for event in citations] == [
+        annotation.model_dump() for annotation in output[message_index].content[0].annotations
+    ]
 
 
 def test_disconnect_after_a_held_citation_still_bills_it() -> None:
@@ -1755,7 +1793,7 @@ def test_disconnect_after_a_held_citation_still_bills_it() -> None:
     incomplete: Final = iterator.partial_response_on_disconnect()
 
     assert incomplete is not None
-    messages: Final = [item for item in incomplete.response.output if item.type == "message"]
-    assert [annotation.url for message in messages for annotation in message.content[0].annotations] == [
-        "https://example.com"
-    ]
+    message_annotations: Final = (
+        item.content[0].annotations for item in incomplete.response.output if item.type == "message"
+    )
+    assert [annotation.url for annotation in chain.from_iterable(message_annotations)] == ["https://example.com"]
