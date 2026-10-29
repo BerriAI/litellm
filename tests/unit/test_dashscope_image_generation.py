@@ -5,6 +5,7 @@ qwen-image-3.0, qwen-image-3.0-pro).
 Run in docker: pytest tests/unit/test_dashscope_image_generation.py -v
 """
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -12,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
+from litellm.cost_calculator import default_image_cost_calculator
 from litellm.llms.dashscope.image_generation.transformation import (
     DashScopeImageGenerationConfig,
     DEFAULT_API_BASE,
@@ -593,3 +595,19 @@ def test_a_per_pixel_deployment_bills_the_size_dashscope_rendered_when_the_calle
     )
 
     assert cost == pytest.approx(2048 * 1536 * 1e-08)
+
+
+@pytest.mark.parametrize("model", ("qwen-image-2.0", "qwen-image-2.0-pro", "qwen-image-3.0"))
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_shared_row_bills_a_generated_image_the_same_on_the_default_calculator_released_proxies_use(model: str):
+    dashscope_cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=ImageResponse(data=[{"url": "https://a.example/1.png"}]),
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+    )
+
+    assert dashscope_cost > 0
+    assert default_image_cost_calculator(model=f"dashscope/{model}", custom_llm_provider="dashscope") == pytest.approx(
+        dashscope_cost
+    )

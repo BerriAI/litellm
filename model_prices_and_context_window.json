@@ -18298,7 +18298,6 @@
         ]
     },
     "dashscope/qwen-image-3.0": {
-        "input_cost_per_image": 0.003,
         "litellm_provider": "dashscope",
         "mode": "image_generation",
         "output_cost_per_image": 0.03,

@@ -288,14 +288,14 @@ def test_the_input_images_dashscope_reports_are_billed_on_top_of_the_edited_imag
         model="dashscope/qwen-image-3.0", image=[PNG, PNG], prompt="p", api_key="k", client=_sync_client([], reply)
     )
 
-    prices: Final = litellm.model_cost["dashscope/qwen-image-3.0"]
-    assert prices["input_cost_per_image"] > 0
-    assert litellm.completion_cost(
+    assert isinstance(response, litellm.ImageResponse)
+    assert CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="qwen-image-3.0",
         completion_response=response,
-        model="dashscope/qwen-image-3.0",
-        call_type="aimage_edit",
         custom_llm_provider="dashscope",
-    ) == pytest.approx(2 * prices["input_cost_per_image"] + prices["output_cost_per_image"])
+        call_type="aimage_edit",
+        model_info=ModelInfo(input_cost_per_image=0.004, output_cost_per_image=0.04),
+    ) == pytest.approx(2 * 0.004 + 0.04)
 
 
 def _edited_images(count: int, input_images: int) -> litellm.ImageResponse:
@@ -328,22 +328,6 @@ def test_a_deployment_image_price_bills_the_edit_the_way_it_bills_any_image_call
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_a_deployment_output_image_price_keeps_billing_the_input_images_at_the_shared_price() -> None:
-    prices: Final = litellm.model_cost["dashscope/qwen-image-3.0"]
-
-    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
-        model="qwen-image-3.0",
-        completion_response=_edited_images(count=2, input_images=3),
-        custom_llm_provider="dashscope",
-        call_type="aimage_edit",
-        model_info=ModelInfo(output_cost_per_image=0.05),
-    )
-
-    assert prices["input_cost_per_image"] > 0
-    assert cost == pytest.approx(2 * 0.05 + 3 * prices["input_cost_per_image"])
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
 def test_a_deployment_that_copies_both_image_prices_bills_edited_and_input_images_at_its_own_prices() -> None:
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
         model="qwen-image-3.0",
@@ -368,4 +352,4 @@ def test_a_deployment_token_price_keeps_the_shared_per_image_billing() -> None:
         model_info=ModelInfo(input_cost_per_token=1e-06),
     )
 
-    assert cost == pytest.approx(2 * prices["input_cost_per_image"] + prices["output_cost_per_image"])
+    assert cost == pytest.approx(2 * prices.get("input_cost_per_image", 0.0) + prices["output_cost_per_image"])
