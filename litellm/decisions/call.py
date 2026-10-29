@@ -61,7 +61,7 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
 )
 from litellm.types.llms.openai import ChatCompletionUserMessage
-from litellm.types.utils import LlmProviders, ProviderSpecificHeader
+from litellm.types.utils import LlmProviders, ProviderSpecificHeader, is_decisions_model_mode
 from litellm.utils import ProviderConfigManager, get_model_cost_key
 
 SystemOneQuestions: TypeAlias = Mapping[str, DecisionQuestion | Mapping[str, object]]
@@ -261,15 +261,23 @@ def _bool_or_none(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 _DeploymentFlag: TypeAlias = Annotated[bool | None, BeforeValidator(_bool_or_none)]
 
 
 class _DeploymentCapabilities(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
+    mode: Annotated[str | None, BeforeValidator(_str_or_none)] = None
     supports_box_questions: _DeploymentFlag = None
     supports_audio_input: _DeploymentFlag = None
     supports_video_input: _DeploymentFlag = None
+
+    def decisions_media_flag(self, flag: bool | None) -> bool | None:
+        return flag if self.mode is None or is_decisions_model_mode(self.mode) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,8 +299,12 @@ def _resolved_support(
         box_questions=provider_config.supports_box_questions(
             model, custom_llm_provider, headers, deployment.supports_box_questions
         ),
-        audio=provider_config.supports_audio_input(model, custom_llm_provider, deployment.supports_audio_input),
-        videos=provider_config.supports_video_input(model, custom_llm_provider, deployment.supports_video_input),
+        audio=provider_config.supports_audio_input(
+            model, custom_llm_provider, deployment.decisions_media_flag(deployment.supports_audio_input)
+        ),
+        videos=provider_config.supports_video_input(
+            model, custom_llm_provider, deployment.decisions_media_flag(deployment.supports_video_input)
+        ),
     )
 
 

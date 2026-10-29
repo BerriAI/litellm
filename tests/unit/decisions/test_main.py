@@ -3742,6 +3742,37 @@ async def test_a_deployment_that_advertises_media_sends_it_for_a_model_the_cost_
 
 
 @pytest.mark.asyncio
+async def test_media_flags_on_a_deployment_whose_own_mode_is_not_decisions_never_send_clips(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    advertised: Final = {"supports_audio_input": True, "supports_video_input": True}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": mode,
+                "litellm_params": {"model": f"openrouter/example/omni-{mode}-preview", "api_key": "k"},
+                "model_info": {"id": f"media-{mode}", "mode": mode, **advertised},
+            }
+            for mode in ("chat", "decisions")
+        ]
+    )
+    send: Final = partial(
+        router.adecisions, input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS, videos=_VIDEO_CLIPS
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio', 'videos']")):
+        await send(model="chat")
+    assert not route.called
+
+    await send(model="decisions")
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
+
+
+@pytest.mark.asyncio
 async def test_a_deployment_that_turns_audio_off_is_refused_or_dropped_even_when_the_cost_map_allows_it(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
 ) -> None:
