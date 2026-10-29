@@ -1969,7 +1969,7 @@ ALIAS_CASES: Final = (
     ("litellm.router_utils.add_retry_fallback_headers", "HiddenParamsAsyncIteratorWrapper", "_inner", "inner", True),
     ("litellm.router_utils.add_retry_fallback_headers", "", "_HiddenParamsHost", "HiddenParamsHost", False),
     (
-        "litellm.router_utils.batch_utils",
+        "litellm.litellm_core_utils.batch_utils",
         "",
         "_get_router_metadata_variable_name",
         "get_router_metadata_variable_name",

@@ -17,12 +17,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.batch_utils import InMemoryFile
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -2071,6 +2071,19 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
+
+
+_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+
+
+def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
+    if marker is None or not drop_params:
+        return marker
+    try:
+        return _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
+    except ValidationError:
+        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
+        return None
 
 
 def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:

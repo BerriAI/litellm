@@ -1523,6 +1523,7 @@ async def test_summary_model_denied_when_user_over_model_budget():
         user_id="user-over-budget",
         user_model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
         model="claude-haiku-4-5",
+        team_id=None,
     )
     import inspect
 

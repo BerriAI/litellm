@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
-from litellm.llms.anthropic.messages.adapters.handler import _run_polyfill_if_enabled
+from litellm.llms.anthropic.messages.adapters.handler import _run_polyfill_if_enabled, prepare_context_managed_request
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
     PolyfillResult,
@@ -228,7 +228,6 @@ SERVER_TOOL_TURN: Final = {
         },
     ],
 }
-COMPACTION_TURN: Final = {"role": "assistant", "content": [{"type": "compaction", "content": "summary " * 300}]}
 
 
 def _clear_above(
@@ -247,12 +246,10 @@ def _clear_above(
     )
 
 
-@pytest.mark.parametrize(
-    "turn", [pytest.param(SERVER_TOOL_TURN, id="server_tool"), pytest.param(COMPACTION_TURN, id="compaction")]
-)
-def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends(turn: dict[str, object]) -> None:
+def test_an_input_tokens_trigger_skips_blocks_no_adapter_sends() -> None:
     history: Final = _make_history(n_pairs=3)
     sent_tokens: Final = litellm.token_counter(model=MODEL, messages=history)
+    turn: Final = SERVER_TOOL_TURN
     messages: Final = [history[0], turn, *history[1:]]
 
     untouched, not_applied = _clear_above(messages, sent_tokens + 100)
@@ -819,6 +816,115 @@ def test_tool_uses_trigger_does_not_count_excluded_tools(trigger_value: int, tri
         },
     )
     assert (applied is not None) == triggers
+
+
+@pytest.mark.parametrize(
+    "system",
+    ["Reference notes. " * 400, [{"type": "text", "text": "Reference notes. " * 400}]],
+    ids=["string", "blocks"],
+)
+def test_input_tokens_trigger_counts_the_system_prompt(system: str | list[dict[str, object]]) -> None:
+    """Like the API, the trigger compares the whole prompt: a system prompt can push it over."""
+    messages = _make_history(n_pairs=3)
+    history_tokens: Final = litellm.token_counter(model=MODEL, messages=messages)
+    edit_spec: Final = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "input_tokens", "value": history_tokens + 100},
+        "keep": {"type": "tool_uses", "value": 1},
+    }
+    _, without_system = apply_clear_tool_uses_20250919(
+        model=MODEL, messages=deepcopy(messages), tools=None, system=None, edit_spec=edit_spec
+    )
+    _, with_system = apply_clear_tool_uses_20250919(
+        model=MODEL, messages=deepcopy(messages), tools=None, system=system, edit_spec=edit_spec
+    )
+    _, met_without_system = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=deepcopy(messages),
+        tools=None,
+        system=None,
+        edit_spec={**edit_spec, "trigger": {"type": "input_tokens", "value": 0}},
+    )
+    assert without_system is None
+    assert with_system is not None
+    assert met_without_system is not None
+    assert with_system["cleared_tool_uses"] == 2
+    assert with_system["cleared_input_tokens"] == met_without_system["cleared_input_tokens"] > 0
+
+
+@pytest.mark.parametrize("compact_position", [None, "after", "before"], ids=["alone", "before_compact", "after_compact"])
+async def test_input_tokens_trigger_counts_a_client_compaction_summary(compact_position: str | None) -> None:
+    """A client compaction summary counts toward the trigger and calls beside it stay clearable, in any edit order."""
+    tail: Final = _make_history(n_pairs=3)
+    edit_spec: Final = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "input_tokens", "value": litellm.token_counter(model=MODEL, messages=tail) + 100},
+        "keep": {"type": "tool_uses", "value": 1},
+    }
+    compaction: Final = {"type": "compaction", "content": "Earlier work. " * 400}
+    compacted_history: Final = [tail[0], {**tail[1], "content": [compaction, *tail[1]["content"]]}, *tail[2:]]
+    compact_spec: Final = {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50_000}}
+    edits: Final = {None: [edit_spec], "after": [edit_spec, compact_spec], "before": [compact_spec, edit_spec]}[
+        compact_position
+    ]
+
+    async def prepare(messages: list[dict[str, object]]) -> PolyfillResult | None:
+        return await prepare_context_managed_request(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            context_management_spec={"edits": edits},
+            litellm_metadata=None,
+            additional_drop_params=None,
+            llm_router=None,
+        )
+
+    def cleared(result: PolyfillResult | None) -> list[object]:
+        applied: Final = result.applied_edits if result is not None else []
+        return [edit.get("cleared_tool_uses") for edit in applied if edit.get("type") == "clear_tool_uses_20250919"]
+
+    without_summary: Final = await prepare(deepcopy(tail))
+    with_summary: Final = await prepare(deepcopy(compacted_history))
+
+    assert cleared(without_summary) == []
+    assert cleared(with_summary) == [2]
+
+
+async def test_compact_after_clearing_replaces_the_client_compaction_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "summary-model")
+    summary: Final = MagicMock()
+    summary.choices = [MagicMock(message=MagicMock(content="<summary>Fresh summary</summary>"))]
+    summary.usage = MagicMock(prompt_tokens=50, completion_tokens=100)
+    router: Final = MagicMock()
+    router.acompletion = AsyncMock(return_value=summary)
+    tail: Final = _make_history(n_pairs=3)
+    result: Final = await prepare_context_managed_request(
+        model=MODEL,
+        messages=[{"role": "assistant", "content": [{"type": "compaction", "content": "Old summary. " * 20_000}]}, *tail],
+        tools=None,
+        system="You are a helpful assistant.",
+        context_management_spec={
+            "edits": [
+                {
+                    "type": "clear_tool_uses_20250919",
+                    "trigger": {"type": "input_tokens", "value": 1_000},
+                    "keep": {"type": "tool_uses", "value": 1},
+                },
+                {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50_000}},
+            ]
+        },
+        litellm_metadata=None,
+        additional_drop_params=None,
+        llm_router=router,
+    )
+    assert result is not None
+    assert isinstance(result.system, str)
+    assert "Fresh summary" in result.system
+    assert "Old summary" not in result.system
+    assert result.system.endswith("You are a helpful assistant.")
 
 
 @pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])

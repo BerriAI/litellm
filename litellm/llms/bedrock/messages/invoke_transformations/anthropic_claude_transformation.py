@@ -102,6 +102,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def tools_for_upstream(self, tools: Sequence[object], model: str, drop_params: object) -> Sequence[object]:
+        return tools
+
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 
