@@ -2076,11 +2076,11 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
+        dropped_non_finite_cost: Final = cost is not None and _carries_non_finite_number(cost)
         if cost is None:
             del self.cost
-        elif _carries_non_finite_number(cost):
+        elif dropped_non_finite_cost:
             verbose_logger.warning("Dropping a non-finite provider usage cost")
-            self._dropped_non_finite_cost = True
             del self.cost
         else:
             self.cost = cost
@@ -2098,9 +2098,11 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         for k, v in params.items():
             setattr(self, k, v)
+        self._dropped_non_finite_cost = dropped_non_finite_cost
 
-    def dropped_non_finite_cost(self) -> bool:
-        return self._dropped_non_finite_cost
+    @staticmethod
+    def dropped_non_finite_cost(usage: "Usage") -> bool:
+        return usage._dropped_non_finite_cost
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

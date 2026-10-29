@@ -991,7 +991,7 @@ class ChunkProcessor:
                     prompt_tokens_details, cache_creation_token_details
                 )
 
-                if usage_chunk.dropped_non_finite_cost():
+                if Usage.dropped_non_finite_cost(usage_chunk):
                     cost = None
                 elif usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
