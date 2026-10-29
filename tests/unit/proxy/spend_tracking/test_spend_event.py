@@ -16,6 +16,11 @@ from litellm.proxy.spend_tracking.spend_event import (
     is_offloadable_success,
     spend_event_callback_args,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import LiteLLMBatch, ModelResponse, Usage
 
 _BIG_PROMPT: Final = "x" * 20_000
@@ -158,6 +163,41 @@ def test_streaming_event_reconstructs_complete_streaming_response():
     args: Final = spend_event_callback_args(event)
     assert args.kwargs["stream"] is True
     assert args.kwargs["complete_streaming_response"] == args.response_obj
+
+
+def _finished_background_response() -> dict:
+    return {
+        "id": "resp_abc",
+        "object": "response",
+        "status": "completed",
+        "background": True,
+        "usage": {"input_tokens": 1200, "output_tokens": 300, "total_tokens": 1500},
+    }
+
+
+@pytest.mark.parametrize(
+    "settlement",
+    [BackgroundResponseSettlement.SETTLES, None, "settles"],
+    ids=["settles_a_background_response", "settles_nothing", "lookalike_string_settles_nothing"],
+)
+def test_sidecar_names_a_passthrough_spend_row_as_the_worker_does(settlement):
+    worker_kwargs: Final = {
+        **_success_kwargs(),
+        "call_type": "pass_through_endpoint",
+        SETTLES_BACKGROUND_RESPONSE_KWARG: settlement,
+    }
+    event: Final = decode_spend_event(_build(worker_kwargs, _finished_background_response()))
+    assert not isinstance(event, SpendEventDecodeError)
+    args: Final = spend_event_callback_args(event)
+    assert args.response_obj is not None
+    assert get_spend_logs_id("pass_through_endpoint", dict(args.response_obj), args.kwargs) == get_spend_logs_id(
+        "pass_through_endpoint", _finished_background_response(), worker_kwargs
+    )
+
+
+def test_event_for_a_call_that_settles_nothing_keeps_the_shape_an_older_collector_decodes():
+    decoded: Final = json.loads(_build(_success_kwargs(), _response()))
+    assert SETTLES_BACKGROUND_RESPONSE_KWARG not in decoded
 
 
 class _HashingCache(Cache):

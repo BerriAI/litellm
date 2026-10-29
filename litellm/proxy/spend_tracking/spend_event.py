@@ -19,7 +19,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -27,6 +27,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import LiteLLMBatch, Usage
 
 SPEND_EVENT_VERSION: Final = 1
@@ -120,6 +124,7 @@ class _SuccessKwargs(TypedDict, total=False):
     realtime_tool_calls: ReadOnly[Sequence[object] | None]
     tools: ReadOnly[Sequence[ObjectMapping] | None]
     passthrough_logging_payload: ReadOnly[_PassthroughPayload | None]
+    settles_background_response: ReadOnly[object]
 
 
 class _FunctionToolFunction(TypedDict):
@@ -151,6 +156,7 @@ class SpendCallbackKwargs(TypedDict):
     realtime_tools: ReadOnly[Sequence[object] | None]
     realtime_tool_calls: ReadOnly[Sequence[object] | None]
     tools: ReadOnly[Sequence[_FunctionTool] | None]
+    settles_background_response: ReadOnly[BackgroundResponseSettlement | None]
     complete_streaming_response: NotRequired[ReadOnly[CompactResponse | None]]
 
 
@@ -158,6 +164,10 @@ _NO_LITELLM_PARAMS: Final[_LitellmParams] = {}
 _SUCCESS_KWARGS: Final = TypeAdapter(_SuccessKwargs)
 _OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
 _COMPACT_RESPONSE: Final = TypeAdapter(CompactResponse)
+
+
+def _is_false(value: bool) -> bool:
+    return not value
 
 
 class SpendEvent(LiteLLMBaseModel):
@@ -185,6 +195,7 @@ class SpendEvent(LiteLLMBaseModel):
     realtime_tools: Sequence[object] | None
     realtime_tool_calls: Sequence[object] | None
     request_tool_names: tuple[str, ...]
+    settles_background_response: bool = Field(default=False, exclude_if=_is_false)
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +389,8 @@ def build_spend_event(
         realtime_tools=kwargs.get("realtime_tools"),
         realtime_tool_calls=kwargs.get("realtime_tool_calls"),
         request_tool_names=_request_tool_names(kwargs),
+        settles_background_response=kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG)
+        is BackgroundResponseSettlement.SETTLES,
     )
     return event.model_dump_json(fallback=_json_fallback).encode() + b"\n"
 
@@ -412,6 +425,9 @@ def spend_event_callback_args(event: SpendEvent) -> SpendEventCallbackArgs:
         "realtime_tools": event.realtime_tools,
         "realtime_tool_calls": event.realtime_tool_calls,
         "tools": tools or None,
+        SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES
+        if event.settles_background_response
+        else None,
     }
     if not event.complete_streaming_response:
         return SpendEventCallbackArgs(kwargs, event.response, event.start_time, event.end_time)
