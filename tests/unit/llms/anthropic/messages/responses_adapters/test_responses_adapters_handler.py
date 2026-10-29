@@ -683,6 +683,39 @@ def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_te
     ]
 
 
+@pytest.mark.parametrize("background", [True, False])
+def test_background_answers_400_without_drop_params(background: bool) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs={**OPENAI_API, "background": background},
+            max_tokens=1024,
+            messages=MESSAGES,
+        )
+
+    assert rejected.value.status_code == 400
+    assert "['background']" in rejected.value.message
+
+
+@pytest.mark.parametrize(
+    "drop_setting",
+    [
+        pytest.param({"drop_params": True}, id="drop_params"),
+        pytest.param({"additional_drop_params": ["background"]}, id="additional_drop_params"),
+    ],
+)
+def test_dropped_background_never_reaches_the_responses_request(drop_setting: Mapping[str, object]) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs={**OPENAI_API, **drop_setting, "background": True},
+        max_tokens=1024,
+        messages=MESSAGES,
+    )
+
+    assert "background" not in responses_kwargs
+    assert responses_kwargs["max_output_tokens"] == 1024
+
+
 REASONING_MODEL: Final = "gpt-bridge-reasoning-cost"
 REASONING_RATES: Final = {
     "input_cost_per_token": 2e-06,

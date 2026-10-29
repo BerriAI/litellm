@@ -60,6 +60,28 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
     return extra_kwargs or {}
 
 
+def _drops_background(forwarded_kwargs: Mapping[str, object]) -> bool:
+    additional_drop_params: Final = forwarded_kwargs.get("additional_drop_params")
+    return drops_unsupported_params(forwarded_kwargs.get("drop_params")) or (
+        isinstance(additional_drop_params, list) and "background" in additional_drop_params
+    )
+
+
+def _reject_background_mode(model: str, forwarded_kwargs: Mapping[str, object]) -> None:
+    if forwarded_kwargs.get("background") is None or _drops_background(forwarded_kwargs):
+        return
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    raise litellm.UnsupportedParamsError(
+        model=model,
+        llm_provider=provider if isinstance(provider, str) else None,
+        message=(
+            f"/v1/messages does not support parameters: ['background'], for model={model}. "
+            "A background run answers with a response id the Anthropic Messages API has no way to retrieve. "
+            "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+    )
+
+
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
     provider: Final = (
         custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
@@ -162,6 +184,7 @@ def _build_responses_kwargs(
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
+    _reject_background_mode(model, forwarded_kwargs)
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [
@@ -237,7 +260,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages"}
+    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "background"}
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
