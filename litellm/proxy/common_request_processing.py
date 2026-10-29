@@ -2581,7 +2581,6 @@ class ProxyBaseLLMRequestProcessing:
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
         # add_litellm_data_to_request predates that mutation.
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
-        verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
@@ -4234,7 +4233,7 @@ class ProxyBaseLLMRequestProcessing:
             e = transformed_exception
         litellm_debug_info: Final = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s %s",
             e,
             litellm_debug_info,
         )
@@ -4597,7 +4596,7 @@ class ProxyBaseLLMRequestProcessing:
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
-                "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+                "An error occurred: %s",
                 e,
             )
 
