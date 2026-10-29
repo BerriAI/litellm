@@ -1800,8 +1800,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     verbose_logger.exception(
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
                     )
+            post_call_details: Final = self._logging_details_copy()
             redact_message_input_output_from_logging(
-                model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
+                model_call_details=post_call_details,
                 result=original_response,
             )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
@@ -1815,9 +1816,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     if callback == "sentry" and add_breadcrumb:
                         verbose_logger.debug("reaches sentry breadcrumbing")
                         try:
-                            details_to_log = copy.deepcopy(self.model_call_details)
+                            details_to_log = copy.deepcopy(post_call_details)
                         except Exception:
-                            details_to_log = self.model_call_details
+                            details_to_log = post_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
@@ -1831,7 +1832,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_post_api_call(
-                            kwargs=self.model_call_details,
+                            kwargs=post_call_details,
                             response_obj=None,
                             start_time=self.start_time,
                             end_time=None,
@@ -2820,9 +2821,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not build_logging_payload:
             return None
 
-        standard_logging_payload: Final = self._build_standard_logging_payload(
-            logging_result, start_time, end_time, isolate_call_details=not publish_logging_payload
-        )
+        standard_logging_payload: Final = self._build_standard_logging_payload(logging_result, start_time, end_time)
         if not publish_logging_payload:
             return standard_logging_payload
         self.model_call_details["standard_logging_object"] = standard_logging_payload
@@ -2843,17 +2842,28 @@ class Logging(LiteLLMLoggingBaseClass):
 
         await invalidate_baseline_cache(self, reason, completed=completed)
 
+    def _logging_details_copy(self) -> dict[str, object]:  # mutable-ok: legacy redaction mutates its isolated payload
+        streaming_keys: Final = ("complete_streaming_response", "async_complete_streaming_response")
+        redact: Final = should_redact_message_logging(self.model_call_details)
+        return {
+            **self.model_call_details,
+            **{
+                key: copy.deepcopy(self.model_call_details[key])
+                for key in streaming_keys
+                if redact and key in self.model_call_details
+            },
+        }
+
     def _build_standard_logging_payload(
         self,
         init_response_obj: object,
         start_time: dt_object,
         end_time: dt_object,
-        isolate_call_details: bool = False,
     ) -> StandardLoggingPayload | None:
         """Build StandardLoggingPayload and accumulate its construction time."""
         _start: Final = time.time()
         payload: Final = get_standard_logging_object_payload(
-            kwargs=dict(self.model_call_details) if isolate_call_details else self.model_call_details,
+            kwargs=self._logging_details_copy(),
             init_response_obj=init_response_obj,
             start_time=start_time,
             end_time=end_time,
@@ -3328,7 +3338,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details["complete_streaming_response"],
                     start_time,
                     end_time,
-                    isolate_call_details=True,
                 )
                 if for_async_request and complete_streaming_response is not None
                 else request_logging_payload
@@ -3361,15 +3370,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 else callbacks
             )
 
-            ## REDACT MESSAGES ##
-            result = _REDACTED_RESULT.validate_python(
-                redact_message_input_output_from_logging(
-                    model_call_details=call_details,
-                    result=result,
-                )
-            )
             ## LOGGING HOOK ##
             hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+            if should_redact_message_logging(call_details) and any(
+                isinstance(callback, CustomGuardrail) for callback in hook_callbacks
+            ):
+                call_details = {  # rebind-ok: logging hooks consume and replace this isolated legacy payload
+                    **call_details,
+                    "messages": copy.deepcopy(call_details.get("messages")),
+                }
+                result = copy.deepcopy(result)  # rebind-ok: preserve the client response before mutable logging hooks
             for callback in hook_callbacks:
                 if isinstance(callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
@@ -3389,7 +3399,14 @@ class Logging(LiteLLMLoggingBaseClass):
                         result=result,
                         call_type=self.call_type,
                     )
-                elif isinstance(callback, CustomLogger):
+                if not for_async_request:
+                    self.model_call_details = call_details
+
+            result = _REDACTED_RESULT.validate_python(
+                redact_message_input_output_from_logging(model_call_details=call_details, result=result)
+            )
+            for callback in hook_callbacks:
+                if isinstance(callback, CustomLogger) and not isinstance(callback, CustomGuardrail):
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
                         kwargs=call_details,
                         result=result,
@@ -3955,16 +3972,17 @@ class Logging(LiteLLMLoggingBaseClass):
             self._get_completed_success_callbacks(asynchronous=True) if not self.stream else callbacks
         )
 
-        result = _REDACTED_RESULT.validate_python(
-            redact_message_input_output_from_logging(
-                model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
-                result=result,
-            )
-        )
-
         ## LOGGING HOOK ##
 
         hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+        if should_redact_message_logging(self.model_call_details) and any(
+            isinstance(callback, CustomGuardrail) for callback in hook_callbacks
+        ):
+            self.model_call_details = {
+                **self.model_call_details,
+                "messages": copy.deepcopy(self.model_call_details.get("messages")),
+            }
+            result = copy.deepcopy(result)  # rebind-ok: preserve the client response before mutable logging hooks
         for callback in hook_callbacks:
             try:
                 if isinstance(callback, CustomGuardrail):
@@ -3985,7 +4003,16 @@ class Logging(LiteLLMLoggingBaseClass):
                         result=result,
                         call_type=self.call_type,
                     )
-                elif isinstance(callback, CustomLogger):
+            except Exception:  # noqa: BLE001  # a failed guardrail must not skip redaction or later logging callbacks
+                verbose_logger.exception("LiteLLM.LoggingError: Exception in guardrail async_logging_hook")
+                self._handle_callback_failure(callback=callback)
+
+        result = _REDACTED_RESULT.validate_python(
+            redact_message_input_output_from_logging(model_call_details=self.model_call_details, result=result)
+        )
+        for callback in hook_callbacks:
+            try:
+                if isinstance(callback, CustomLogger) and not isinstance(callback, CustomGuardrail):
                     result = redact_message_input_output_from_custom_logger(
                         result=result, litellm_logging_obj=self, custom_logger=callback
                     )
