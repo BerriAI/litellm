@@ -1214,6 +1214,66 @@ def test_transform_request_drops_lookaround_regex_when_the_deployment_model_info
     assert properties == _LOOKAROUND_FREE_PROPERTIES
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.newvendor.model-1",
+        "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123",
+    ],
+)
+def test_transform_request_drops_lookaround_regex_for_a_model_the_cost_map_does_not_list(model):
+    assert model not in litellm.model_cost
+
+    assert _tool_schema_properties(model, _ARTIFACT_DATA_ANTHROPIC_TOOL) == _LOOKAROUND_FREE_PROPERTIES
+
+
+def test_transform_request_keeps_lookaround_regex_for_an_unlisted_model_whose_deployment_opts_out():
+    properties = _tool_schema_properties(
+        "us.newvendor.model-1", _ARTIFACT_DATA_ANTHROPIC_TOOL, {"model_info": {"supports_regex_lookaround": True}}
+    )
+
+    assert properties == _ARTIFACT_DATA_INPUT_SCHEMA["properties"]
+
+
+def test_a_router_deployment_of_a_model_the_cost_map_does_not_list_drops_lookaround_regex(respx_mock):
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.newvendor.model-1/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "unlisted",
+                "litellm_params": {
+                    "model": "bedrock/us.newvendor.model-1",
+                    "aws_access_key_id": "fake-access-key",
+                    "aws_secret_access_key": "fake-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+            }
+        ]
+    )
+
+    router.completion(
+        model="unlisted",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[_ARTIFACT_DATA_OPENAI_TOOL],
+        client=HTTPHandler(),
+    )
+
+    tool: Final = json.loads(route.calls[0].request.content)["toolConfig"]["tools"][0]
+    assert tool["toolSpec"]["inputSchema"]["json"]["properties"] == _LOOKAROUND_FREE_PROPERTIES
+
+
 def test_transform_request_keeps_lookaround_regex_when_the_deployment_model_info_opts_out():
     properties = _tool_schema_properties(
         "global.moonshotai.kimi-k3", _ARTIFACT_DATA_ANTHROPIC_TOOL, {"model_info": {"supports_regex_lookaround": True}}

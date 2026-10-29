@@ -1559,7 +1559,8 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
 
     The deployment's ``model_info.supports_regex_lookaround`` wins, then the
     ``model_prices_and_context_window.json`` entry of its ``base_model``, then the
-    entry of ``model`` itself. A model nobody flagged keeps its schema as sent.
+    entry of ``model`` itself. A listed model nobody flagged keeps its schema as sent,
+    and a model the cost map does not list drops the lookarounds.
     """
     params: Final = litellm_params or {}
     deployment_flag: Final = deployment_model_info(params).get("supports_regex_lookaround")
@@ -1568,7 +1569,10 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
     base_model: Final = params.get("base_model")
     candidates: Final = (*((base_model,) if isinstance(base_model, str) else ()), model)
     flags: Final = (_bedrock_converse_model_flag(candidate, "supports_regex_lookaround") for candidate in candidates)
-    return next((flag for flag in flags if flag is not None), True)
+    flag: Final = next((flag for flag in flags if flag is not None), None)
+    if flag is not None:
+        return flag
+    return any(_bedrock_cost_map_lists(candidate) for candidate in candidates)
 
 
 _BedrockConverseModelFlag: TypeAlias = Literal[
@@ -1577,10 +1581,17 @@ _BedrockConverseModelFlag: TypeAlias = Literal[
 ]
 
 
-def _bedrock_converse_model_flag(model: str, key: _BedrockConverseModelFlag) -> bool | None:
+def _bedrock_model_info_candidates(model: str) -> tuple[str, ...]:
     base: Final = get_bedrock_base_model(model)
-    candidates: Final = dict.fromkeys((model, base, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base)))
-    for candidate in candidates:
+    return tuple(dict.fromkeys((model, base, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base))))
+
+
+def _bedrock_cost_map_lists(model: str) -> bool:
+    return bedrock_cost_map_has_row(_bedrock_model_info_candidates(model))
+
+
+def _bedrock_converse_model_flag(model: str, key: _BedrockConverseModelFlag) -> bool | None:
+    for candidate in _bedrock_model_info_candidates(model):
         with contextlib.suppress(Exception):
             model_info = get_cached_model_info()(
                 model=candidate,
