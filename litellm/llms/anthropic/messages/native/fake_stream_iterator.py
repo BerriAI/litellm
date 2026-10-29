@@ -125,12 +125,7 @@ class FakeAnthropicMessagesStreamIterator:
             server_tool_start: Final = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {
-                    "type": "server_tool_use",
-                    "id": block_dict.get("id"),
-                    "name": block_dict.get("name"),
-                    "input": empty_input,
-                },
+                "content_block": {**block_dict, "input": empty_input},
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(server_tool_start)}\n\n".encode())
             server_tool_delta: Final = {

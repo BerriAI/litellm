@@ -126,8 +126,17 @@ def _content_events(content: Sequence[Mapping[str, object]]) -> tuple[tuple[str,
 def test_server_tool_use_streams_empty_start_then_input_json_delta():
     """A real Anthropic stream opens server_tool_use with an empty input and
     sends the query as an input_json_delta, which SDK accumulators read."""
+    caller: Final = {"type": "code_execution_20260120", "tool_id": "srvtoolu_00"}
     events: Final = _content_events(
-        [{"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "example search"}}]
+        [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01",
+                "name": "web_search",
+                "input": {"query": "example search"},
+                "caller": caller,
+            }
+        ]
     )
     assert [event_type for event_type, _ in events] == [
         "content_block_start",
@@ -139,6 +148,7 @@ def test_server_tool_use_streams_empty_start_then_input_json_delta():
         "id": "srvtoolu_01",
         "name": "web_search",
         "input": {},
+        "caller": caller,
     }
     delta: Final = events[1][1]["delta"]
     assert isinstance(delta, dict)

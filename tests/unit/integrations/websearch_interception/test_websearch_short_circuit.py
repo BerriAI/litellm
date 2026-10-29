@@ -7,6 +7,7 @@ and executes the search directly without routing through the backend LLM.
 
 import json
 import time
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +18,7 @@ import litellm
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.messages.dispatch import MessagesResult
 
 # ---------------------------------------------------------------------------
 # Detection tests
@@ -520,31 +522,29 @@ class TestShortCircuitThroughMessagesEntryPoint:
     runs, so only a request through anthropic_messages shows whether native
     clients still get their server_tool_use and web_search_tool_result blocks."""
 
-    NATIVE_TOOL = {"type": "web_search_20250305", "name": "web_search"}
+    NATIVE_TOOL: Final = {"type": "web_search_20250305", "name": "web_search"}
 
-    async def _send(self, *, tools: list[dict], stream: bool, **kwargs):
-        import litellm
+    @pytest.fixture(autouse=True)
+    def _intercept_web_search(self, perplexity_search: respx.Route) -> Iterator[respx.Route]:
+        with patch("litellm.callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])]):
+            yield perplexity_search
 
-        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
-            mock_search.return_value = ("Title: Result\nURL: https://example.com\nSnippet: test", None)
-            with patch("litellm.callbacks", [logger]):
-                response = await litellm.anthropic_messages(
-                    model="bedrock/converse/us.anthropic.claude-sonnet-5-5",
-                    messages=[{"role": "user", "content": "latest python release"}],
-                    tools=tools,
-                    max_tokens=64,
-                    stream=stream,
-                    **kwargs,
-                )
-                if not stream:
-                    return response
-                return b"".join([chunk async for chunk in response])
+    @staticmethod
+    async def _send(*, tools: Sequence[Mapping[str, object]], stream: bool, **kwargs: object) -> MessagesResult:
+        return await litellm.anthropic_messages(
+            model="bedrock/converse/us.anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "latest python release"}],
+            tools=tools,
+            max_tokens=64,
+            stream=stream,
+            **kwargs,
+        )
 
     @pytest.mark.asyncio
-    async def test_native_tool_gets_native_blocks(self):
-        response = await self._send(tools=[self.NATIVE_TOOL], stream=False)
+    async def test_native_tool_gets_native_blocks(self, perplexity_search: respx.Route):
+        response: Final = await self._send(tools=[self.NATIVE_TOOL], stream=False)
 
+        assert perplexity_search.call_count == 1
         assert [block["type"] for block in response["content"]] == [
             "server_tool_use",
             "web_search_tool_result",
@@ -554,12 +554,13 @@ class TestShortCircuitThroughMessagesEntryPoint:
         assert server_tool_use["name"] == "web_search"
         assert server_tool_use["input"] == {"query": "latest python release"}
         assert tool_result["tool_use_id"] == server_tool_use["id"]
+        assert [result["url"] for result in tool_result["content"]] == ["https://example.com/releases"]
 
     @pytest.mark.asyncio
     async def test_native_blocks_reply_can_be_costed(self):
         from litellm.litellm_core_utils.litellm_logging import Logging
 
-        logging_obj = Logging(
+        logging_obj: Final = Logging(
             model="bedrock/converse/us.anthropic.claude-sonnet-5-5",
             messages=[{"role": "user", "content": "latest python release"}],
             stream=False,
@@ -569,15 +570,16 @@ class TestShortCircuitThroughMessagesEntryPoint:
             function_id="short-circuit-cost",
         )
         logging_obj.update_environment_variables(litellm_params={}, optional_params={})
-        response = await self._send(tools=[self.NATIVE_TOOL], stream=False, litellm_logging_obj=logging_obj)
+        response: Final = await self._send(tools=[self.NATIVE_TOOL], stream=False, litellm_logging_obj=logging_obj)
 
         assert logging_obj.response_cost_calculator(result=response) == 0.0
 
     @pytest.mark.asyncio
     async def test_native_tool_streams_native_blocks(self):
-        body = await self._send(tools=[self.NATIVE_TOOL], stream=True)
+        stream: Final = await self._send(tools=[self.NATIVE_TOOL], stream=True)
+        body: Final = b"".join([chunk async for chunk in stream])
 
-        starts = [
+        starts: Final = [
             json.loads(line.removeprefix(b"data: "))["content_block"]
             for line in body.splitlines()
             if line.startswith(b"data: ") and b'"content_block_start"' in line
@@ -591,7 +593,7 @@ class TestShortCircuitThroughMessagesEntryPoint:
             get_litellm_web_search_tool,
         )
 
-        response = await self._send(tools=[get_litellm_web_search_tool()], stream=False)
+        response: Final = await self._send(tools=[get_litellm_web_search_tool()], stream=False)
 
         assert [block["type"] for block in response["content"]] == ["text"]
 

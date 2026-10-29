@@ -406,8 +406,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             content.append(
                 WebSearchTransformation.build_web_search_outcome_block(tool_use_id=tool_use_id, outcome=outcome)
             )
-        # Keep the text block so non-native short-circuit callers (Claude Code,
-        # github_copilot, etc.) see the same payload they always have.
+        # Callers that sent the litellm standard search tool read the result from this text block.
         content.append({"type": "text", "text": search_result_text})
 
         response: Final[dict[str, object]] = {
