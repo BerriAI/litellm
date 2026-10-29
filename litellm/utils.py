@@ -2710,7 +2710,10 @@ class _HuggingFaceTokenizerLoadOutcomes:
                 return known
             retrying: Final = replace(known, retrying=True)
             self._remember(key, retrying)
-        self.start_retry(retry_when_due)
+        try:
+            self.start_retry(retry_when_due)
+        except RuntimeError as error:
+            return self.remember_failed_retry(key, str(error))
         return retrying
 
     def remember_loaded(self, key: _HuggingFaceTokenizerKey, tokenizer: HuggingFace) -> _HuggingFaceTokenizerLoaded:

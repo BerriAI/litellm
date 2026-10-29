@@ -1472,6 +1472,34 @@ def test_fork_guard_error_in_a_retry_waits_out_the_next_window_like_any_failed_r
     assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
+def test_retry_thread_that_cannot_start_answers_the_count_and_retries_after_the_next_window():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=0.0)
+    thread_starts: Final = MagicMock(side_effect=(RuntimeError("can't start new thread"), None))
+
+    def start_thread_then_retry(retry: Callable[[], None]) -> None:
+        thread_starts()
+        retry()
+
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=start_thread_then_retry)
+    with patch(
+        "litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=RuntimeError("HF unavailable")
+    ) as from_pretrained:
+        _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        when_the_thread_cannot_start: Final = _return_huggingface_tokenizer(model, outcomes)
+        from_pretrained.side_effect = None
+        from_pretrained.return_value = sentinel.tokenizer
+        inside_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+        clock.return_value = 2 * HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+        _return_huggingface_tokenizer(model, outcomes)
+        after_the_next_window: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert isinstance(when_the_thread_cannot_start, _HuggingFaceTokenizerLoadFailure)
+    assert isinstance(inside_the_next_window, _HuggingFaceTokenizerLoadFailure)
+    assert from_pretrained.call_count == 2
+    assert after_the_next_window == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+
+
 def test_fork_guard_error_while_loading_a_tokenizer_is_raised_and_not_remembered():
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 
