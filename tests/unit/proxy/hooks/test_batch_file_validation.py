@@ -1274,7 +1274,8 @@ def test_should_not_skip_and_reuses_descriptors_when_limits_present():
     assert returned is descriptors
 
 
-def test_resolve_fetch_params_uses_request_model_credentials():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_uses_request_model_credentials():
     rate_limiter = _make_rate_limiter()
     with (
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
@@ -1288,7 +1289,7 @@ def test_resolve_fetch_params_uses_request_model_credentials():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id="file-plain-openai",
                 custom_llm_provider="openai",
                 data={"model": "my-vllm-batch"},
@@ -1300,7 +1301,8 @@ def test_resolve_fetch_params_uses_request_model_credentials():
     assert fetch_kwargs["api_base"] == "http://vllm:8000/v1"
 
 
-def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
     rate_limiter = _make_rate_limiter()
     with (
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
@@ -1310,7 +1312,7 @@ def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id="file-plain-openai",
                 custom_llm_provider="openai",
                 data={"model": "my-vllm-batch"},
@@ -1320,7 +1322,8 @@ def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
 
 
-def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     import base64
 
     rate_limiter = _make_rate_limiter()
@@ -1342,7 +1345,7 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id=encoded_file_id,
                 custom_llm_provider="openai",
                 data={},

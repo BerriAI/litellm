@@ -79,6 +79,7 @@ from litellm.constants import (
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
+    PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -8552,9 +8553,10 @@ from litellm.caching.in_memory_cache import InMemoryCache
 
 
 class AvailableModelsCache(InMemoryCache):
-    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000):
-        super().__init__(ttl_seconds, max_size)
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 1000, clock: Callable[[], float] | None = None):
+        super().__init__(ttl_seconds, max_size, clock=clock)
         self._env_hash: str | None = None
+        self._listing_lock = threading.Lock()
 
     def _get_env_hash(self) -> str:
         """Create a hash of relevant environment variables"""
@@ -8608,8 +8610,28 @@ class AvailableModelsCache(InMemoryCache):
         available_models: list[str],
     ):
         """Set cached model info"""
+        with self._listing_lock:
+            self._store_model_info(custom_llm_provider, litellm_params, available_models, ttl=None)
+
+    def cache_timed_out_listing_unless_listed(
+        self,
+        custom_llm_provider: str,
+        litellm_params: LiteLLM_Params | None,
+        ttl: int,
+    ) -> None:
+        with self._listing_lock:
+            if self.get_cached_model_info(custom_llm_provider, litellm_params) is None:
+                self._store_model_info(custom_llm_provider, litellm_params, (), ttl=ttl)
+
+    def _store_model_info(
+        self,
+        custom_llm_provider: str,
+        litellm_params: LiteLLM_Params | None,
+        available_models: Sequence[str],
+        ttl: int | None,
+    ) -> None:
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
-        self.set_cache(cache_key, copy.deepcopy(available_models))
+        self.set_cache(cache_key, list(available_models), ttl=ttl)
 
 
 # Global cache instance
@@ -8661,9 +8683,10 @@ def _get_valid_models_from_provider_api(
     provider_config: BaseLLMModelInfo,
     custom_llm_provider: str,
     litellm_params: LiteLLM_Params | None = None,
+    model_cache: AvailableModelsCache = _model_cache,
 ) -> list[str]:
     try:
-        cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
+        cached_result: Final = model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
 
         if cached_result is not None:
             return cached_result
@@ -8671,8 +8694,14 @@ def _get_valid_models_from_provider_api(
             litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
         )
 
-        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+        model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
+    except httpx.TimeoutException as e:
+        verbose_logger.warning("Timed out getting valid models: %s", e)
+        model_cache.cache_timed_out_listing_unless_listed(
+            custom_llm_provider, litellm_params, ttl=PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
+        )
+        return model_cache.get_cached_model_info(custom_llm_provider, litellm_params) or []
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
         return []
@@ -10308,12 +10337,14 @@ class ProviderConfigManager:
             from litellm.llms.ollama.common_utils import OllamaModelInfo
 
             return OllamaModelInfo()
-        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
-            from litellm.llms.vllm.common_utils import (
-                VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
-            )
+        elif LlmProviders.VLLM == provider:
+            from litellm.llms.vllm.common_utils import VLLMModelInfo
 
             return VLLMModelInfo()
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
+
+            return HostedVLLMModelInfo()
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:

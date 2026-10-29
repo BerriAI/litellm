@@ -441,6 +441,7 @@ from litellm.proxy.auth.model_checks import (
     get_key_models,
     get_mcp_server_ids,
     get_team_models,
+    run_model_discovery,
 )
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
@@ -12429,7 +12430,8 @@ async def model_list(
         # Get complete model list including wildcard routes if requested
         from litellm.proxy.auth.model_checks import get_complete_model_list
 
-        all_models = get_complete_model_list(
+        all_models = await run_model_discovery(
+            get_complete_model_list,
             key_models=[],
             team_models=[],
             proxy_model_list=[
@@ -17864,7 +17866,7 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
 
-    all_models = expand_wildcard_deployments_for_model_info(all_models, llm_router)
+    all_models = await run_model_discovery(expand_wildcard_deployments_for_model_info, all_models, llm_router)
 
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -18199,7 +18201,8 @@ async def model_group_info(
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     )
     all_models_str: Final = (
-        get_complete_model_list(
+        await run_model_discovery(
+            get_complete_model_list,
             key_models=(),
             team_models=(),
             proxy_model_list=llm_router.get_model_names(),

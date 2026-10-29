@@ -10583,6 +10583,94 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     assert _model_cache.get_cached_model_info("openai") is None
 
 
+@respx.mock
+def test_a_timed_out_provider_model_listing_is_retried_only_after_its_timeout_ttl() -> None:
+    from litellm.constants import PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
+    from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
+    from litellm.types.router import LiteLLM_Params
+    from litellm.utils import AvailableModelsCache, _get_valid_models_from_provider_api
+
+    models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
+        side_effect=httpx.ReadTimeout("vLLM did not answer")
+    )
+    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
+    clock: Final = Mock(return_value=1000.0)
+    model_cache: Final = AvailableModelsCache(clock=clock)
+
+    def list_models() -> list[str]:
+        return _get_valid_models_from_provider_api(
+            HostedVLLMModelInfo(), "hosted_vllm", litellm_params, model_cache=model_cache
+        )
+
+    assert list_models() == []
+    assert list_models() == []
+    assert models_route.call_count == 1
+
+    models_route.mock(side_effect=None, return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+    clock.return_value = 1000.0 + PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS - 1
+    assert list_models() == []
+    assert models_route.call_count == 1
+
+    clock.return_value = 1000.0 + PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS + 1
+    assert list_models() == ["qwen2.5"]
+    assert models_route.call_count == 2
+
+
+@respx.mock
+def test_a_listing_that_times_out_keeps_the_models_a_concurrent_listing_cached() -> None:
+    from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
+    from litellm.types.router import LiteLLM_Params
+    from litellm.utils import AvailableModelsCache, _get_valid_models_from_provider_api
+
+    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-flaky.test:8000/v1")
+    model_cache: Final = AvailableModelsCache(clock=Mock(return_value=1000.0))
+
+    def list_models() -> list[str]:
+        return _get_valid_models_from_provider_api(
+            HostedVLLMModelInfo(), "hosted_vllm", litellm_params, model_cache=model_cache
+        )
+
+    def time_out_after_a_concurrent_listing_succeeds(request: httpx.Request) -> httpx.Response:
+        assert list_models() == ["qwen2.5"]
+        raise httpx.ReadTimeout("vLLM did not answer", request=request)
+
+    models_route: Final = respx.get("http://vllm-flaky.test:8000/v1/models").mock(
+        side_effect=iter(
+            (time_out_after_a_concurrent_listing_succeeds, httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+        )
+    )
+
+    assert list_models() == ["qwen2.5"]
+    assert list_models() == ["qwen2.5"]
+    assert models_route.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("host", "first_answer"),
+    [("vllm-erroring.test", httpx.Response(503)), ("vllm-refusing.test", httpx.ConnectError("connection refused"))],
+    ids=["server-error", "connection-refused"],
+)
+@respx.mock
+def test_a_provider_model_listing_that_fails_fast_is_tried_again_on_the_next_call(
+    host: str, first_answer: httpx.Response | httpx.ConnectError
+) -> None:
+    from litellm.types.router import LiteLLM_Params
+
+    models_route: Final = respx.get(f"http://{host}:8000/v1/models").mock(
+        side_effect=[first_answer, httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})]
+    )
+    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base=f"http://{host}:8000/v1")
+
+    def list_models() -> list[str]:
+        return get_valid_models(
+            check_provider_endpoint=True, custom_llm_provider="hosted_vllm", litellm_params=litellm_params
+        )
+
+    assert list_models() == []
+    assert list_models() == ["qwen2.5"]
+    assert models_route.call_count == 2
+
+
 def test_delta_tool_calls_sequential_indices():
     """
     Test that multiple tool calls without explicit indices receive sequential indices.

@@ -1,9 +1,13 @@
+import asyncio
+import threading
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
@@ -764,26 +768,134 @@ def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: s
     assert api_key not in str(refused.value.detail)
 
 
-def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
-    apply_team_provider_credentials(
-        data=data,
-        llm_router=Router(
-            model_list=[
-                {
-                    "model_name": "openai/*",
-                    "litellm_params": {
-                        "model": "openai/*",
-                        "api_key": "team-openai-key",
-                        "api_base": "https://team.example/v1",
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_hung_wildcard_listing_during_a_credential_lookup_leaves_the_event_loop_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    listing_started: Final = threading.Event()
+    other_request_served: Final = threading.Event()
+    listing_answered: Final = threading.Event()
+
+    def listing_that_answers_once_another_request_is_served(request: httpx.Request) -> httpx.Response:
+        listing_started.set()
+        if other_request_served.wait(timeout=3):
+            listing_answered.set()
+            return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        return httpx.Response(503)
+
+    respx.get("http://vllm-credential-lookup.test:8000/v1/models").mock(
+        side_effect=listing_that_answers_once_another_request_is_served
+    )
+    data: Final[dict[str, object]] = {}
+    lookup: Final = asyncio.create_task(
+        apply_team_provider_credentials(
+            data=data,
+            llm_router=Router(
+                model_list=[
+                    {
+                        "model_name": "hosted_vllm/*",
+                        "litellm_params": {
+                            "model": "hosted_vllm/*",
+                            "api_base": "http://vllm-credential-lookup.test:8000/v1",
+                        },
+                    }
+                ]
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            custom_llm_provider="openai",
+        )
+    )
+    assert await asyncio.to_thread(listing_started.wait, 3)
+    other_request_served.set()
+    await lookup
+
+    assert listing_answered.is_set()
+    assert data == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "custom_llm_provider, vllm_api_base, openai_deployment, applied_credential",
+    [
+        ("openai", "http://vllm-beside-openai.test:8000/v1", ("gpt-4o", "openai/gpt-4o"), ("api_key", "openai-key")),
+        (
+            "openai",
+            "http://vllm-before-openai-wildcard.test:8000/v1",
+            ("openai/*", "openai/*"),
+            ("api_key", "openai-key"),
+        ),
+        (
+            "hosted_vllm",
+            "http://vllm-route-match.test:8000/v1",
+            ("gpt-4o", "openai/gpt-4o"),
+            ("api_base", "http://vllm-route-match.test:8000/v1"),
+        ),
+    ],
+)
+async def test_a_credential_lookup_a_configured_model_answers_never_lists_the_wildcard_server(
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    vllm_api_base: str,
+    openai_deployment: tuple[str, str],
+    applied_credential: tuple[str, str],
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    data: Final[dict[str, object]] = {}
+
+    with respx.mock(assert_all_called=False) as vllm_server:
+        listing: Final = vllm_server.get(f"{vllm_api_base}/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        )
+        await apply_team_provider_credentials(
+            data=data,
+            llm_router=Router(
+                model_list=[
+                    {
+                        "model_name": "hosted_vllm/*",
+                        "litellm_params": {"model": "hosted_vllm/*", "api_base": vllm_api_base},
                     },
-                    "model_info": {"id": "team-a-openai", "team_id": "team-a"},
-                }
-            ]
-        ),
-        user_api_key_dict=UserAPIKeyAuth(
-            api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
-        ),
-        custom_llm_provider="openai",
+                    {
+                        "model_name": openai_deployment[0],
+                        "litellm_params": {"model": openai_deployment[1], "api_key": "openai-key"},
+                    },
+                ]
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert not listing.called
+    assert data.get(applied_credential[0]) == applied_credential[1]
+
+
+def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
+    asyncio.run(
+        apply_team_provider_credentials(
+            data=data,
+            llm_router=Router(
+                model_list=[
+                    {
+                        "model_name": "openai/*",
+                        "litellm_params": {
+                            "model": "openai/*",
+                            "api_key": "team-openai-key",
+                            "api_base": "https://team.example/v1",
+                        },
+                        "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+                    }
+                ]
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
+            ),
+            custom_llm_provider="openai",
+        )
     )
 
 
