@@ -8,8 +8,10 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import unquote, urlparse
 
 import httpx
 from httpx import Response
@@ -258,13 +260,23 @@ def _inferred_format(file: Mapping[str, object], url: str) -> Mapping[str, str]:
     return _PDF_FORMAT if "format" not in file and url.lower().endswith(".pdf") else MappingProxyType({})
 
 
+_DEFAULT_FILENAME: Final = "document.pdf"
+
+
+def _inferred_filename(file: Mapping[str, object], url: str) -> Mapping[str, str]:
+    if "filename" in file:
+        return MappingProxyType({})
+    url_filename: Final = PurePosixPath(unquote(urlparse(url).path)).name
+    return MappingProxyType({"filename": url_filename if PurePosixPath(url_filename).suffix else _DEFAULT_FILENAME})
+
+
 def _inlined_image_url(image_url: Mapping[str, object] | None, data_url: str) -> Mapping[str, object] | str:
     return {**image_url, "url": data_url} if image_url is not None else data_url
 
 
 def _inlined_file(file: Mapping[str, object], url: str, data_url: str) -> Mapping[str, object]:
     kept: Final = {k: v for k, v in file.items() if k != "file_id"}
-    return {**kept, **_inferred_format(file, url), "file_data": data_url}
+    return {**kept, **_inferred_format(file, url), **_inferred_filename(file, url), "file_data": data_url}
 
 
 def _base64_source(url: str, data_url: str) -> Mapping[str, str]:

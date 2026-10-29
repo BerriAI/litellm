@@ -344,14 +344,16 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
 
     data_url = async_only_image_fetch.data_url
     base64_png = async_only_image_fetch.base64_png
+    pdf_name = pdf_url.rsplit("/", 1)[1]
+    image_name = image_url.rsplit("/", 1)[1]
     assert inlined[0] == {"role": "system", "content": "be terse"}
     assert inlined[1]["content"] == [
         {"type": "text", "text": "what is this?"},
         {"type": "image_url", "image_url": {"url": data_url, "detail": "low"}},
         {"type": "image_url", "image_url": data_url},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
-        {"type": "file", "file": {"format": "application/pdf", "file_data": data_url}},
-        {"type": "file", "file": {"format": "image/png", "file_data": data_url}},
+        {"type": "file", "file": {"format": "application/pdf", "filename": pdf_name, "file_data": data_url}},
+        {"type": "file", "file": {"format": "image/png", "filename": image_name, "file_data": data_url}},
         {
             "type": "document",
             "source": {"type": "base64", "media_type": "application/pdf", "data": base64_png},
@@ -406,6 +408,27 @@ def test_inline_remote_media_inlines_every_remote_part_shape(monkeypatch):
     ]
     assert fetched == [image_url]
     assert messages == snapshot
+
+
+@pytest.mark.parametrize(
+    ("file", "filename"),
+    [
+        ({"file_id": "https://docs.example/reports/q3%20summary.pdf"}, "q3 summary.pdf"),
+        ({"file_id": "https://docs.example/download?id=7"}, "document.pdf"),
+        ({"file_id": "https://docs.example/reports/q3.pdf", "filename": "caller.pdf"}, "caller.pdf"),
+    ],
+    ids=["named_by_the_url", "url_without_a_file_name", "caller_filename_kept"],
+)
+def test_inline_remote_media_names_an_inlined_file_so_openai_shaped_apis_accept_it(monkeypatch, file, filename):
+    monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: "data:application/pdf;base64,JVBERi0=")
+    messages = [{"role": "user", "content": [{"type": "file", "file": file}]}]
+
+    inlined = inline_remote_media(messages, should_inline=image_handling.inline_remote_files)
+
+    inlined_file = inlined[0]["content"][0]["file"]
+    assert "file_id" not in inlined_file
+    assert inlined_file["file_data"] == "data:application/pdf;base64,JVBERi0="
+    assert inlined_file["filename"] == filename
 
 
 async def test_async_inline_remote_media_inlines_only_the_parts_the_predicate_accepts(async_only_image_fetch):
