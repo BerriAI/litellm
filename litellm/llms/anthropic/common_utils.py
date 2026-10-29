@@ -218,10 +218,19 @@ def anthropic_context_management(context_management: JsonValue) -> JsonValue:
     return context_management if edits is None else _JSON_VALUE.validate_python(edits)
 
 
+def _context_management_edits(spec: JsonValue) -> Sequence[object]:
+    mapping: Final = as_str_mapping(spec)
+    return (validated_object_list(mapping.get("edits")) if mapping is not None else None) or ()
+
+
+def context_management_with_edits(context_management: JsonValue) -> JsonValue:
+    spec: Final = anthropic_context_management(context_management)
+    return spec if _context_management_edits(spec) else None
+
+
 def context_management_betas(context_management: JsonValue) -> tuple[str, ...]:
-    spec: Final = as_str_mapping(anthropic_context_management(context_management))
-    edits: Final = validated_object_list(spec.get("edits")) if spec is not None else None
-    edit_types: Final = tuple(edit.get("type") for edit in map(as_str_mapping, edits or ()) if edit is not None)
+    edits: Final = _context_management_edits(anthropic_context_management(context_management))
+    edit_types: Final = tuple(edit.get("type") for edit in map(as_str_mapping, edits) if edit is not None)
     return tuple(
         beta
         for beta, used in (

@@ -991,3 +991,31 @@ async def test_counter_forwards_context_management_with_the_beta_inference_sends
     assert result is not None and result.total_tokens == 259
     assert TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)["context_management"] == forwarded
     assert (sent_beta in betas, unsent_beta in betas) == (True, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.parametrize("context_management", ({}, {"edits": []}, []), ids=("empty_object", "empty_edits", "empty_list"))
+async def test_counter_leaves_out_context_management_without_edits(context_management: JsonValue) -> None:
+    """Anthropic's count endpoint rejects a context_management with no edits, which inference accepts, so the count
+    leaves it out and adds no context-management beta."""
+    with respx.mock:
+        route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 11})
+        )
+        result: Final = await AnthropicTokenCounter().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
+            context_management=CountContextManagement(spec=context_management, drop_invalid_edits=False),
+        )
+
+    sent: Final = route.calls.last.request
+    betas: Final = frozenset(sent.headers.get("anthropic-beta", "").split(","))
+    assert result is not None and result.total_tokens == 11
+    assert "context_management" not in TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)
+    assert not betas & {
+        ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+        ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+    }

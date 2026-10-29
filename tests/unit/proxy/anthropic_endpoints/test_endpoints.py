@@ -6,6 +6,7 @@ import json
 import logging
 import unittest
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -660,7 +661,10 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
 
 
 def _count_on_claude(
-    monkeypatch: pytest.MonkeyPatch, peer: Callable[[httpx.Request], httpx.Response], headers: Mapping[str, str]
+    monkeypatch: pytest.MonkeyPatch,
+    peer: Callable[[httpx.Request], httpx.Response],
+    headers: Mapping[str, str],
+    extra_body: Mapping[str, object] = MappingProxyType({}),
 ) -> httpx.Response:
     from fastapi import FastAPI
 
@@ -700,7 +704,7 @@ def _count_on_claude(
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
     return TestClient(app).post(
         "/v1/messages/count_tokens",
-        json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}]},
+        json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}], **extra_body},
         headers=dict(headers),
     )
 
@@ -726,6 +730,24 @@ def test_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
             "status_code": 200,
         },
     )
+
+
+def test_count_tokens_returns_the_context_management_the_provider_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    applied: Final = {"original_input_tokens": 640}
+    response: Final = _count_on_claude(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, json={"input_tokens": 576, "context_management": applied}, request=request
+        ),
+        {},
+        {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
+    )
+
+    assert response.json() == {
+        "input_tokens": 576,
+        "context_management": applied,
+        "litellm_count_source": "provider",
+    }, response.text
 
 
 def test_count_tokens_provider_rejection_logs_its_status_and_answers_the_same_error(

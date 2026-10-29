@@ -27,9 +27,9 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
-    anthropic_context_management,
     carries_signed_compaction_block,
     context_management_betas,
+    context_management_with_edits,
     is_claude_model_target,
     merge_anthropic_beta_headers,
     tools_without_custom_field,
@@ -413,7 +413,7 @@ class AnthropicCountTokensConfig:
                                         drop_custom=drop_params,
                                     ),
                                 ),
-                                ("context_management", anthropic_context_management(context_management)),
+                                ("context_management", context_management_with_edits(context_management)),
                             )
                             if value is not None
                         }
