@@ -1294,3 +1294,40 @@ async def test_hosted_vllm_router_batch_with_an_unknown_value_is_rejected(
         await call_router()
 
     assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]
+
+
+async def _list_on_vllm_router() -> list[LiteLLMBatch]:
+    page: Final = await litellm.alist_batches(
+        custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
+    )
+    return page.data
+
+
+async def _list_on_vllm_router_sync() -> list[LiteLLMBatch]:
+    return litellm.list_batches(custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE).data
+
+
+@pytest.mark.parametrize("list_router", (_list_on_vllm_router, _list_on_vllm_router_sync))
+async def test_hosted_vllm_router_batch_list_comes_back_as_openai_batches(
+    respx_mock: respx.MockRouter, list_router: Callable[[], Awaitable[list[LiteLLMBatch]]]
+):
+    respx_mock.get(f"{VLLM_ROUTER_API_BASE}/batches").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {**VLLM_ROUTER_BATCH, "id": "batch_5f8dac", "status": "pending"},
+                {**VLLM_ROUTER_BATCH, "id": "batch_c74802", "status": "running"},
+            ],
+            "first_id": "batch_5f8dac",
+            "last_id": "batch_c74802",
+            "has_more": False,
+        },
+    )
+
+    batches: Final = await list_router()
+
+    assert [(batch.id, batch.object, batch.status) for batch in batches] == [
+        ("batch_5f8dac", "batch", "validating"),
+        ("batch_c74802", "batch", "in_progress"),
+    ]

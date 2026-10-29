@@ -1,7 +1,7 @@
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, TypeVar, cast
 
 import httpx
 
@@ -2133,6 +2133,13 @@ class OpenAIFilesAPI(BaseLLM):
         return response
 
 
+_BatchPage = TypeVar("_BatchPage", SyncCursorPage[Batch], AsyncCursorPage[Batch])
+
+
+def _as_litellm_batch_page(page: _BatchPage) -> _BatchPage:
+    return page.model_copy(update={"data": [LiteLLMBatch.model_validate(batch.model_dump()) for batch in page.data]})
+
+
 class OpenAIBatchesAPI(BaseLLM):
     """
     OpenAI methods to support for batches
@@ -2323,7 +2330,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
         response: Final = await openai_client.batches.list(after=after, limit=limit)
-        return response
+        return _as_litellm_batch_page(response)
 
     def list_batches(
         self,
@@ -2360,7 +2367,7 @@ class OpenAIBatchesAPI(BaseLLM):
                 )
             return self.alist_batches(openai_client=openai_client, after=after, limit=limit)
         response: Final = openai_client.batches.list(after=after, limit=limit)
-        return response
+        return _as_litellm_batch_page(response)
 
 
 class OpenAIAssistantsAPI(BaseLLM):

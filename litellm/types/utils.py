@@ -4761,6 +4761,8 @@ class LiteLLMFineTuningJob(FineTuningJob):
         self._hidden_params = kwargs.get("_hidden_params", {})
 
 
+_BatchFieldValue: TypeAlias = object
+
 _OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
     {"pending": "validating", "running": "in_progress"}
 )
@@ -4773,20 +4775,20 @@ class LiteLLMBatch(Batch):
 
     @field_validator("object", mode="before")
     @classmethod
-    def _default_missing_object_type(cls, value: object) -> object:
+    def _default_missing_object_type(cls, value: _BatchFieldValue) -> _BatchFieldValue:
         return "batch" if value is None else value
 
     @field_validator("status", mode="before")
     @classmethod
-    def _map_vllm_router_status(cls, value: object) -> object:
+    def _map_vllm_router_status(cls, value: _BatchFieldValue) -> _BatchFieldValue:
         return _OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(value, value) if isinstance(value, str) else value
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, _BatchFieldValue]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, _BatchFieldValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
