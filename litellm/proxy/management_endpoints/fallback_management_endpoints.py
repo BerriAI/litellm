@@ -63,45 +63,60 @@ def _rule_covers(entry: StoredFallback, model: str) -> bool:
 
 
 def _layered_over_config_rules(
-    runtime_rules: ContentPolicyFallbackRules, config_rules: ContentPolicyFallbackRules
-) -> ContentPolicyFallbackRules:
+    runtime_rules: ContentPolicyFallbackRules, config_rules: Sequence[Mapping[str, JsonValue]]
+) -> Sequence[Mapping[str, object]]:
     covered: Final = frozenset[str]().union(*runtime_rules)
     return [*runtime_rules, *(rule for rule in config_rules if covered.isdisjoint(rule))]
 
 
+def _config_file_rules(rules: object) -> Sequence[Mapping[str, JsonValue]]:
+    try:
+        candidates: Final = _OPTIONAL_JSON_RULES.validate_python(rules) or ()
+    except ValidationError:
+        return ()
+    return tuple(rule for rule in candidates if isinstance(rule, Mapping))
+
+
 def _log_ignored_content_policy_rules(rules: object, error: ValidationError) -> None:
     verbose_proxy_logger.error(
-        "Ignoring invalid content_policy_fallbacks %r from config/DB, every other rule still applies. "
-        "Fix it through POST /fallback, /config/update, or the config file: %s",
+        "Ignoring invalid content_policy_fallbacks %r from the DB, every other rule still applies. "
+        "Fix it through POST /fallback or /config/update: %s",
         rules,
         error,
     )
 
 
-def _valid_content_policy_rule(rule: JsonValue) -> ContentPolicyFallbackRule | None:
+def _checked_content_policy_rule(rule: JsonValue) -> ContentPolicyFallbackRule | ValidationError:
     try:
         return _CONTENT_POLICY_FALLBACK_RULE.validate_python(rule)
     except ValidationError as invalid_rule:
-        _log_ignored_content_policy_rules(rule, invalid_rule)
-        return None
+        return invalid_rule
 
 
-def _valid_content_policy_rules(rules: object) -> ContentPolicyFallbackRules:
+def _checked_content_policy_rules(
+    rules: object,
+) -> Sequence[tuple[object, ContentPolicyFallbackRule | ValidationError]]:
     try:
         candidates: Final = _OPTIONAL_JSON_RULES.validate_python(rules) or ()
     except ValidationError as not_a_rule_list:
-        _log_ignored_content_policy_rules(rules, not_a_rule_list)
-        return ()
-    validated: Final = (_valid_content_policy_rule(candidate) for candidate in candidates)
-    return tuple(rule for rule in validated if rule is not None)
+        return ((rules, not_a_rule_list),)
+    return tuple((candidate, _checked_content_policy_rule(candidate)) for candidate in candidates)
 
 
 def apply_content_policy_fallbacks(llm_router: "Router", rules: object) -> None:
-    runtime_rules: Final = _valid_content_policy_rules(rules)
-    config_rules: Final = _valid_content_policy_rules(
-        litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
+    checked_rules: Final = _checked_content_policy_rules(rules)
+    runtime_rules: Final = tuple(result for _, result in checked_rules if not isinstance(result, ValidationError))
+    layered_rules: Final = _layered_over_config_rules(
+        runtime_rules,
+        _config_file_rules(
+            litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
+        ),
     )
-    layered_rules: Final = _layered_over_config_rules(runtime_rules, config_rules)
+    if layered_rules == llm_router.content_policy_fallbacks:  # pyright: ignore[reportUnknownMemberType]  # untyped Router list
+        return
+    for rule, result in checked_rules:
+        if isinstance(result, ValidationError):
+            _log_ignored_content_policy_rules(rule, result)
     llm_router.update_settings(content_policy_fallbacks=layered_rules)  # pyright: ignore[reportUnknownMemberType]  # untyped kwargs
 
 

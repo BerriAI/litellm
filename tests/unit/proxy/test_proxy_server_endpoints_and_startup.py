@@ -5689,6 +5689,49 @@ async def test_a_db_content_policy_value_that_is_not_a_list_keeps_the_litellm_se
 
 
 @pytest.mark.asyncio
+async def test_a_db_sync_keeps_a_litellm_settings_rule_with_a_target_router_init_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup", 5]}])
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row([{"secondary": ["backup"]}])
+    )
+
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+    assert await _answer_after_content_policy_refusal(router, "secondary") == "backup answered"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_db_content_policy_rule_is_logged_once_per_change_of_the_rules(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [])
+    router: Final = _content_policy_router()
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    stored_rules: Final = [{"secondary": "backup"}, {"primary": ["backup"]}]
+    changed_rules: Final = [{"secondary": "backup"}, {"secondary": ["backup"]}]
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row(stored_rules)
+        )
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row(stored_rules)
+        )
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row(changed_rules)
+        )
+
+    notices: Final = [
+        record for record in caplog.records if "Ignoring invalid content_policy_fallbacks" in record.getMessage()
+    ]
+    assert len(notices) == 2
+    assert await _answer_after_content_policy_refusal(router, "secondary") == "backup answered"
+
+
+@pytest.mark.asyncio
 async def test_config_file_content_policy_fallbacks_stay_the_only_rules_after_a_db_sync(
     monkeypatch: pytest.MonkeyPatch,
 ):
