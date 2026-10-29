@@ -1911,6 +1911,87 @@ async def test_non_string_safety_identifier_is_dropped_from_the_wire_under_drop_
     }
 
 
+_MALFORMED_EXTRA_HEADERS: Final[tuple[object, ...]] = ("X-Foo: bar", 7, ["X-Foo: bar"])
+_MALFORMED_EXTRA_HEADERS_IDS: Final = ("string", "int", "list")
+
+
+def _openai_decisions_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    return respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+@pytest.mark.parametrize(
+    "extra_headers", (*_MALFORMED_EXTRA_HEADERS, {"X-Foo": 1}), ids=(*_MALFORMED_EXTRA_HEADERS_IDS, "non_string_value")
+)
+async def test_malformed_extra_headers_is_rejected_before_http(
+    extra_headers: object,
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _openai_decisions_route(respx_mock, monkeypatch)
+
+    with pytest.raises(litellm.BadRequestError, match=r"(?s)Invalid Decisions request.*extra_headers") as caught:
+        await getattr(litellm, f"a{api}")(
+            model="openai/gpt-6-luna", api_key="caller-key", extra_headers=extra_headers, **request_kwargs
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+@pytest.mark.parametrize("extra_headers", _MALFORMED_EXTRA_HEADERS, ids=_MALFORMED_EXTRA_HEADERS_IDS)
+async def test_malformed_extra_headers_is_dropped_under_drop_params(
+    extra_headers: object,
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = _openai_decisions_route(respx_mock, monkeypatch)
+
+    response: Final = await getattr(litellm, f"a{api}")(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        extra_headers=extra_headers,
+        drop_params=True,
+        **request_kwargs,
+    )
+
+    assert route.called
+    assert "x-foo" not in route.calls.last.request.headers
+    assert response.answers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_drop_params_keeps_the_well_formed_extra_headers(
+    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    route: Final = _openai_decisions_route(respx_mock, monkeypatch)
+
+    await getattr(litellm, f"a{api}")(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        extra_headers={"X-Kept": "yes", "X-Bad": 1},
+        **request_kwargs,
+    )
+
+    sent: Final = route.calls.last.request.headers
+    assert sent["x-kept"] == "yes"
+    assert "x-bad" not in sent
+
+
 _CLOUDFLARE_RUN_URL: Final = "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare"
 _PERPLEXITY_DECISIONS_URL: Final = "https://api.perplexity.ai/v1/decisions"
 _PNG_DATA_URL: Final = "data:image/png;base64,AA=="

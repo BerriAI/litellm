@@ -80,6 +80,10 @@ _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
+_EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(
+    Mapping[str, str] | None, config=ConfigDict(title="extra_headers")
+)
+_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[str, str])
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
@@ -95,7 +99,7 @@ _ASSETS_ADAPTER: Final[TypeAdapter[DecisionsAssets | None]] = TypeAdapter(
 _ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, DecisionsAsset]]] = TypeAdapter(
     tuple[DecisionsAssetReference, DecisionsAsset]
 )
-_ASSET_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_MAPPING_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -127,9 +131,9 @@ def _valid_asset(entry: tuple[str, object]) -> tuple[str, DecisionsAsset] | None
         return None
 
 
-def _asset_entries(assets: object) -> Mapping[str, object]:
+def _mapping_entries(value: object) -> Mapping[str, object]:
     try:
-        return _ASSET_ENTRIES_ADAPTER.validate_python(assets)
+        return _MAPPING_ENTRIES_ADAPTER.validate_python(value)
     except ValidationError:
         return MappingProxyType({})
 
@@ -138,7 +142,7 @@ def _request_assets(assets: object, drops_params: bool) -> Mapping[str, Decision
     if not drops_params:
         return _ASSETS_ADAPTER.validate_python(assets)
     valid: Final = MappingProxyType(
-        dict(entry for entry in map(_valid_asset, _asset_entries(assets).items()) if entry is not None)
+        dict(entry for entry in map(_valid_asset, _mapping_entries(assets).items()) if entry is not None)
     )
     return valid or None
 
@@ -408,8 +412,23 @@ def _provider_ir_request(
     return supported
 
 
+def _valid_header(entry: tuple[str, object]) -> tuple[str, str] | None:
+    try:
+        return _HEADER_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _request_extra_headers(extra_headers: object, drops_params: bool) -> Mapping[str, str]:
+    if not drops_params:
+        return _EXTRA_HEADERS_ADAPTER.validate_python(extra_headers) or MappingProxyType({})
+    return MappingProxyType(
+        dict(header for header in map(_valid_header, _mapping_entries(extra_headers).items()) if header is not None)
+    )
+
+
 def _outbound_headers(
-    extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
+    extra_headers: object, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
@@ -417,7 +436,7 @@ def _outbound_headers(
         ),
         custom_llm_provider=custom_llm_provider,
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    return MappingProxyType({**_request_extra_headers(extra_headers, _drops_params(kwargs)), **forwarded})
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
