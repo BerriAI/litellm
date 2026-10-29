@@ -17106,6 +17106,7 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
     }
 
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -17137,6 +17138,72 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
     assert await real_cache.async_get_cache(key="team-1_member-1") is None
     assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 999.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_update", [{"rpm_limit": 2}, {"tpm_limit": 100}])
+async def test_team_member_update_evicts_cached_auth_of_the_members_existing_keys(monkeypatch, limit_update):
+    """Regression for #49041: a key's cached auth object carries the member's rpm/tpm limit, so a new
+    member limit must evict the auth objects of every key the member already uses in this team, while
+    the member's keys in other teams and other members' keys stay cached"""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key_rows = (
+        SimpleNamespace(token="member-1-team-1-key-a", user_id="member-1", team_id="team-1"),
+        SimpleNamespace(token="member-1-team-1-key-b", user_id="member-1", team_id="team-1"),
+        SimpleNamespace(token="member-1-team-2-key", user_id="member-1", team_id="team-2"),
+        SimpleNamespace(token="member-2-team-1-key", user_id="member-2", team_id="team-1"),
+    )
+
+    async def find_key_rows(where):
+        return [row for row in key_rows if row.user_id == where["user_id"] and row.team_id == where["team_id"]]
+
+    mock_prisma_client = MagicMock()
+    real_cache = UserApiKeyCache()
+    for row in key_rows:
+        await real_cache.async_set_cache(key=row.token, value=f"cached-auth-{row.token}")
+
+    team_row = LiteLLM_TeamTable(team_id="team-1", metadata={}, members_with_roles=[])
+    team_info_response = {
+        "team_info": team_row,
+        "team_memberships": [LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", budget_id=None)],
+    }
+
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(side_effect=find_key_rows)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", real_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", DualCache())
+
+    mock_tx = AsyncMock()
+    mock_prisma_client.tx.return_value.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_prisma_client.tx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            AsyncMock(return_value=team_info_response),
+        ),
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints.upsert_budget_and_membership",
+            AsyncMock(),
+        ),
+    ):
+        await team_member_update(
+            data=TeamMemberUpdateRequest(team_id="team-1", user_id="member-1", **limit_update),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+
+    assert await real_cache.async_get_cache(key="member-1-team-1-key-a") is None
+    assert await real_cache.async_get_cache(key="member-1-team-1-key-b") is None
+    assert await real_cache.async_get_cache(key="member-1-team-2-key") == "cached-auth-member-1-team-2-key"
+    assert await real_cache.async_get_cache(key="member-2-team-1-key") == "cached-auth-member-2-team-1-key"
 
 
 @pytest.mark.asyncio
