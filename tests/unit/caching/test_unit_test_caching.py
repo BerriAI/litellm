@@ -310,7 +310,7 @@ def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_grou
 
 
 @pytest.mark.parametrize("planted", [["sales-premium"], [("sales", "sales-premium")]], ids=["string", "tuple"])
-def test_get_model_param_value_reads_caching_groups_only_beside_the_router_group(planted: list):
+def test_get_model_param_value_reads_caching_groups_only_beside_the_router_group(planted: list[str | tuple[str, str]]):
     cache: Final = Cache()
     request: Final = {
         "model": "openai/gpt-5.6",
