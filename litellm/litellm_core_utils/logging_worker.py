@@ -72,8 +72,8 @@ class LoggingWorker:
         self.concurrency = concurrency
         self.timeout_summary_window = timeout_summary_window
         self._queue: asyncio.Queue[LoggingTask] | None = None
-        self._worker_task: asyncio.Task | None = None
-        self._running_tasks: set[asyncio.Task] = set()
+        self._worker_task: asyncio.Task[None] | None = None
+        self._running_tasks: set[asyncio.Task[None]] = set()
         self._dequeued_tasks: dict[int, LoggingTask] = {}  # mutable-ok: refs so flush can rescue never-started tasks
         self._sem: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
@@ -495,7 +495,7 @@ class LoggingWorker:
             # No worker launched and no in-flight tasks to drain.
             return
 
-        tasks_to_cancel: Final[list[asyncio.Task]] = list(self._running_tasks)
+        tasks_to_cancel: Final[list[asyncio.Task[None]]] = list(self._running_tasks)
         if self._worker_task:
             # Include the main worker loop so it stops fetching work.
             tasks_to_cancel.append(self._worker_task)

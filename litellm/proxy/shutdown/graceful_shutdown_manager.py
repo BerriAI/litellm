@@ -24,7 +24,7 @@ import os
 import signal
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from types import FrameType
 from typing import Final
@@ -99,7 +99,7 @@ class GracefulShutdownManager:
 
     @classmethod
     @contextmanager
-    def capture_sigterm(cls, clock: Callable[[], float] = time.monotonic) -> Iterator[None]:
+    def capture_sigterm(cls, clock: Callable[[], float] = time.monotonic) -> Generator[None, None, None]:
         if threading.current_thread() is not threading.main_thread():
             yield
             return
@@ -144,6 +144,7 @@ class GracefulShutdownManager:
                 live ``InFlightRequestsMiddleware`` counter; injectable for tests.
             poll_interval: Seconds between counter polls.
             log_interval: Minimum seconds between ``drain_waiting`` log lines.
+            clock: Monotonic clock shared with the shutdown timestamp.
 
         Returns:
             Number of requests that drained while waiting (>= 0).
