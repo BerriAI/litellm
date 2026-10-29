@@ -1,11 +1,11 @@
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -27,6 +27,9 @@ class HoistedAdditionalTools:
     input: str | ResponseInputParam
     tools: tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]
     hoisted: tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]
+
+
+_INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
 def _is_additional_tools_item(item: object) -> bool:
@@ -84,6 +87,12 @@ def _unique_tools(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, o
     )
     first_seen_order: Final = tuple(dict.fromkeys(identity for identity, _ in keyed))
     return tuple(_merged(copies_by_identity[identity]) for identity in first_seen_order)
+
+
+def additional_tools_in_input(input: object) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    """The tools that ``additional_tools`` input items carry, in input order."""
+    items: Final = _INPUT_ITEMS.validate_python(input) if isinstance(input, list) else ()
+    return tuple(chain.from_iterable(_tools_of_item(item) for item in items if _is_additional_tools_item(item)))
 
 
 def hoist_additional_tools(

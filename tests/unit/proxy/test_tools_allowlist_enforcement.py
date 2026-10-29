@@ -58,7 +58,9 @@ class TestExtractRequestToolNames:
                 {"type": "function", "name": "get_current_weather", "description": "x"},
             ]
         }
-        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "get_current_weather"
+        ]
 
     def test_openai_responses_mcp_tools(self):
         data = {
@@ -120,6 +122,30 @@ class TestExtractRequestToolNames:
         }
         assert extract_request_tool_names("/v1/responses", data) == ["search_issues"]
 
+    def test_openai_responses_additional_tools_in_input(self):
+        """Codex on newer models leaves tools[] empty and sends every tool in an additional_tools input item."""
+        data = {
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "functions",
+                            "tools": [{"type": "custom", "name": "exec"}, {"type": "function", "name": "wait"}],
+                        },
+                        {"type": "function", "name": "search_issues"},
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ],
+        }
+        assert extract_request_tool_names("/v1/responses", data) == ["exec", "wait", "search_issues"]
+
+    def test_openai_responses_string_input_has_no_additional_tools(self):
+        assert extract_request_tool_names("/v1/responses", {"input": "hi"}) == []
+
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/messages", data) == [
@@ -163,7 +189,9 @@ class TestExtractRequestToolNames:
                 },
             ]
         }
-        assert extract_request_tool_names("/generate_content", data) == ["schedule_meeting"]
+        assert extract_request_tool_names("/generate_content", data) == [
+            "schedule_meeting"
+        ]
 
     def test_mcp_call_tool_name(self):
         data = {"name": "my_tool", "arguments": {}}
@@ -298,11 +326,20 @@ class TestCheckToolsAllowlist:
                     }
                 ],
             },
+            {
+                "input": [
+                    {
+                        "type": "additional_tools",
+                        "role": "developer",
+                        "tools": [{"type": "function", "name": "run_shell"}],
+                    }
+                ]
+            },
         ],
-        ids=["namespace_in_tools", "tool_search_output_in_input"],
+        ids=["namespace_in_tools", "tool_search_output_in_input", "additional_tools_in_input"],
     )
     @pytest.mark.asyncio
-    async def test_disallowed_namespace_member_raises_on_responses_route(self, body):
+    async def test_disallowed_tool_outside_top_level_tools_raises_on_responses_route(self, body):
         token = _token(metadata={"allowed_tools": ["get_weather"]})
         with pytest.raises(ProxyException) as exc_info:
             await check_tools_allowlist(

@@ -73,6 +73,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
     append_returned_tools,
     merge_guardrailed_tools,
 )
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     decode_compaction_item,
@@ -931,10 +932,12 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp), opening namespace tools into their
-        members and adding the tools a tool_search_output in input[] loads."""
+        and custom, tools[].server_label for mcp), including the tools additional_tools
+        items in input[] carry, opening namespace tools into their members and adding
+        the tools a tool_search_output in input[] loads."""
         names: Final[list[str]] = []
-        for tool in (*with_namespace_members(list_field(data, "tools")), *input_tool_search_tools(data)):
+        request_tools: Final = (*list_field(data, "tools"), *additional_tools_in_input(data.get("input")))
+        for tool in (*with_namespace_members(request_tools), *input_tool_search_tools(data)):
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):
