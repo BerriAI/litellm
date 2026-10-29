@@ -1,17 +1,20 @@
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 
 ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
+_NAMESPACE_TOOL_TYPE: Final = "namespace"
+_QUALIFIED_NAME_SEPARATOR: Final = "__"
+_TOOLS: Final = TypeAdapter(tuple[object, ...])
 
 
 class _InputItemType(LiteLLMBaseModel):
@@ -61,7 +64,7 @@ def _members_of_copies(copies: Sequence[Mapping[str, object]]) -> Iterator[Mappi
 
 def _merged(copies: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
     newest: Final = copies[-1]
-    if newest.get("type") != "namespace" or len(copies) == 1:
+    if newest.get("type") != _NAMESPACE_TOOL_TYPE or len(copies) == 1:
         return newest
     members: Final = tuple(_members_of_copies(copies))
     return {**newest, "tools": list(_unique_tools(members))} if members else newest
@@ -108,3 +111,36 @@ def hoist_additional_tools(
         for tool in _unique_tools((*existing, *hoisted))
     )
     return HoistedAdditionalTools(input=remaining_input, tools=unique, hoisted=hoisted)
+
+
+def with_additional_tools_hoisted(request: Mapping[str, object]) -> Mapping[str, object]:
+    request_input: Final = request.get("input")
+    if not isinstance(request_input, list):
+        return request
+    input_items: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as inference does
+    top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
+        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _TOOLS.validate_python(request.get("tools") or ())
+    )
+    hoisted: Final = hoist_additional_tools(input_items, top_level_tools)
+    if not hoisted.hoisted:
+        return request
+    return {**request, "input": hoisted.input, "tools": list(hoisted.tools)}
+
+
+def _qualified_member(namespace: str, member: Mapping[str, object]) -> Mapping[str, object]:
+    prefix: Final = f"{namespace.removesuffix(_QUALIFIED_NAME_SEPARATOR)}{_QUALIFIED_NAME_SEPARATOR}"
+    return {**member, "name": f"{prefix}{member.get('name')}"}
+
+
+def _members_as_tools(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    if tool.get("type") != _NAMESPACE_TOOL_TYPE:
+        return (tool,)
+    namespace: Final = str(tool.get("name") or "")
+    return tuple(_qualified_member(namespace, member) for member in _tool_list_of(tool))
+
+
+def with_namespace_members_as_tools(request: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = _tool_list_of(request)
+    if not any(tool.get("type") == _NAMESPACE_TOOL_TYPE for tool in tools):
+        return request
+    return {**request, "tools": list(chain.from_iterable(map(_members_as_tools, tools)))}

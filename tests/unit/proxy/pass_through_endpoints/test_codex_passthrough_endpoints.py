@@ -16,7 +16,8 @@ from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.chatgpt.common_utils import OPENAI_AUTH_CLAIM_KEY
 from litellm.proxy import proxy_server
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
 from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import codex_shared_cache
 from litellm.proxy.utils import hash_token
@@ -1084,3 +1085,262 @@ def test_openai_reasoning_from_the_native_route_is_dropped_for_chatgpt_and_unwra
     replayed: Final = json.loads(provider.calls[1].request.content)["input"][1]
     assert (replayed["id"], replayed["encrypted_content"]) == ("rs_openai", _OPENAI_BLOB)
     assert v1.json()["output"][0]["encrypted_content"] == _OPENAI_BLOB
+
+
+_XAI_BASE: Final = "https://xai-api.test/v1"
+_LUNA_ID: Final = "oai-luna-deployment"
+_LUNA_BLOB: Final = "gAAAAB-luna-reasoning-blob"
+_LUNA_REASONING: Final = {
+    "type": "reasoning",
+    "summary": [],
+    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(_LUNA_BLOB, _LUNA_ID),
+}
+_CHATGPT_REASONING: Final = {"type": "reasoning", "summary": [], "encrypted_content": "gAAAAB-chatgpt-reasoning-blob"}
+
+
+@pytest.fixture
+def xai_and_openai_router(monkeypatch: pytest.MonkeyPatch) -> Router:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "grok-4.7",
+                "litellm_params": {"model": "xai/grok-4.7", "api_base": _XAI_BASE, "api_key": "test-xai-key"},
+            },
+            {
+                "model_name": "oai-luna",
+                "litellm_params": {
+                    "model": "openai/gpt-6-luna",
+                    "api_base": _OPENAI_BASE,
+                    "api_key": "test-openai-key",
+                },
+                "model_info": {"id": _LUNA_ID},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    return router
+
+
+@pytest.mark.parametrize(
+    ("model", "replayed", "expected"),
+    [
+        pytest.param("grok-4.7", _CHATGPT_REASONING, None, id="chatgpt reasoning to xai is dropped"),
+        pytest.param("grok-4.7", _LUNA_REASONING, None, id="another deployment's reasoning to xai is dropped"),
+        pytest.param("oai-luna", _LUNA_REASONING, _LUNA_BLOB, id="the minting deployment's reasoning is kept"),
+    ],
+)
+def test_litellm_model_on_native_route_gets_only_the_reasoning_it_can_decrypt(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    xai_and_openai_router: Router,
+    model: str,
+    replayed: dict[str, object],
+    expected: str | None,
+) -> None:
+    _account_catalog(respx_mock)
+    xai: Final = respx_mock.post(f"{_XAI_BASE}/responses").mock(side_effect=_provider_reply)
+    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": model,
+            "input": [_USER_TURN, replayed, _ASSISTANT_TURN, _USER_TURN],
+            "stream": False,
+            "store": False,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    provider: Final = xai if model == "grok-4.7" else luna
+    sent: Final = json.loads(provider.calls.last.request.content)["input"]
+    assert [item.get("encrypted_content") for item in sent if item.get("type") == "reasoning"] == (
+        [] if expected is None else [expected]
+    )
+
+
+def _namespace(name: str, *members: str) -> dict[str, object]:
+    return {
+        "type": "namespace",
+        "name": name,
+        "description": "",
+        "tools": [{"type": "function", "name": member, "parameters": {"type": "object"}} for member in members],
+    }
+
+
+_EXEC_TOOL: Final = {"type": "function", "name": "exec_command", "parameters": {"type": "object"}}
+_ADDITIONAL_TOOLS: Final = {
+    "type": "additional_tools",
+    "role": "developer",
+    "tools": [_namespace("collaboration", "followup_task"), _namespace("mcp__docs__", "search")],
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_input", "expected_tool_names"),
+    [
+        pytest.param(
+            "grok-4.7",
+            [_USER_TURN],
+            ["exec_command", "collaboration__followup_task", "mcp__docs__search"],
+            id="xai gets the item's tools as top-level functions",
+        ),
+        pytest.param("oai-luna", [_ADDITIONAL_TOOLS, _USER_TURN], ["exec_command"], id="the openai api keeps the item"),
+    ],
+)
+def test_codex_additional_tools_item_reaches_each_provider_in_a_shape_it_accepts(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    xai_and_openai_router: Router,
+    model: str,
+    expected_input: list[dict[str, object]],
+    expected_tool_names: list[str],
+) -> None:
+    _account_catalog(respx_mock)
+    xai: Final = respx_mock.post(f"{_XAI_BASE}/responses").mock(side_effect=_provider_reply)
+    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": model,
+            "input": [_ADDITIONAL_TOOLS, _USER_TURN],
+            "tools": [_EXEC_TOOL],
+            "stream": False,
+            "store": False,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    sent: Final = json.loads((xai if model == "grok-4.7" else luna).calls.last.request.content)
+    assert sent["input"] == expected_input
+    assert [tool["name"] for tool in sent["tools"]] == expected_tool_names
+
+
+_ANTHROPIC_BASE: Final = "https://anthropic-api.test"
+
+
+def test_codex_namespace_tool_called_through_the_chat_bridge_comes_back_with_its_namespace(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude-sonnet-5-5",
+                    "litellm_params": {
+                        "model": "anthropic/claude-sonnet-5-5",
+                        "api_base": _ANTHROPIC_BASE,
+                        "api_key": "test-anthropic-key",
+                    },
+                }
+            ]
+        ),
+    )
+    _account_catalog(respx_mock)
+    anthropic: Final = respx_mock.post(f"{_ANTHROPIC_BASE}/v1/messages").respond(
+        json={
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [
+                {"type": "tool_use", "id": "toolu_test", "name": "mcp__docs____search", "input": {"query": "proxy"}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    )
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": "claude-sonnet-5-5",
+            "input": [_ADDITIONAL_TOOLS, _USER_TURN],
+            "tools": [_EXEC_TOOL],
+            "stream": False,
+            "store": False,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert anthropic.called
+    (call,) = (item for item in response.json()["output"] if item["type"] == "function_call")
+    assert (call["namespace"], call["name"]) == ("mcp__docs__", "search")
+
+
+def test_encrypted_reasoning_stays_only_when_every_deployment_the_router_may_pick_can_decrypt_it(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_base: Final = "https://second-openai-org.test/v1"
+
+    def replayed_blobs(optional_pre_call_checks: list[str]) -> list[object]:
+        monkeypatch.setattr(
+            proxy_server,
+            "llm_router",
+            Router(
+                model_list=[
+                    {
+                        "model_name": "oai-pair",
+                        "litellm_params": {"model": "openai/gpt-6-luna", "api_base": base, "api_key": "test-key"},
+                        "model_info": {"id": model_id},
+                    }
+                    for base, model_id in ((_OPENAI_BASE, _LUNA_ID), (second_base, "second-org-deployment"))
+                ],
+                optional_pre_call_checks=optional_pre_call_checks,
+            ),
+        )
+        providers: Final = tuple(
+            respx_mock.post(f"{base}/responses").mock(side_effect=_provider_reply)
+            for base in (_OPENAI_BASE, second_base)
+        )
+        response: Final = client.post(
+            "/backend-api/codex/responses",
+            json={"model": "oai-pair", "input": [_USER_TURN, _LUNA_REASONING, _USER_TURN], "store": False},
+            headers=_ACCOUNT_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        (sent,) = (json.loads(call.request.content)["input"] for provider in providers for call in provider.calls)
+        return [item.get("encrypted_content") for item in sent if item.get("type") == "reasoning"]
+
+    _account_catalog(respx_mock)
+    assert replayed_blobs([]) == []
+    respx_mock.reset()
+    _account_catalog(respx_mock)
+    assert replayed_blobs(["encrypted_content_affinity"]) == [_LUNA_BLOB]
+
+
+class ModelListingCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.listings: Final[list[tuple[str, ...]]] = []
+
+    async def async_filter_listed_models(
+        self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+    ) -> Sequence[str]:
+        self.listings.append(tuple(model_names))
+        return model_names
+
+
+def test_jwt_caller_builds_the_models_etag_once_across_chatgpt_turns(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter: Final = ModelListingCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key=None, user_id="jwt-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    _chatgpt_responses(respx_mock)
+    turns: Final = tuple(
+        client.post(
+            "/backend-api/codex/responses",
+            json={"model": "gpt-unlisted", "input": "Hello", "stream": True},
+            headers={**_HEADERS, "x-litellm-api-key": "test-jwt-credential"},
+        )
+        for _ in range(2)
+    )
+    assert [turn.status_code for turn in turns] == [200, 200]
+    assert len(counter.listings) == 1
+    first_etag, second_etag = (turn.headers["x-models-etag"] for turn in turns)
+    assert first_etag == second_etag != _UPSTREAM_MODELS_ETAG

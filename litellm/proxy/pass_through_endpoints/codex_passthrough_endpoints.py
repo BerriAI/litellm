@@ -14,7 +14,9 @@ from starlette.types import Message
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
@@ -37,10 +39,13 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
 from litellm.proxy.response_api_endpoints.endpoints import responses_api
+from litellm.responses.additional_tools import with_additional_tools_hoisted, with_namespace_members_as_tools
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_other_provider_reasoning_item
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.router import Deployment
-from litellm.utils import supports_none_reasoning_effort
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, supports_none_reasoning_effort
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -70,6 +75,7 @@ _ACCOUNT_SLUGS_UNAVAILABLE_TTL_SECONDS: Final = 60
 _ACCOUNT_SLUGS_CACHE_PREFIX: Final = "codex_account_slugs:"
 _MODELS_ETAG_CACHE_PREFIX: Final = "codex_models_etag:"
 _MODELS_ETAG_TTL_SECONDS: Final = 300
+_OPENAI_API_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
 _HEADERS: Final = frozenset(
     {
         "authorization",
@@ -326,6 +332,80 @@ def _with_wrapped_reasoning(body: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
+def _router_pins_encrypted_reasoning(model: str, llm_router: "Router") -> bool:
+    return any(
+        isinstance(callback, EncryptedContentAffinityCheck) and callback.is_enabled_for_model_group(model)
+        for callback in llm_router.optional_callbacks or ()
+    )
+
+
+def _with_reasoning_the_targets_can_decrypt(
+    body: Mapping[str, object], model: str, llm_router: "Router", deployments: tuple[Deployment, ...]
+) -> Mapping[str, object]:
+    try:
+        items: Final = _INPUT_ITEMS.validate_python(body.get("input"))
+    except ValidationError:
+        return body
+    targets: Final = tuple(deployment.model_dump(exclude_none=True) for deployment in deployments)
+    target_groups: Final = (
+        (targets,) if _router_pins_encrypted_reasoning(model, llm_router) else tuple((target,) for target in targets)
+    )
+    kept: Final = list(items)
+    for group in target_groups:
+        EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+            llm_router, kept, None, group, unmarked_origin=None
+        )
+    return {**body, "input": kept}
+
+
+def _model_and_provider(deployment: Deployment) -> tuple[str, str] | None:
+    try:
+        model, provider, _, _ = get_llm_provider(
+            model=deployment.litellm_params.model, custom_llm_provider=deployment.litellm_params.custom_llm_provider
+        )
+    except BadRequestError:
+        return None
+    return model, provider
+
+
+def _is_openai_api(deployment: Deployment) -> bool:
+    resolved: Final = _model_and_provider(deployment)
+    return resolved is not None and resolved[1] in _OPENAI_API_PROVIDERS
+
+
+def _bridges_to_chat_completions(deployment: Deployment) -> bool:
+    resolved: Final = _model_and_provider(deployment)
+    return (
+        resolved is not None
+        and ProviderConfigManager.get_provider_responses_api_config(
+            provider=resolved[1], model=resolved[0], api_base=deployment.litellm_params.api_base
+        )
+        is None
+    )
+
+
+def _with_tools_the_targets_accept(
+    body: Mapping[str, object], deployments: tuple[Deployment, ...]
+) -> Mapping[str, object]:
+    if all(_is_openai_api(deployment) for deployment in deployments):
+        return body
+    hoisted: Final = with_additional_tools_hoisted(body)
+    if all(_bridges_to_chat_completions(deployment) for deployment in deployments):
+        return hoisted
+    return with_namespace_members_as_tools(hoisted)
+
+
+def _litellm_body(body: Mapping[str, object], llm_router: "Router | None", team_id: str | None) -> Mapping[str, object]:
+    wrapped: Final = _with_wrapped_reasoning(_with_provider_default_reasoning(body, llm_router, team_id))
+    model: Final = body.get("model")
+    if not isinstance(model, str) or llm_router is None:
+        return wrapped
+    deployments: Final = _candidate_deployments(model, llm_router, team_id)
+    return _with_tools_the_targets_accept(
+        _with_reasoning_the_targets_can_decrypt(wrapped, model, llm_router, deployments), deployments
+    )
+
+
 def _is_unpersisted_reasoning_reference(item: object) -> bool:
     try:
         fields: Final = _JSON_OBJECT.validate_python(item)
@@ -385,42 +465,45 @@ async def _litellm_catalog_rows(
     return tuple(row for row in rows if _routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id))
 
 
-def _models_etag_cache_key(token: str, upstream_etag: str) -> str:
-    return f"{_MODELS_ETAG_CACHE_PREFIX}{hashlib.sha256(json.dumps([token, upstream_etag]).encode()).hexdigest()}"
+def _models_etag_caller(user_api_key_dict: UserAPIKeyAuth, gateway_token: str) -> str:
+    return user_api_key_dict.token or hashlib.sha256(gateway_token.encode()).hexdigest()
+
+
+def _models_etag_cache_key(caller: str, upstream_etag: str) -> str:
+    return f"{_MODELS_ETAG_CACHE_PREFIX}{hashlib.sha256(json.dumps([caller, upstream_etag]).encode()).hexdigest()}"
 
 
 async def _remembered_models_etag(
-    user_api_key_dict: UserAPIKeyAuth, upstream_etag: str, rows: tuple[CodexCatalogRow, ...], cache: _SharedCache
+    caller: str, upstream_etag: str, rows: tuple[CodexCatalogRow, ...], cache: _SharedCache
 ) -> str:
     etag: Final = codex_catalog_etag(upstream_etag, rows) if rows else upstream_etag
-    if user_api_key_dict.token is not None:
-        await cache.async_set_cache(
-            _models_etag_cache_key(user_api_key_dict.token, upstream_etag),
-            {"etag": etag},
-            ttl=_MODELS_ETAG_TTL_SECONDS,
-        )
+    await cache.async_set_cache(
+        _models_etag_cache_key(caller, upstream_etag), {"etag": etag}, ttl=_MODELS_ETAG_TTL_SECONDS
+    )
     return etag
 
 
-async def _cached_models_etag(token: str | None, upstream_etag: str, cache: _SharedCache) -> str | None:
-    if token is None:
-        return None
+async def _cached_models_etag(caller: str, upstream_etag: str, cache: _SharedCache) -> str | None:
     try:
         return _CACHED_MODELS_ETAG.validate_python(
-            await cache.async_get_cache(_models_etag_cache_key(token, upstream_etag))
+            await cache.async_get_cache(_models_etag_cache_key(caller, upstream_etag))
         )["etag"]
     except ValidationError:
         return None
 
 
 async def _key_models_etag(
-    upstream_etag: str, user_api_key_dict: UserAPIKeyAuth, llm_router: "Router | None", cache: _SharedCache
+    upstream_etag: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    caller: str,
+    llm_router: "Router | None",
+    cache: _SharedCache,
 ) -> str:
-    cached: Final = await _cached_models_etag(user_api_key_dict.token, upstream_etag, cache)
+    cached: Final = await _cached_models_etag(caller, upstream_etag, cache)
     if cached is not None:
         return cached
     rows: Final = await _litellm_catalog_rows(user_api_key_dict, llm_router)
-    return await _remembered_models_etag(user_api_key_dict, upstream_etag, rows, cache)
+    return await _remembered_models_etag(caller, upstream_etag, rows, cache)
 
 
 def _with_etag(response: Response, content: bytes | str, etag: str | None) -> Response:
@@ -436,7 +519,11 @@ def _with_etag(response: Response, content: bytes | str, etag: str | None) -> Re
 
 
 async def _catalog(
-    request: Request, user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str], cache: _SharedCache
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    caller: str,
+    headers: Mapping[str, str],
+    cache: _SharedCache,
 ) -> Response:
     from litellm.proxy.proxy_server import llm_router
 
@@ -459,9 +546,7 @@ async def _catalog(
         await _remember_account_slugs(account_slugs_key, slugs, cache)
     rows: Final = await _litellm_catalog_rows(user_api_key_dict, llm_router)
     upstream_etag: Final = upstream.headers.get(_ETAG_HEADER)
-    etag: Final = (
-        None if upstream_etag is None else await _remembered_models_etag(user_api_key_dict, upstream_etag, rows, cache)
-    )
+    etag: Final = None if upstream_etag is None else await _remembered_models_etag(caller, upstream_etag, rows, cache)
     if not rows:
         return upstream
     merged: Final = merged_codex_catalog(upstream_body, rows)
@@ -472,6 +557,7 @@ async def _responses(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
+    caller: str,
     headers: Mapping[str, str],
     cache: _SharedCache,
 ) -> object:
@@ -479,9 +565,7 @@ async def _responses(
 
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
     if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, headers, cache):
-        litellm_body: Final = _with_wrapped_reasoning(
-            _with_provider_default_reasoning(body, llm_router, user_api_key_dict.team_id)
-        )
+        litellm_body: Final = _litellm_body(body, llm_router, user_api_key_dict.team_id)
         return await responses_api(
             _as_litellm_responses_request(request, json.dumps(litellm_body).encode(), litellm_body),
             fastapi_response,
@@ -500,7 +584,7 @@ async def _responses(
     upstream_models_etag: Final = upstream.headers.get(_MODELS_ETAG_HEADER)
     if upstream_models_etag is not None:
         upstream.headers[_MODELS_ETAG_HEADER] = await _key_models_etag(
-            upstream_models_etag, user_api_key_dict, llm_router, cache
+            upstream_models_etag, user_api_key_dict, caller, llm_router, cache
         )
     return upstream
 
@@ -557,6 +641,7 @@ async def codex_passthrough_route(
         raise HTTPException(status_code=401, detail="ChatGPT and LiteLLM credentials must be separate")
 
     headers: Final = MappingProxyType({name: value for name, value in request.headers.items() if name in _HEADERS})
+    caller: Final = _models_etag_caller(user_api_key_dict, gateway_token)
     if endpoint == "models":
-        return await _catalog(request, user_api_key_dict, headers, cache)
-    return await _responses(request, fastapi_response, user_api_key_dict, headers, cache)
+        return await _catalog(request, user_api_key_dict, caller, headers, cache)
+    return await _responses(request, fastapi_response, user_api_key_dict, caller, headers, cache)
