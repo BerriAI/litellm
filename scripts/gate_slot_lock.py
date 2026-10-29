@@ -93,7 +93,7 @@ def _queue_message(count: int, gate: bool) -> str:
         return f"gate_slot_lock: all {count} machine-wide slots are busy; queueing (set {SLOT_COUNT_ENV}=0 to disable)"
     return (
         "gate_slot_lock: the one machine-wide slot ad-hoc commands share is busy; queueing "
-        f"(make check and the lint gates keep the other {count - 1} for themselves)"
+        "(the rest stay free for make check and the lint gates)"
     )
 
 
