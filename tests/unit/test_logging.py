@@ -862,8 +862,6 @@ def test_secret_filter_keeps_truncated_traceback(monkeypatch):
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_diagnostic_redaction_precedes_a_credential_cut(monkeypatch, native):
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "0")
@@ -890,8 +888,6 @@ def test_correlation_id_redacts_before_its_length_bound(monkeypatch):
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_malformed_interpolation_still_scrubs_a_record(monkeypatch, native):
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "bad % api_key=secret123", ("value",))
@@ -905,8 +901,6 @@ def test_malformed_interpolation_still_scrubs_a_record(monkeypatch, native):
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_key_pattern_template_keeps_the_rendered_redacted_line(monkeypatch, native):
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.INFO, "password=%s ok", ("hunter2",))
@@ -1733,8 +1727,6 @@ def test_access_log_path_filter_keeps_a_record_without_a_string_path_arg(monkeyp
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_diagnostic_filter_scrubs_exc_stack_and_nested_extras(monkeypatch, native):
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
@@ -1761,8 +1753,6 @@ def test_diagnostic_filter_scrubs_exc_stack_and_nested_extras(monkeypatch, nativ
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_diagnostic_filter_stamps_records_so_a_second_pass_is_free(monkeypatch, native):
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "api_key=secret123")
@@ -1775,8 +1765,6 @@ def test_diagnostic_filter_stamps_records_so_a_second_pass_is_free(monkeypatch, 
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_json_formatter_scrubs_unfiltered_extras(monkeypatch, native):
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
@@ -1791,8 +1779,6 @@ def test_json_formatter_scrubs_unfiltered_extras(monkeypatch, native):
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, native):
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     secret = "sk-" + "q" * 48
