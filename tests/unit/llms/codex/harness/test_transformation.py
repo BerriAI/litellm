@@ -5,14 +5,16 @@ codex-cli through a LiteLLM gateway.
 """
 
 import asyncio
+import functools
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed, OptionsMismatch
 from litellm.harness.handlers.cli_handler import CLIHarnessHandler
@@ -20,11 +22,11 @@ from litellm.harness.options import ClaudeCodeOptions, CodexOptions
 from litellm.harness.sandbox.base import CompletedRun
 from litellm.harness.sandbox.docker import DockerSandbox
 from litellm.harness.types import Harness, Reasoning, Text, ToolCall, ToolResult
+from litellm.llms.base_llm.base_utils import strict_json_schema
 from litellm.llms.base_llm.harness.transformation import (
     HarnessTurnError,
     HarnessTurnRequest,
 )
-from litellm.llms.base_llm.harness.utils import strict_json_schema
 from litellm.llms.codex.harness.transformation import (
     CODEX_SCHEMA_FILENAME,
     CODEX_TOKEN_ENV,
@@ -341,6 +343,61 @@ def test_strict_json_schema_recursive():
     answer = schema["$defs"]["Answer"]
     assert answer["additionalProperties"] is False
     assert answer["required"] == ["file", "content"]
+
+
+def test_strict_json_schema_treats_property_names_and_enum_values_as_data():
+    schema = strict_json_schema(
+        {
+            "type": "object",
+            "properties": {
+                "default": {"type": "string"},
+                "$ref": {"type": "string", "default": "x"},
+                "properties": {"type": "object", "properties": {"x": {"type": "integer"}}},
+                "kind": {"enum": [{"type": "object"}], "const": {"type": "object"}, "examples": [{"type": "object"}]},
+                "untyped": {"properties": {"z": {"type": "string"}}},
+            },
+            "$defs": {"default": {"type": "object", "properties": {"y": {"type": "string"}}}},
+            "definitions": {"default": {"type": "string"}},
+            "patternProperties": {"default": {"type": "string"}},
+        }
+    )
+    assert schema == {
+        "type": "object",
+        "properties": {
+            "default": {"type": "string"},
+            "$ref": {"type": "string"},
+            "properties": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}},
+                "required": ["x"],
+                "additionalProperties": False,
+            },
+            "kind": {"enum": [{"type": "object"}], "const": {"type": "object"}, "examples": [{"type": "object"}]},
+            "untyped": {"properties": {"z": {"type": "string"}}, "required": ["z"], "additionalProperties": False},
+        },
+        "$defs": {
+            "default": {
+                "type": "object",
+                "properties": {"y": {"type": "string"}},
+                "required": ["y"],
+                "additionalProperties": False,
+            }
+        },
+        "definitions": {"default": {"type": "string"}},
+        "patternProperties": {"default": {"type": "string"}},
+        "required": ["default", "$ref", "properties", "kind", "untyped"],
+        "additionalProperties": False,
+    }
+
+
+def _nested_items(levels: int) -> JsonValue:
+    return functools.reduce(lambda inner, _: {"items": inner}, range(levels), True)
+
+
+def test_strict_json_schema_refuses_a_schema_nested_past_the_recursion_cap():
+    assert strict_json_schema(_nested_items(DEFAULT_MAX_RECURSE_DEPTH)) == _nested_items(DEFAULT_MAX_RECURSE_DEPTH)
+    with pytest.raises(ValueError, match="nested deeper than"):
+        strict_json_schema(_nested_items(DEFAULT_MAX_RECURSE_DEPTH + 1))
 
 
 def test_config_overrides_rejects_managed_keys():

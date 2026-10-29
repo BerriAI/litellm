@@ -14,14 +14,20 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    iter_items,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
-from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import drop_policy, tools_without_mcp_servers
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
+    AnthropicMcpServerTool,
     AnthropicMessagesRequest,
     AnthropicOutputConfig,
     AnthropicOutputSchema,
@@ -168,6 +174,9 @@ def _build_responses_kwargs(
     top_k: int | None = None,
     top_p: float | None = None,
     output_format: AnthropicOutputSchema | None = None,
+    speed: str | None = None,
+    mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+    container: Mapping[str, object] | None = None,
     extra_kwargs: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """
@@ -176,12 +185,18 @@ def _build_responses_kwargs(
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     _reject_background_mode(model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    request_tools: Final = tools_without_mcp_servers(
-        forwarded_kwargs.get("mcp_servers"),
-        tools or (),
-        model=model,
-        route=target_provider if isinstance(target_provider, str) else "this route",
-        drop_params=drops_mcp_servers(forwarded_kwargs),
+    explicitly_drops_mcp_servers: Final = "mcp_servers" in drop_policy(forwarded_kwargs).additional_drop_params
+    sent_mcp_servers: Final = None if explicitly_drops_mcp_servers else mcp_servers
+    request_tools: Final = (
+        tools_without_mcp_servers(
+            mcp_servers,
+            tools or (),
+            model=model,
+            route=target_provider if isinstance(target_provider, str) else "this route",
+            drop_params=True,
+        )
+        if explicitly_drops_mcp_servers
+        else tools or ()
     )
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
@@ -218,11 +233,21 @@ def _build_responses_kwargs(
     if tool_choice and (request_tools or not tools):
         request_data["tool_choice"] = tool_choice
     if request_tools:
-        request_data["tools"] = list(request_tools)
+        request_data["tools"] = (
+            [dict(tool) for tool in _rewritten_blocks(request_tools, block_rewrite)] or list(request_tools)
+            if block_rewrite
+            else list(request_tools)
+        )
     if top_p is not None:
         request_data["top_p"] = top_p
     if output_format:
         request_data["output_format"] = output_format
+    if speed is not None:
+        request_data["speed"] = speed
+    if sent_mcp_servers:
+        request_data["mcp_servers"] = list(sent_mcp_servers)
+    if container is not None:
+        request_data["container"] = dict(container)
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(
@@ -230,6 +255,7 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
     )
 
     # Normalize reasoning effort based on model capabilities
@@ -277,6 +303,10 @@ def _build_responses_kwargs(
     explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
     if explicit_prompt_cache_key is not None:
         responses_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
+
+    explicit_service_tier: Final = forwarded_kwargs.get("service_tier")
+    if explicit_service_tier is not None:
+        responses_kwargs["service_tier"] = explicit_service_tier
 
     deployment_include: Final = forwarded_kwargs.get("include")
     bridge_include: Final = responses_kwargs.get("include")
@@ -386,6 +416,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
+        speed: str | None = None,
+        mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+        container: Mapping[str, object] | None = None,
         **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
 
@@ -407,6 +440,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                speed=speed,
+                mcp_servers=mcp_servers,
+                container=container,
                 extra_kwargs=kwargs,
             )
 
@@ -447,6 +483,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
+        speed: str | None = None,
+        mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+        container: Mapping[str, object] | None = None,
         _is_async: bool = False,
         **kwargs: object,
     ) -> (
@@ -472,6 +511,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                speed=speed,
+                mcp_servers=mcp_servers,
+                container=container,
                 **kwargs,
             )
 
@@ -493,6 +535,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                speed=speed,
+                mcp_servers=mcp_servers,
+                container=container,
                 extra_kwargs=kwargs,
             )
 
