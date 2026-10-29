@@ -6,20 +6,23 @@ import json
 import logging
 import unittest
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
-from typing import Final, NoReturn
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Response
+from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.types import Message
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
 
 
@@ -75,6 +78,14 @@ class TestAnthropicEndpoints(unittest.TestCase):
 
 
 _BLOCK_CALL_ID: Final = "messages-block"
+_BLOCK_TEXT: Final = "blocked by guardrail"
+
+
+class _BlockEveryRequest(CustomGuardrail):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> None:
+        self.raise_passthrough_exception(violation_message=_BLOCK_TEXT, request_data=data)
 
 
 class _RewriteEveryStreamedReply(CustomGuardrail):
@@ -85,42 +96,42 @@ class _RewriteEveryStreamedReply(CustomGuardrail):
             yield ModelResponseStream(choices=[])
 
 
+def _messages_request(body: Mapping[str, object]) -> Request:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"x-litellm-call-id", _BLOCK_CALL_ID.encode())],
+        },
+        receive,
+    )
+
+
 async def _blocked_messages_reply(
     body: Mapping[str, object], fastapi_response: Response, rails: tuple[CustomGuardrail, ...]
 ) -> tuple[object, str]:
     import litellm
     import litellm.proxy.anthropic_endpoints.endpoints as ep
     import litellm.proxy.proxy_server as proxy_server
-    from litellm.caching.dual_cache import DualCache
-    from litellm.integrations.custom_guardrail import ModifyResponseException
     from litellm.proxy.utils import ProxyLogging
 
-    exc: Final = ModifyResponseException(
-        message="blocked by guardrail",
-        model="claude-haiku-5-5",
-        request_data={**body},
-        guardrail_name="deny-list",
+    blocker: Final = _BlockEveryRequest(
+        guardrail_name="deny-list", event_hook=GuardrailEventHooks.pre_call, default_on=True
     )
-
-    async def fake_process(self: ProxyBaseLLMRequestProcessing, **kwargs: object) -> NoReturn:
-        self.data = {**self.data, "litellm_call_id": _BLOCK_CALL_ID}
-        raise exc
-
     with (
-        patch.object(
-            ep, "read_request_body", new=AsyncMock(return_value={**body})
-        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(
-            ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
-        ),  # test-quality-ok: the guardrail block happens inside this call; the test targets the endpoint's except block
         patch.object(
             proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
         ),  # test-quality-ok: module global imported at call time; no injection seam
-        patch.object(litellm, "callbacks", new=[*rails]),  # test-quality-ok: guardrails register through this global
+        patch.object(litellm, "callbacks", new=[blocker, *rails]),  # test-quality-ok: guardrails register through this global
     ):
         response = await ep.anthropic_response(
             fastapi_response=fastapi_response,
-            request=MagicMock(),
+            request=_messages_request(body),
             user_api_key_dict=UserAPIKeyAuth(),
         )
         if not isinstance(response, StreamingResponse):
@@ -222,7 +233,7 @@ class TestBlockedResponseUsage:
             "message_stop",
         ]
         assert all(payload["type"] == name for name, payload in events)
-        assert events[2][1]["delta"] == {"type": "text_delta", "text": "blocked by guardrail"}
+        assert events[2][1]["delta"] == {"type": "text_delta", "text": _BLOCK_TEXT}
         assert events[4][1]["delta"]["stop_reason"] == "end_turn"
 
     @pytest.mark.asyncio
@@ -233,7 +244,7 @@ class TestBlockedResponseUsage:
 
         assert fastapi_response.headers["x-litellm-call-id"] == _BLOCK_CALL_ID
         assert isinstance(response, Mapping)
-        assert response["content"] == [{"type": "text", "text": "blocked by guardrail"}]
+        assert response["content"] == [{"type": "text", "text": _BLOCK_TEXT}]
 
 
 class TestProxyExceptionAnthropicEnvelope:
