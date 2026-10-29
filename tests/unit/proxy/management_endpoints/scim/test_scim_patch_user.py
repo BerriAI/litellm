@@ -564,8 +564,8 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
                     value=[{"value": "team-omega"}, {"value": "team-delta"}, {"value": "team-beta"}],
                 )
             ],
-            ("team-omega", "team-delta", "team-beta"),
-            id="replace_keeps_the_request_order",
+            ("team-delta", "team-omega", "team-beta"),
+            id="replace_keeps_teams_the_user_has_in_record_order_and_adds_new_ones_in_request_order",
         ),
         pytest.param(
             [
@@ -579,6 +579,14 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
             ],
             ("team-omega", "team-beta", "team-mu"),
             id="ops_after_a_replace_apply_to_the_replaced_list",
+        ),
+        pytest.param(
+            [
+                SCIMPatchOperation(op="remove", path='groups[value eq "team-zeta"]'),
+                SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-zeta"}]),
+            ],
+            ("team-zeta", "team-alpha", "team-kappa", "team-delta"),
+            id="removing_and_re_adding_a_team_keeps_its_place",
         ),
     ],
 )

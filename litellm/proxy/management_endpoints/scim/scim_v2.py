@@ -1948,7 +1948,11 @@ async def update_user(
 
         # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
         # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
-        target_teams: Final = user_data["teams"] or existing_user.teams
+        target_teams: Final = (
+            list(_keep_record_team_order(existing_user.teams, user_data["teams"]))
+            if user_data["teams"]
+            else existing_user.teams
+        )
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams,
@@ -2241,19 +2245,29 @@ def _handle_name_update(path: str, op_type: str, value: object, scim_metadata: d
             scim_metadata["familyName"] = str(value)
 
 
-def _handle_group_operations(op_type: str, value: object, teams: dict[str, None], path: str | None) -> None:
-    """Handle group/team membership operations, keeping the record's team order and adding new teams in op order."""
-    group_values = _extract_group_values(value)
-    if not group_values and value is None:
-        group_values = _extract_ids_from_path_filter(path, "groups")
-    if op_type == "replace":
-        teams.clear()
-        teams.update(dict.fromkeys(group_values))
-    elif op_type == "add":
-        teams.update(dict.fromkeys(group_values))
-    elif op_type == "remove":
-        for gid in group_values:
-            teams.pop(gid, None)
+def _is_group_path(path: str | None) -> bool:
+    return isinstance(path, str) and path.lower().startswith("groups")
+
+
+def _apply_group_operation(teams: tuple[str, ...], op: SCIMPatchOperation) -> tuple[str, ...]:
+    listed: Final = _extract_group_values(op.value)
+    group_values: Final = listed if listed or op.value is not None else _extract_ids_from_path_filter(op.path, "groups")
+    if op.op == "replace":
+        return tuple(dict.fromkeys(group_values))
+    if op.op == "add":
+        return tuple(dict.fromkeys((*teams, *group_values)))
+    removed: Final = frozenset(group_values)
+    return tuple(team for team in teams if team not in removed)
+
+
+def _keep_record_team_order(record_teams: Sequence[str], target_teams: Sequence[str]) -> tuple[str, ...]:
+    target: Final = frozenset(target_teams)
+    record: Final = tuple(dict.fromkeys(record_teams))
+    known: Final = frozenset(record)
+    return (
+        *(team for team in record if team in target),
+        *(team for team in dict.fromkeys(target_teams) if team not in known),
+    )
 
 
 def _multi_valued_attribute_base(path: str) -> str:
@@ -2541,8 +2555,6 @@ def _apply_patch_ops(
     if isinstance(enterprise, _InvalidEnterpriseValue):
         _raise_invalid_enterprise_value(enterprise)
 
-    teams: Final[dict[str, None]] = dict.fromkeys(existing_user.teams or [])
-
     for op in patch_ops.Operations:
         path = op.path.lower() if isinstance(op.path, str) else ""
         value = op.value
@@ -2584,14 +2596,16 @@ def _apply_patch_ops(
             _handle_name_update(path, op_type, value, scim_metadata)
         elif _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
             _handle_multi_valued_attribute_update(path, op_type, value, metadata)
-        elif path.startswith("groups"):
-            _handle_group_operations(op_type, value, teams, op.path)
-        elif _enterprise_extension_sub_path(path) is not None:
+        elif _is_group_path(path) or _enterprise_extension_sub_path(path) is not None:
             continue
         else:
             _handle_generic_metadata(path, op_type, value, metadata)
 
-    final_teams: Final = tuple(teams)
+    record_teams: Final = tuple(existing_user.teams or [])
+    final_teams: Final = _keep_record_team_order(
+        record_teams,
+        reduce(_apply_group_operation, (op for op in patch_ops.Operations if _is_group_path(op.path)), record_teams),
+    )
     final_metadata: Final = (
         {
             **{key: metadata_value for key, metadata_value in metadata.items() if key != SCIM_ENTERPRISE_METADATA_KEY},

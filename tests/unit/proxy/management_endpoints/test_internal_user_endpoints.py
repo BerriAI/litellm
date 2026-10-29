@@ -4196,7 +4196,9 @@ async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(m
 
 
 @pytest.mark.asyncio
-async def test_add_new_user_to_default_team_joins_teams_in_the_order_given_and_past_a_failing_team(mocker):
+async def test_add_new_user_to_default_team_joins_teams_in_the_order_given_and_past_a_failing_team(
+    mocker: MockerFixture,
+) -> None:
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         add_new_user_to_default_team,
     )
@@ -4228,7 +4230,9 @@ async def test_add_new_user_to_default_team_joins_teams_in_the_order_given_and_p
 
 
 @pytest.mark.asyncio
-async def test_add_new_user_to_default_team_rejects_an_invalid_team_before_joining_any(mocker):
+async def test_add_new_user_to_default_team_rejects_an_invalid_team_before_joining_any(
+    mocker: MockerFixture,
+) -> None:
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         add_new_user_to_default_team,
     )
