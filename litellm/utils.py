@@ -8375,22 +8375,39 @@ class AvailableModelsCache(InMemoryCache):
 
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
 
-        result: Final = cast(list[str] | None, self.get_cache(cache_key))
+        result: Final = self._cached(cache_key)
 
-        if result is not None:
-            return copy.deepcopy(result)
-        return result
+        if isinstance(result, Sequence):
+            return list(result)
+        if self._cached(_failed_listing_key(cache_key)) is not None:
+            return []
+        return None
 
     def set_cached_model_info(
         self,
         custom_llm_provider: str,
         litellm_params: LiteLLM_Params | None,
         available_models: list[str],
-        ttl: float | None = None,
     ):
         """Set cached model info"""
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
-        self.set_cache(cache_key, copy.deepcopy(available_models), ttl=ttl)
+        self._store(cache_key, copy.deepcopy(available_models))
+
+    def set_failed_model_listing(
+        self, custom_llm_provider: str, litellm_params: LiteLLM_Params | None, ttl_seconds: float
+    ) -> None:
+        cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
+        self._store(_failed_listing_key(cache_key), True, ttl=ttl_seconds)
+
+    def _cached(self, key: str) -> Sequence[str] | bool | None:
+        return cast(Sequence[str] | bool | None, self.get_cache(key))
+
+    def _store(self, key: str, value: object, ttl: float | None = None) -> None:
+        self.set_cache(key, value, ttl=ttl)
+
+
+def _failed_listing_key(cache_key: str) -> str:
+    return f"{cache_key}:failed"
 
 
 # Global cache instance
@@ -8458,8 +8475,8 @@ def _get_valid_models_from_provider_api(
         return models
     except Exception as e:
         verbose_logger.warning("Error getting valid models: %s", e)
-        _model_cache.set_cached_model_info(
-            custom_llm_provider, litellm_params, [], ttl=_FAILED_PROVIDER_LISTING_TTL_SECONDS
+        _model_cache.set_failed_model_listing(
+            custom_llm_provider, litellm_params, ttl_seconds=_FAILED_PROVIDER_LISTING_TTL_SECONDS
         )
         return []
 

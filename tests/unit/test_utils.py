@@ -8908,6 +8908,28 @@ def test_get_valid_models_does_not_ask_a_failing_provider_again_on_the_next_list
     assert (listings, catalog.call_count) == (([], []), 1)
 
 
+@respx.mock
+def test_get_valid_models_keeps_a_good_listing_when_an_overlapping_listing_fails_after_it(
+    reset_mock_cache: None,
+) -> None:
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-overlapping-listings")
+    statuses: Final = iter((503, 200))
+
+    def answer_after_an_overlapping_listing(request: httpx.Request) -> httpx.Response:
+        status: Final = next(statuses)
+        if status == 503:
+            get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+            return httpx.Response(503)
+        return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=answer_after_an_overlapping_listing)
+    get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+
+    assert get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment
+    ) == ["openrouter/anthropic/claude-haiku-5-5"]
+
+
 @pytest.fixture
 def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
