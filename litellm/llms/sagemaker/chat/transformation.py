@@ -81,9 +81,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
-        container_request: Final = {
-            key: value for key, value in request.items() if key not in self.aws_authentication_params
-        }
+        header_only_params: Final = frozenset((*self.aws_authentication_params, "model_id"))
+        container_request: Final = {key: value for key, value in request.items() if key not in header_only_params}
         served_model_name: Final = litellm_params.get("hf_model_name")
         if not isinstance(served_model_name, str):
             return container_request
