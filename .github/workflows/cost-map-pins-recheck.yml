@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - litellm_cmg_qa_after_e4e035
     paths:
       - ci_cd/cost_map_pins.json
 
