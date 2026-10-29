@@ -9,15 +9,20 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
 
 import litellm
+from litellm import Router
+from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -237,6 +242,7 @@ def test_anthropic_display_name_resolved_via_internal_team_key(
         return_value=[
             {
                 "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
                 "model_info": {
                     "team_id": "team-1",
                     "team_public_model_name": "gpt-4-team",
@@ -320,6 +326,7 @@ def test_anthropic_format_returns_public_team_model_name(
         return_value=[
             {
                 "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
                 "model_info": {
                     "team_id": "team-1",
                     "team_public_model_name": "gpt-4-team",
@@ -494,7 +501,11 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
 
     patched_models.get_model_list = MagicMock(
         return_value=[
-            {"model_name": internal_name, "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"}}
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"},
+            }
         ]
     )
     patched_models.get_model_names = MagicMock(return_value=[internal_name])
@@ -514,3 +525,206 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
     assert response.status_code == 200
     (entry,) = response.json()["models"]
     assert (entry["slug"], [tier["id"] for tier in entry["service_tiers"]]) == ("gpt-4-team", ["ultrafast"])
+
+
+def _priced_jev_models() -> frozenset[str]:
+    return frozenset(name.removeprefix("typesafe/") for name in litellm.model_cost if name.startswith("typesafe/"))
+
+
+async def _admin_picker_models() -> set[str]:
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin, return_wildcard_routes=True, include_model_access_groups=True, scope="expand"
+    )
+    return {model["id"] for model in response["data"]}
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_offers_typesafe_models_when_typesafe_is_configured(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    jev_models: Final = _priced_jev_models()
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert jev_models
+    assert {"gpt-4", "typesafe/*", *jev_models} <= picker_models
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_still_lists_models_when_the_typesafe_key_reference_cannot_resolve(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LITELLM_QA_UNSET_TYPESAFE_TOKEN", raising=False)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "oidc/env/LITELLM_QA_UNSET_TYPESAFE_TOKEN")
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert {"gpt-4", "typesafe/*"} <= picker_models
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_offers_no_typesafe_models_without_typesafe_credentials(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    picker_models: Final = await _admin_picker_models()
+
+    assert "gpt-4" in picker_models
+    assert picker_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_does_not_read_the_secret_manager_for_typesafe_credentials(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret_manager: Final = MagicMock(spec=CustomSecretManager)
+    secret_manager.sync_read_secret.return_value = None
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_manager)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+
+    picker_models: Final = await _admin_picker_models()
+
+    secrets_read: Final = {
+        call.kwargs["secret_name"]
+        for call in (*secret_manager.sync_read_secret.call_args_list, *secret_manager.async_read_secret.call_args_list)
+    }
+    assert "gpt-4" in picker_models
+    assert "TYPESAFE_API_KEY" not in secrets_read
+
+
+@pytest.mark.asyncio
+async def test_default_model_list_does_not_offer_typesafe_models(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(user_api_key_dict=admin)
+
+    assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+async def _key_dialog_models(user_role: LitellmUserRoles, team_id: str | None) -> set[str]:
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=user_role)
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=caller, return_wildcard_routes=True, include_model_access_groups=True, team_id=team_id
+    )
+    return {model["id"] for model in response["data"]}
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_without_a_team_offers_typesafe_models_to_an_admin(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.PROXY_ADMIN, team_id=None)
+
+    assert {"gpt-4", "typesafe/*", *_priced_jev_models()} <= dialog_models
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["expand", None])
+async def test_pickers_offer_typesafe_names_once_and_no_bare_name_for_registered_typesafe_deployments(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    jev_models: Final = _priced_jev_models()
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = Router(
+        model_list=[
+            {"model_name": "typesafe/*", "litellm_params": {"model": "typesafe/*", "api_key": "sk-typesafe-fake"}},
+            {
+                "model_name": "ticket-router",
+                "litellm_params": {"model": "typesafe/my-classifier", "api_key": "sk-typesafe-fake"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin, return_wildcard_routes=True, include_model_access_groups=True, scope=scope
+    )
+
+    listed: Final = [model["id"] for model in response["data"]]
+    assert {"ticket-router", *jev_models} <= set(listed)
+    assert listed.count("typesafe/*") == 1
+    assert set(listed).isdisjoint({"*", "my-classifier"})
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_offers_no_typesafe_models_to_an_internal_user(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.INTERNAL_USER, team_id=None)
+
+    assert "gpt-4" in dialog_models
+    assert dialog_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_key_dialog_for_a_team_offers_no_typesafe_models_the_team_lacks(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+
+    dialog_models: Final = await _key_dialog_models(LitellmUserRoles.PROXY_ADMIN, team_id="team-without-typesafe")
+
+    assert dialog_models.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+async def test_scope_expand_lists_no_typesafe_models_to_a_client_not_asking_for_allowlist_names(
+    openai_only_router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(user_api_key_dict=admin, scope="expand")
+
+    listed: Final = {model["id"] for model in response["data"]}
+    assert "gpt-4" in listed
+    assert listed.isdisjoint({"typesafe/*", *_priced_jev_models()})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "return_wildcard_routes", "only_model_access_groups"),
+    [
+        pytest.param(None, False, True, id="access-group-dropdown"),
+        pytest.param(None, None, None, id="dashboard-list-without-wildcard-routes"),
+        pytest.param("expand", None, None, id="expanded-list-without-wildcard-routes"),
+        pytest.param(None, True, True, id="access-groups-only-with-wildcard-routes"),
+    ],
+)
+async def test_dashboard_lists_not_asking_for_allowlist_names_offer_no_typesafe_models(
+    openai_only_router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str | None,
+    return_wildcard_routes: bool | None,
+    only_model_access_groups: bool | None,
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin,
+        include_model_access_groups=True,
+        return_wildcard_routes=return_wildcard_routes,
+        only_model_access_groups=only_model_access_groups,
+        scope=scope,
+    )
+
+    assert {model["id"] for model in response["data"]}.isdisjoint({"typesafe/*", *_priced_jev_models()})

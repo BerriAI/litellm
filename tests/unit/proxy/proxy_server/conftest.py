@@ -11,10 +11,13 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    from litellm import Router
 
 # Repo root, anchored to this file (not CWD) so the path is correct no
 # matter where pytest is invoked from. With the project installed via
@@ -536,3 +539,25 @@ def reset_login_throttle(monkeypatch):
     _drop_throttle_keys()
     yield _drop_throttle_keys
     _drop_throttle_keys()
+
+
+@pytest.fixture
+def openai_only_router(monkeypatch: pytest.MonkeyPatch) -> Router:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "gpt-4-id"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    return router
