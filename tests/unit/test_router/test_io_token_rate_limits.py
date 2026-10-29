@@ -3,7 +3,7 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import Final
 
@@ -593,6 +593,35 @@ class TestModelRateLimitingCheckIOTokens:
 
         assert without_cap["metadata"][OTPM_RESERVED_KEY] == 100
         assert with_cap["metadata"][OTPM_RESERVED_KEY] == 300
+
+    @pytest.mark.asyncio
+    async def test_deployment_cap_sets_the_reservation_only_through_the_param_its_api_sends(self):
+        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+        chat: Final = {"messages": [{"role": "user", "content": "hello"}]}
+        responses: Final = {"input": "hello"}
+
+        async def reserved(deployment_cap: Mapping[str, int], request_shape: Mapping[str, object]) -> int:
+            request_kwargs: Final = {**request_shape, "metadata": {}}
+            set_io_token_rate_limit_request_kwargs(request_kwargs)
+            await check.async_pre_call_check(
+                {
+                    "litellm_params": {"model": MANTLE_OPUS, "otpm": 4000, **deployment_cap},
+                    "model_info": {"id": f"io-sent-cap-{sorted(deployment_cap)}-{sorted(request_shape)}"},
+                    "model_name": "opus",
+                }
+            )
+            return request_kwargs["metadata"][OTPM_RESERVED_KEY]
+
+        chat_default: Final = await reserved({}, chat)
+        responses_default: Final = await reserved({}, responses)
+
+        assert chat_default == responses_default > 100
+        assert await reserved({"max_tokens": 100}, chat) == 100
+        assert await reserved({"max_completion_tokens": 100}, chat) == 100
+        assert await reserved({"max_output_tokens": 100}, chat) == chat_default
+        assert await reserved({"max_output_tokens": 100}, responses) == 100
+        assert await reserved({"max_tokens": 100}, responses) == responses_default
+        assert await reserved({"max_completion_tokens": 100}, responses) == responses_default
 
     def test_sync_io_pre_call_reserves_and_reconciles(self):
         from litellm.utils import get_utc_datetime

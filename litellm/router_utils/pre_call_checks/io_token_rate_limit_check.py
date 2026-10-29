@@ -167,14 +167,18 @@ def _model_max_output_tokens(model_name: str) -> int | None:
     return None
 
 
-_OUTPUT_CAP_KEYS: Final = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+_CHAT_OUTPUT_CAP_KEYS: Final = ("max_tokens", "max_completion_tokens")
+_RESPONSES_OUTPUT_CAP_KEYS: Final = ("max_output_tokens",)
+_OUTPUT_CAP_KEYS: Final = _CHAT_OUTPUT_CAP_KEYS + _RESPONSES_OUTPUT_CAP_KEYS
 
 
-def _explicit_max_tokens(request_kwargs: Mapping[str, object] | None) -> int | None:
+def _explicit_max_tokens(
+    request_kwargs: Mapping[str, object] | None, cap_keys: tuple[str, ...] = _OUTPUT_CAP_KEYS
+) -> int | None:
     if not request_kwargs:
         return None
     explicit: Final = next(
-        (request_kwargs[key] for key in _OUTPUT_CAP_KEYS if request_kwargs.get(key) is not None),
+        (request_kwargs[key] for key in cap_keys if request_kwargs.get(key) is not None),
         None,
     )
     match explicit:
@@ -184,12 +188,23 @@ def _explicit_max_tokens(request_kwargs: Mapping[str, object] | None) -> int | N
             return None
 
 
+def _sent_deployment_cap_keys(request_kwargs: Mapping[str, object] | None) -> tuple[str, ...]:
+    is_responses_request: Final = (
+        request_kwargs is not None and "input" in request_kwargs and "messages" not in request_kwargs
+    )
+    return _RESPONSES_OUTPUT_CAP_KEYS if is_responses_request else _CHAT_OUTPUT_CAP_KEYS
+
+
 def _output_cap(request_kwargs: Mapping[str, object] | None, deployment: Mapping[str, object]) -> int | None:
     from_request: Final = _explicit_max_tokens(request_kwargs)
     if from_request is not None:
         return from_request
     params: Final = deployment.get("litellm_params")
-    return _explicit_max_tokens(params) if is_str_keyed_mapping(params) else None
+    return (
+        _explicit_max_tokens(params, _sent_deployment_cap_keys(request_kwargs))
+        if is_str_keyed_mapping(params)
+        else None
+    )
 
 
 def _otpm_reservation(output_cap: int | None, model_name: str, otpm_limit: int) -> int:
