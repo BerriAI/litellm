@@ -10,10 +10,12 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
+from types import FrameType
 from typing import Final, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -598,6 +600,7 @@ _LOG_FORMAT_PREFIX: Final = "%(asctime)s - %(name)s:%(levelname)s"
 _LOG_FORMAT_SUFFIX: Final = ": %(filename)s:%(lineno)s - %(message)s"
 _PLAIN_LOG_FORMAT: Final = _LOG_FORMAT_PREFIX + _LOG_FORMAT_SUFFIX
 _COLOR_LOG_FORMAT: Final = f"\033[92m{_LOG_FORMAT_PREFIX}\033[0m{_LOG_FORMAT_SUFFIX}"
+_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _stream_is_tty(stream: TextIO | None) -> bool:
@@ -612,15 +615,28 @@ def _stream_is_tty(stream: TextIO | None) -> bool:
         return False
 
 
-def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
-    """The plain-text log format, colorized only when both streams are an interactive terminal.
+def _color_enabled(stream: TextIO | None) -> bool:
+    """True when ANSI colors written to the stream reach an interactive terminal.
 
     Honors the NO_COLOR convention from no-color.org: color is disabled when
     NO_COLOR is present with a non-empty value.
     """
-    if os.environ.get("NO_COLOR"):
-        return _PLAIN_LOG_FORMAT
-    return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
+    return not os.environ.get("NO_COLOR") and _stream_is_tty(stream)
+
+
+def _terminal_colors(stdout: TextIO | None, stderr: TextIO | None) -> bool:
+    """True when both streams are an interactive color terminal, the one rule for log lines and startup prints."""
+    return _color_enabled(stdout) and _color_enabled(stderr)
+
+
+def terminal_text(message: str) -> str:
+    """The message with its ANSI colors kept only on a color terminal, by the rule the plain log format uses."""
+    return message if _terminal_colors(sys.stdout, sys.stderr) else _ANSI_ESCAPE.sub("", message)
+
+
+def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
+    """The plain-text log format, colorized only when both streams are an interactive terminal."""
+    return _COLOR_LOG_FORMAT if _terminal_colors(stdout, stderr) else _PLAIN_LOG_FORMAT
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
@@ -642,8 +658,8 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
         super().emit(record)
 
 
-def _parse_json_logs_env(value: str | None) -> bool:
-    """Strict opt-in parse for the JSON_LOGS env var: only "true" (any case) enables JSON logs.
+def _parse_env_flag(value: str | None) -> bool:
+    """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
     Matches the reader in litellm-proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
@@ -656,7 +672,18 @@ def resolve_log_level(log_level: str) -> int:
     return getattr(logging, log_level.upper())
 
 
-json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
+json_logs: Final = _parse_env_flag(os.getenv("JSON_LOGS"))
+suppress_startup_output: Final = _parse_env_flag(os.getenv("LITELLM_SUPPRESS_STARTUP_OUTPUT"))
+
+
+class StartupOutputSettings(TypedDict, total=False):
+    json_logs: ReadOnly[object]
+    suppress_startup_output: ReadOnly[object]
+
+
+STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(StartupOutputSettings)
+
+
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
@@ -743,7 +770,7 @@ class JsonFormatter(Formatter):
         return dt.isoformat()
 
     def format(self, record):
-        message_str: Final = record.getMessage()
+        message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
             "level": record.levelname,
@@ -799,12 +826,14 @@ class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
     Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
-    behaves the same whether or not json_logs is enabled.
+    behaves the same whether or not json_logs is enabled. Unless it was built with the color format,
+    it also drops the ANSI color codes a message carries, which a piped log would store as text.
     """
 
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
-        formatted: Final = rendered if _is_redacted(record) else redact_string(rendered)
+        uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
+        formatted: Final = uncolored if _is_redacted(record) else redact_string(uncolored)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -898,29 +927,46 @@ verbose_proxy_logger.addFilter(_diagnostic_filter)
 verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
 verbose_logger.addFilter(_diagnostic_filter)
 
-_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
-
 
 def print_startup_message(message: str) -> None:
     """Write a boot-time message meant for the operator's terminal.
 
-    Plain mode prints it unchanged, colors and spacing included. With JSON logs on, every line of
-    stdout is read by a log pipeline, so the message goes out as one INFO record of the proxy logger
-    instead, on stdout like the print whatever handlers the logging config gave that logger, with the
-    ANSI color codes and surrounding blank lines removed, located at the caller and emitted at any log
-    level, whole and unredacted as the print showed it; a blank spacer produces no record.
+    LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output turns every one of them
+    off; a warning goes through print_startup_warning instead. Plain mode prints it with its spacing,
+    keeping the ANSI colors only on a color terminal by the same check as the plain log format, so a
+    container log never stores escape codes.
+    With JSON logs on, every line of stdout is read by a log pipeline, so the message goes out as one
+    INFO record of the proxy logger instead, on stdout like the print whatever handlers the logging
+    config gave that logger, with the ANSI color codes and surrounding blank lines removed, located at
+    the caller and emitted at any log level, whole and unredacted as the print showed it; a blank
+    spacer produces no record.
     """
+    if litellm.suppress_startup_output is True:
+        return
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.INFO)
+
+
+def print_startup_warning(message: str) -> None:
+    """Write a boot-time warning as print_startup_message writes a message, even with suppress_startup_output
+    on, since it names something the operator has to fix. With JSON logs on it is a WARNING record, on
+    stdout where the print put it, so a collector that filters on the level field keeps it."""
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.WARNING)
+
+
+def _write_startup_message(message: str, caller: FrameType | None, level: int) -> None:
     if not litellm.json_logs:
-        print(message)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        import click
+
+        click.echo(terminal_text(message))
         return
     text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
     if not text:
         return
-    frame: Final = inspect.currentframe()
-    caller: Final = frame.f_back if frame is not None else None
     record: Final = verbose_proxy_logger.makeRecord(
         verbose_proxy_logger.name,
-        logging.INFO,
+        level,
         caller.f_code.co_filename if caller is not None else __file__,
         caller.f_lineno if caller is not None else 0,
         text,
@@ -934,8 +980,8 @@ def print_startup_message(message: str) -> None:
 
 
 def _startup_json_handler() -> logging.Handler:
-    """The proxy's JSON handler on stdout, filters included, for one startup message."""
-    handler: Final = LevelRoutingStreamHandler()
+    """The proxy's JSON handler on stdout, filters included, for one startup message or warning."""
+    handler: Final = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     handler.addFilter(_secret_filter)
     handler.addFilter(_correlation_filter)
