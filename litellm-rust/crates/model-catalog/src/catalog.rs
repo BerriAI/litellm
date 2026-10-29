@@ -359,13 +359,13 @@ impl Catalog {
     /// Rows replaced by the same key's row in `bundled` when it has one, and left out otherwise
     pub fn with_rejected_replaced<'a>(
         self,
-        errors: &'a [Located],
+        errors: &'a [Error],
         bundled: &Catalog,
     ) -> (Self, Vec<Rejection<'a>>) {
         let (mut catalog, removed) = self.without_rejected(errors);
-        let mut rejected: IndexMap<String, Vec<&'a Located>> = IndexMap::new();
+        let mut rejected: IndexMap<String, Vec<&'a Error>> = IndexMap::new();
         for error in removed {
-            if let Some(key) = crate::error::pointer_root(&error.path) {
+            if let Some(key) = crate::error::pointer_root(error.path()) {
                 rejected.entry(key).or_default().push(error);
             }
         }
