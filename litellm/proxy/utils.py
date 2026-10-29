@@ -133,7 +133,7 @@ from litellm import (
     Router,
 )
 from litellm._internal_context import service_target
-from litellm._logging import redact_internal_details_from_client_message, redact_string, verbose_proxy_logger
+from litellm._logging import redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
@@ -9177,9 +9177,9 @@ def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | Non
     asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
 
 
-def _redact_when_status_is_none(e: Exception, message: str) -> str:
+def _client_message(e: Exception) -> str:
     status_is_none: Final = hasattr(e, "status_code") and attribute_of(e, "status_code") is None
-    return redact_internal_details_from_client_message(message) if status_is_none else message
+    return "Internal server error" if status_is_none else strip_bug_report_notice(str(e))
 
 
 def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) -> ProxyException:
@@ -9198,7 +9198,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
         return with_litellm_call_id(openai_shaped_proxy_exception(e, str(e.detail), e.status_code), litellm_call_id)
     if should_report_bug(e):
         verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
-    message: Final = _redact_when_status_is_none(e, strip_bug_report_notice(str(e)))
+    message: Final = _client_message(e)
     status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
     return with_litellm_call_id(openai_shaped_proxy_exception(e, message, status_code), litellm_call_id)
 

@@ -324,16 +324,6 @@ def test_handle_exception_on_proxy_keeps_the_path_a_rejected_request_names():
     assert "gs://my-bucket/tmp/batch_input.jsonl" in result.message
 
 
-def test_handle_exception_on_proxy_redacts_the_host_an_unreachable_guardrail_names_without_a_status():
-    """A guardrail that cannot reach its upstream raises with status_code=None, which crashed into a 503 before, so
-    its message never reached the caller and must not start handing any virtual key the guardrail's private address."""
-    result: Final = handle_exception_on_proxy(_exception_carrying_status(None, "Cannot connect to host 10.12.4.7:8443"))
-
-    assert result.code == "500"
-    assert "Cannot connect to host" in result.message
-    assert "10.12.4.7" not in result.message
-
-
 def test_handle_exception_on_proxy_keeps_the_message_an_exception_with_a_status_carries():
     """Main sends a status-bearing failure's message verbatim, and relabeling its type must not change that text."""
     result: Final = handle_exception_on_proxy(_exception_carrying_status(503, "Cannot connect to host 10.12.4.7:8443"))
@@ -341,13 +331,26 @@ def test_handle_exception_on_proxy_keeps_the_message_an_exception_with_a_status_
     assert (result.code, result.message) == ("503", "Cannot connect to host 10.12.4.7:8443")
 
 
-def test_handle_exception_on_proxy_answers_500_for_an_exception_whose_status_is_none():
-    """A guardrail whose upstream refuses the connection raises with status_code=None, and
-    passing that through as the code crashed the proxy's error handler, which then blamed the
-    auth database with a 503 instead of naming the unreachable guardrail."""
-    result: Final = handle_exception_on_proxy(_exception_carrying_status(None))
+@pytest.mark.parametrize(
+    "message",
+    [
+        "boom",
+        "Cannot connect to host 10.12.4.7:8443",
+        "Cannot connect to host guardrail.internal.svc.cluster.local:443",
+        "Cannot connect to host [fd00::12]:8443",
+    ],
+    ids=["plain", "ipv4", "cluster_dns", "ipv6"],
+)
+def test_handle_exception_on_proxy_answers_a_generic_500_for_an_exception_whose_status_is_none(message: str):
+    """A guardrail whose upstream refuses the connection raises with status_code=None, which crashed the handler
+    into a 503 blaming the auth database, and its text names private hosts no virtual key was ever sent."""
+    result: Final = handle_exception_on_proxy(_exception_carrying_status(None, message))
 
-    assert (result.code, result.type, result.message) == ("500", ProxyErrorTypes.internal_server_error.value, "boom")
+    assert (result.code, result.type, result.message) == (
+        "500",
+        ProxyErrorTypes.internal_server_error.value,
+        "Internal server error",
+    )
 
 
 @pytest.mark.parametrize(
