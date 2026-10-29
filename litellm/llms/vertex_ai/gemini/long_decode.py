@@ -132,6 +132,27 @@ def with_default_output_budget(
     return {**request_body, "generationConfig": {**generation_config, "max_output_tokens": min(budget, model_max)}}
 
 
+def resumes_a_dropped_stream(request_body: RequestBody) -> bool:
+    return _asks_for_one_candidate(request_body.get("generationConfig") or GenerationConfig())
+
+
+def checkpoint_token(body: GenerateContentResponseBody) -> str | None:
+    candidate: Final = _first_candidate(body)
+    if candidate is None or candidate.get("finishReason") is not None:
+        return None
+    return candidate.get("continuationToken") or None
+
+
+def is_dropped_stream(error: Exception) -> bool:
+    if isinstance(error, VertexAIError):
+        return error.status_code >= 500
+    return isinstance(error, httpx.TransportError)
+
+
+def log_dropped_stream(error: Exception) -> None:
+    verbose_logger.warning("Gemini stream dropped, resuming from its last checkpoint: %s", error)
+
+
 def client_continuation_token(candidate: Candidates) -> str | None:
     if candidate.get("finishReason") not in CUT_OFF_FINISH_REASONS:
         return None

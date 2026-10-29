@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini.long_decode import (
     collect_hops_async,
@@ -115,12 +116,12 @@ def _logging_raw_responses_to(logged: list[object]) -> Callable[[Mapping[str, ob
     return log_raw_response
 
 
+def _sse_body(*chunks: Mapping[str, object]) -> bytes:
+    return "".join(f"data: {json.dumps(chunk)}\r\n\r\n" for chunk in chunks).encode()
+
+
 def _sse(*chunks: Mapping[str, object]) -> httpx.Response:
-    return httpx.Response(
-        200,
-        content="".join(f"data: {json.dumps(chunk)}\r\n\r\n" for chunk in chunks).encode(),
-        headers={"content-type": "text/event-stream"},
-    )
+    return httpx.Response(200, content=_sse_body(*chunks), headers={"content-type": "text/event-stream"})
 
 
 @pytest.mark.parametrize("is_async", [True, False])
@@ -726,11 +727,12 @@ async def _stream_chunks(
     continuation_token: str | None = None,
     n: int | None = None,
     timeout: float | None = None,
+    max_tokens: int | None = 100_000,
 ) -> list:
     kwargs: Final = {
         "model": MODEL,
         "messages": list(MESSAGES),
-        "max_tokens": 100_000,
+        "max_tokens": max_tokens,
         "stream": True,
         "stream_options": {"include_usage": True},
         "api_key": "fake-gemini-key",
@@ -1135,12 +1137,26 @@ async def test_streaming_cut_off_stream_gives_the_client_only_its_final_token(is
     assert _client_tokens(chunks) == ["dG9rLTE="]
 
 
-class _BodyThatDropsBeforeItsFirstFrame(httpx.SyncByteStream, httpx.AsyncByteStream):
-    def __iter__(self) -> Iterator[bytes]:
-        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+DROPPED: Final = "peer closed connection without sending complete message body"
 
-    def __aiter__(self) -> AsyncIterator[bytes]:
-        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+@dataclass(frozen=True)
+class _BodyThatDrops(httpx.SyncByteStream, httpx.AsyncByteStream):
+    sent_first: bytes = b""
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.sent_first
+        raise httpx.RemoteProtocolError(DROPPED)
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.sent_first
+        raise httpx.RemoteProtocolError(DROPPED)
+
+
+def _dropping_after(*chunks: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200, stream=_BodyThatDrops(_sse_body(*chunks)), headers={"content-type": "text/event-stream"}
+    )
 
 
 @pytest.mark.parametrize(
@@ -1149,7 +1165,7 @@ class _BodyThatDropsBeforeItsFirstFrame(httpx.SyncByteStream, httpx.AsyncByteStr
         lambda: httpx.Response(500, json={"error": {"code": 500}}),
         lambda: httpx.Response(200, content=b"<html>not json</html>"),
         lambda: _sse({"error": {"code": 503, "message": "The model is overloaded.", "status": "UNAVAILABLE"}}, HOP_2),
-        lambda: httpx.Response(200, stream=_BodyThatDropsBeforeItsFirstFrame()),
+        lambda: _dropping_after(),
     ],
     ids=["refused", "not_json", "error_frame", "dropped"],
 )
@@ -1183,6 +1199,122 @@ async def test_streaming_continuation_request_is_sent_with_the_callers_timeout(i
 
     assert _stream_text(chunks) == "hello world"
     assert read_timeouts == [7.5, 7.5]
+
+
+STREAM_CHECKPOINT: Final = {
+    **_checkpoint("hel", "Y2twdC0x"),
+    "responseId": "first-call",
+    "usageMetadata": HOP_1["usageMetadata"],
+}
+SERVER_ERROR_FRAME: Final = {"error": {"code": 500, "message": "Internal error encountered.", "status": "INTERNAL"}}
+
+
+@pytest.mark.parametrize(
+    "first_hop",
+    [lambda: _dropping_after(STREAM_CHECKPOINT), lambda: _sse(STREAM_CHECKPOINT, SERVER_ERROR_FRAME)],
+    ids=["dropped", "server_error_frame"],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_stream_that_breaks_after_a_checkpoint_resumes_from_it_as_one_continuous_stream(
+    is_async: bool, first_hop: Callable[[], httpx.Response]
+):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (first_hop(), _sse(_answered_as(HOP_2, "resumed-call")))
+
+    chunks: Final = await _collect_stream(is_async, hops, sent)
+
+    assert sent[1] == {**sent[0], "continuationToken": "Y2twdC0x"}
+    assert _stream_text(chunks) == "hel world"
+    assert _stream_finish_reasons(chunks) == ["stop"]
+    assert _client_tokens(chunks) == []
+    assert {chunk.id for chunk in chunks} == {"first-call"}
+    assert chunks[-1].usage.completion_tokens == 50
+    assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_stream_with_no_output_limit_resumed_from_a_checkpoint_points_its_citations_into_the_answer(
+    is_async: bool,
+):
+    sent: Final[list[dict[str, object]]] = []
+    resumed: Final = _citing(
+        HOP_2,
+        [{"text": HOP_2_GROUNDED}],
+        {"groundingMetadata": {"groundingSupports": [_support(HOP_2_GROUNDED, HOP_2_GROUNDED)]}},
+    )
+
+    chunks: Final = await _stream_chunks(
+        is_async, _replay((_dropping_after(STREAM_CHECKPOINT), _sse(resumed)), sent), max_tokens=None
+    )
+    answer: Final = _stream_text(chunks)
+
+    assert len(sent) == 2
+    assert answer == "hel" + HOP_2_GROUNDED
+    assert [
+        _bytes_at(answer, span) for span in _supported_spans(_chunk_metadata(chunks, "vertex_ai_grounding_metadata"))
+    ] == [HOP_2_GROUNDED]
+
+
+@pytest.mark.parametrize(
+    ("first_hop", "error", "message"),
+    [
+        (lambda: _dropping_after(), MidStreamFallbackError, DROPPED),
+        (lambda: _dropping_after(STREAM_FIRST_CHUNK), MidStreamFallbackError, DROPPED),
+        (lambda: _dropping_after(STREAM_CHECKPOINT, STREAM_FIRST_CHUNK), MidStreamFallbackError, DROPPED),
+        (
+            lambda: _dropping_after(_ending_with(STREAM_CHECKPOINT, "MAX_TOKENS")),
+            MidStreamFallbackError,
+            DROPPED,
+        ),
+        (lambda: _sse(STREAM_CHECKPOINT, GOOGLE_REJECTION), litellm.BadRequestError, "INVALID_ARGUMENT"),
+    ],
+    ids=["no_frame", "no_checkpoint", "text_after_the_checkpoint", "after_the_last_frame", "client_error_frame"],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_stream_that_breaks_with_nothing_safe_to_resume_from_raises_the_break(
+    is_async: bool, first_hop: Callable[[], httpx.Response], error: type[Exception], message: str
+):
+    sent: Final[list[dict[str, object]]] = []
+
+    with pytest.raises(error, match=message):
+        await _collect_stream(is_async, (first_hop(), _sse(HOP_2)), sent)
+
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize(
+    "resumed_hop",
+    [lambda: httpx.Response(500, json=SERVER_ERROR_FRAME), lambda: _dropping_after()],
+    ids=["refused", "dropped"],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_resume_that_fails_before_its_first_frame_ends_with_length_and_the_checkpoint(
+    is_async: bool, resumed_hop: Callable[[], httpx.Response]
+):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (_dropping_after(STREAM_CHECKPOINT), resumed_hop())
+
+    chunks: Final = await _collect_stream(is_async, hops, sent)
+
+    assert len(sent) == 2
+    assert _stream_text(chunks) == "hel"
+    assert _stream_finish_reasons(chunks) == ["length"]
+    assert _client_tokens(chunks) == ["Y2twdC0x"]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_request_for_more_than_one_choice_is_never_resumed_after_a_drop(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+
+    with pytest.raises(MidStreamFallbackError, match=DROPPED):
+        await _stream_chunks(is_async, _replay((_dropping_after(STREAM_CHECKPOINT), _sse(HOP_2)), sent), n=2)
+
+    assert len(sent) == 1
 
 
 @dataclass(frozen=True, slots=True)
