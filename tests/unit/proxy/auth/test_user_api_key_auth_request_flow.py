@@ -725,6 +725,44 @@ async def test_user_custom_auth_runs_post_custom_auth_checks_when_opt_in():
         litellm.enable_post_custom_auth_checks = original_flag
 
 
+async def _authenticate_through_custom_auth() -> UserAPIKeyAuth:
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
+
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    return await user_api_key_auth_builder(
+        request=request,
+        api_key="Bearer sk-custom-auth-shared",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_custom_auth_returning_one_shared_token_keeps_each_requests_end_user_apart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    shared_token: Final = UserAPIKeyAuth(api_key="sk-custom-auth-shared", user_id="custom-user-123")
+    proxy_attrs: Final = _proxy_server_attrs_for_custom_auth(user_custom_auth=AsyncMock(return_value=shared_token))
+    for attr, val in proxy_attrs.items():
+        monkeypatch.setattr(_proxy_server_mod, attr, val, raising=False)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", False, raising=False)
+
+    capped_end_users_request: Final = await _authenticate_through_custom_auth()
+    capped_end_users_request.end_user_id = "eu-capped"
+    capped_end_users_request.end_user_model_max_budget = {"gpt-4o": {"max_budget": 0.00001}}
+    next_end_users_request: Final = await _authenticate_through_custom_auth()
+
+    assert (next_end_users_request.end_user_id, next_end_users_request.end_user_model_max_budget) == (None, None)
+
+
 @pytest.mark.asyncio
 async def test_enterprise_custom_auth_skips_post_custom_auth_checks_by_default():
     """

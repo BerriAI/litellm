@@ -2136,6 +2136,10 @@ async def _resolve_object_permission_for_unresolvable_team(
     )
 
 
+def _custom_auth_token_for_this_request(response: object) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth.model_validate(response).model_copy()
+
+
 async def user_api_key_auth_builder(
     request: Request,
     api_key: str,
@@ -2214,7 +2218,7 @@ async def user_api_key_auth_builder(
                     request=request, api_key=api_key, user_custom_auth=user_custom_auth
                 )
             if response is not None and isinstance(response, UserAPIKeyAuth):
-                validated = UserAPIKeyAuth.model_validate(response)
+                validated = _custom_auth_token_for_this_request(response)
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
                     validated = await _run_post_custom_auth_checks(
                         valid_token=validated,
@@ -2230,7 +2234,7 @@ async def user_api_key_auth_builder(
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)
-            validated = UserAPIKeyAuth.model_validate(response)
+            validated = _custom_auth_token_for_this_request(response)
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
                     valid_token=validated,
