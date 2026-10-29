@@ -561,14 +561,16 @@ def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
 def _multi_part_texts_by_call_id(input_data: "str | ResponseInputParam") -> Mapping[str, tuple[str, ...]]:
     if isinstance(input_data, str):
         return MappingProxyType({})
-    tool_outputs: Final = tuple(
-        item for item in input_data if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
+    texted_outputs: Final = tuple(
+        (str(stream_item_field(item, "call_id")), texts)
+        for item in input_data
+        if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES and (texts := tool_output_texts(item))
     )
-    call_ids: Final = tuple(str(stream_item_field(item, "call_id")) for item in tool_outputs)
+    call_ids: Final = tuple(call_id for call_id, _ in texted_outputs)
     return MappingProxyType(
         {
             call_id: tuple(text for _, text in texts)
-            for call_id, texts in zip(call_ids, map(tool_output_texts, tool_outputs))
+            for call_id, texts in texted_outputs
             if len(texts) > 1 and call_ids.count(call_id) == 1
         }
     )

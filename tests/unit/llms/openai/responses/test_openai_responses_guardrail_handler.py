@@ -981,6 +981,40 @@ class TestToolResultItemsReachTextsGuardrails:
         assert "second output" in guardrail.seen_message_contents[0]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "textless_output",
+        [
+            {"type": "function_call_output", "call_id": "call_1", "output": ""},
+            {"type": "function_call_output", "call_id": "call_1", "output": None},
+            {
+                "type": "computer_call_output",
+                "call_id": "call_1",
+                "output": {"type": "computer_screenshot", "file_id": "file-screen"},
+            },
+        ],
+        ids=["empty_string", "null", "file_id_screenshot"],
+    )
+    async def test_multi_part_output_sharing_a_call_id_with_a_textless_output_lists_its_parts_in_structured_messages(
+        self, textless_output: dict[str, object]
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        call_item, output_type = _TOOL_TURNS[0]
+        request: Final = _tool_result_request(
+            call_item,
+            output_type,
+            [{"type": "input_text", "text": "first "}, {"type": "input_text", "text": "output"}],
+        )
+        request["input"].append(copy.deepcopy(textless_output))
+
+        await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["Weather?", "first ", "output"]]
+        assert guardrail.seen_message_contents[0][2] == [
+            {"type": "text", "text": "first "},
+            {"type": "text", "text": "output"},
+        ]
+
+    @pytest.mark.asyncio
     async def test_tool_result_item_is_scanned_like_function_call_output(self) -> None:
         guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
         call_item, _ = _TOOL_TURNS[0]
