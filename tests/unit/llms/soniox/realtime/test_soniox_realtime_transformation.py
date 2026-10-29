@@ -98,6 +98,23 @@ def test_an_empty_transcription_language_keeps_the_deployment_language_hints():
     assert _start_request(frames)["language_hints"] == ["fa"]
 
 
+def test_a_client_language_cannot_widen_strict_deployment_language_hints():
+    config = SonioxRealtimeConfig(options=SonioxRealtimeOptions(language_hints=("fa",), language_hints_strict=True))
+
+    frames = config.transform_realtime_request(_session_update({"transcription": {"language": "en"}}), MODEL)
+
+    assert _start_request(frames)["language_hints"] == ["fa"]
+    assert config.transform_realtime_request(_session_update({"transcription": {"language": "en"}}), MODEL) == ()
+
+
+def test_a_soniox_native_config_frame_is_rejected_without_starting_the_stream():
+    config = SonioxRealtimeConfig()
+
+    with pytest.raises(SonioxProtocolError):
+        config.transform_realtime_request(json.dumps({"model": "stt-rt-v5", "audio_format": "auto"}), MODEL)
+    assert _start_request(config.transform_realtime_request(_append(), MODEL))["sample_rate"] == 24_000
+
+
 def test_audio_before_session_update_starts_a_default_stream_once_and_rejects_a_later_change():
     config = SonioxRealtimeConfig()
 

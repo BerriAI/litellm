@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from itertools import chain, groupby
 from types import MappingProxyType, TracebackType
@@ -143,8 +144,10 @@ def _sample_rate(update: TranscriptionSessionUpdate | None) -> int:
     return audio_format.rate
 
 
-def _language_hints(language: str | None, configured: tuple[str, ...] | None) -> tuple[str, ...] | None:
-    if not language:
+def _language_hints(
+    language: str | None, configured: tuple[str, ...] | None, strict: bool | None
+) -> tuple[str, ...] | None:
+    if not language or (strict and configured):
         return configured
     return (language, *(hint for hint in configured or () if hint != language))
 
@@ -163,7 +166,9 @@ def build_start_request(
 ) -> SonioxStartRequest:
     return SonioxStartRequest(
         **options.model_dump(exclude={"language_hints"}),
-        language_hints=_language_hints(None if update is None else update.language, options.language_hints),
+        language_hints=_language_hints(
+            None if update is None else update.language, options.language_hints, options.language_hints_strict
+        ),
         model=model,
         audio_format="pcm_s16le",
         sample_rate=_sample_rate(update),
@@ -197,7 +202,8 @@ def _changes_started_stream(update: TranscriptionSessionUpdate, started: SonioxS
         _changes_started_rate(update, started)
         or (
             update.language is not None
-            and _language_hints(update.language, started.language_hints) != started.language_hints
+            and _language_hints(update.language, started.language_hints, started.language_hints_strict)
+            != started.language_hints
         )
         or (turn_detection_set and _uses_endpoint_detection(update, drop_params) != started.enable_endpoint_detection)
     )
@@ -255,7 +261,7 @@ class SonioxEventTransformer:
         self._drops_originals: Final = drops_originals
         self._item_id: str | None = None
         self._final_tokens: Final[list[_SonioxToken]] = []  # mutable-ok: a turn's tokens append in O(1) each
-        self._finalizes: tuple[bool, ...] = ()
+        self._finalizes: Final[deque[bool]] = deque()  # mutable-ok: pending finalizes queue and pop in O(1) each
         self._processed_ms: int = 0
         self._billed_ms: int = 0
         self._refusal: SonioxException | None = None
@@ -279,7 +285,7 @@ class SonioxEventTransformer:
         if discards_turn and not self._finalizes:
             self._item_id = None
             self._final_tokens.clear()
-        self._finalizes = (*self._finalizes, discards_turn)
+        self._finalizes.append(discards_turn)
 
     def take_unbilled_usage(self, stream_ms: int = 0) -> RealtimeInputAudioTranscriptionUsage | None:
         billable_ms: Final = max(self._processed_ms, stream_ms)
@@ -313,11 +319,10 @@ class SonioxEventTransformer:
 
     @property
     def _discarding(self) -> bool:
-        return self._finalizes[:1] == (True,)
+        return bool(self._finalizes) and self._finalizes[0]
 
     def _finalized(self) -> tuple[OpenAIRealtimeEvents, ...]:
-        discarded: Final = self._discarding
-        self._finalizes = self._finalizes[1:]
+        discarded: Final = self._finalizes.popleft() if self._finalizes else False
         return () if discarded else self._complete(speech_stopped=False)
 
     def _start(self) -> tuple[OpenAIRealtimeEvents, ...]:
@@ -479,6 +484,8 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
     ) -> tuple[str | bytes, ...]:
         request: Final = json_object(message, SonioxProtocolError)
         event_type: Final = request.get("type")
+        if event_type is None:
+            raise SonioxProtocolError("Soniox realtime takes OpenAI realtime events, and this message has no type")
         if event_type in SESSION_UPDATE_EVENT_TYPES:
             update: Final = parse_transcription_session_update(message, SonioxProtocolError)
             ignored: Final = _ignored_settings(update)
