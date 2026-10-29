@@ -197,7 +197,7 @@ proxy-runtime = [
 ]
 
 [project.scripts]
-litellm = "litellm:run_server"
+litellm = "litellm_cli.main:proxy_server"
 lite = "litellm_cli.main:cli"
 litellm-proxy = "litellm_cli.main:litellm_proxy_cli"
 
