@@ -924,7 +924,7 @@ class AmazonConverseConfig(BaseConfig):
 
         ``supports_native_structured_output`` in ``litellm.model_cost`` turns it on for every request, and
         ``supports_bedrock_native_structured_output`` (the deployment's ``model_info`` first) only when the
-        request asks for thinking, which the json tool path would drop.
+        request asks for thinking, which the json tool path would drop, or when the model cannot force the json tool.
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
         """
         return bedrock_chat_uses_native_structured_output(

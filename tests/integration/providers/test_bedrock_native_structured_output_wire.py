@@ -18,8 +18,9 @@ from pydantic import JsonValue, TypeAdapter
 _HAIKU: Final = "us.anthropic.claude-haiku-5-5"
 _FABLE: Final = "us.anthropic.claude-fable-5"
 _SONNET: Final = "us.anthropic.claude-sonnet-4-6"
-_OPUS: Final = "us.anthropic.claude-opus-5-5"
+_OPUS: Final = "us.anthropic.claude-opus-5"
 _OPT_IN: Final = _OPUS
+_UNFORCEABLE_TOOL: Final = "us.anthropic.claude-opus-5-5"
 _OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _DEEPSEEK: Final = "deepseek.v3.2"
 _AWS: Final[dict[str, JsonValue]] = {
@@ -536,6 +537,12 @@ def _resolves(schema: Mapping[str, JsonValue], ref: str) -> bool:
     return ref.startswith(prefix) and ref.removeprefix(prefix) in object_value(schema.get("$defs") or {})
 
 
+def _tool_choice(body: Mapping[str, JsonValue], invoke: bool) -> JsonValue:
+    if invoke:
+        return body.get("tool_choice")
+    return object_value(body.get("toolConfig") or {}).get("toolChoice")
+
+
 def _assert_native_without_tools(body: Mapping[str, JsonValue], invoke: bool, schema: Mapping[str, JsonValue]) -> None:
     assert _native_schema(body, invoke) == schema, body
     assert _JSON_TOOL not in _tools(body, invoke), body
@@ -629,6 +636,40 @@ def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gatewa
         invoke: Final = route == "invoke"
         assert _native_schema(body, invoke) is None, body
         assert _tools(body, invoke)[_JSON_TOOL]["properties"] == _SCHEMA["properties"], body
+
+
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+def test_json_schema_without_thinking_on_a_model_that_cannot_force_the_json_tool_gets_native_output(
+    gateway: Gateway, route: str
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, _UNFORCEABLE_TOOL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_response_format(_SCHEMA))
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        _, body = _one_call(wire, marker_hex)
+        _assert_native_without_tools(body, route == "invoke", _SCHEMA)
+
+
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+def test_a_model_that_cannot_force_the_json_tool_retries_a_rejected_native_output_with_an_unforced_json_tool(
+    gateway: Gateway, route: str
+) -> None:
+    marker, marker_hex = _marker()
+    invoke: Final = route == "invoke"
+    with wire_server(_rejecting_native_output(_FABLE_REJECTION)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, _UNFORCEABLE_TOOL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_response_format(_SCHEMA))
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        rejected, retried = (_JSON.validate_json(request.body) for request in wire.drain())
+        assert _native_schema(rejected, invoke) == _SCHEMA, rejected
+        assert _native_schema(retried, invoke) is None, retried
+        assert _tools(retried, invoke)[_JSON_TOOL]["properties"] == _SCHEMA["properties"], retried
+        assert _tool_choice(retried, invoke) is None, retried
 
 
 @pytest.mark.parametrize(

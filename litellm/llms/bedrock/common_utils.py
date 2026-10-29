@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
 from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -315,7 +316,8 @@ def bedrock_chat_uses_native_structured_output(
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
     return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
-        thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+        (thinking_requested or AnthropicModelInfo.forced_tool_use_unsupported(model))
+        and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
     )
 
 

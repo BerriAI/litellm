@@ -4889,7 +4889,10 @@ ADAPTIVE_THINKING: Final = {"type": "adaptive"}
 
 
 def _converse_request_for_json_schema(
-    model: str, stream: bool, thinking_params: Mapping[str, object] | None = None
+    model: str,
+    stream: bool,
+    thinking_params: Mapping[str, object] | None = None,
+    model_info: Mapping[str, object] | None = None,
 ) -> tuple[Mapping[str, object], RequestObject]:
     config = AmazonConverseConfig()
     optional_params = config.map_openai_params(
@@ -4897,12 +4900,13 @@ def _converse_request_for_json_schema(
         optional_params={},
         model=model,
         drop_params=False,
+        model_info=model_info,
     )
     request = config._transform_request(
         model=model,
         messages=[{"role": "user", "content": "Name the capital of France."}],
         optional_params=optional_params,
-        litellm_params={},
+        litellm_params={} if model_info is None else {"model_info": model_info},
         headers={},
     )
     return optional_params, request
@@ -4967,6 +4971,32 @@ def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
 
     assert ("outputConfig" in request) is native
     assert ("toolConfig" in request) is not native
+
+
+_FORCED_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
+
+
+@pytest.mark.parametrize(
+    ("forced_tool_use", "model_info", "native", "tool_choice"),
+    [
+        (False, None, True, None),
+        (True, None, False, _FORCED_JSON_TOOL_CHOICE),
+        (False, {"supports_bedrock_native_structured_output": False}, False, None),
+    ],
+    ids=["cannot-force-tool", "can-force-tool", "cannot-force-tool-deployment-opt-out"],
+)
+def test_bedrock_native_output_key_applies_without_thinking_when_the_model_cannot_force_the_json_tool(
+    set_native_structured_output, monkeypatch, forced_tool_use, model_info, native, tool_choice
+):
+    model: Final = "us.anthropic.claude-haiku-5-5"
+    monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
+    set_native_structured_output(model, "bedrock")
+
+    _, request = _converse_request_for_json_schema(model, False, model_info=model_info)
+
+    assert ("outputConfig" in request) is native
+    assert ("toolConfig" in request) is not native
+    assert request.get("toolConfig", {}).get("toolChoice") == tool_choice
 
 
 def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profile(set_native_structured_output):

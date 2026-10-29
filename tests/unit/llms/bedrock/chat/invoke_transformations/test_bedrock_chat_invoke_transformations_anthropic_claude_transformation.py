@@ -2010,6 +2010,28 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     )
 
 
+@pytest.mark.parametrize(
+    ("forced_tool_use", "model_info", "native"),
+    [
+        (False, None, True),
+        (True, None, False),
+        (False, {"supports_bedrock_native_structured_output": False}, False),
+    ],
+    ids=["cannot-force-tool", "can-force-tool", "cannot-force-tool-deployment-opt-out"],
+)
+def test_invoke_native_output_key_applies_without_thinking_when_the_model_cannot_force_the_json_tool(
+    set_native_structured_output, monkeypatch, forced_tool_use, model_info, native
+):
+    model: Final = "us.anthropic.claude-haiku-5-5"
+    monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
+    set_native_structured_output(model, "bedrock")
+
+    result: Final = _invoke_chat_params(model, model_info, {"response_format": _CITY_RESPONSE_FORMAT})
+
+    assert ("output_format" in result) is native
+    assert ("tools" in result) is not native
+
+
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("drop_params", [True, False])
 def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
