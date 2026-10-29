@@ -21928,6 +21928,173 @@ _LIT_7114_BATCH_OK = {
     "status": "validating",
     "created_at": 1,
 }
+_UPSTREAM_CONTEXT_WINDOW_400 = {
+    "message": "This model's maximum context length is 16385 tokens",
+    "type": "invalid_request_error",
+    "code": "context_length_exceeded",
+}
+
+
+@pytest.mark.asyncio
+async def test_router_retries_a_context_window_refusal_on_a_sibling_deployment(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(simple_shuffle.random, "choice", lambda deployments: deployments[0])
+    router = litellm.Router(
+        model_list=[_retry_skip_deployment("refusing", "refusing"), _retry_skip_deployment("sibling", "sibling")],
+        num_retries=2,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        refusing = respx_mock.post("https://refusing.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_CONTEXT_WINDOW_400})
+        )
+        sibling = respx_mock.post("https://sibling.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_LIT_7114_CHAT_OK)
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert refusing.call_count == 1
+    assert sibling.call_count == 1
+    assert response.choices[0].message.content == "hi back"
+
+
+@pytest.mark.asyncio
+async def test_router_tries_each_deployment_once_when_every_one_refuses_the_context_window(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(simple_shuffle.random, "choice", lambda deployments: deployments[0])
+    router = litellm.Router(
+        model_list=[_retry_skip_deployment("first", "first"), _retry_skip_deployment("second", "second")],
+        num_retries=3,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        first = respx_mock.post("https://first.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_CONTEXT_WINDOW_400})
+        )
+        second = respx_mock.post("https://second.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_CONTEXT_WINDOW_400})
+        )
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert first.call_count == 1
+    assert second.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_router_retries_a_context_window_refusal_at_most_once_when_no_sibling_fits(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("admitting", "admitting", model_info={"max_input_tokens": 1_000_000}),
+            _retry_skip_deployment("too-small", "too-small", model_info={"max_input_tokens": 1}),
+        ],
+        num_retries=3,
+        enable_pre_call_checks=True,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        admitting = respx_mock.post("https://admitting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_CONTEXT_WINDOW_400})
+        )
+        too_small = respx_mock.post("https://too-small.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_LIT_7114_CHAT_OK)
+        )
+        with pytest.raises(litellm.ContextWindowExceededError) as raised:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert "maximum context length" in str(raised.value)
+    assert too_small.call_count == 0
+    assert admitting.call_count <= 2
+    assert raised.value.num_retries == admitting.call_count - 1
+
+
+@pytest.mark.asyncio
+async def test_router_raises_its_own_context_window_error_without_retrying_when_no_deployment_fits(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("small", "small", model_info={"max_input_tokens": 1}),
+            _retry_skip_deployment("smaller", "smaller", model_info={"max_input_tokens": 1}),
+        ],
+        num_retries=2,
+        enable_pre_call_checks=True,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        small = respx_mock.post("https://small.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_LIT_7114_CHAT_OK)
+        )
+        smaller = respx_mock.post("https://smaller.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_LIT_7114_CHAT_OK)
+        )
+        with pytest.raises(litellm.ContextWindowExceededError) as raised:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert small.call_count == smaller.call_count == 0
+    assert not raised.value.num_retries
+
+
+@pytest.mark.asyncio
+async def test_router_makes_one_call_for_a_context_window_refusal_in_a_one_deployment_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(model_list=[_retry_skip_deployment("only", "only")], num_retries=2, disable_cooldowns=True)
+
+    with respx.mock as respx_mock:
+        only = respx_mock.post("https://only.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_CONTEXT_WINDOW_400})
+        )
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert only.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_router_sends_a_context_window_refusal_to_context_window_fallbacks_without_retrying_the_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(simple_shuffle.random, "choice", lambda deployments: deployments[0])
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("refusing", "refusing"),
+            _retry_skip_deployment("sibling", "sibling"),
+            {**_retry_skip_deployment("long", "long"), "model_name": "gpt-5.6-long"},
+        ],
+        num_retries=2,
+        context_window_fallbacks=[{"gpt-5.6": ["gpt-5.6-long"]}],
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        refusing = respx_mock.post("https://refusing.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_CONTEXT_WINDOW_400})
+        )
+        sibling = respx_mock.post("https://sibling.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_LIT_7114_CHAT_OK)
+        )
+        long = respx_mock.post("https://long.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_LIT_7114_CHAT_OK)
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert refusing.call_count == 1
+    assert sibling.call_count == 0
+    assert long.call_count == 1
+    assert response.choices[0].message.content == "hi back"
 
 
 class _PassthroughAdapter(CustomLogger):
