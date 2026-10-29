@@ -1559,6 +1559,14 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         assert events == self._events(self._ended_by_upstream_error(sent_before_the_cut))
 
+    @pytest.mark.asyncio
+    async def test_unfinished_allowed_tool_call_with_no_upstream_error_reaches_the_client_as_sent(self):
+        unfinished_tool_call: Final = self._sse_chunks("Bash")[:6]
+
+        out: Final = await self._drain(self.blocking, unfinished_tool_call)
+
+        assert out == unfinished_tool_call
+
     def _resplit(self, chunks, size=7):
         joined = b"".join(chunks)
         return [joined[i : i + size] for i in range(0, len(joined), size)]

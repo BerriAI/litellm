@@ -119,6 +119,8 @@ def without_cut_off_tool_use(source_chunks: Sequence[object]) -> Sequence[object
     Assembly leaves that call out of what a guardrail checks, since its input is a JSON prefix, yet a
     client SDK's stream snapshot still holds it, so it must not reach the client unchecked.
     """
+    if not anthropic_sse_error_events(source_chunks):
+        return source_chunks
     cut_off: Final = frozenset(
         index
         for index, block in anthropic_sse_unfinished_blocks(source_chunks).items()
