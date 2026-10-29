@@ -19,6 +19,7 @@ from starlette.types import Message
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import RESPONSES_LATE_SSE_FRAMING, ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.responses_stream_errors import (
@@ -88,7 +89,7 @@ class _StreamsBody(Protocol):
 
 
 def _sse_frame_data(frame: str) -> str | None:
-    return next((line[6:].strip() for line in frame.splitlines() if line.startswith("data: ")), None)
+    return next((line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: ")), None)
 
 
 def _event_error(event: Mapping[str, object]) -> Mapping[str, object]:

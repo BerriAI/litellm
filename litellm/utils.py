@@ -7000,6 +7000,8 @@ def get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
+                reasoning_modes=_model_info.get("reasoning_modes", None),
+                reasoning_contexts=_model_info.get("reasoning_contexts", None),
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
@@ -7662,7 +7664,6 @@ def validate_environment(
             model in litellm.open_ai_chat_completion_models
             or model in litellm.open_ai_text_completion_models
             or model in litellm.open_ai_embedding_models
-            or model in litellm.openai_image_generation_models
             or model.startswith("gpt-image")
         ):
             if "OPENAI_API_KEY" in os.environ:
@@ -9612,18 +9613,19 @@ class ProviderConfigManager:
             return litellm.HostedVLLMDecisionsConfig()
         if provider == LlmProviders.LM_STUDIO:
             return litellm.LMStudioDecisionsConfig()
+        if provider in (LlmProviders.OLLAMA, LlmProviders.OLLAMA_CHAT):
+            return litellm.OllamaDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE):
+        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
+                LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
             }
             return configs[provider]()
-        if provider == LlmProviders.AZURE_AI:
-            return litellm.AzureAIDecisionsConfig()
         return None
 
     @staticmethod
@@ -10308,11 +10310,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> BaseImageGenerationConfig | None:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_generation import (
-                get_openai_image_generation_config,
-            )
+            from litellm.llms.openai.image_generation import GPTImageGenerationConfig
 
-            return get_openai_image_generation_config(model)
+            return GPTImageGenerationConfig()
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_generation import (
                 get_azure_image_generation_config,
@@ -10415,6 +10415,13 @@ class ProviderConfigManager:
             return get_modelscope_image_generation_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIImageGenerationConfig()
+        elif LlmProviders.TENCENT == provider:
+            from litellm.llms.tencent.image_generation.transformation import (
+                TencentImageGenerationConfig,
+                is_tokenhub_image_model,
+            )
+
+            return TencentImageGenerationConfig() if is_tokenhub_image_model(model) else None
         return None
 
     @staticmethod
@@ -10536,9 +10543,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> BaseImageEditConfig | None:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_edit import get_openai_image_edit_config
+            from litellm.llms.openai.image_edit import OpenAIImageEditConfig
 
-            return get_openai_image_edit_config(model=model)
+            return OpenAIImageEditConfig()
         elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
 
@@ -10603,6 +10610,15 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.TENCENT == provider:
+            from litellm.llms.tencent.image_edit.transformation import (
+                TencentImageEditConfig,
+            )
+            from litellm.llms.tencent.image_generation.transformation import (
+                is_tokenhub_image_model,
+            )
+
+            return TencentImageEditConfig() if is_tokenhub_image_model(model) else None
         return None
 
     @staticmethod
