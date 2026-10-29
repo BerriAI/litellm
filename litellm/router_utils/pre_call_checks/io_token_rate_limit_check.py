@@ -222,6 +222,12 @@ def _extract_response_usage(response_obj: object) -> object:
     return getattr(response_obj, "usage", None)
 
 
+def _openai_shaped_usage(usage: object) -> object:
+    if isinstance(usage, dict) and litellm.AnthropicConfig.is_anthropic_usage_object(usage):
+        return litellm.AnthropicConfig().calculate_usage(usage_object=usage, reasoning_content=None)
+    return usage
+
+
 def _usage_is_present(usage: object) -> bool:
     """
     True only if usage carries an actual input/output breakdown.
@@ -250,7 +256,7 @@ def _resolve_reconcile_usage_tokens(
     fields. When usage cannot be resolved, return ``usage_resolved=False`` so
     callers keep the pre-call reservation instead of refunding it as zero usage.
     """
-    usage: Final = _extract_response_usage(response_obj)
+    usage: Final = _openai_shaped_usage(_extract_response_usage(response_obj))
     if _usage_is_present(usage):
         prompt_tokens, completion_tokens, cached_tokens = _get_usage_tokens(usage)
         return max(0, prompt_tokens - cached_tokens), completion_tokens, True

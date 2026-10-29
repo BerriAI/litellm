@@ -985,7 +985,7 @@ class TestModelRateLimitingCheckIOTokens:
 
         assert await dual_cache.async_get_cache(key=itpm_key) == 4
 
-    def test_sync_reconcile_anthropic_dict_usage(self):
+    def test_sync_reconcile_anthropic_dict_usage_counts_uncached_input_once(self):
         dual_cache = DualCache()
         itpm_key = "global_router:io-anthropic:bedrock_mantle/test:itpm:00-00"
         otpm_key = "global_router:io-anthropic:bedrock_mantle/test:otpm:00-00"
@@ -1002,12 +1002,17 @@ class TestModelRateLimitingCheckIOTokens:
         }
         response = {
             "type": "message",
-            "usage": {"input_tokens": 3, "output_tokens": 2, "cache_read_input_tokens": 1},
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 2,
+                "cache_read_input_tokens": 1,
+                "cache_creation_input_tokens": 4,
+            },
         }
 
         io_token_reconcile_success(dual_cache, kwargs, response)
 
-        assert dual_cache.get_cache(key=itpm_key) == 2
+        assert dual_cache.get_cache(key=itpm_key) == 3 + 4
         assert dual_cache.get_cache(key=otpm_key) == 2
 
     @pytest.mark.asyncio
