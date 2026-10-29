@@ -6341,7 +6341,7 @@ def test_hosted_vllm_stream_with_two_choices_keeps_each_stop_reason_on_its_final
     content_chunk_stop_reasons: Final = frozenset(
         (choice["index"], choice["stop_reason"])
         for choice in emitted
-        if choice["finish_reason"] is None and choice.get("stop_reason") is not None
+        if _DELTA.validate_python(choice["delta"]).get("content") and choice.get("stop_reason") is not None
     )
     finished_with_content: Final = frozenset(
         (index, _TWO_CHOICE_STOP_REASONS[index])
@@ -6350,6 +6350,27 @@ def test_hosted_vllm_stream_with_two_choices_keeps_each_stop_reason_on_its_final
     )
 
     assert content_chunk_stop_reasons == finished_with_content
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents",
+    [("", ""), ("2", ""), ("", "2"), ("2", "2")],
+    ids=["both-finish-only", "content-then-finish-only", "finish-only-then-content", "both-content-then-finish"],
+)
+def test_hosted_vllm_stream_with_two_choices_delivers_every_token_id_and_stop_reason_of_each_choice(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+
+    assert {
+        index: _joined_token_ids([choice for choice in emitted if choice["index"] == index])
+        for index in _TWO_CHOICE_TOKEN_IDS
+    } == _TWO_CHOICE_TOKEN_IDS
+    assert frozenset(
+        (choice["index"], choice["stop_reason"]) for choice in emitted if choice.get("stop_reason") is not None
+    ) == frozenset(_TWO_CHOICE_STOP_REASONS.items())
+
 
 _CACHED_VLLM_TOKEN_IDS: Final = (16, 11, 220, 17, 11, 220, 18, 11, 220, 19)
 

@@ -166,6 +166,15 @@ def _apply_choice_fields(choice: StreamingChoices, fields: Mapping[str, object])
         setattr(choice, field, value)
 
 
+def _choice_fields_chunk(
+    model_response: ModelResponseStream, upstream_index: int, fields: Mapping[str, object]
+) -> ModelResponseStream:
+    model_response.choices[0].delta = Delta(content="")  # rebind-ok: chunks are built in place here
+    model_response.choices[0].index = upstream_index  # rebind-ok: chunks are built in place here
+    _apply_choice_fields(model_response.choices[0], fields)
+    return model_response
+
+
 def _holds_only_scalars(fields: Iterable[tuple[str, object]]) -> bool:
     return all(value is None or isinstance(value, (str, int, float, bool)) for _, value in fields)
 
@@ -1291,6 +1300,11 @@ class CustomStreamWrapper:
             else:
                 return
         elif self.received_finish_reason is not None:
+            another_choice_fields_chunk: Final = self._another_choice_fields_chunk(
+                model_response, response_obj, chunk_choice_fields
+            )
+            if another_choice_fields_chunk is not None:
+                return another_choice_fields_chunk
             if self.sent_last_chunk is True:
                 # Bedrock returns the guardrail trace in the last chunk - we want to return this here
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
@@ -1341,11 +1355,9 @@ class CustomStreamWrapper:
         elif self._has_special_delta_content(model_response):
             return self._handle_special_delta_content(model_response)
         elif chunk_choice_fields:
-            upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
-            model_response.choices[0].delta = Delta(content="")  # rebind-ok: chunks are built in place here
-            model_response.choices[0].index = upstream_index  # rebind-ok: chunks are built in place here
-            _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
-            return model_response
+            return _choice_fields_chunk(
+                model_response, _upstream_choice_index(response_obj.get("original_chunk")), chunk_choice_fields
+            )
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -2009,6 +2021,27 @@ class CustomStreamWrapper:
 
     def _apply_finish_choice_fields(self, choice: StreamingChoices) -> None:
         _apply_choice_fields(choice, self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS))
+
+    def _another_choice_fields_chunk(
+        self,
+        model_response: ModelResponseStream,
+        response_obj: Mapping[str, object],
+        chunk_choice_fields: Mapping[str, object],
+    ) -> ModelResponseStream | None:
+        upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
+        is_finished: Final = bool(response_obj.get("is_finished"))
+        if is_finished and upstream_index == model_response.choices[0].index and not self.sent_last_chunk:
+            return None
+        finish_fields: Final = (
+            self.received_finish_choice_fields.get(upstream_index, _NO_UPSTREAM_CHOICE_FIELDS)
+            if is_finished
+            else _NO_UPSTREAM_CHOICE_FIELDS
+        )
+        if not chunk_choice_fields and all(value is None for value in finish_fields.values()):
+            return None
+        return _choice_fields_chunk(
+            model_response, upstream_index, MappingProxyType({**finish_fields, **chunk_choice_fields})
+        )
 
     def finish_reason_handler(self):
         model_response: Final = self.model_response_creator(
