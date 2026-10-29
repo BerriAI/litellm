@@ -430,6 +430,7 @@ from litellm.proxy.auth.master_key_boot_check import (
     with_stored_secrets_counted,
 )
 from litellm.proxy.auth.model_checks import (
+    access_groups_usable_by_team,
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
     get_complete_model_list,
@@ -15909,13 +15910,14 @@ def _resolve_model_grant_to_deployment_ids(
     if not models or SpecialModelNames.all_proxy_models.value in models:
         return tuple(llm_router.get_model_ids(exclude_team_models=True))
 
-    access_groups: Final = llm_router.get_model_access_groups_usable_by_team(None)
+    access_groups: Final = access_groups_usable_by_team(llm_router, None)
     granted_model_names: Final = tuple(name for model in models for name in (model, *access_groups.get(model, ())))
     return tuple(
         model_id
         for name in granted_model_names
-        for deployment in llm_router.get_deployments_usable_by_team(name, None)
-        if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
+        for deployment in (llm_router.get_model_list(model_name=name) or ())
+        if Router.deployment_usable_by_team(deployment, None)
+        and (model_id := deployment.get("model_info", {}).get("id", None)) is not None
     )
 
 
@@ -16652,7 +16654,7 @@ async def _gather_team_accessible_model_ids(
     """Collect model IDs the team can use from router config and DB."""
     team_accessible_model_ids: Final[set[str]] = set()
     access_groups: Final[Mapping[str, Sequence[str]]] = (
-        llm_router.get_model_access_groups_usable_by_team(team_id) if llm_router else MappingProxyType({})
+        access_groups_usable_by_team(llm_router, team_id) if llm_router else MappingProxyType({})
     )
 
     if not team_object.models or SpecialModelNames.all_proxy_models.value in team_object.models:

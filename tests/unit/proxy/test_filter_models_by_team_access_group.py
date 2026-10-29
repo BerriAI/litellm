@@ -59,10 +59,11 @@ async def test_filter_resolves_access_group_names():
     # Router mock
     mock_router = MagicMock()
     # get_model_access_groups returns {group_name: [model_names]}
-    mock_router.get_model_access_groups_usable_by_team.return_value = {
+    mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
         "Group-B": ["claude-3"],
     }
+    mock_router.deployments_named.return_value = ({"model_info": {}},)
 
     # get_model_list returns deployments matching a model_name
     def fake_get_model_list(model_name=None, team_id=None):
@@ -114,10 +115,11 @@ async def test_filter_resolves_mix_of_access_groups_and_literal_names():
     all_models = [gpt4o, gpt5, claude, mistral]
 
     mock_router = MagicMock()
-    mock_router.get_model_access_groups_usable_by_team.return_value = {
+    mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
         "Group-B": ["claude-3"],
     }
+    mock_router.deployments_named.return_value = ({"model_info": {}},)
 
     def fake_get_model_list(model_name=None, team_id=None):
         return [m for m in all_models if m["model_name"] == model_name]
@@ -159,10 +161,11 @@ async def test_filter_excludes_models_from_other_access_group():
     all_models = [gpt4o, claude, llama]
 
     mock_router = MagicMock()
-    mock_router.get_model_access_groups_usable_by_team.return_value = {
+    mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o"],
         "Group-B": ["claude-3", "llama-4"],
     }
+    mock_router.deployments_named.return_value = ({"model_info": {}},)
 
     def fake_get_model_list(model_name=None, team_id=None):
         return [m for m in all_models if m["model_name"] == model_name]
@@ -198,9 +201,10 @@ async def test_filter_db_fallback_receives_resolved_model_names():
     all_models = [gpt4o]
 
     mock_router = MagicMock()
-    mock_router.get_model_access_groups_usable_by_team.return_value = {
+    mock_router.get_model_access_groups.return_value = {
         "Group-A": ["gpt-4o", "gpt-5"],
     }
+    mock_router.deployments_named.return_value = ({"model_info": {}},)
     # get_model_list returns nothing — forces reliance on the DB fallback
     mock_router.get_model_list = MagicMock(return_value=[])
 

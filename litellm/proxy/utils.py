@@ -9540,7 +9540,9 @@ def access_groups_visible_to_caller(
 ) -> Mapping[str, Sequence[str]]:
     if team_id is None and is_proxy_admin(user_api_key_dict):
         return llm_router.get_model_access_groups()
-    return llm_router.get_model_access_groups_usable_by_team(team_id)
+    from litellm.proxy.auth.model_checks import access_groups_usable_by_team
+
+    return access_groups_usable_by_team(llm_router, team_id)
 
 
 async def get_available_models_for_user(

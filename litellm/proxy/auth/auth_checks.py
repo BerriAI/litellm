@@ -97,6 +97,7 @@ from litellm.proxy.auth.model_access_denied import (
     customer_model_access_denied_client_message,
     model_access_denied_client_message,
 )
+from litellm.proxy.auth.model_checks import model_owned_by_other_teams
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     broadcast_evictions,
@@ -5546,7 +5547,7 @@ def raise_when_key_reaches_only_other_teams_deployments(
         return
     requested_models: Final = (model,) if isinstance(model, str) else tuple(model)
     foreign_model: Final = next(
-        (name for name in requested_models if llm_router.model_owned_by_other_teams(name, valid_token.team_id)),
+        (name for name in requested_models if model_owned_by_other_teams(llm_router, name, valid_token.team_id)),
         None,
     )
     if foreign_model is None:

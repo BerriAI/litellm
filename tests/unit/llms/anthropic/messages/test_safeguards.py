@@ -345,8 +345,8 @@ class _Router:
     ) -> dict[str, list[str]]:
         return {}
 
-    def model_owned_by_other_teams(self, model_name: str, team_id: str | None) -> bool:
-        return False
+    def deployments_named(self, model_name: str) -> None:
+        return None
 
     async def acompletion(self, **kwargs: object) -> ModelResponse:
         self.calls.append(kwargs)

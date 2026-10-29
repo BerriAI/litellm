@@ -1521,3 +1521,71 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(mo
     ]
     assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
     assert unrouted_ids == []
+
+
+def _router_with_global_and_team_b_deployments():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-nova",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {"id": "global-nova", "access_groups": ["bedrock-group"]},
+            },
+            {
+                "model_name": "model_name_team-b_1111",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-micro-v1:0"},
+                "model_info": {
+                    "id": "team-b-nova",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-nova",
+                    "access_groups": ["bedrock-group"],
+                },
+            },
+            {
+                "model_name": "model_name_team-b_2222",
+                "litellm_params": {"model": "bedrock/us.amazon.nova-lite-v1:0"},
+                "model_info": {
+                    "id": "team-b-lite",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-lite",
+                    "access_groups": ["team-b-only"],
+                },
+            },
+        ],
+    )
+
+
+def test_access_groups_usable_by_team_drops_other_teams_deployments() -> None:
+    from litellm.proxy.auth.model_checks import access_groups_usable_by_team
+
+    router: Final = _router_with_global_and_team_b_deployments()
+
+    assert access_groups_usable_by_team(router, None) == {"bedrock-group": ("bedrock-nova",)}
+    assert access_groups_usable_by_team(router, "team-a") == {"bedrock-group": ("bedrock-nova",)}
+    assert access_groups_usable_by_team(router, "team-b") == {
+        "bedrock-group": ("bedrock-nova", "model_name_team-b_1111"),
+        "team-b-only": ("model_name_team-b_2222",),
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_name", "team_id", "owned_by_other_teams"),
+    [
+        ("model_name_team-b_1111", None, True),
+        ("model_name_team-b_1111", "team-a", True),
+        ("model_name_team-b_1111", "team-b", False),
+        ("bedrock-nova", None, False),
+        ("bedrock-nova", "team-a", False),
+        ("bedrock-nova", "team-b", False),
+        ("team-b-nova", None, False),
+        ("unknown-model", None, False),
+    ],
+)
+def test_model_owned_by_other_teams(model_name: str, team_id: str | None, owned_by_other_teams: bool) -> None:
+    from litellm.proxy.auth.model_checks import model_owned_by_other_teams
+
+    router: Final = _router_with_global_and_team_b_deployments()
+
+    assert model_owned_by_other_teams(router, model_name, team_id) is owned_by_other_teams

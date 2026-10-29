@@ -81,6 +81,34 @@ def _get_models_from_access_groups(
     return kept_models + member_models
 
 
+def _model_name_usable_by_team(llm_router: Router, model_name: str, team_id: str | None) -> bool:
+    return any(
+        Router.deployment_usable_by_team(deployment, team_id)
+        for deployment in llm_router.deployments_named(model_name) or ()
+    )
+
+
+def access_groups_usable_by_team(llm_router: Router, team_id: str | None) -> Mapping[str, Sequence[str]]:
+    return MappingProxyType(
+        {
+            group: usable_group_models
+            for group, model_names in llm_router.get_model_access_groups().items()
+            if (
+                usable_group_models := tuple(
+                    name for name in model_names if _model_name_usable_by_team(llm_router, name, team_id)
+                )
+            )
+        }
+    )
+
+
+def model_owned_by_other_teams(llm_router: Router, model_name: str, team_id: str | None) -> bool:
+    deployments: Final = tuple(llm_router.deployments_named(model_name) or ())
+    return bool(deployments) and not any(
+        Router.deployment_usable_by_team(deployment, team_id) for deployment in deployments
+    )
+
+
 async def get_mcp_server_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> list[str]:

@@ -194,7 +194,6 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
-    router.model_owned_by_other_teams = MagicMock(return_value=False)
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
     router.model_list = []
     router.acreate_batch = AsyncMock(return_value=make_batch())
@@ -1454,7 +1453,6 @@ def retrieve_harness():
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
-    router.model_owned_by_other_teams = MagicMock(return_value=False)
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
     router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
@@ -2038,7 +2036,6 @@ def list_harness():
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
-    router.model_owned_by_other_teams = MagicMock(return_value=False)
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
     router.model_list = []
     router.alist_batches = AsyncMock(return_value=FakeListPage([]))
@@ -2457,7 +2454,6 @@ def cancel_harness():
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
-    router.model_owned_by_other_teams = MagicMock(return_value=False)
     router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
     router.model_list = []
     router.acancel_batch = AsyncMock(return_value=make_batch())
