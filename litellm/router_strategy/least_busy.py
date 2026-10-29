@@ -1,7 +1,6 @@
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
-from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -46,6 +45,7 @@ class _Deployment(TypedDict):
 _CALL_KWARGS: Final = TypeAdapter(_CallKwargs)
 _DEPLOYMENTS: Final = TypeAdapter(list[_Deployment])
 _MEMORY_COUNTS: Final = TypeAdapter(tuple[float | None, ...] | None)
+_RESERVATION_TIMES: Final = TypeAdapter(tuple[float, ...] | None)
 
 
 def _request_count_key(model_group: str, deployment_id: str) -> str:
@@ -67,6 +67,10 @@ def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
     if model_group is None or deployment_id is None:
         return None
     return model_group, str(deployment_id)
+
+
+def _reservation_key(request_count_key: str) -> str:
+    return f"{request_count_key}:reservations"
 
 
 def _request_count_keys(model_group: str, healthy_deployments: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
@@ -123,15 +127,15 @@ class LeastBusyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
         self._clock = clock
-        self._reservations: Mapping[str, tuple[float, ...]] = MappingProxyType({})
 
     def _live_reservations(self, key: str, now: float) -> tuple[float, ...]:
-        return _unexpired(self._reservations.get(key, ()), now)
+        raw: Final = self.router_cache.get_cache(_reservation_key(key), local_only=True)
+        return _unexpired(_RESERVATION_TIMES.validate_python(raw) or (), now)
 
-    def _store_reservations(self, key: str, times: tuple[float, ...], now: float) -> None:
-        # Drop expired and empty entries on every write so the map only holds the last TTL window.
-        merged: Final = {**self._reservations, key: times}
-        self._reservations = MappingProxyType({k: live for k, v in merged.items() if (live := _unexpired(v, now))})
+    def _store_reservations(self, key: str, times: tuple[float, ...]) -> None:
+        self.router_cache.set_cache(
+            _reservation_key(key), times, local_only=True, ttl=SELECTION_RESERVATION_TTL_SECONDS
+        )
 
     def _select(
         self,
@@ -146,7 +150,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         live: Final = tuple(self._live_reservations(key, now) for key in keys)
         index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
         if reserve:
-            self._store_reservations(keys[index], (*live[index], now), now)
+            self._store_reservations(keys[index], (*live[index], now))
         return healthy_deployments[index]
 
     def _release_reservation(self, kwargs: Mapping[str, object]) -> None:
@@ -155,7 +159,7 @@ class LeastBusyLoggingHandler(CustomLogger):
             return
         key: Final = _request_count_key(*ref)
         now: Final = self._clock()
-        self._store_reservations(key, self._live_reservations(key, now)[1:], now)
+        self._store_reservations(key, self._live_reservations(key, now)[1:])
 
     @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:

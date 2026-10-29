@@ -402,9 +402,11 @@ async def test_router_spreads_requests_that_start_together(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    burst: Final = 2 * len(ROUTER_DEPLOYMENT_IDS)
+    all_started: Final = asyncio.Barrier(burst)
 
-    async def slow_completion(_: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(0.05)
+    async def completion_after_all_started(_: httpx.Request) -> httpx.Response:
+        await all_started.wait()
         return httpx.Response(
             200,
             json={
@@ -417,32 +419,37 @@ async def test_router_spreads_requests_that_start_together(
             },
         )
 
-    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=slow_completion)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=completion_after_all_started
+    )
     router: Final = _least_busy_router()
 
     await asyncio.gather(
-        *(
-            router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}])
-            for _ in range(2 * len(ROUTER_DEPLOYMENT_IDS))
-        )
+        *(router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}]) for _ in range(burst))
     )
 
-    assert sorted(call.request.headers["authorization"] for call in route.calls) == sorted(
-        f"Bearer key-{deployment_id}" for deployment_id in ROUTER_DEPLOYMENT_IDS for _ in range(2)
-    )
+    one_per_deployment: Final = tuple(f"Bearer key-{deployment_id}" for deployment_id in ROUTER_DEPLOYMENT_IDS)
+    assert sorted(call.request.headers["authorization"] for call in route.calls) == sorted(one_per_deployment * 2)
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
 
 
 def test_a_reservation_that_never_reaches_the_api_call_expires() -> None:
-    now: list[float] = [0.0]
-    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), clock=lambda: now[0])
+    clock: Final = _ManualClock()
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), clock=clock)
 
-    picks: Final = []
-    for at in (0.0, 1.0, 2.0):
-        now[0] = at
-        picks.append(worker.get_available_deployments(GROUP, HEALTHY, reserve=True))
-    now[0] = SELECTION_RESERVATION_TTL_SECONDS + 0.5
-
-    assert picks == [DEPLOYMENT_A, DEPLOYMENT_B, DEPLOYMENT_A]
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    clock.now = 1.0
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+    clock.now = 2.0
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    clock.now = SELECTION_RESERVATION_TTL_SECONDS + 0.5
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
 
 
@@ -456,14 +463,13 @@ def test_a_started_request_moves_its_reservation_into_the_in_flight_count() -> N
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
 
 
-def test_expired_and_released_reservations_do_not_accumulate_across_model_groups() -> None:
-    now: list[float] = [0.0]
-    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), clock=lambda: now[0])
+def test_a_request_started_through_another_selector_on_the_same_cache_releases_the_reservation() -> None:
+    cache: Final = DualCache()
+    picker: Final = LeastBusyLoggingHandler(router_cache=cache)
+    registered: Final = LeastBusyLoggingHandler(router_cache=cache)
 
-    for i in range(50):
-        worker.get_available_deployments(f"group-{i}", HEALTHY, reserve=True)
-    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
-    now[0] = SELECTION_RESERVATION_TTL_SECONDS + 0.5
-    worker.get_available_deployments("group-new", HEALTHY, reserve=True)
+    assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    registered.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
 
-    assert len(worker._reservations) == 1
+    assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+    assert picker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
