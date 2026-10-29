@@ -140,7 +140,7 @@ class Schema(TypedDict, total=False):
     title: str
     description: str
     nullable: bool
-    default: object
+    default: ReadOnly[object]
     items: "Schema"
     minItems: str
     maxItems: str
@@ -155,7 +155,7 @@ class Schema(TypedDict, total=False):
     minLength: str
     maxLength: str
     pattern: str
-    example: object
+    example: ReadOnly[object]
     anyOf: list["Schema"]
 
 
@@ -794,9 +794,9 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
     name: str
     done: bool
-    response: dict[str, object]
-    metadata: dict[str, object]
-    error: dict[str, object]
+    response: ReadOnly[dict[str, object]]
+    metadata: ReadOnly[dict[str, object]]
+    error: ReadOnly[dict[str, object]]
 
 
 VERTEX_CREDENTIALS_TYPES = str | dict[str, str]

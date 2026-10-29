@@ -45,6 +45,8 @@ router: Final = APIRouter()
 @with_config(ConfigDict(extra="allow", strict=True))
 class _PluginSessionClaim(TypedDict):
     plugin: NotRequired[ReadOnly[object]]
+    user_id: NotRequired[ReadOnly[str]]
+    user_role: NotRequired[ReadOnly[str]]
     exp: NotRequired[ReadOnly[int | float | str]]
 
 

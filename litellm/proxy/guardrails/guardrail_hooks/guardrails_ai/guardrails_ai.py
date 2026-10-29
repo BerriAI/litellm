@@ -8,12 +8,11 @@
 import json
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly
-from typing_extensions import TypedDict as _ValidatedTypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -38,26 +37,13 @@ class GuardrailsAIResponse(TypedDict):
     validationPassed: bool
 
 
-class InferenceData(TypedDict):
-    name: str
-    shape: list[int]
-    data: list
-    datatype: str
-
-
-class GuardrailsAIResponsePreCall(TypedDict):
-    modelname: str
-    modelversion: str
-    outputs: list[InferenceData]
-
-
 @with_config(ConfigDict(extra="allow", strict=True))
-class _PreCallOutput(_ValidatedTypedDict):
+class _PreCallOutput(TypedDict):
     data: ReadOnly[NotRequired[Sequence[str]]]
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
-class _PreCallResponse(_ValidatedTypedDict):
+class _PreCallResponse(TypedDict):
     outputs: ReadOnly[NotRequired[Sequence[_PreCallOutput]]]
 
 

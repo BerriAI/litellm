@@ -70,10 +70,12 @@ def test_cache_delete_passes_string_and_numeric_keys_to_the_cache(mock_redis_del
     mock_redis_delete.delete_cache_keys.assert_awaited_once_with(keys=keys)
 
 
-def test_cache_delete_rejects_keys_that_are_not_a_list(mock_redis_delete):
-    response = client.post("/cache/delete", headers={"Authorization": "Bearer sk-9876"}, json={"keys": "abc"})
+def test_cache_delete_rejects_keys_that_are_not_a_list_with_a_400_that_hides_them(mock_redis_delete):
+    response = client.post("/cache/delete", headers={"Authorization": "Bearer sk-9876"}, json={"keys": "sk-secret-key"})
 
-    assert response.status_code == 500
+    assert response.status_code == 400
+    assert response.json()["detail"][0]["loc"] == ["keys"]
+    assert "sk-secret-key" not in response.text
     mock_redis_delete.delete_cache_keys.assert_not_awaited()
 
 

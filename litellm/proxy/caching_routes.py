@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -172,6 +172,8 @@ async def cache_delete(request: Request):
                 status_code=500,
                 detail=f"Cache type {litellm.cache.type} does not support deleting a key. only `redis` is supported",
             )
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=e.errors(include_url=False, include_input=False))
     except Exception as e:
         raise HTTPException(
             status_code=500,

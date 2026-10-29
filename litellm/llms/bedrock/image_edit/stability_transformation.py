@@ -50,8 +50,8 @@ else:
 
 @with_config(ConfigDict(extra="allow", strict=True))
 class _StabilityResponse(TypedDict):
-    finish_reasons: ReadOnly[NotRequired[Sequence[object]]]
-    images: ReadOnly[NotRequired[Sequence[str | None]]]
+    finish_reasons: ReadOnly[NotRequired[Sequence[object] | None]]
+    images: ReadOnly[NotRequired[Sequence[str | None] | None]]
 
 
 _STABILITY_RESPONSE: Final = TypeAdapter(_StabilityResponse)
