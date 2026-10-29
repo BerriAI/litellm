@@ -46,10 +46,12 @@ def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str
 def _already_routes_to(model: str, custom_llm_provider: str) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 
-    leading_segment: Final = model.split("/", 1)[0]
-    if leading_segment == model or not names_a_provider(leading_segment):
-        return False
-    return inferred_provider(model) == custom_llm_provider
+    return _leads_with_provider(model) and inferred_provider(model) == custom_llm_provider
+
+
+def _leads_with_provider(model: str) -> bool:
+    leading_segment, separator, _ = model.partition("/")
+    return bool(separator) and names_a_provider(leading_segment)
 
 
 def names_a_provider(candidate: str) -> bool:
@@ -70,8 +72,7 @@ def qualify_agentic_followup_model(patch_model: str | None, model: str, custom_l
     """Resolve the model an agentic follow-up re-dispatches, keeping a hook's own provider."""
     if not patch_model or patch_model == model:
         return qualify_provider_stripped_model(model, custom_llm_provider)
-    leading_segment: Final = patch_model.split("/", 1)[0]
-    if leading_segment != patch_model and names_a_provider(leading_segment):
+    if _leads_with_provider(patch_model):
         return patch_model
     return qualify_provider_stripped_model(patch_model, custom_llm_provider)
 

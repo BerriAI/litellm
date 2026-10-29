@@ -777,7 +777,6 @@ async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_
 async def test_responses_retrieval_followup_reuses_the_model_the_caller_requested(
     guardrail: HeadroomGuardrail,
 ) -> None:
-    """The retrieval follow-up re-dispatches from the handler, which only sees the provider-stripped model."""
     requested_model: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
     retrieve_hash: Final = "b573993006976af767214fac"
     logging_obj: Final = Logging(
