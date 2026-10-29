@@ -69,3 +69,12 @@ def test_schema_compatibility_still_rejects_changes_to_a_kept_relation() -> None
     assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(restricted)) == (
         f"Breaking: Field Item.creator changed type from {old_creator} to {new_creator}",
     )
+
+
+def test_schema_compatibility_rejects_dropping_a_relation_with_a_referential_action() -> None:
+    cascading: Final = RELATED.replace("references: [id])\n creator", "references: [id], onDelete: Cascade)\n creator")
+    kept_lines: Final = (line for line in cascading.splitlines() if not line.startswith((" items ", " owner ")))
+    owner_dropped: Final = "\n".join(kept_lines)
+    assert check_breaking_changes(parse_model_fields(cascading), parse_model_fields(owner_dropped)) == (
+        "Breaking: Field Item.owner was removed",
+    )

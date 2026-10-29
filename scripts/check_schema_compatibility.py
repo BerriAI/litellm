@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 
 Schema: TypeAlias = Mapping[str, Mapping[str, str]]
 MODELS: Final = re.compile(r"^[ \t]*model\s+(\w+)\s*\{(.*?)^[ \t]*\}", re.MULTILINE | re.DOTALL)
+REFERENTIAL_ACTION: Final = re.compile(r"\bon(?:Delete|Update)\s*:")
 
 
 def parse_model_fields(schema: str) -> Schema:
@@ -36,8 +37,9 @@ def _field_changes(model: str, field: str, old_type: str, new_fields: Mapping[st
         yield f"Breaking: Field {model}.{field} changed type from {old_type} to {new_type}"
 
 
-def _is_relation(field_type: str, old_schema: Schema) -> bool:
-    return re.split(r"[\[?\s]", field_type, maxsplit=1)[0] in old_schema
+def _is_droppable_relation(field_type: str, old_schema: Schema) -> bool:
+    is_relation: Final = re.split(r"[\[?\s]", field_type, maxsplit=1)[0] in old_schema
+    return is_relation and REFERENTIAL_ACTION.search(field_type) is None
 
 
 def _model_changes(model: str, old_schema: Schema, new_schema: Schema) -> Iterator[str]:
@@ -46,7 +48,7 @@ def _model_changes(model: str, old_schema: Schema, new_schema: Schema) -> Iterat
         return
     new_fields: Final = new_schema[model]
     for field, old_type in old_schema[model].items():
-        if field in new_fields or not _is_relation(old_type, old_schema):
+        if field in new_fields or not _is_droppable_relation(old_type, old_schema):
             yield from _field_changes(model, field, old_type, new_fields)
 
 
