@@ -171,6 +171,7 @@ LLM_CONFIG_NAMES: Final = (
     "DatabricksDecisionsConfig",
     "HostedVLLMDecisionsConfig",
     "LMStudioDecisionsConfig",
+    "OllamaDecisionsConfig",
     "LayaDecisionsConfig",
     "BespokeDecisionsConfig",
     "OpenAIDecisionsConfig",
@@ -749,6 +750,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "HostedVLLMDecisionsConfig",
     ),
     "LMStudioDecisionsConfig": (".llms.lm_studio.decisions.transformation", "LMStudioDecisionsConfig"),
+    "OllamaDecisionsConfig": (".llms.ollama.decisions.transformation", "OllamaDecisionsConfig"),
     "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
     "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
@@ -801,7 +803,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
     "AnthropicMessagesConfig": (
-        ".llms.anthropic.pass_through.messages.transformation",
+        ".llms.anthropic.messages.native.transformation",
         "AnthropicMessagesConfig",
     ),
     "BedrockClaudePlatformMessagesConfig": (

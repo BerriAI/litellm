@@ -6,6 +6,8 @@ The HTTP router serves `/mcp`, `/{server}/mcp`, `/mcp/{server}`, `/mcp/{server}/
 
 `NativeGateway` aggregates upstream tools, prompts, resources, and resource templates. Tool and prompt calls resolve registered server prefixes, including prefixes containing hyphens. Resource names receive prefixes while their URIs remain unchanged, and reads require exactly one selected server. Tool allowlists apply to discovery and execution. Upstream pagination is drained with cycle detection. Aggregate tool listings retain healthy servers and expose sanitized outcomes under `_meta["litellm.ai/server_outcomes"]`, while scoped REST listings preserve upstream failures
 
+Every HTTP failure, including extractor rejections and the legacy SSE and session transport checks, is an `Error` with its status from `status()` and the `{"detail"}` envelope. The detail is the `litellm_error::Report` of the error, except for upstream and authorization failures, whose causes can carry upstream URLs and backend detail. Startup failures are `ConnectError`, whose `Debug` redacts the SDK's initialization cause for the same reason
+
 ## Integration
 
 Construct `Server` entries from connected SDK peers and pass a `Registry` to `NativeGateway::new`. Keep their `RunningService` handles alive in the host and cancel them during shutdown. SDK peers can use stdio, Streamable HTTP, or another SDK transport. Connection establishment, outbound credentials, HTTP client pools, and reconnection remain owned by the host
