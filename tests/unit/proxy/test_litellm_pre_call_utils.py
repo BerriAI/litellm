@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -6861,7 +6862,7 @@ class TestApplyKeyTagsPreAuth:
 
 def test_resolve_provider_from_deployment_uses_litellm_params_model():
     """When custom_llm_provider is unset, fall back to the prefix of model."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = None
@@ -6872,7 +6873,7 @@ def test_resolve_provider_from_deployment_uses_litellm_params_model():
 
 def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
     """Explicit custom_llm_provider on the deployment wins over model prefix."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = "bedrock"
@@ -6883,21 +6884,21 @@ def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
 
 def test_resolve_provider_from_deployment_no_match():
     """No deployment for the model group -> None."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_by_model_group_name.return_value = None
     assert _resolve_provider_from_deployment(router, "unknown-model") is None
 
 
 def test_resolve_provider_from_deployment_router_raises():
     """Router exceptions must not propagate — fall back to None."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_by_model_group_name.side_effect = RuntimeError("boom")
     assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") is None
 
 
 def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
     """If post-alias lookup fails, the pre-alias name is also tried."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "bedrock/anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = None
@@ -6950,7 +6951,7 @@ def test_apply_overrides_multi_provider_default_picks_correct_provider(
         },
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = "bedrock"
@@ -7001,7 +7002,7 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
         },
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     _apply_credential_overrides_from_model_config(data=data, user_api_key_dict=user_api_key_dict, llm_router=router)
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
@@ -7409,9 +7410,9 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"gpt-4": [0]}
-        team_model_to_deployment_indices = {}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"gpt-4": [0]}
+    mock_router.team_model_to_deployment_indices = {}
 
     test_data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -7420,7 +7421,7 @@ def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monk
         team_model_aliases={"gpt-4": "model_name_team-1_dead-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
     assert test_data.get("model") == "gpt-4"
@@ -7433,9 +7434,9 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
-    class _MockRouter:
-        model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
-        team_model_to_deployment_indices = {}
+    mock_router = route_entry_points_to_stubs(MagicMock())
+    mock_router.model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
+    mock_router.team_model_to_deployment_indices = {}
 
     test_data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -7444,7 +7445,7 @@ def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
         team_model_aliases={"gpt-4": "model_name_team-1_live-uuid"},
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         _update_model_if_team_alias_exists(data=test_data, user_api_key_dict=user_api_key_dict)
 
     assert test_data.get("model") == "model_name_team-1_live-uuid"
@@ -9932,7 +9933,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9964,7 +9965,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9995,7 +9996,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10036,7 +10037,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10077,7 +10078,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table = self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10125,7 +10126,7 @@ class TestResolveUserProviderCredentials:
             return real_matcher(fallbacks=fallbacks, model_group=model_group)
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"unmatched-%d" % i: ["x"]} for i in range(30_000)] + [{"*": ["generic-x"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10151,7 +10152,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"gpt-4o": ["copilot-chat"]}, {"gpt-4o": ["other-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10189,7 +10190,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         entries: Final = [{"azure/unmatched-%d" % i: ["x"]} for i in range(300)]
         entries.insert(290, {"*": ["copilot-chat"]})
         router.fallbacks = entries
@@ -10241,7 +10242,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10270,7 +10271,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10307,7 +10308,7 @@ class TestResolveUserProviderCredentials:
             return real_matcher(fallbacks=fallbacks, model_group=model_group)
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"gpt-4o": ["copilot-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10353,7 +10354,7 @@ class TestResolveUserProviderCredentials:
         table.find_many = AsyncMock(
             return_value=[SimpleNamespace(user_id="user-a", credential_name="copilot-cred", credential_b64=ciphertext)]
         )
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10384,7 +10385,7 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         table: Final = self._env(monkeypatch)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10425,7 +10426,7 @@ class TestResolveUserProviderCredentials:
             return result
 
         monkeypatch.setattr(lpc, "_fallback_edges", _counting_edges)
-        router: Final = MagicMock()
+        router: Final = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = [{"*": ["target-%d" % i for i in range(4999)] + ["copilot-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10464,7 +10465,7 @@ class TestResolveUserProviderCredentials:
 
         table = self._env(monkeypatch)
         monkeypatch.setattr(litellm, "model_alias_map", {"chat-alias": "copilot-chat"})
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10509,7 +10510,7 @@ class TestResolveUserProviderCredentials:
             "get_team_object",
             AsyncMock(return_value=SimpleNamespace(router_settings={"fallbacks": [{"gpt-4o": ["copilot-chat"]}]})),
         )
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -10688,7 +10689,7 @@ class TestResolveUserProviderCredentials:
         from litellm.types.router import LiteLLM_Params
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_list = MagicMock(
             return_value=[
                 {

@@ -185,7 +185,7 @@ async def _install_model_rows(
         assert prisma_client is not None
         await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
     proxy_server.proxy_config._add_deployment(db_models=rows)
-    proxy_server.llm_model_list = router.get_model_list()
+    proxy_server.llm_model_list = router.registry().deployments()
     return "loaded"
 
 
@@ -305,7 +305,8 @@ def _model_is_loaded(model_name_or_id: str) -> bool:
     router: Final = proxy_server.llm_router
     if router is None:
         return False
-    return model_name_or_id in router.model_names or router.has_model_id(model_name_or_id)
+    registry: Final = router.registry()
+    return model_name_or_id in registry.names(kind="group_set") or registry.has_deployment(model_name_or_id)
 
 
 def _guardrail_is_loaded(guardrail_name: str) -> bool:

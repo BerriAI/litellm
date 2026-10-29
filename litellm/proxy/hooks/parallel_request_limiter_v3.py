@@ -76,6 +76,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.spend_tracking.input_tokens import tokenizer_models
 from litellm.responses.litellm_completion_transformation.compaction_items import billable_input_since_newest_compaction
 from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -142,7 +143,7 @@ class RateLimitedModel:
 def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
     if router is None:
         return (model,)
-    return tuple(dict.fromkeys(router.resolved_litellm_models(model, team_id, use_base_model=True))) or (model,)
+    return tuple(dict.fromkeys(router.registry().names(model, kind="litellm_base_models", team_id=team_id))) or (model,)
 
 
 def _resolve_media_models_via_proxy_router(model: str, team_id: str | None) -> tuple[str, ...]:
@@ -156,7 +157,13 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
 
     if llm_router is None:
         return None
-    return resolve_model_group_alias(llm_router.model_group_alias, model)
+    return resolve_model_group_alias(llm_router.registry().aliases(), model)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
+
+
+def _tokenizer_models_via_proxy_router(model: str) -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import llm_router
+
+    return tokenizer_models(model, llm_router)
 
 
 def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
@@ -164,7 +171,7 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
 
     if llm_router is None:
         return None
-    ceiling: Final = llm_router.team_ptu_ceiling(team_id, model_group)
+    ceiling: Final = llm_router.health().team_ptu_ceiling(team_id, model_group)
     return ceiling if ceiling is not None and is_ptu_cost_attribution_enabled() else None
 
 
@@ -884,6 +891,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ] = _resolve_ptu_team_ceiling_via_proxy_router,
         fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
         force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
+        tokenizer_models_resolver: Callable[[str], tuple[str, ...]] = _tokenizer_models_via_proxy_router,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
@@ -893,6 +901,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
+        self._tokenizer_models_resolver = tokenizer_models_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -3556,7 +3565,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         try:
             # Get all deployments for this model
-            model_list: Final = llm_router.get_model_list(model_name=model)
+            model_list: Final = llm_router.registry().deployments(model)
             if not model_list:
                 return False
 
@@ -4009,15 +4018,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             estimate: Final = max(
                 0,
-                int(
-                    token_counter(
-                        model=model or "",
-                        messages=countable_messages,
-                        text=selected_text,
-                        tools=countable_tools,
-                        tool_choice=countable_tool_choice,
-                        use_default_image_token_count=True,
+                *(
+                    int(
+                        token_counter(
+                            model=tokenizer_model,
+                            messages=countable_messages,
+                            text=selected_text,
+                            tools=countable_tools,
+                            tool_choice=countable_tool_choice,
+                            use_default_image_token_count=True,
+                        )
                     )
+                    for tokenizer_model in self._tokenizer_models_resolver(model or "")
                 ),
             )
             return estimate + audio_token_estimate

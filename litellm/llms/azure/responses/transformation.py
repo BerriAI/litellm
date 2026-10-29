@@ -142,7 +142,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 return filtered_item
         return item
 
-    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+    def _validate_input_param(
+        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+    ) -> str | ResponseInputParam:
         """
         Override parent method to also filter out 'status' field from message items.
         Azure OpenAI API does not accept 'status' field in input messages.
@@ -150,7 +152,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         from typing import cast
 
         # First call parent's validation
-        validated_input: Final = super()._validate_input_param(input)
+        validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
 
         # Then filter out status from message items
         if isinstance(validated_input, list):
@@ -333,7 +335,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the get response API request into a URL and data
 
@@ -341,7 +343,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - GET /v1/responses/{response_id}
         """
         get_url: Final = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id)
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         verbose_logger.debug("get response url=%s", get_url)
         return get_url, data
 

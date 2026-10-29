@@ -1180,7 +1180,7 @@ async def test_proxy_config_subscriber_applies_published_model_ids_from_the_db(
     prisma_client = MagicMock()
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=rows)
     router = MagicMock()
-    router.get_model_list.return_value = ["deployment"]
+    router.registry.return_value.deployments.return_value = ["deployment"]
     installed: List[object] = []
 
     def install(db_models: object) -> None:
