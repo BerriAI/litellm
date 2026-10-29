@@ -5,6 +5,7 @@ here is the checker output parse and `introduced`, the diff scan that names the 
 endpoint behind a breach.
 """
 
+import subprocess
 from pathlib import Path
 from typing import Final
 
@@ -58,3 +59,26 @@ def test_introduced_keeps_only_routes_registered_on_added_lines() -> None:
 def test_introduced_does_not_match_a_path_that_is_only_a_prefix_of_an_added_one() -> None:
     added: Final = gate.added_text('+@router.post("/v1/decisions/batch")\n')
     assert gate.introduced((gate.Violation("POST", "/v1/decisions", "OA002"),), added) == ()
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.com", *args], cwd=repo, check=True)
+
+
+def test_base_counts_runs_the_base_tree_with_the_git_ignored_native_extension(tmp_path: Path) -> None:
+    repo: Final = tmp_path / "repo"
+    bridge: Final = repo / "litellm" / "rust_bridge"
+    bridge.mkdir(parents=True)
+    (repo / ".gitignore").write_text("litellm/rust_bridge/_native*.so\n")
+    (bridge / "__init__.py").write_text("")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    (bridge / "_native.abi3.so").write_text("built")
+    checker: Final = tmp_path / "check.py"
+    checker.write_text(
+        "import pathlib, sys\n"
+        "sys.exit('no native extension') if not pathlib.Path('litellm/rust_bridge/_native.abi3.so').exists() else None\n"
+        "print('POST /v1/realtime/translations/calls OA001')\n"
+    )
+    assert dict(gate.base_counts("HEAD", repo_root=repo, checker=checker)) == {"OA001": 1}

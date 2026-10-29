@@ -10,7 +10,8 @@ routes that already exist are only ever allowed to shrink.
 
 The merge-base counts come from scripts/lint_base_counts.py: the disk cache, then the
 CI artifact published for that commit, then a pass of the current checker over a
-detached worktree at the merge-base with that tree first on PYTHONPATH.
+detached worktree at the merge-base with that tree first on PYTHONPATH and the current
+tree's git-ignored rust bridge extension copied in, since `import litellm` needs it.
 """
 
 from __future__ import annotations
@@ -43,6 +44,8 @@ REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 CHECKER: Final = REPO_ROOT / "scripts" / "check_openapi_docs.py"
 TARGET: Final = "litellm"
 TERMINATION_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
+RUST_BRIDGE: Final = Path("litellm") / "rust_bridge"
+NATIVE_EXTENSION_GLOBS: Final = ("_native*.so", "_native*.pyd")
 
 _LINE: Final = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) (?P<code>OA\d+)$")
 _ADDED_LINE: Final = re.compile(r"^\+(?!\+\+)(?P<text>.*)$", re.MULTILINE)
@@ -101,6 +104,12 @@ def _install_termination_handlers() -> None:
             signal.signal(termination, _exit_on_termination)
 
 
+def _copy_native_extensions(source_root: Path, target_root: Path) -> None:
+    for pattern in NATIVE_EXTENSION_GLOBS:
+        for extension in (source_root / RUST_BRIDGE).glob(pattern):
+            shutil.copy(extension, target_root / RUST_BRIDGE / extension.name)
+
+
 def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* checker over the base tree."""
     _install_termination_handlers()
@@ -108,6 +117,7 @@ def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) 
     worktree: Final = parent / "wt"
     try:
         _run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_root)
+        _copy_native_extensions(repo_root, worktree)
         (worktree / "scripts").mkdir(parents=True, exist_ok=True)
         base_checker: Final = worktree / "scripts" / "check_openapi_docs.py"
         shutil.copy(checker, base_checker)
