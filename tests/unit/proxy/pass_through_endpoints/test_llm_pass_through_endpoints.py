@@ -74,6 +74,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 
 
 def _assert_bedrock_processing_data_classification(data: dict[str, object], is_streaming: bool) -> None:
@@ -8656,6 +8657,13 @@ class TestEuJevPassthroughRoute:
         assert response.status_code == 200
         assert recorder.models == [hook_model]
         assert json.loads(route.calls.last.request.content) == body
+
+    @pytest.mark.parametrize("model", [7, ["eu-jeff-latest"], False])
+    def test_a_non_string_client_model_reaches_upstream_unchanged(self, model: int | list[str] | bool) -> None:
+        client_body: Final = {"model": model, "state": "x"}
+        hook_body: Final = {"model": eu_jev_scoped_model(client_body), "state": "x"}
+
+        assert eu_jev_upstream_body(hook_body, client_body) == client_body
 
     def test_a_null_model_is_limited_as_the_latest_release_and_left_out_upstream(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
