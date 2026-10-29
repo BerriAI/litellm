@@ -1225,14 +1225,14 @@ class CustomStreamWrapper:
                             _prepend_upstream_choice_extras(
                                 model_response.choices[0],
                                 upstream_choice,
-                                upstream_choice_extra_keys - {"message", *STREAM_FINISH_CHOICE_FIELDS},
+                                upstream_choice_extra_keys - {"message"},
                             )
                         else:
                             choices: Final = []
                             for choice in upstream_chunk.choices:
                                 try:
                                     if isinstance(choice, BaseModel):
-                                        choice_json = choice.model_dump(exclude=set(STREAM_FINISH_CHOICE_FIELDS))
+                                        choice_json = choice.model_dump()
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
@@ -1316,10 +1316,12 @@ class CustomStreamWrapper:
                 model_response.choices[0].finish_reason = map_finish_reason(
                     finish_reason=self.received_finish_reason
                 )  # ensure consistent output to openai
-                if _upstream_choice_index(_original_chunk) == model_response.choices[0].index:
-                    self._apply_finish_choice_fields(model_response.choices[0])
-                    if response_obj.get("is_finished"):
-                        _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
+                self._apply_finish_choice_fields(model_response.choices[0])
+                if (
+                    response_obj.get("is_finished")
+                    and _upstream_choice_index(_original_chunk) == model_response.choices[0].index
+                ):
+                    _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
 
                 self.sent_last_chunk = True
 

@@ -6103,11 +6103,12 @@ def test_hosted_vllm_stream_keeps_stop_reason_and_every_token_id(
         ),
     )
 
+    assert [choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is not None] == [stop_reason]
     assert [
-        (choice["finish_reason"], choice.get("stop_reason"))
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice["stop_reason"])
         for choice in emitted
-        if choice["finish_reason"] is not None or choice.get("stop_reason") is not None
-    ] == [("stop", stop_reason)]
+        if choice["finish_reason"] is None and choice.get("stop_reason") is not None
+    ] == ([(final_content, stop_reason)] if final_content else [])
     assert _joined_token_ids(emitted) == (16, 11, 17, 20)
 
 
@@ -6217,6 +6218,27 @@ def test_hosted_vllm_stream_with_two_choices_keeps_ids_and_stop_reason_on_their_
     ] == []
 
 
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents", [("2", ""), ("2", "2")], ids=["content-then-finish-only", "both-content-then-finish"]
+)
+def test_hosted_vllm_stream_with_two_choices_keeps_each_stop_reason_on_its_final_content_chunk(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+    content_chunk_stop_reasons: Final = frozenset(
+        (choice["index"], choice["stop_reason"])
+        for choice in emitted
+        if choice["finish_reason"] is None and choice.get("stop_reason") is not None
+    )
+    finished_with_content: Final = frozenset(
+        (index, _TWO_CHOICE_STOP_REASONS[index])
+        for index, content in zip((first_finished, 1 - first_finished), finish_contents)
+        if content
+    )
+
+    assert content_chunk_stop_reasons == finished_with_content
+
 _CACHED_VLLM_TOKEN_IDS: Final = (16, 11, 220, 17, 11, 220, 18, 11, 220, 19)
 
 
@@ -6264,7 +6286,6 @@ async def test_a_streamed_cache_hit_keeps_the_vllm_stop_reason_and_every_token_i
     emitted: Final = await _replayed_cache_hit_choices(logging_obj, replay)
 
     assert [choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is not None] == [", 5"]
-    assert {choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is None} == {None}
     assert _joined_token_ids(emitted) == _CACHED_VLLM_TOKEN_IDS
 
 
