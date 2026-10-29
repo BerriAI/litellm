@@ -174,7 +174,7 @@ lint-ruff: $(LINT_DEP_INSTALL)
 # https://github.com/astral-sh/ruff/discussions/4049
 lint-format-changed: install-dev
 	@base_ref=$$($(RESOLVE_BASE)) && \
-	diff=$$(git diff "$$base_ref" --unified=0 --no-color -- '*.py') && \
+	diff=$$(git diff "$$base_ref" --unified=0 --no-color --no-renames --diff-filter=d -- '*.py') && \
 	printf '%s\n' "$$diff" | \
 	perl -ne '\
 		if (/^diff --git a\/(.*) b\//) { $$file = $$1; } \
@@ -200,7 +200,7 @@ lint-ruff-dev: install-dev
 
 lint-ruff-FULL-dev: install-dev
 	@base_ref=$$($(RESOLVE_BASE)) && \
-	files=$$(git diff --name-only "$$base_ref" -- '*.py') || exit $$?; \
+	files=$$(git diff --name-only --diff-filter=d "$$base_ref" -- '*.py') || exit $$?; \
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 

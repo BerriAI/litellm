@@ -119,16 +119,42 @@ def test_explicit_base_works_without_remote_access(
     assert "No changed litellm Python files" in checked.stdout
 
 
-def test_format_check_skips_branch_files_deleted_from_the_working_tree(remote_and_clone: tuple[Path, Path]) -> None:
+@pytest.mark.parametrize("target", ["lint-format-check-changed", "lint-format-changed", "lint-ruff-FULL-dev"])
+def test_changed_file_targets_skip_paths_gone_from_the_working_tree(
+    remote_and_clone: tuple[Path, Path],
+    target: str,
+) -> None:
     _, repo = remote_and_clone
+    (repo / "litellm" / "renamed_away.py").write_text("a = 1\nb = 2\nc = 3\nd = 4\n")
+    _commit(repo, "add a module the branch renames")
+    base: Final = _git(repo, "rev-parse", "HEAD")
     (repo / "litellm" / "kept.py").write_text("value = 2\n")
     (repo / "litellm" / "dropped.py").write_text("value = 3\n")
     _commit(repo, "add two modules")
-    _git(repo, "rm", "-q", "litellm/dropped.py")
-    checked: Final = _make(repo, "lint-format-check-changed", "BASE_REF=origin/release_branch", "UV_RUN=echo")
+    _git(repo, "rm", "-q", "litellm/dropped.py", "litellm/example.py")
+    _git(repo, "mv", "litellm/renamed_away.py", "litellm/renamed_to.py")
+    (repo / "litellm" / "renamed_to.py").write_text("a = 1\nb = 2\nc = 3\nd = 5\n")
+    checked: Final = _make(repo, target, "-o", "install-dev", f"BASE_REF={base}", "UV_RUN=echo")
     assert checked.returncode == 0, checked.stderr
     assert "litellm/kept.py" in checked.stdout
-    assert "litellm/dropped.py" not in checked.stdout
+    gone: Final = ("litellm/dropped.py", "litellm/example.py", "litellm/renamed_away.py")
+    assert [path for path in gone if path in checked.stdout] == []
+
+
+def test_format_check_skips_a_branch_file_the_merged_base_renamed(remote_and_clone: tuple[Path, Path]) -> None:
+    _, repo = remote_and_clone
+    _git(repo, "checkout", "-qb", "upstream")
+    _git(repo, "mv", "litellm/example.py", "litellm/moved.py")
+    _commit(repo, "upstream renames the module")
+    _git(repo, "checkout", "-q", "release_branch")
+    (repo / "litellm" / "example.py").write_text("value = 5\n")
+    _commit(repo, "branch edits the module")
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "-q", "--no-commit", "upstream")
+    assert (repo / "litellm" / "moved.py").read_text() == "value = 5\n"
+    checked: Final = _make(repo, "lint-format-check-changed", "BASE_REF=upstream", "UV_RUN=echo")
+    assert checked.returncode == 0, checked.stderr
+    assert "litellm/example.py" not in checked.stdout
+    assert "No changed litellm Python files to format-check." in checked.stdout
 
 
 def _freshness(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
