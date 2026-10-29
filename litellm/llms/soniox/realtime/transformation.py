@@ -53,6 +53,7 @@ _MAX_PENDING_FRAMES: Final = 64
 _FINALIZE: Final = '{"type":"finalize"}'
 _KEEPALIVE: Final = '{"type":"keepalive"}'
 _END_STREAM: Final = ""
+_HEALTH_CHECK_SILENCE: Final = bytes(DEFAULT_SAMPLE_RATE // 5)
 _CONTROL_FRAMES: Final = frozenset((_FINALIZE, _KEEPALIVE, _END_STREAM))
 _CLIENT_CONTROL_FRAMES: Final = MappingProxyType(
     {"input_audio_buffer.commit": _FINALIZE, "input_audio_buffer.end": _END_STREAM}
@@ -60,6 +61,7 @@ _CLIENT_CONTROL_FRAMES: Final = MappingProxyType(
 SESSION_STARTED_FRAME: Final = '{"type":"litellm.soniox.session_started"}'
 _ENDPOINT_TOKEN: Final = "<end>"
 _FINALIZED_TOKEN: Final = "<fin>"
+_REFUSED_STREAM_CODES: Final = frozenset({400, 401, 402, 403, 429})
 
 
 class SonioxProtocolError(RealtimeTranscriptionProtocolError):
@@ -127,6 +129,7 @@ class _SonioxResponse(BaseModel):
     total_audio_proc_ms: int | None = None
     error_code: int | None = None
     error_message: str | None = None
+    finished: bool = False
 
 
 def _sample_rate(update: TranscriptionSessionUpdate | None) -> int:
@@ -250,7 +253,7 @@ class SonioxEventTransformer:
     def __init__(self, *, translated_only: bool) -> None:
         self._translated_only: Final = translated_only
         self._item_id: str | None = None
-        self._final_tokens: tuple[_SonioxToken, ...] = ()
+        self._final_tokens: Final[list[_SonioxToken]] = []  # mutable-ok: a turn's tokens append in O(1) each
         self._processed_ms: int = 0
         self._billed_ms: int = 0
         self._refusal: SonioxException | None = None
@@ -279,7 +282,7 @@ class SonioxEventTransformer:
         return duration_usage(unbilled_ms / 1000)
 
     def _report(self, error: SonioxException) -> OpenAIRealtimeErrorEvent:
-        if self._processed_ms == 0:
+        if self._processed_ms == 0 and error.status_code in _REFUSED_STREAM_CODES:
             self._refusal = error
         return error_event(error.message)
 
@@ -293,7 +296,7 @@ class SonioxEventTransformer:
         started: Final = self._start()
         if not token.is_final or (self._translated_only and token.translation_status != "translation"):
             return started
-        self._final_tokens = (*self._final_tokens, token)
+        self._final_tokens.append(token)
         return (*started, _delta(self._current_item_id(), token))
 
     def _start(self) -> tuple[OpenAIRealtimeEvents, ...]:
@@ -311,9 +314,9 @@ class SonioxEventTransformer:
         item_id: Final = self._item_id
         if item_id is None:
             return ()
-        tokens: Final = self._final_tokens
+        tokens: Final = tuple(self._final_tokens)
         self._item_id = None
-        self._final_tokens = ()
+        self._final_tokens.clear()
         stopped: Final[tuple[OpenAIRealtimeEvents, ...]] = (
             (speech_event("input_audio_buffer.speech_stopped", item_id),) if speech_stopped else ()
         )
@@ -515,13 +518,23 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         return (start_request.model_dump_json(exclude_none=True),)
 
 
-async def soniox_realtime_health_check(model: str, api_base: str | None, api_key: str | None) -> bool:
+def _finishes_stream(frame: str | bytes) -> bool:
+    response: Final = _SonioxResponse.model_validate_json(frame)
+    error: Final = _soniox_error(response)
+    if error is not None:
+        raise error
+    return response.finished
+
+
+async def soniox_realtime_health_check(
+    model: str, api_base: str | None, api_key: str | None, options: SonioxRealtimeOptions
+) -> bool:
     import websockets
 
     config: Final = SonioxRealtimeConfig()
     url: Final = config.get_complete_url(api_base, model)
     headers: Final = config.validate_environment({}, model, api_key)
-    start_request: Final = build_start_request(model, None, SonioxRealtimeOptions())
+    start_request: Final = build_start_request(model, None, options)
     async with websockets.connect(
         url,
         additional_headers=headers,
@@ -529,8 +542,9 @@ async def soniox_realtime_health_check(model: str, api_base: str | None, api_key
         ssl=realtime_ssl_for_url(url),
     ) as backend:
         await backend.send(start_request.model_dump_json(exclude_none=True))
+        await backend.send(_HEALTH_CHECK_SILENCE)
         await backend.send(_END_STREAM)
         async for frame in backend:
-            if (error := _soniox_error(_SonioxResponse.model_validate_json(frame))) is not None:
-                raise error
-    return True
+            if _finishes_stream(frame):
+                return True
+    raise SonioxException(status_code=502, message="Soniox closed the realtime stream without finishing it")

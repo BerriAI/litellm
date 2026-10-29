@@ -46,7 +46,7 @@ from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
-from ..llms.soniox.realtime.transformation import soniox_realtime_health_check
+from ..llms.soniox.realtime.transformation import SonioxRealtimeOptions, soniox_realtime_health_check
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
@@ -860,7 +860,12 @@ async def realtime_health_check(
             query_params={"model": model},
         )
     elif custom_llm_provider == "soniox":
-        return await soniox_realtime_health_check(model=model, api_base=resolved_api_base, api_key=health_check_api_key)
+        return await soniox_realtime_health_check(
+            model=model,
+            api_base=resolved_api_base,
+            api_key=health_check_api_key,
+            options=SonioxRealtimeOptions.model_validate(dict(resolved_params)),
+        )
     elif custom_llm_provider == "xai":
         url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}

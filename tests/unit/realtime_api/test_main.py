@@ -1234,7 +1234,7 @@ async def test_arealtime_routes_soniox_with_the_deployment_options(monkeypatch):
     assert json.loads(start_request)["language_hints"] == ["de"]
 
 
-async def _serve_soniox(reply: str) -> tuple[object, list[object]]:
+async def _serve_soniox(reply: str | None) -> tuple[object, list[object]]:
     import websockets
 
     received: list[object] = []
@@ -1243,7 +1243,9 @@ async def _serve_soniox(reply: str) -> tuple[object, list[object]]:
         received.append(connection.request.headers["Authorization"])
         received.append(json.loads(await connection.recv()))
         received.append(await connection.recv())
-        await connection.send(reply)
+        received.append(await connection.recv())
+        if reply is not None:
+            await connection.send(reply)
 
     return await websockets.serve(handler, "127.0.0.1", 0), received
 
@@ -1254,13 +1256,20 @@ async def test_soniox_realtime_health_check_starts_and_ends_a_stream_on_the_depl
     port = next(iter(server.sockets)).getsockname()[1]
     async with server:
         healthy = await realtime_main.realtime_health_check(
-            model="stt-rt-v5", custom_llm_provider="soniox", api_key="soniox-key", api_base=f"http://127.0.0.1:{port}"
+            model="stt-rt-v5",
+            custom_llm_provider="soniox",
+            api_key="soniox-key",
+            api_base=f"http://127.0.0.1:{port}",
+            model_params={"model": "soniox/stt-rt-v5", "language_hints": ["fa", "en"]},
         )
 
     assert healthy is True
     assert received[0] == "Bearer soniox-key"
     assert received[1]["model"] == "stt-rt-v5"
-    assert received[2] == ""
+    assert received[1]["language_hints"] == ["fa", "en"]
+    assert received[2] == bytes(len(received[2]))
+    assert len(received[2]) > 0
+    assert received[3] == ""
 
 
 @pytest.mark.asyncio
@@ -1276,3 +1285,16 @@ async def test_soniox_realtime_health_check_fails_when_soniox_refuses_the_stream
             )
 
     assert refused.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_soniox_realtime_health_check_fails_when_soniox_closes_without_finishing_the_stream():
+    from litellm.llms.soniox.common_utils import SonioxException
+
+    server, _ = await _serve_soniox(None)
+    port = next(iter(server.sockets)).getsockname()[1]
+    async with server:
+        with pytest.raises(SonioxException):
+            await realtime_main.realtime_health_check(
+                model="stt-rt-v5", custom_llm_provider="soniox", api_key="soniox-key", api_base=f"ws://127.0.0.1:{port}"
+            )

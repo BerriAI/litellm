@@ -346,7 +346,7 @@ def test_stream_time_since_the_start_request_is_billed_on_close_because_soniox_c
     assert config.unbilled_usage_on_session_close(MODEL) is None
 
 
-def _refusal_after(processed_ms: int) -> SonioxRealtimeConfig:
+def _refusal_after(processed_ms: int, error_code: int = 401) -> SonioxRealtimeConfig:
     now = [100.0]
     config = SonioxRealtimeConfig(clock=lambda: now[0])
     config.transform_realtime_request(_append(), MODEL)
@@ -355,7 +355,7 @@ def _refusal_after(processed_ms: int) -> SonioxRealtimeConfig:
             _response([_token("Hi")], total_audio_proc_ms=processed_ms), MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT
         )
     config.transform_realtime_response(
-        json.dumps({"error_code": 401, "error_message": "Invalid API key.", "total_audio_proc_ms": processed_ms}),
+        json.dumps({"error_code": error_code, "error_message": "Soniox error.", "total_audio_proc_ms": processed_ms}),
         MODEL,
         MagicMock(),
         EMPTY_TRANSFORM_INPUT,
@@ -375,6 +375,14 @@ def test_an_error_before_any_audio_is_processed_is_a_refused_session_that_bills_
 
 def test_an_error_after_audio_was_processed_keeps_the_session_a_billed_success():
     config = _refusal_after(processed_ms=1500)
+
+    assert config.session_refusal() is None
+    assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 3.0}
+
+
+@pytest.mark.parametrize("error_code", [408, 500, 503])
+def test_a_stream_failure_before_any_audio_is_processed_still_bills_the_open_stream(error_code: int):
+    config = _refusal_after(processed_ms=0, error_code=error_code)
 
     assert config.session_refusal() is None
     assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 3.0}
