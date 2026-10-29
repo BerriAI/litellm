@@ -28,7 +28,6 @@ from typing_extensions import ReadOnly
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
-    CONTENT_FILTER_STREAMING_CHECKSUM_CACHE_SIZE,
     CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
     CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -79,7 +78,7 @@ from .competitor_intent import (
     BaseCompetitorIntentChecker,
 )
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
-from .validators import PATTERN_VALIDATORS, CandidateCheck, run_validator
+from .validators import PATTERN_VALIDATORS
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -243,15 +242,8 @@ class _MaskedText:
             redactions=tuple(sorted((*shifted, *added), key=lambda redaction: redaction.start)),
         )
 
-    def holds_failed_after(self, settled_end: int) -> bool:
-        return any(redaction.failed_checksum and redaction.original_end > settled_end for redaction in self.redactions)
-
-    def restored(self, original: str, settled_end: int) -> tuple[str, tuple[tuple[int, int], ...]]:
-        failed: Final = tuple(
-            redaction
-            for redaction in self.redactions
-            if redaction.failed_checksum and redaction.original_end <= settled_end
-        )
+    def restored(self, original: str) -> tuple[str, tuple[tuple[int, int], ...]]:
+        failed: Final = tuple(redaction for redaction in self.redactions if redaction.failed_checksum)
         if not failed:
             return self.text, ()
         gaps: Final = tuple(
@@ -267,9 +259,9 @@ class _MaskedText:
 
 
 @dataclass(frozen=True, slots=True)
-class _FilteredText:
-    text: str
-    holds_unsettled_numbers: bool = False
+class _FirstPass:
+    masked: _MaskedText
+    detected_rules: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -994,24 +986,20 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return self._merge_spans(match_spans)
 
-    def _checksum_windows(self, text: str, check_candidate: CandidateCheck) -> _SortedSpans:
+    def _checksum_windows(self, text: str) -> _SortedSpans:
         return _SortedSpans.of(
-            itertools.chain.from_iterable(
-                self._valid_checksum_windows(text, entry, check_candidate) for entry in self.compiled_patterns
-            )
+            itertools.chain.from_iterable(self._valid_checksum_windows(text, entry) for entry in self.compiled_patterns)
         )
 
     @staticmethod
-    def _valid_checksum_windows(
-        text: str, pattern_entry: CompiledPatternEntry, check_candidate: CandidateCheck
-    ) -> tuple[tuple[int, int], ...]:
+    def _valid_checksum_windows(text: str, pattern_entry: CompiledPatternEntry) -> tuple[tuple[int, int], ...]:
         validator: Final = pattern_entry["validator"]
         if validator is None:
             return ()
         return tuple(
             candidate.span(1)
             for candidate in _checksum_window_regex(pattern_entry["regex"]).finditer(text)
-            if check_candidate(validator, candidate.group(1))
+            if validator(candidate.group(1))
         )
 
     @staticmethod
@@ -1101,7 +1089,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             Tuple of (matched_text, pattern_name, action) if match found, None otherwise
         """
-        checksum_windows: Final = functools.cache(functools.partial(self._checksum_windows, text, run_validator))
+        checksum_windows: Final = functools.cache(functools.partial(self._checksum_windows, text))
         unmasked: Final = _MaskedText(text=text)
         for pattern_entry in self.compiled_patterns:
             spans = [
@@ -1494,59 +1482,62 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         text: str,
         detections: list[ContentFilterDetection] | None,
-        check_candidate: CandidateCheck,
-        unsettled_tail: int,
-    ) -> _FilteredText:
-        checksum_windows: Final = functools.cache(
-            functools.partial(self._checksum_windows, text, functools.cache(check_candidate))
+        validates_checksums: bool,
+    ) -> str:
+        checksum_windows: Final = (
+            functools.cache(functools.partial(self._checksum_windows, text)) if validates_checksums else None
         )
-        first_detection: Final = len(detections) if detections is not None else 0
-        masked: Final = functools.reduce(
-            lambda masked_so_far, pattern_entry: self._act_on_spans(
-                masked_so_far,
-                pattern_entry,
-                *self._checked_matches(masked_so_far, pattern_entry, checksum_windows),
-                detections,
+        first_pass: Final = functools.reduce(
+            lambda so_far, indexed_entry: self._act_on_first_pass_matches(
+                so_far, *indexed_entry, checksum_windows, detections
             ),
-            self.compiled_patterns,
-            _MaskedText(text=text),
+            enumerate(self.compiled_patterns),
+            _FirstPass(masked=_MaskedText(text=text)),
         )
-        settled_end: Final = len(text) - unsettled_tail
-        holds_unsettled_numbers: Final = masked.holds_failed_after(settled_end)
-        put_back_text, put_back = masked.restored(text, settled_end)
+        put_back_text, put_back = first_pass.masked.restored(text)
         if not put_back:
-            return _FilteredText(text=put_back_text, holds_unsettled_numbers=holds_unsettled_numbers)
+            return put_back_text
         put_back_spans: Final = _SortedSpans.of(put_back)
-        detected_rules: Final = frozenset(
-            (detection["pattern_name"], detection["action"])
-            for detection in (detections or ())[first_detection:]
-            if detection["type"] == "pattern"
-        )
-        return _FilteredText(
-            text=functools.reduce(
-                lambda masked_so_far, pattern_entry: self._act_on_spans(
-                    masked_so_far,
-                    pattern_entry,
-                    *self._matches_on_put_back_numbers(masked_so_far, pattern_entry, put_back_spans),
-                    (
-                        None
-                        if (pattern_entry["pattern_name"], pattern_entry["action"].value) in detected_rules
-                        else detections
-                    ),
-                ),
-                (pattern_entry for pattern_entry in self.compiled_patterns if pattern_entry["validator"] is None),
-                _MaskedText(text=put_back_text),
-            ).text,
-            holds_unsettled_numbers=holds_unsettled_numbers,
+        return functools.reduce(
+            lambda masked_so_far, indexed_entry: self._act_on_spans(
+                masked_so_far,
+                indexed_entry[1],
+                *self._matches_on_put_back_numbers(masked_so_far, indexed_entry[1], put_back_spans),
+                None if indexed_entry[0] in first_pass.detected_rules else detections,
+            ),
+            (
+                (index, pattern_entry)
+                for index, pattern_entry in enumerate(self.compiled_patterns)
+                if pattern_entry["validator"] is None
+            ),
+            _MaskedText(text=put_back_text),
+        ).text
+
+    def _act_on_first_pass_matches(
+        self,
+        so_far: _FirstPass,
+        index: int,
+        pattern_entry: CompiledPatternEntry,
+        checksum_windows: Callable[[], _SortedSpans] | None,
+        detections: list[ContentFilterDetection] | None,
+    ) -> _FirstPass:
+        spans, failed_checksum = self._checked_matches(so_far.masked, pattern_entry, checksum_windows)
+        return _FirstPass(
+            masked=self._act_on_spans(so_far.masked, pattern_entry, spans, failed_checksum, detections),
+            detected_rules=(
+                so_far.detected_rules if all(failed_checksum) else so_far.detected_rules | frozenset((index,))
+            ),
         )
 
     def _checked_matches(
         self,
         masked: _MaskedText,
         pattern_entry: CompiledPatternEntry,
-        checksum_windows: Callable[[], _SortedSpans],
+        checksum_windows: Callable[[], _SortedSpans] | None,
     ) -> tuple[Sequence[tuple[int, int]], tuple[bool, ...]]:
         spans: Final = self._find_pattern_spans(masked.text, pattern_entry)
+        if checksum_windows is None:
+            return spans, (False,) * len(spans)
         return spans, tuple(self._fails_checksum(masked, span, pattern_entry, checksum_windows) for span in spans)
 
     def _matches_on_put_back_numbers(
@@ -1627,21 +1618,18 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return text
 
-    def _filter_single_text(
-        self,
-        text: str,
-        detections: list[ContentFilterDetection] | None = None,
-        check_candidate: CandidateCheck = run_validator,
-    ) -> str:
-        return self._filter_text(text, detections, check_candidate, unsettled_tail=0).text
+    def _filter_single_text(self, text: str, detections: list[ContentFilterDetection] | None = None) -> str:
+        return self._filter_text(text, detections, validates_checksums=True)
+
+    def _filter_streamed_text(self, text: str, detections: list[ContentFilterDetection] | None = None) -> str:
+        return self._filter_text(text, detections, validates_checksums=False)
 
     def _filter_text(
         self,
         text: str,
         detections: list[ContentFilterDetection] | None,
-        check_candidate: CandidateCheck,
-        unsettled_tail: int,
-    ) -> _FilteredText:
+        validates_checksums: bool,
+    ) -> str:
         """
         Apply all content filtering checks to a single text.
 
@@ -1653,9 +1641,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         Args:
             text: Text to filter
             detections: Optional list to append detection information
-            check_candidate: Runs a pattern's checksum validator on a candidate match
-            unsettled_tail: Trailing characters of a still-streaming text that more text can still change. A number
-                that fails its checksum and reaches into this tail stays masked, and the result says so
+            validates_checksums: Whether a match that fails its pattern's checksum is put back. Streams pass False,
+                since later text can still change what a rule matches, so they mask every match as before
 
         Returns:
             Filtered text (with masking applied if action is MASK)
@@ -1687,8 +1674,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             text = self._handle_category_keyword_match(keyword, category_name, severity, action, text, detections)
 
         # Check regex patterns - process ALL patterns, not just first match
-        filtered: Final = self._apply_patterns(text, detections, check_candidate, unsettled_tail)
-        text = filtered.text
+        text = self._apply_patterns(text, detections, validates_checksums)
 
         # Check blocked words - iterate through ALL blocked words
         text_lower = text.lower()
@@ -1698,7 +1684,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 text = self._handle_blocked_word_match(keyword, action, description, text, detections)
                 text_lower = text.lower()  # Update after masking
 
-        return replace(filtered, text=text)
+        return text
 
     @staticmethod
     def _keyword_to_regex_pattern(keyword: str) -> str:
@@ -2301,8 +2287,8 @@ class ContentFilterGuardrail(CustomGuardrail):
             return deferred
         head_detections: Final[list[ContentFilterDetection]] = []  # mutable-ok: filled by _filter_single_text
         try:
-            masked_head: Final = self._filter_single_text(head, detections=head_detections)
-            masked_tail: Final = self._filter_single_text(tail)
+            masked_head: Final = self._filter_streamed_text(head, detections=head_detections)
+            masked_tail: Final = self._filter_streamed_text(tail)
         except Exception:
             return deferred
         if masked_head + masked_tail != masked_text or len(masked_head) > state.yielded_masked_text_len:
@@ -2314,20 +2300,6 @@ class ContentFilterGuardrail(CustomGuardrail):
             committed_detections=state.committed_detections + tuple(head_detections),
             next_trim_len=0,
         )
-
-    def _masked_if_stream_ended(self, text: str, check_candidate: CandidateCheck) -> str | None:
-        try:
-            return self._filter_text(text, None, check_candidate, unsettled_tail=0).text
-        except HTTPException:
-            return None
-
-    @staticmethod
-    def _shared_prefix_len(masked_text: str, masked_if_ended: str | None) -> int:
-        if masked_if_ended is None:
-            return 0
-        if masked_if_ended.startswith(masked_text):
-            return len(masked_text)
-        return len(os.path.commonprefix((masked_text, masked_if_ended)))
 
     @staticmethod
     def _merge_detections(detections: Sequence[ContentFilterDetection]) -> tuple[ContentFilterDetection, ...]:
@@ -2353,9 +2325,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
         plan: Final = self._streamed_scan_plan()
-        check_candidate: Final = functools.lru_cache(maxsize=CONTENT_FILTER_STREAMING_CHECKSUM_CACHE_SIZE)(
-            run_validator
-        )
 
         start_time: Final = datetime.now()
         scan_seconds: float = 0.0  # rebind-ok: accumulates per-chunk scan time across the stream
@@ -2396,17 +2365,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                         scan_started = time.perf_counter()
 
                         try:
-                            filtered = self._filter_text(
-                                text_to_scan,
-                                choice_detections,
-                                check_candidate,
-                                unsettled_tail=0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
-                            )
-                            masked_if_ended = (
-                                self._masked_if_stream_ended(text_to_scan, check_candidate)
-                                if filtered.holds_unsettled_numbers
-                                else filtered.text
-                            )
+                            masked_text = self._filter_streamed_text(text_to_scan, detections=choice_detections)
+                            if is_final and masked_text.endswith(" "):
+                                masked_text = masked_text[:-1]
                             latest_detections = tuple(choice_detections)
                         except HTTPException:
                             state_by_choice[choice_index] = replace(
@@ -2415,19 +2376,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                             raise
                         except Exception as e:
                             verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
-                            filtered = _FilteredText(text=text_to_scan)  # Fallback to current text
-                            masked_if_ended = text_to_scan
+                            masked_text = text_to_scan  # Fallback to current text
                             latest_detections = previous_state.latest_detections
                         finally:
                             scan_seconds += time.perf_counter() - scan_started
 
-                        masked_text = filtered.text[:-1] if is_final and filtered.text.endswith(" ") else filtered.text
                         safe_to_yield_len = max(
                             previous_state.yielded_masked_text_len,
-                            min(
-                                len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
-                                self._shared_prefix_len(masked_text, masked_if_ended),
-                            ),
+                            len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
                         )
                         choice.delta.content = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
                         next_state = replace(
@@ -2441,11 +2397,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                             continue
 
                         trim_started = time.perf_counter()
-                        state_by_choice[choice_index] = (
-                            next_state
-                            if masked_if_ended is None
-                            else self._trim_streamed_choice_buffer(next_state, masked_if_ended, plan)
-                        )
+                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
                         scan_seconds += time.perf_counter() - trim_started
 
                     yield item

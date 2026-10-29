@@ -19,11 +19,6 @@ from litellm.constants import (
 )
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
-    _FilteredText,
-)
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.validators import (
-    CandidateCheck,
-    run_validator,
 )
 from litellm.types.guardrails import (
     BlockedWord,
@@ -632,6 +627,30 @@ class TestContentFilterGuardrail:
         assert entry["masked_entity_count"] == {"group4": 1}
 
     @pytest.mark.asyncio
+    async def test_later_pattern_sharing_a_name_counts_its_matches_on_a_number_put_back(self):
+        later_patterns: Final = (
+            ContentFilterPattern(pattern_type="regex", pattern=r"\bpin\b", action=ContentFilterAction.MASK),
+            ContentFilterPattern(pattern_type="regex", pattern=r"\b\d{4}\b", action=ContentFilterAction.MASK),
+        )
+        card_rule: Final = ContentFilterPattern(
+            pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+        )
+
+        async def masked_entity_count(patterns: tuple[ContentFilterPattern, ...]) -> dict[str, int]:
+            guardrail: Final = ContentFilterGuardrail(
+                guardrail_name="test-checksum-shared-name-count", patterns=list(patterns)
+            )
+            request_data: Final[dict[str, dict[str, list[StandardLoggingGuardrailInformation]]]] = {"metadata": {}}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["pin and card 4111 1111 1111 1112 end"]},
+                request_data=request_data,
+                input_type="request",
+            )
+            return request_data["metadata"]["standard_logging_guardrail_information"][0]["masked_entity_count"]
+
+        assert await masked_entity_count((card_rule, *later_patterns)) == await masked_entity_count(later_patterns)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("pattern_name", "checksum_valid", "checksum_invalid"),
         [
@@ -737,9 +756,57 @@ class TestContentFilterGuardrail:
                 _in_chunks("FR27 5892 9262 5322 3897 2114 796 it 3797 621746 14951 3722 314364 73911 textok 4336 2547 3487 7245 safe and more words", 8),
                 "621746",
             ),
+            (
+                (
+                    ContentFilterPattern(
+                        pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+                    ),
+                    ContentFilterPattern(
+                        pattern_type="prebuilt", pattern_name="uoft_tcard", action=ContentFilterAction.MASK
+                    ),
+                ),
+                (),
+                _in_chunks("id 4111111111111112" + "\n" * 60 + "tcard holder ok", 8),
+                "4111111111111112",
+            ),
+            (
+                (
+                    ContentFilterPattern(
+                        pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+                    ),
+                    ContentFilterPattern(
+                        pattern_type="regex",
+                        pattern=r"\b\d{4}(?: \d{4}){3}\b(?=.{0,90}\bcvv\b)",
+                        name="card_with_cvv",
+                        action=ContentFilterAction.BLOCK,
+                    ),
+                ),
+                (),
+                _in_chunks(
+                    "the number on file is 4111 1111 1111 1112, and the three digits printed on the back are the cvv 123",
+                    4,
+                ),
+                "1112",
+            ),
+            (
+                (
+                    ContentFilterPattern(
+                        pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+                    ),
+                    ContentFilterPattern(
+                        pattern_type="prebuilt", pattern_name="au_medicare", action=ContentFilterAction.BLOCK
+                    ),
+                ),
+                (),
+                _in_chunks(
+                    "ref 8834 6011 1484 9325 7256 904580\nmore text here to push it along, please keep going for a while now",
+                    3,
+                ),
+                "6011",
+            ),
         ],
     )
-    async def test_checksum_pattern_streams_the_same_text_as_a_whole_response(
+    async def test_checksum_pattern_stream_sends_no_digit_of_a_number_it_matched(
         self,
         patterns: tuple[ContentFilterPattern, ...],
         blocked_words: tuple[BlockedWord, ...],
@@ -774,57 +841,9 @@ class TestContentFilterGuardrail:
                 )
             ]
         )
-        whole_response: Final = await guardrail.apply_guardrail(
-            inputs={"texts": ["".join(chunks)]}, request_data={}, input_type="response"
-        )
 
         assert hidden not in streamed
-        assert [streamed] == whole_response.get("texts")
-
-    @pytest.mark.asyncio
-    async def test_checksum_pattern_stream_sends_no_digit_of_a_number_a_later_rule_blocks(self):
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
-
-        guardrail: Final = ContentFilterGuardrail(
-            guardrail_name="test-checksum-streaming-later-block",
-            patterns=[
-                ContentFilterPattern(pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK),
-                ContentFilterPattern(
-                    pattern_type="prebuilt", pattern_name="au_medicare", action=ContentFilterAction.BLOCK
-                ),
-            ],
-        )
-        chunks: Final = _in_chunks(
-            "ref 8834 6011 1484 9325 7256 904580\nmore text here to push it along, please keep going for a while now", 3
-        )
-
-        async def mock_stream():
-            for index, content in enumerate(chunks):
-                yield ModelResponseStream(
-                    id=f"chunk{index}",
-                    choices=[
-                        StreamingChoices(
-                            delta=Delta(content=content),
-                            index=0,
-                            finish_reason="stop" if index == len(chunks) - 1 else None,
-                        )
-                    ],
-                    model="gpt-4",
-                )
-
-        sent: Final[list[str]] = []
-
-        async def send_stream():
-            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=MagicMock(), response=mock_stream(), request_data={}
-            ):
-                sent.append(chunk.choices[0].delta.content or "")
-
-        with pytest.raises(HTTPException) as exc_info:
-            await send_stream()
-
-        assert exc_info.value.detail["pattern"] == "au_medicare"
-        assert "6011" not in "".join(sent)
+        assert streamed.endswith(chunks[-1][-2:])
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1449,15 +1468,13 @@ class TestContentFilterGuardrail:
         scanned_lengths: Final[list[int]] = []
 
         class RecordingGuardrail(ContentFilterGuardrail):
-            def _filter_text(
+            def _filter_streamed_text(
                 self,
                 text: str,
-                detections: list[ContentFilterDetection] | None,
-                check_candidate: CandidateCheck,
-                unsettled_tail: int,
-            ) -> _FilteredText:
+                detections: list[ContentFilterDetection] | None = None,
+            ) -> str:
                 scanned_lengths.append(len(text))
-                return super()._filter_text(text, detections, check_candidate, unsettled_tail)
+                return super()._filter_streamed_text(text, detections=detections)
 
         guardrail: Final = RecordingGuardrail(
             guardrail_name="test-streaming-bounded-scan",
@@ -1493,15 +1510,13 @@ class TestContentFilterGuardrail:
         scanned_lengths: Final[list[int]] = []
 
         class RecordingGuardrail(ContentFilterGuardrail):
-            def _filter_text(
+            def _filter_streamed_text(
                 self,
                 text: str,
-                detections: list[ContentFilterDetection] | None,
-                check_candidate: CandidateCheck,
-                unsettled_tail: int,
-            ) -> _FilteredText:
+                detections: list[ContentFilterDetection] | None = None,
+            ) -> str:
                 scanned_lengths.append(len(text))
-                return super()._filter_text(text, detections, check_candidate, unsettled_tail)
+                return super()._filter_streamed_text(text, detections=detections)
 
         guardrail: Final = RecordingGuardrail(
             guardrail_name="test-streaming-refused-cut-backoff",

@@ -2,7 +2,7 @@ import re
 import string
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final
 
 _SEPARATORS: Final = re.compile(r"[\s\-]")
 _IBAN_CHARACTERS: Final = re.compile(r"[0-9A-Z]{5,34}")
@@ -148,13 +148,6 @@ def passes_iban_mod97(value: str) -> bool:
         return False
     rearranged: Final = iban[4:] + iban[:4]
     return int(rearranged.translate(_IBAN_LETTER_VALUES)) % 97 == 1
-
-
-CandidateCheck: TypeAlias = Callable[[Callable[[str], bool], str], bool]
-
-
-def run_validator(validator: Callable[[str], bool], candidate: str) -> bool:
-    return validator(candidate)
 
 
 PATTERN_VALIDATORS: Final[Mapping[str, Callable[[str], bool]]] = MappingProxyType(
