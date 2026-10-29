@@ -13,7 +13,6 @@ def perplexity_search(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRou
     monkeypatch.setenv("PERPLEXITYAI_API_KEY", "test-perplexity-key")
     monkeypatch.delenv("PERPLEXITY_API_BASE", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
     return respx_mock.post(PERPLEXITY_SEARCH_URL).respond(
         json={"results": [{"title": "AI news", "url": "https://example.com/ai-news", "snippet": "AI news."}]}
     )

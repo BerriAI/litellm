@@ -113,11 +113,12 @@ class _WebSearchSettingsView(TypedDict):
     websearch_interception_params: WebSearchInterceptionConfig
 
 
-def _caller_model(model: str, logging_obj: "LiteLLMLoggingObj | None", custom_llm_provider: object) -> str:
+def _caller_model(model: str, logging_obj: "LiteLLMLoggingObj | None", kwargs: Mapping[str, object]) -> str:
     agentic_view: Final[_AgenticLoopParamsView] = {
         "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params", {}) if logging_obj else {}
     }
     recorded_model: Final = agentic_view["agentic_loop_params"].get("model")
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
     return qualify_provider_stripped_model(
         recorded_model if isinstance(recorded_model, str) and recorded_model else model,
         custom_llm_provider if isinstance(custom_llm_provider, str) else "",
@@ -1266,7 +1267,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             }
         }
 
-        full_model_name: Final = _caller_model(model, logging_obj, kwargs.get("custom_llm_provider"))
+        full_model_name: Final = _caller_model(model, logging_obj, kwargs)
 
         verbose_logger.debug(
             "WebSearchInterception: Built responses request patch model=%s input_items=%d searches=%d",
@@ -1934,7 +1935,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             k: v for k, v in kwargs.items() if not k.startswith("_websearch_interception") and k not in internal_params
         }
 
-        full_model_name: Final = _caller_model(model, logging_obj, kwargs.get("custom_llm_provider"))
+        full_model_name: Final = _caller_model(model, logging_obj, kwargs)
 
         verbose_logger.debug(
             "WebSearchInterception: Built chat completion request patch model=%s messages=%d",
