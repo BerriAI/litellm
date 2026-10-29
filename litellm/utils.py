@@ -8512,34 +8512,26 @@ def _get_valid_models_from_provider_api(
     litellm_params: LiteLLM_Params | None = None,
 ) -> list[str]:
     with _model_cache.listing_lock(custom_llm_provider, litellm_params):
-        return _cached_or_listed_provider_models(provider_config, custom_llm_provider, litellm_params)
+        try:
+            cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
 
+            if cached_result is not None:
+                return cached_result
+            models: Final = provider_config.discover_models(
+                litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
+            )
 
-def _cached_or_listed_provider_models(
-    provider_config: BaseLLMModelInfo,
-    custom_llm_provider: str,
-    litellm_params: LiteLLM_Params | None,
-) -> list[str]:
-    try:
-        cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)
-
-        if cached_result is not None:
-            return cached_result
-        models: Final = provider_config.discover_models(
-            litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
-        )
-
-        _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
-        return models
-    except httpx.TimeoutException as e:
-        verbose_logger.warning("Error getting valid models: %s", e)
-        _model_cache.set_failed_model_listing(
-            custom_llm_provider, litellm_params, ttl_seconds=_FAILED_PROVIDER_LISTING_TTL_SECONDS
-        )
-        return []
-    except Exception as e:
-        verbose_logger.warning("Error getting valid models: %s", e)
-        return []
+            _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
+            return models
+        except httpx.TimeoutException as e:
+            verbose_logger.warning("Error getting valid models: %s", e)
+            _model_cache.set_failed_model_listing(
+                custom_llm_provider, litellm_params, ttl_seconds=_FAILED_PROVIDER_LISTING_TTL_SECONDS
+            )
+            return []
+        except Exception as e:
+            verbose_logger.warning("Error getting valid models: %s", e)
+            return []
 
 
 def get_valid_models(
