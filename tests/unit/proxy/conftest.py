@@ -8,7 +8,6 @@ import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
-from pathlib import Path
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 

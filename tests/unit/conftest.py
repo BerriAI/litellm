@@ -219,12 +219,21 @@ def _flush_client_caches() -> None:
     _reset_aws_auth_caches()
 
 
+_MACOS_LONGEST_SOCKET_PATH: Final = 103
+_LONGEST_SOCKET_SUFFIX: Final = len("/sock12345678/.s.PGSQL.65535")
+
+
+def _socket_root() -> str:
+    default: Final = tempfile.gettempdir()
+    return default if len(default) + _LONGEST_SOCKET_SUFFIX <= _MACOS_LONGEST_SOCKET_PATH else "/tmp"
+
+
 @pytest.fixture
 def socket_dir() -> Iterator[Path]:
     """A directory whose unix socket paths fit the kernel's sun_path limit, which pytest's tmp_path exceeds on macOS."""
-    directory: Final = Path(tempfile.mkdtemp(prefix="sock"))
+    directory: Final = Path(tempfile.mkdtemp(prefix="sock", dir=_socket_root()))
     yield directory
-    shutil.rmtree(directory)
+    shutil.rmtree(directory, ignore_errors=True)
 
 
 @pytest.fixture
