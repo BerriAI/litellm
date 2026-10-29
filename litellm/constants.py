@@ -765,7 +765,6 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
 # Used for web search interception across providers
 LITELLM_WEB_SEARCH_TOOL_NAME: Final = "litellm_web_search"
 
-DEFAULT_IMAGE_ENDPOINT_MODEL: Final = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL: Final = "sora-2"
 
 DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS: Final = get_env_int("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8)
@@ -1066,6 +1065,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
+    "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
 ]
 
 
@@ -1147,6 +1147,7 @@ openai_compatible_providers: Final[list[str]] = [
     "prism",
     "sail",
     "reka",
+    "streamlake",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
