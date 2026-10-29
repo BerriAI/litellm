@@ -4,7 +4,10 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    get_llm_provider,
+    resolve_model_and_provider_for_metadata,
+)
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
@@ -291,3 +294,23 @@ def responses_api_bridge_check(
         model = model.replace("responses/", "")
 
     return model_info, model
+
+
+def chat_completion_ends_in_responses_api(model: str | None, custom_llm_provider: str | None) -> bool:
+    """Whether chat completion for this model is served by a Responses API.
+
+    Encrypted reasoning can be replayed only there. A normal chat provider cannot
+    verify the block, so the messages adapter strips it. ``chatgpt`` and a
+    ``responses/`` model keep it.
+    """
+    if model is None and custom_llm_provider is None:
+        return False
+    try:
+        resolved_model, provider = resolve_model_and_provider_for_metadata(model or "", custom_llm_provider)
+    except Exception as error:  # noqa: BLE001  # unknown model names must not fail message translation
+        verbose_logger.debug("responses replay check failed for %s: %s", model, error)
+        return custom_llm_provider == LlmProviders.CHATGPT.value or (
+            isinstance(model, str) and (model == "chatgpt" or model.startswith("chatgpt/"))
+        )
+    model_info, _resolved = responses_api_bridge_check(model=resolved_model, custom_llm_provider=provider)
+    return model_info.get("mode") == "responses"
