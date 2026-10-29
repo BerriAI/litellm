@@ -84,9 +84,15 @@ fn rejects_malformed_and_incomplete_config(#[case] yaml: &str) {
 
 #[rstest]
 fn distinguishes_read_errors_from_parse_errors(directory: TempDir) {
+    let error = Config::load(directory.path().join("missing.yaml")).unwrap_err();
+    assert!(
+        litellm_error::Report::new(&error)
+            .to_string()
+            .contains("missing.yaml")
+    );
     assert!(matches!(
-        Config::load(directory.path().join("missing.yaml")),
-        Err(Error::Read(error)) if error.kind() == std::io::ErrorKind::NotFound
+        error,
+        Error::Read { source, .. } if source.kind() == std::io::ErrorKind::NotFound
     ));
 }
 

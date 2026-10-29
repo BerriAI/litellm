@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 flate2.workspace = true
+litellm-error.workspace = true
 litellm-http.workspace = true
 litellm-storage-clickhouse.workspace = true
 serde.workspace = true

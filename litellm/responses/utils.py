@@ -1,8 +1,10 @@
 import base64
+import os
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
-from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
+from types import MappingProxyType
+from typing import Any, Final, Optional, TypeVar, Union, cast, get_args, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
@@ -14,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     InputTokensDetails,
@@ -29,6 +32,7 @@ from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    ModelInfo,
     PromptTokensDetailsWrapper,
     ProviderSpecificHeader,
     SpecialEnums,
@@ -399,7 +403,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, object] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> ResponsesAPIResponse: 
         ...
 
@@ -408,7 +412,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, object] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -418,7 +422,7 @@ class ResponsesAPIRequestUtils:
     def update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse | dict[str, Any],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, Any] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Update the responses_api_response_id with model_id and custom_llm_provider.
 
@@ -761,6 +765,12 @@ class ResponsesAPIRequestUtils:
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
                 response_id=decoded_response_id,
+            )
+        except ValueError:
+            return DecodedResponseId(
+                custom_llm_provider=None,
+                model_id=None,
+                response_id=response_id,
             )
         except Exception as e:
             verbose_logger.debug("Error decoding response_id '%s': %s", response_id, e)
@@ -1110,7 +1120,7 @@ class ResponsesAPIRequestUtils:
     def _update_container_ids_in_response(
         responses_api_response: ResponsesAPIResponse | dict[str, object],
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, Any] | None = None,
     ) -> ResponsesAPIResponse | dict[str, object]:
         """Encode container IDs in the response output with provider/model info.
 
@@ -1190,7 +1200,7 @@ class ResponsesAPIRequestUtils:
         """
         from starlette.datastructures import Headers
 
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
@@ -1382,3 +1392,98 @@ def auto_reasoning_summary(model: str, custom_llm_provider: object) -> Reasoning
         provider, model.removeprefix(f"{provider}/")
     )
     return "detailed" if responses_config is None else responses_config.auto_reasoning_summary()
+
+
+def opt_in_auto_reasoning_summary(model: str | None, custom_llm_provider: object) -> ReasoningSummaryLevel | None:
+    if not (litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"):
+        return None
+    return "detailed" if model is None else auto_reasoning_summary(model, custom_llm_provider)
+
+
+def reasoning_with_summary_default(
+    reasoning: Mapping[str, object], summary_alias: object, model: str, custom_llm_provider: object
+) -> Mapping[str, object]:
+    if "summary" in reasoning:
+        return {**reasoning}
+    summary: Final = (
+        summary_alias if summary_alias is not None else opt_in_auto_reasoning_summary(model, custom_llm_provider)
+    )
+    return {**reasoning} if summary is None else {**reasoning, "summary": summary}
+
+
+_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
+
+
+def _openai_model_info(model: str) -> ModelInfo | None:
+    from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
+
+    model_info: Final = lookup_model_info_for_registration(model.removeprefix("responses/"), "openai")
+    return None if isinstance(model_info, ModelInfoLookupMiss) else model_info
+
+
+def _declared_values(values: Sequence[str] | None) -> frozenset[str | None] | None:
+    return None if values is None else frozenset(values)
+
+
+def _openai_reasoning_field_values(model: str) -> Mapping[str, frozenset[str | None] | None]:
+    model_info: Final = _openai_model_info(model)
+    if model_info is None:
+        return MappingProxyType({"summary": _SUMMARY_VALUES, "mode": None, "context": None})
+    if not model_info.get("supports_reasoning"):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            "summary": _SUMMARY_VALUES,
+            "mode": _declared_values(model_info.get("reasoning_modes")),
+            "context": _declared_values(model_info.get("reasoning_contexts")),
+        }
+    )
+
+
+def _openai_accepts_reasoning_field(
+    key: str, value: object, values_by_field: Mapping[str, frozenset[str | None] | None]
+) -> bool:
+    if key == "effort":
+        return True
+    if key not in values_by_field:
+        return False
+    allowed: Final = values_by_field[key]
+    return allowed is None or (isinstance(value, str | None) and value in allowed)
+
+
+def _openai_accepted_reasoning(reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
+    values_by_field: Final = _openai_reasoning_field_values(model)
+    return {
+        key: value for key, value in reasoning.items() if _openai_accepts_reasoning_field(key, value, values_by_field)
+    }
+
+
+def _additional_drop_paths(additional_drop_params: object) -> tuple[str, ...]:
+    if additional_drop_params.__class__ is not list:
+        return ()
+    return tuple(path for path in iter_items(additional_drop_params) if isinstance(path, str))
+
+
+def openai_bridge_reasoning(
+    *,
+    requested: Mapping[str, object],
+    effort_kept: bool,
+    summary_alias: object,
+    model: str,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> Mapping[str, object] | None:
+    drop_paths: Final = _additional_drop_paths(additional_drop_params)
+    if "reasoning_effort" in drop_paths:
+        return None
+    kept: Final = requested if effort_kept else {key: value for key, value in requested.items() if key != "effort"}
+    with_summary: Final = reasoning_with_summary_default(kept, summary_alias, model, "openai")
+    accepted: Final = (
+        _openai_accepted_reasoning(with_summary, model)
+        if drop_params and OpenAIGPTConfig.is_openai_catalog_model(model)
+        else {**with_summary}
+    )
+    remaining: Final = as_str_mapping(
+        _apply_nested_drop_params({"reasoning_effort": accepted}, list(drop_paths)).get("reasoning_effort")
+    )
+    return remaining or None
