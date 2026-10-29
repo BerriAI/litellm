@@ -376,10 +376,10 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Eq '^(litellm/(proxy|types)/|ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$|\.github/workflows/test-linting\.yml$)' <<< "$files"; then
+          if grep -Eq '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$|\.github/workflows/test-linting\.yml$)' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No proxy, types or generator changes in this pull request, nothing to verify."
+            echo "No litellm, enterprise, dependency or generator changes in this pull request, nothing to verify."
             echo "relevant=false" >> "$GITHUB_OUTPUT"
           fi
 
