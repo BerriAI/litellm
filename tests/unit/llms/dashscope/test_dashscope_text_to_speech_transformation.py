@@ -161,6 +161,52 @@ def test_the_sync_handler_downloads_through_the_injected_blocking_client_within_
 
 
 @pytest.mark.parametrize(
+    ("audio_url", "download_url"),
+    (
+        (
+            "http://dashscope-result-sh.oss-cn-shanghai.aliyuncs.com/a1.wav?Expires=1&Signature=ab%2Bc%3D",
+            "https://dashscope-result-sh.oss-cn-shanghai.aliyuncs.com/a1.wav?Expires=1&Signature=ab%2Bc%3D",
+        ),
+        (
+            "https://dashscope-result-sh.oss-cn-shanghai.aliyuncs.com/a1.wav",
+            "https://dashscope-result-sh.oss-cn-shanghai.aliyuncs.com/a1.wav",
+        ),
+        ("http://audio.notaliyuncs.com/a1.wav", "http://audio.notaliyuncs.com/a1.wav"),
+        (AUDIO_URL, AUDIO_URL),
+    ),
+)
+def test_an_alibaba_cloud_audio_url_is_downloaded_over_https(
+    monkeypatch: pytest.MonkeyPatch, audio_url: str, download_url: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    download_seen: Final[list[httpx.Request]] = []  # mutable-ok: request log
+    config: Final = DashScopeTextToSpeechConfig(
+        sync_client=lambda: HTTPHandler(client=httpx.Client(transport=_recording(download_seen, _audio)))
+    )
+
+    speech: Final = BaseLLMHTTPHandler().text_to_speech_handler(
+        model="qwen3-tts-flash",
+        input="Hello.",
+        voice="Cherry",
+        text_to_speech_provider_config=config,
+        text_to_speech_optional_params={},
+        custom_llm_provider="dashscope",
+        litellm_params={"api_key": "k", "api_base": None},
+        logging_obj=_logging(),
+        timeout=30,
+        client=HTTPHandler(
+            client=httpx.Client(
+                transport=_recording([], _api({**SYNTHESIZED, "output": {"audio": {"url": audio_url}}}))
+            )
+        ),
+    )
+
+    assert speech.content == AUDIO
+    (download,) = download_seen
+    assert str(download.url) == download_url
+
+
+@pytest.mark.parametrize(
     ("api_base", "environment", "model", "url"),
     (
         (None, None, "qwen3-tts-flash", f"{INTL}{MULTIMODAL_PATH}"),

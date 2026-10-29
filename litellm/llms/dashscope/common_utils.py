@@ -32,13 +32,15 @@ def dashscope_api_root(api_base: str) -> str:
     return root if separator else trimmed
 
 
+def is_aliyun_host(host: str | None) -> bool:
+    return host is not None and (host == "aliyuncs.com" or host.endswith(".aliyuncs.com"))
+
+
 def _rerank_base_for_chat_shaped_base(api_base: str | None) -> str | None:
     if api_base is None:
         return None
     parsed: Final = urlparse(api_base)
-    host: Final = parsed.hostname or ""
-    on_aliyun_host: Final = host == "aliyuncs.com" or host.endswith(".aliyuncs.com")
-    if not on_aliyun_host or parsed.path.rstrip("/") != DASHSCOPE_CHAT_COMPATIBLE_PATH:
+    if not is_aliyun_host(parsed.hostname) or parsed.path.rstrip("/") != DASHSCOPE_CHAT_COMPATIBLE_PATH:
         return None
     return f"{parsed.scheme}://{parsed.netloc}{DASHSCOPE_RERANK_PATH}"
 

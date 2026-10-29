@@ -137,9 +137,10 @@ CHINA_ENDPOINT: Final = "https://dashscope.aliyuncs.com/api/v1/services/aigc/mul
             None,
             "https://images.example.com/edit",
         ),
+        ("https://dashscope.aliyuncs.com/compatible-mode/v1", None, "https://images.example.com/edit", CHINA_ENDPOINT),
         (
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
             None,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "https://images.example.com/edit",
             "https://images.example.com/edit",
         ),
@@ -307,7 +308,6 @@ def _edited_images(count: int, input_images: int) -> litellm.ImageResponse:
     ("model", "deployment_price", "size", "expected_cost"),
     (
         ("qwen-image-2.0", ModelInfo(input_cost_per_image=0.02), None, 2 * 0.02),
-        ("qwen-image-3.0", ModelInfo(output_cost_per_image=0.05), None, 2 * 0.05),
         ("qwen-image-3.0-pro", ModelInfo(input_cost_per_pixel=1e-08), "1024x1024", 2 * 1024 * 1024 * 1e-08),
     ),
 )
@@ -328,6 +328,35 @@ def test_a_deployment_image_price_bills_the_edit_the_way_it_bills_any_image_call
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
+def test_a_deployment_output_image_price_keeps_billing_the_input_images_at_the_shared_price() -> None:
+    prices: Final = litellm.model_cost["dashscope/qwen-image-3.0"]
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="qwen-image-3.0",
+        completion_response=_edited_images(count=2, input_images=3),
+        custom_llm_provider="dashscope",
+        call_type="aimage_edit",
+        model_info=ModelInfo(output_cost_per_image=0.05),
+    )
+
+    assert prices["input_cost_per_image"] > 0
+    assert cost == pytest.approx(2 * 0.05 + 3 * prices["input_cost_per_image"])
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_deployment_that_copies_both_image_prices_bills_edited_and_input_images_at_its_own_prices() -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="qwen-image-3.0",
+        completion_response=_edited_images(count=2, input_images=3),
+        custom_llm_provider="dashscope",
+        call_type="aimage_edit",
+        model_info=ModelInfo(input_cost_per_image=0.004, output_cost_per_image=0.04),
+    )
+
+    assert cost == pytest.approx(2 * 0.04 + 3 * 0.004)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_a_deployment_token_price_keeps_the_shared_per_image_billing() -> None:
     prices: Final = litellm.model_cost["dashscope/qwen-image-3.0"]
 
@@ -340,4 +369,3 @@ def test_a_deployment_token_price_keeps_the_shared_per_image_billing() -> None:
     )
 
     assert cost == pytest.approx(2 * prices["input_cost_per_image"] + prices["output_cost_per_image"])
-

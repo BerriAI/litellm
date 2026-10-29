@@ -47,7 +47,7 @@ _DASHSCOPE_EDIT_RESPONSE: Final = {
             }
         ]
     },
-    "usage": {"width": 1024, "height": 1024, "image_count": 1},
+    "usage": {"image_count": 1},
 }
 
 

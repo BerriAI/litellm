@@ -16,7 +16,8 @@ from litellm.llms.dashscope.image_generation.transformation import (
     DashScopeImageGenerationConfig,
     DEFAULT_API_BASE,
 )
-from litellm.types.utils import ImageResponse
+from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+from litellm.types.utils import ImageResponse, ModelInfo
 from litellm.utils import get_llm_provider
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -561,3 +562,22 @@ def test_transform_response_rejects_malformed_payloads_without_echoing_them(
         _transform_response(payload)
 
     assert "input_value" not in str(exc_info.value)
+
+
+def test_a_per_pixel_deployment_bills_the_size_dashscope_rendered_when_the_caller_sent_none():
+    response = _transform_response(
+        {
+            "output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]},
+            "usage": {"width": 2048, "height": 1536, "image_count": 1},
+        }
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="qwen-image-2.0",
+        completion_response=response,
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+        model_info=ModelInfo(input_cost_per_pixel=1e-08),
+    )
+
+    assert cost == pytest.approx(2048 * 1536 * 1e-08)

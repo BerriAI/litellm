@@ -75,11 +75,13 @@ _IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
     "output_cost_per_image_token",
 )
 
-_FLAT_IMAGE_PRICE_KEYS: Final[tuple[str, ...]] = (
-    "input_cost_per_image",
-    "output_cost_per_image",
-    "input_cost_per_pixel",
-)
+
+def _deployment_prices_images_without_an_output_price(pricing: ModelInfo | None) -> bool:
+    return pricing is not None and (
+        "input_cost_per_pixel" in pricing
+        or ("input_cost_per_image" in pricing and "output_cost_per_image" not in pricing)
+    )
+
 
 # Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
 # request in the cost-calc path, so the f-strings are built once here instead
@@ -2123,7 +2125,7 @@ def _model_priced_image_cost_calculator(
 
             return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
         case litellm.LlmProviders.DASHSCOPE.value:
-            if pricing is not None and any(key in pricing for key in _FLAT_IMAGE_PRICE_KEYS):
+            if _deployment_prices_images_without_an_output_price(pricing):
                 return None
             from litellm.llms.dashscope.image_generation.cost_calculator import (
                 cost_calculator as dashscope_image_cost_calculator,

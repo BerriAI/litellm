@@ -89,9 +89,11 @@ class DashScopeImageEditConfig(BaseImageEditConfig):
     ) -> str:
         if api_base is not None and not api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
             return api_base
-        configured: Final = api_base or get_secret_str("DASHSCOPE_API_BASE")
+        if api_base is not None:
+            return f"{dashscope_api_root(api_base)}{DASHSCOPE_MULTIMODAL_GENERATION_PATH}"
+        env_api_base: Final = get_secret_str("DASHSCOPE_API_BASE")
         derived: Final = (
-            f"{dashscope_api_root(configured)}{DASHSCOPE_MULTIMODAL_GENERATION_PATH}" if configured else None
+            f"{dashscope_api_root(env_api_base)}{DASHSCOPE_MULTIMODAL_GENERATION_PATH}" if env_api_base else None
         )
         return get_secret_str("DASHSCOPE_API_BASE_IMAGE") or derived or DEFAULT_API_BASE
 

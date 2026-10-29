@@ -2,6 +2,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -26,6 +27,7 @@ from litellm.llms.dashscope.common_utils import (
     DASHSCOPE_MULTIMODAL_GENERATION_PATH,
     DashScopeError,
     dashscope_api_root,
+    is_aliyun_host,
     missing_dashscope_family_key_message,
     resolve_dashscope_family_api_key,
 )
@@ -123,6 +125,13 @@ def _speech_response(raw_response: httpx.Response) -> _SpeechResponse:
         ) from e
 
 
+def _https_on_aliyun(url: str) -> str:
+    parsed: Final = urlparse(url)
+    return (
+        parsed._replace(scheme="https").geturl() if parsed.scheme == "http" and is_aliyun_host(parsed.hostname) else url
+    )
+
+
 def _audio_url(raw_response: httpx.Response) -> tuple[str, _Usage | None]:
     parsed: Final = _speech_response(raw_response)
     if parsed.output is None:
@@ -131,7 +140,7 @@ def _audio_url(raw_response: httpx.Response) -> tuple[str, _Usage | None]:
             message=parsed.message or parsed.code or raw_response.text,
             headers=raw_response.headers,
         )
-    return parsed.output.audio.url, parsed.usage
+    return _https_on_aliyun(parsed.output.audio.url), parsed.usage
 
 
 def _request_timeout(raw_response: httpx.Response) -> httpx.Timeout | None:
