@@ -1773,7 +1773,8 @@ class AmazonConverseConfig(BaseConfig):
             if is_bedrock_application_inference_profile_arn(model):
                 additional_request_params["output_config"] = anthropic_output_config
             elif base_model.startswith("anthropic"):
-                if litellm.drop_params is True and not AnthropicConfig.model_supports_effort_param(model, "bedrock"):
+                drops_unsupported_effort: Final = litellm.drop_params is True or drop_params
+                if drops_unsupported_effort and not AnthropicConfig.model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
                         DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                         model,

@@ -5419,3 +5419,108 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+_CONVERSE_EFFORT_MODEL: Final = "us.anthropic.claude-opus-4-7"
+_CONVERSE_NO_EFFORT_MODEL: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+_CONVERSE_URL: Final = r".*bedrock-runtime.*/converse$"
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "Paris"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 10, "outputTokens": 2, "totalTokens": 12},
+}
+_CITY_FORMAT: Final = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    },
+}
+
+
+@pytest.fixture
+def _converse_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "fake")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post(url__regex=_CONVERSE_URL).mock(return_value=httpx.Response(200, json=_CONVERSE_REPLY))
+
+
+def _sent_converse_fields(route: respx.Route) -> Mapping[str, object]:
+    return json.loads(route.calls.last.request.read()).get("additionalModelRequestFields", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "output_config",
+    [
+        pytest.param({"effort": "high"}, id="effort_only"),
+        pytest.param({"effort": "high", "format": _CITY_FORMAT}, id="effort_and_format"),
+    ],
+)
+async def test_bedrock_converse_claude_gets_the_effort_without_a_thinking_block(
+    _converse_route: respx.Route, output_config: Mapping[str, object]
+) -> None:
+    await litellm.anthropic.messages.acreate(
+        model=f"bedrock/converse/{_CONVERSE_EFFORT_MODEL}",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        output_config=output_config,
+    )
+
+    sent: Final = _sent_converse_fields(_converse_route)
+    assert sent["output_config"] == {"effort": "high"}
+    assert "thinking" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("drop_params_source", "forwards_effort"),
+    [("request", False), ("global", False), ("none", True)],
+)
+async def test_bedrock_converse_claude_without_effort_support_drops_the_effort_only_under_drop_params(
+    _converse_route: respx.Route, monkeypatch: pytest.MonkeyPatch, drop_params_source: str, forwards_effort: bool
+) -> None:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    assert not AnthropicConfig.model_supports_effort_param(_CONVERSE_NO_EFFORT_MODEL, "bedrock"), (
+        "precondition from model_prices_and_context_window.json: Claude Haiku 4.5 takes no effort (2026-10-29)"
+    )
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+    await litellm.anthropic.messages.acreate(
+        model=f"bedrock/converse/{_CONVERSE_NO_EFFORT_MODEL}",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        output_config={"effort": "high"},
+        **({"drop_params": True} if drop_params_source == "request" else {}),
+    )
+
+    assert ("output_config" in _sent_converse_fields(_converse_route)) is forwards_effort
+
+
+@pytest.mark.parametrize(
+    "output_config",
+    [pytest.param(None, id="null"), pytest.param({"format": _CITY_FORMAT}, id="format_only")],
+)
+def test_bedrock_converse_claude_without_an_effort_gets_no_output_config(
+    output_config: Mapping[str, object] | None,
+) -> None:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model=f"bedrock/converse/{_CONVERSE_EFFORT_MODEL}",
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Name the capital of France."}],
+            output_config=output_config,
+        ),
+        custom_llm_provider="bedrock",
+    )
+
+    assert "output_config" not in openai_request
