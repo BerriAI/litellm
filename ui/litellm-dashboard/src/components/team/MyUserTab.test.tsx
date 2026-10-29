@@ -60,7 +60,7 @@ describe("MyUserTab", () => {
         litellm_budget_table: {
           max_budget: 100,
           budget_duration: "30d",
-          budget_reset_at: new Date(2026, 6, 15, 12, 0, 0).toISOString(),
+          budget_reset_at: "2026-07-15T12:00:00.000Z",
         },
       },
       isLoading: false,
@@ -70,7 +70,7 @@ describe("MyUserTab", () => {
     renderWithProviders(<MyUserTab teamId="team-1" />);
 
     expect(screen.getByText("Current Period Spend (USD)")).toBeInTheDocument();
-    expect(screen.getByText("Jun 15 - Jul 15, 2026 (resets Jul 15, 2026 12:00)")).toBeInTheDocument();
+    expect(screen.getByText("Jun 15 - Jul 15, 2026 UTC (resets Jul 15, 2026 12:00 UTC)")).toBeInTheDocument();
     expect(screen.queryByText(/cycle/i)).not.toBeInTheDocument();
   });
 });

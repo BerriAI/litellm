@@ -3,11 +3,11 @@ import utc from "dayjs/plugin/utc";
 
 dayjs.extend(utc);
 
-export function formatBudgetReset(iso: string | null | undefined): string | null {
+export function formatBudgetResetTime(iso: string | null | undefined): string | null {
   if (!iso) return null;
-  const resetDate = dayjs(iso);
+  const resetDate = dayjs.utc(iso);
   if (!resetDate.isValid()) return null;
-  return resetDate.format("MMM D, YYYY");
+  return resetDate.format("MMM D, YYYY HH:mm [UTC]");
 }
 
 export function formatBudgetResetUtc(iso: string | null | undefined): string | null {
@@ -74,12 +74,11 @@ export function describeBudgetResetSchedule(
   budgetDuration: string | null | undefined,
   budgetResetAt: string | null | undefined,
 ): BudgetResetSchedule {
-  const resetDate = budgetResetAt ? dayjs(budgetResetAt) : null;
+  const resetDate = budgetResetAt ? dayjs.utc(budgetResetAt) : null;
   if (resetDate?.isValid()) {
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const label = resetDate.format("MMM D, YYYY HH:mm");
+    const label = resetDate.format("MMM D, YYYY HH:mm [UTC]");
     const period = budgetDuration
-      ? formatBudgetPeriod(getBudgetPeriodStart(budgetDuration, resetDate.utc()).local(), resetDate)
+      ? `${formatBudgetPeriod(getBudgetPeriodStart(budgetDuration, resetDate), resetDate)} UTC`
       : null;
     const coverage = period
       ? `Current Period Spend covers ${period} and resets every ${budgetDuration}.`
@@ -88,7 +87,7 @@ export function describeBudgetResetSchedule(
       label,
       resetAt: resetDate.toISOString(),
       period,
-      tooltip: `${coverage} Next reset ${label} (${timeZone}). ${ROLLOVER_NOTE}`,
+      tooltip: `${coverage} Next reset ${label}. ${ROLLOVER_NOTE}`,
     };
   }
   if (!budgetDuration) {

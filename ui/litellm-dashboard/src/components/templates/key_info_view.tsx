@@ -5,6 +5,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeft, Info } from "lucide-react";
@@ -571,6 +572,7 @@ export default function KeyInfoView({
     return "Unlimited";
   })();
   const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate);
+  const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -747,9 +749,7 @@ export default function KeyInfoView({
                       : `of ${budgetDisplay}`}
                     <InheritedBudgetHint gates={inheritedGates} />
                   </p>
-                  {currentKeyData.budget_reset_at && (
-                    <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
-                  )}
+                  {budgetResetTime && <p className="text-sm">Resets {budgetResetTime}</p>}
                   <p className="text-sm mt-2" data-testid="key-lifetime-spend">
                     Lifetime spend: ${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)}
                     {needsLifetimeSpendBackfill(currentKeyData.spend, currentKeyData.total_spend) && (
@@ -1048,8 +1048,8 @@ export default function KeyInfoView({
                   <div>
                     <p className="text-sm font-medium">Budget Reset</p>
                     <p data-testid="budget-reset-value" className="text-sm">
-                      {currentKeyData.budget_reset_at
-                        ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
+                      {budgetResetTime
+                        ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${budgetResetTime}`
                         : "Never"}
                     </p>
                   </div>

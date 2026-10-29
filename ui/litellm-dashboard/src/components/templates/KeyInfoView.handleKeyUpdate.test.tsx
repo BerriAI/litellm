@@ -517,7 +517,7 @@ describe("KeyInfoView handleKeyUpdate budget_duration", () => {
     );
 
     fireEvent.click(screen.getByText("Settings"));
-    expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Every 30d");
+    expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Every 30d, next Sep 1, 2026 00:00 UTC");
 
     fireEvent.click(screen.getByText("Edit Settings"));
     (globalThis as any).__TEST_FORM_VALUES = {

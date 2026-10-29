@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { budgetPeriodRange, describeBudgetResetSchedule, formatBudgetReset, formatBudgetResetUtc } from "./budgetUtils";
+import {
+  budgetPeriodRange,
+  describeBudgetResetSchedule,
+  formatBudgetResetTime,
+  formatBudgetResetUtc,
+} from "./budgetUtils";
 
-const localIso = (year: number, monthIndex: number, day: number, hour = 12): string =>
-  new Date(year, monthIndex, day, hour, 0, 0).toISOString();
+const utcIso = (year: number, monthIndex: number, day: number, hour = 12): string =>
+  new Date(Date.UTC(year, monthIndex, day, hour, 0, 0)).toISOString();
 
 const originalTimezone: string | undefined = process.env.TZ;
 
@@ -18,14 +23,30 @@ afterEach(() => {
 describe("formatBudgetResetUtc", () => {
   it("formats the reset date in UTC regardless of the local timezone", () => {
     process.env.TZ = "America/Los_Angeles";
-    const resetAt: string = "2026-10-20T00:00:00Z";
+    expect(formatBudgetResetUtc("2026-10-20T00:00:00Z")).toBe("Oct 20, 2026");
+  });
+});
 
-    expect(formatBudgetResetUtc(resetAt)).toBe("Oct 20, 2026");
-    expect(formatBudgetReset(resetAt)).toBe("Oct 19, 2026");
+describe("formatBudgetResetTime", () => {
+  it.each(["America/Los_Angeles", "Asia/Tokyo", "UTC"])(
+    "prints the reset instant in UTC and says so for a %s viewer",
+    (timeZone) => {
+      process.env.TZ = timeZone;
+      expect(formatBudgetResetTime("2026-11-01T00:00:00Z")).toBe("Nov 1, 2026 00:00 UTC");
+      expect(formatBudgetResetTime("2026-10-31T17:30:00-07:00")).toBe("Nov 1, 2026 00:30 UTC");
+    },
+  );
+
+  it.each([null, undefined, "", "not-a-date"])("returns null for %s", (value) => {
+    expect(formatBudgetResetTime(value)).toBeNull();
   });
 });
 
 describe("describeBudgetResetSchedule", () => {
+  beforeEach(() => {
+    process.env.TZ = "America/Los_Angeles";
+  });
+
   it("reports lifetime spend with no period when the budget has no duration and no scheduled reset", () => {
     const schedule = describeBudgetResetSchedule(null, null);
     expect(schedule.label).toBe("Never resets");
@@ -41,62 +62,58 @@ describe("describeBudgetResetSchedule", () => {
     expect(schedule.tooltip).toContain("every 30d");
   });
 
-  it("shows the next reset with its time zone and the rollover carryover note", () => {
-    const resetAt = new Date(2026, 6, 15, 12, 0, 0);
-    const schedule = describeBudgetResetSchedule("30d", resetAt.toISOString());
-    expect(schedule.label).toBe("Jul 15, 2026 12:00");
-    expect(schedule.resetAt).toBe(resetAt.toISOString());
-    expect(schedule.tooltip).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  it("shows the next reset in UTC with the rollover carryover note", () => {
+    const resetAt = utcIso(2026, 6, 15);
+    const schedule = describeBudgetResetSchedule("30d", resetAt);
+    expect(schedule.label).toBe("Jul 15, 2026 12:00 UTC");
+    expect(schedule.resetAt).toBe(resetAt);
+    expect(schedule.tooltip).toContain("Next reset Jul 15, 2026 12:00 UTC.");
     expect(schedule.tooltip).toContain("carries into the next period");
   });
 
   it("treats 30d as one calendar month back from the reset, like the proxy does", () => {
-    const schedule = describeBudgetResetSchedule("30d", localIso(2026, 10, 1, 0));
-    expect(schedule.period).toBe("Oct 1 - Nov 1, 2026");
-    expect(schedule.tooltip).toContain("covers Oct 1 - Nov 1, 2026 and resets every 30d");
+    const schedule = describeBudgetResetSchedule("30d", utcIso(2026, 10, 1, 0));
+    expect(schedule.period).toBe("Oct 1 - Nov 1, 2026 UTC");
+    expect(schedule.tooltip).toContain("covers Oct 1 - Nov 1, 2026 UTC and resets every 30d");
   });
 
   it("subtracts the exact duration for day and week windows", () => {
-    expect(describeBudgetResetSchedule("7d", localIso(2026, 6, 15)).period).toBe("Jul 8 - Jul 15, 2026");
-    expect(describeBudgetResetSchedule("2w", localIso(2026, 6, 15)).period).toBe("Jul 1 - Jul 15, 2026");
-    expect(describeBudgetResetSchedule("weekly", localIso(2026, 6, 15)).period).toBe("Jul 8 - Jul 15, 2026");
+    expect(describeBudgetResetSchedule("7d", utcIso(2026, 6, 15)).period).toBe("Jul 8 - Jul 15, 2026 UTC");
+    expect(describeBudgetResetSchedule("2w", utcIso(2026, 6, 15)).period).toBe("Jul 1 - Jul 15, 2026 UTC");
+    expect(describeBudgetResetSchedule("weekly", utcIso(2026, 6, 15)).period).toBe("Jul 8 - Jul 15, 2026 UTC");
   });
 
-  it("walks the month back in UTC so a non-UTC viewer sees the proxy's window", () => {
-    const originalTz = process.env.TZ;
+  it("shows the proxy's UTC month window to a viewer whose local date is a day behind", () => {
     process.env.TZ = "America/New_York";
-    try {
-      const schedule = describeBudgetResetSchedule("30d", "2026-03-01T00:00:00Z");
-      expect(schedule.period).toBe("Jan 31 - Feb 28, 2026");
-    } finally {
-      process.env.TZ = originalTz;
-    }
+    const schedule = describeBudgetResetSchedule("30d", "2026-03-01T00:00:00Z");
+    expect(schedule.period).toBe("Feb 1 - Mar 1, 2026 UTC");
+    expect(schedule.label).toBe("Mar 1, 2026 00:00 UTC");
   });
 
   it("clamps month windows to the last day of a shorter month", () => {
-    expect(describeBudgetResetSchedule("1mo", localIso(2026, 2, 31)).period).toBe("Feb 28 - Mar 31, 2026");
+    expect(describeBudgetResetSchedule("1mo", utcIso(2026, 2, 31)).period).toBe("Feb 28 - Mar 31, 2026 UTC");
   });
 
   it("spells out both years when the period crosses a year boundary", () => {
-    expect(describeBudgetResetSchedule("30d", localIso(2027, 0, 10)).period).toBe("Dec 10, 2026 - Jan 10, 2027");
+    expect(describeBudgetResetSchedule("30d", utcIso(2027, 0, 10)).period).toBe("Dec 10, 2026 - Jan 10, 2027 UTC");
   });
 
   it("keeps both clock times when an hourly window crosses midnight", () => {
-    expect(describeBudgetResetSchedule("1h", localIso(2026, 6, 16, 0)).period).toBe(
-      "Jul 15, 2026 23:00 - Jul 16, 2026 00:00",
+    expect(describeBudgetResetSchedule("1h", utcIso(2026, 6, 16, 0)).period).toBe(
+      "Jul 15, 2026 23:00 - Jul 16, 2026 00:00 UTC",
     );
   });
 
   it("shows seconds for a window shorter than a minute", () => {
-    expect(describeBudgetResetSchedule("30s", localIso(2026, 6, 15)).period).toBe("Jul 15, 2026 11:59:30 - 12:00:00");
+    expect(describeBudgetResetSchedule("30s", utcIso(2026, 6, 15)).period).toBe("Jul 15, 2026 11:59:30 - 12:00:00 UTC");
   });
 
   it("shows clock times for a window that starts and ends on the same day", () => {
-    expect(describeBudgetResetSchedule("1h", localIso(2026, 6, 15)).period).toBe("Jul 15, 2026 11:00 - 12:00");
+    expect(describeBudgetResetSchedule("1h", utcIso(2026, 6, 15)).period).toBe("Jul 15, 2026 11:00 - 12:00 UTC");
   });
 
   it("falls back to a one day window for a duration the proxy would not recognise", () => {
-    expect(describeBudgetResetSchedule("fortnightly", localIso(2026, 6, 15)).period).toBe("Jul 14 - Jul 15, 2026");
+    expect(describeBudgetResetSchedule("fortnightly", utcIso(2026, 6, 15)).period).toBe("Jul 14 - Jul 15, 2026 UTC");
   });
 
   it("shows no period when the reset date is unparseable", () => {
@@ -108,7 +125,7 @@ describe("describeBudgetResetSchedule", () => {
 
   it("never describes the window as a cycle", () => {
     const schedules = [
-      describeBudgetResetSchedule("30d", localIso(2026, 6, 15)),
+      describeBudgetResetSchedule("30d", utcIso(2026, 6, 15)),
       describeBudgetResetSchedule("30d", null),
       describeBudgetResetSchedule(null, null),
     ];

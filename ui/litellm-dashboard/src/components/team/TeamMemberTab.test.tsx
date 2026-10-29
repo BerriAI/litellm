@@ -32,7 +32,7 @@ const mockSetIsAddMemberModalVisible = vi.fn();
 const mockOnMemberSpendReset = vi.fn();
 const mockOnMemberBudgetReset = vi.fn();
 
-const budgetResetIso = new Date(2026, 6, 15, 12, 0, 0).toISOString();
+const budgetResetIso = "2026-07-15T12:00:00.000Z";
 
 const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
   team_id: "team-123",
@@ -313,7 +313,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("Jul 15, 2026 12:00")).toBeInTheDocument();
+    expect(screen.getByText("Jul 15, 2026 12:00 UTC")).toBeInTheDocument();
   });
 
   it("shows the budget period date range instead of a bare reset date when the duration is known", () => {
@@ -334,8 +334,8 @@ describe("TeamMembersComponent", () => {
 
     expect(screen.getByRole("columnheader", { name: /^Budget Period/ })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /^Current Period Spend \(USD\)/ })).toBeInTheDocument();
-    expect(screen.getByText("Jun 15 - Jul 15, 2026")).toBeInTheDocument();
-    expect(screen.queryByText("Jul 15, 2026 12:00")).not.toBeInTheDocument();
+    expect(screen.getByText("Jun 15 - Jul 15, 2026 UTC")).toBeInTheDocument();
+    expect(screen.queryByText("Jul 15, 2026 12:00 UTC")).not.toBeInTheDocument();
     expect(screen.queryByText(/cycle/i)).not.toBeInTheDocument();
   });
 
@@ -355,7 +355,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.queryByText("Jul 15, 2026 12:00")).not.toBeInTheDocument();
+    expect(screen.queryByText("Jul 15, 2026 12:00 UTC")).not.toBeInTheDocument();
     expect(screen.getAllByText("Never resets").length).toBeGreaterThan(0);
   });
 

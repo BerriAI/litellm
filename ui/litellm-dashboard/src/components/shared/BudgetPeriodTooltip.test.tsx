@@ -22,20 +22,20 @@ const noBudget = { spend: null, maxBudget: null, budgetDuration: "30d", budgetRe
 const noBudgetNoDuration = { spend: 2, maxBudget: null, budgetDuration: null, budgetResetAt: null };
 
 describe("budgetPeriodLines", () => {
-  it("describes the current period, max budget, interval and spend when a reset is scheduled", () => {
-    process.env.TZ = "UTC";
+  it("describes the current period in UTC, max budget, interval and spend when a reset is scheduled", () => {
+    process.env.TZ = "America/Los_Angeles";
     expect(budgetPeriodLines(scheduled)).toEqual([
-      "Budget period: Mar 1, 2026 00:00 to Apr 1, 2026 00:00 (UTC)",
+      "Budget period: Mar 1, 2026 00:00 UTC to Apr 1, 2026 00:00 UTC",
       "Max budget: $100.00",
       "Reset interval: monthly",
       "Spend this period: $12.5000",
     ]);
   });
 
-  it("falls back to the next reset when the duration cannot be parsed", () => {
-    process.env.TZ = "UTC";
+  it("falls back to the next reset in UTC when the duration cannot be parsed", () => {
+    process.env.TZ = "Asia/Tokyo";
     expect(budgetPeriodLines(unparseableDuration)).toEqual([
-      "Next reset: Apr 1, 2026 00:00 (UTC)",
+      "Next reset: Apr 1, 2026 00:00 UTC",
       "Max budget: $100.00",
       "Reset interval: fortnight",
       "Spend this period: $0.0000",

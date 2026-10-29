@@ -337,10 +337,10 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         accessorKey: "budget_reset_at",
         meta: { title: "Budget Reset" },
         header: ({ column }) => <DataTableSortHeader column={column} title="Budget Reset" />,
-        size: 130,
+        size: 160,
         enableSorting: true,
         sortDescFirst: false,
-        cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
+        cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" timeZone="UTC" />,
       },
       {
         id: "models",

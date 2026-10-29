@@ -1,11 +1,10 @@
 "use client";
 
-import dayjs from "dayjs";
 import { CircleHelp } from "lucide-react";
 
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { budgetPeriodRange } from "@/utils/budgetUtils";
+import { budgetPeriodRange, formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface BudgetPeriodTooltipProps {
@@ -15,18 +14,13 @@ export interface BudgetPeriodTooltipProps {
   budgetResetAt: string | null | undefined;
 }
 
-const formatPeriodDate = (iso: string): string => dayjs(iso).format("MMM D, YYYY HH:mm");
-
 const describePeriod = (budgetDuration: string, budgetResetAt: string | null | undefined): string | null => {
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const period = budgetPeriodRange(budgetDuration, budgetResetAt);
   if (period) {
-    return `Budget period: ${formatPeriodDate(period.start)} to ${formatPeriodDate(period.end)} (${timeZone})`;
+    return `Budget period: ${formatBudgetResetTime(period.start)} to ${formatBudgetResetTime(period.end)}`;
   }
-  if (budgetResetAt && dayjs(budgetResetAt).isValid()) {
-    return `Next reset: ${formatPeriodDate(budgetResetAt)} (${timeZone})`;
-  }
-  return null;
+  const nextReset = formatBudgetResetTime(budgetResetAt);
+  return nextReset ? `Next reset: ${nextReset}` : null;
 };
 
 export const budgetPeriodLines = ({
