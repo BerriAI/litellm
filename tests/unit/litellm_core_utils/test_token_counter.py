@@ -2676,17 +2676,20 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, "azure/azure-only-chat-model", {"litellm_provider": "azure", "mode": "chat"})
     registered: Final = tuple(f"concurrently-registered-model-{index}" for index in range(200))
+    checked: Final = threading.Semaphore(0)
 
     def register() -> None:
         for name in registered:
+            if not checked.acquire(timeout=10):
+                return
             litellm.open_ai_chat_completion_models.add(name)
-            time.sleep(0)
 
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             registering: Final = pool.submit(register)
             while not registering.done():
                 assert not is_openai_model("azure-only-chat-model")
+                checked.release()
             registering.result()
     finally:
         litellm.open_ai_chat_completion_models.difference_update(registered)

@@ -1135,7 +1135,7 @@ def _tiktoken_encoding_name(model: str) -> str | None:
 
 
 def _suffixed_variant_encoding_name(model: str) -> str | None:
-    known: Final = [name for name in MODEL_TO_ENCODING if model.startswith(f"{name}-")]
+    known: Final = tuple(name for name in MODEL_TO_ENCODING if model.startswith(f"{name}-"))
     return MODEL_TO_ENCODING[max(known, key=len)] if known else None
 
 

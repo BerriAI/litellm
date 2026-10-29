@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.token_counter import unresolved_tokenizer_model
+from litellm.litellm_core_utils.token_counter import served_openai_models, unresolved_tokenizer_model
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
@@ -62,7 +62,7 @@ def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
     if llm_router is None:
         return (model,)
     group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
-    served: Final = llm_router.served_openai_models(group)
+    served: Final = served_openai_models(llm_router.deployments_named(group) or ())
     if not served:
         return (model,)
     openai_served: Final = tuple(served_model for served_model in served if served_model is not None)
