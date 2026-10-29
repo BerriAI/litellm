@@ -2509,9 +2509,9 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
 
 
 def _gemini_default_mode_streaming(
-    monkeypatch, client_messages, model="gemini-live-2.5-flash-native-audio", drop_params=False
+    monkeypatch, client_messages, model="gemini-live-2.5-flash-native-audio", drop_params=False, defer_setup=False
 ):
-    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", defer_setup, raising=False)
     from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
     client_ws = MagicMock()
@@ -2994,6 +2994,71 @@ async def test_deferred_setup_sends_the_default_setup_before_text_content_that_c
     assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
     errors: Final = [event["error"] for event in _events_sent_to_client(streaming) if event["type"] == "error"]
     assert [(error["code"], error["event_id"]) for error in errors] == [("session_update_not_applied", "evt_late")]
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_sends_a_session_update_that_follows_buffered_audio_at_once(monkeypatch):
+    append: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})
+    commit: Final = json.dumps({"type": "input_audio_buffer.commit"})
+    session_update: Final = json.dumps({"type": "session.update", "session": {"instructions": "Be a pirate."}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch, [append, commit, session_update], model="gemini-live-2.5-flash", defer_setup=True
+    )
+
+    await streaming.client_ack_messages()
+
+    frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup"]
+    assert "Be a pirate." in json.dumps(frames[0]["setup"]["systemInstruction"])
+
+
+@pytest.mark.parametrize("defer_setup", [False, True])
+@pytest.mark.asyncio
+async def test_a_transcription_guardrail_refuses_gemini_audio_it_cannot_screen(monkeypatch, defer_setup):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    session_update: Final = json.dumps(
+        {"type": "session.update", "session": {"turn_detection": {"type": "server_vad", "create_response": False}}}
+    )
+    append: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})
+    commit: Final = json.dumps({"type": "input_audio_buffer.commit", "event_id": "commit_1"})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch,
+        [session_update, append, append, commit, json.dumps({"type": "response.create"}), _TEXT_ITEM_CREATE],
+        model="gemini-live-2.5-flash",
+        defer_setup=defer_setup,
+    )
+
+    await streaming.client_ack_messages()
+
+    frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    refusals: Final = [
+        event["error"]["event_id"]
+        for event in _events_sent_to_client(streaming)
+        if event["type"] == "error" and event["error"]["code"] == "audio_input_not_screenable"
+    ]
+    assert refusals == [None, "commit_1"]
+
+
+@pytest.mark.parametrize("defer_setup", [False, True])
+@pytest.mark.parametrize("control_type", ["response.cancel", "conversation.item.delete", "input_audio_buffer.clear"])
+@pytest.mark.asyncio
+async def test_a_control_event_before_session_update_leaves_the_setup_open(monkeypatch, defer_setup, control_type):
+    control_event: Final = json.dumps({"type": control_type, "item_id": "item_x"})
+    session_update: Final = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
+    streaming, backend_ws = _gemini_default_mode_streaming(
+        monkeypatch,
+        [control_event, session_update, _TEXT_ITEM_CREATE],
+        model="gemini-live-2.5-flash",
+        defer_setup=defer_setup,
+    )
+
+    await streaming.client_ack_messages()
+
+    frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    assert frames[0]["setup"]["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert [event["type"] for event in _events_sent_to_client(streaming) if event["type"] == "error"] == []
 
 
 @pytest.mark.asyncio

@@ -1972,23 +1972,15 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
 _DOCUMENTED_VOICE: Final = sorted(GEMINI_LIVE_DOCUMENTED_VOICES)[0].capitalize()
 
 
-@pytest.mark.parametrize(
-    ("voice", "drop_params", "forwarded"),
-    [
-        ("Notavoice", True, None),
-        ("Notavoice", False, "Notavoice"),
-        (_DOCUMENTED_VOICE, True, _DOCUMENTED_VOICE),
-    ],
-)
-def test_map_openai_params_drops_an_undocumented_voice_only_with_drop_params(voice, drop_params, forwarded):
-    """Gemini Live closes the session on a voice it does not know, and AI Studio knows
-    names Vertex AI refuses, so only drop_params narrows to the documented voices."""
-    mapped = GeminiRealtimeConfig(drop_params=drop_params).map_openai_params(
-        optional_params={}, non_default_params={"voice": voice}
-    )
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("voice", ["Nova", _DOCUMENTED_VOICE])
+def test_google_ai_studio_forwards_any_gemini_voice_name(voice, drop_params):
+    """AI Studio Live speaks voices outside Google's documented list, so the name is forwarded even with drop_params."""
+    config = GeminiRealtimeConfig(drop_params=drop_params)
+    mapped = config.map_openai_params(optional_params={}, non_default_params={"voice": voice})
 
-    speech_config = mapped.get("generationConfig", {}).get("speechConfig")
-    assert (speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] if speech_config else None) == forwarded
+    assert mapped["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == voice
+    assert config.setup_session_update_rejection("gemini-3.8-live", {"voice": voice}, setup_sent=False) is None
 
 
 @pytest.fixture(autouse=False)

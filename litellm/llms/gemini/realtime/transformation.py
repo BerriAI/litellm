@@ -121,13 +121,21 @@ GEMINI_LIVE_DOCUMENTED_VOICES: Final[frozenset[str]] = frozenset(
 )
 
 
-def _gemini_live_speech_config(voice: object, drop_params: bool) -> Mapping[str, object] | None:
+def _is_undocumented_live_voice(voice: object) -> bool:
+    return (
+        isinstance(voice, str)
+        and voice.lower() not in OPENAI_STOCK_REALTIME_VOICES
+        and voice.lower() not in GEMINI_LIVE_DOCUMENTED_VOICES
+    )
+
+
+def _gemini_live_speech_config(voice: object, drop_undocumented: bool) -> Mapping[str, object] | None:
     """Build the Gemini Live speechConfig for a client-requested voice.
 
     Gemini Live closes the session on a voice name it does not know. OpenAI
-    stock voice names are always dropped, and with drop_params so is any name
-    outside Google's documented Live voices, keeping the model's default voice.
-    Every other name is forwarded verbatim for Gemini to accept or refuse.
+    stock voice names are always dropped, and so is any name outside Google's
+    documented Live voices when ``drop_undocumented`` is set, keeping the
+    model's default voice. Every other name is forwarded verbatim.
     """
     if not isinstance(voice, str):
         return VertexGeminiConfig().map_audio_params({"voice": voice})
@@ -138,7 +146,7 @@ def _gemini_live_speech_config(voice: object, drop_params: bool) -> Mapping[str,
             voice,
         )
         return None
-    if drop_params and voice.lower() not in GEMINI_LIVE_DOCUMENTED_VOICES:
+    if drop_undocumented and _is_undocumented_live_voice(voice):
         verbose_logger.warning(
             "Gemini Realtime: voice %s is not a documented Gemini Live voice; "
             "drop_params is set, so it is dropped and the session keeps the model's default voice.",
@@ -225,6 +233,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def _rejects_vad_tuning_with_detection_off(self) -> bool:
         """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
         return True
+
+    def _rejects_undocumented_voices(self) -> bool:
+        return False
 
     @staticmethod
     def _usage_detail_alias(details: object, defaults: dict[str, int]) -> dict[str, object]:
@@ -424,7 +435,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if realtime_input_config is not None:
                     optional_params["realtimeInputConfig"] = realtime_input_config
             elif key == "voice":
-                speech_config = _gemini_live_speech_config(value, self.drop_params)
+                speech_config = _gemini_live_speech_config(
+                    value, self.drop_params and self._rejects_undocumented_voices()
+                )
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
@@ -564,6 +577,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 ),
                 param="session",
             )
+        return self._modality_rejection(model, session) or self._voice_rejection(model, session)
+
+    @staticmethod
+    def _modality_rejection(model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
         param: Final = "output_modalities" if "output_modalities" in session else "modalities"
         unsupported: Final = GeminiRealtimeConfig._unsupported_response_modalities(
             model, GeminiRealtimeConfig._requested_response_modalities(session.get(param))
@@ -577,6 +594,22 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 f"{', '.join(modality.lower() for modality in unsupported)} output. Set drop_params to drop it instead"
             ),
             param=f"session.{param}",
+        )
+
+    def _voice_rejection(self, model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
+        audio_output: Final = as_str_mapping((as_str_mapping(session.get("audio")) or {}).get("output")) or {}
+        output_voice: Final = audio_output.get("voice")
+        voice: Final = output_voice or session.get("voice")
+        if not self._rejects_undocumented_voices() or not _is_undocumented_live_voice(voice):
+            return None
+        param: Final = "session.audio.output.voice" if output_voice else "session.voice"
+        return RealtimeSessionUpdateRejection(
+            code="invalid_value",
+            message=(
+                f"Invalid value for '{param}': {voice} is not a Gemini Live voice {model} offers. "
+                "Set drop_params to drop it instead"
+            ),
+            param=param,
         )
 
     @staticmethod

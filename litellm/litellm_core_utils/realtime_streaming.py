@@ -172,6 +172,23 @@ _HELD_SESSION_UPDATE_TOO_LARGE: Final = RealtimeSessionUpdateRejection(
 )
 
 
+def _unscreened_audio_error_event(client_event_id: object) -> dict[str, object]:
+    return {
+        "type": "error",
+        "event_id": f"event_{uuid.uuid4()}",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "audio_input_not_screenable",
+            "message": (
+                "A realtime_input_transcription guardrail is on, and Gemini Live only transcribes a turn after it "
+                "starts answering it, so audio input was not sent. Send text with conversation.item.create instead"
+            ),
+            "param": None,
+            "event_id": client_event_id if isinstance(client_event_id, str) else None,
+        },
+    }
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
     return json.loads(payload)
@@ -352,6 +369,7 @@ class RealTimeStreaming:
         self._held_session_update: Mapping[str, object] | None = None
         self._applied_session_fields: Mapping[str, object] | None = None
         self._held_session_update_bytes: int = 0
+        self._unscreened_audio_refused: bool = False
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
@@ -389,6 +407,15 @@ class RealTimeStreaming:
         ]
     )
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
+    _CLIENT_CONTENT_TYPES = frozenset(
+        [
+            "conversation.item.create",
+            "response.create",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+            "input_audio_buffer.end",
+        ]
+    )
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
@@ -1134,6 +1161,21 @@ class RealTimeStreaming:
         """Transcription-only sessions have no assistant turn to gate and reject realtime session updates."""
         return not self._is_transcription_session and self._has_audio_transcription_guardrails()
 
+    def _refuses_unscreened_audio(self, msg_type: str | None) -> bool:
+        return (
+            msg_type in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
+            and self._builds_setup_lazily()
+            and self._should_disable_vad_auto_response()
+        )
+
+    async def _refuse_unscreened_audio(self, msg_type: str | None, message: str) -> None:
+        if self._unscreened_audio_refused and msg_type not in RealTimeStreaming._CLIENT_AUDIO_BUFFER_COMMIT_TYPES:
+            return
+        self._unscreened_audio_refused = True
+        await self.websocket.send_text(
+            json.dumps(_unscreened_audio_error_event(_decode_json_object(message).get("event_id")))
+        )
+
     async def run_realtime_guardrails(
         self,
         transcript: str,
@@ -1839,13 +1881,17 @@ class RealTimeStreaming:
                 except (json.JSONDecodeError, AttributeError):
                     pass
 
+                if self._refuses_unscreened_audio(msg_type):
+                    await self._refuse_unscreened_audio(msg_type, message)
+                    continue
+
                 ## LOGGING
                 # Log after any in-place modifications (GA remap, guardrail
                 # turn_detection injection) so audit logs reflect what we
                 # actually forward to the backend.
                 self.store_input(message=message)
 
-                if msg_type != "session.update" and self._uses_deferred_backend_setup():
+                if msg_type in RealTimeStreaming._CLIENT_CONTENT_TYPES and self._uses_deferred_backend_setup():
                     await self._send_setup_before_content(msg_type)
 
                 if self._should_buffer_client_message_until_setup(message):
@@ -1880,8 +1926,11 @@ class RealTimeStreaming:
                     continue
                 if msg_type == "session.update" and self._holds_session_updates_until_first_content():
                     await self._hold_session_update(message)
+                    if self._pending_messages_until_setup:
+                        await self._send_held_session_update_as_setup()
                     continue
-                await self._send_setup_before_content(msg_type)
+                if msg_type in RealTimeStreaming._CLIENT_CONTENT_TYPES:
+                    await self._send_setup_before_content(msg_type)
                 sent = await self._send_to_backend(message)
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True

@@ -665,3 +665,37 @@ def test_vertex_session_update_two_output_modalities_collapse_to_audio():
 
     assert len(messages) == 1
     assert json.loads(messages[0])["setup"]["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+@pytest.mark.parametrize(
+    ("session", "param"),
+    [
+        ({"voice": "Nova"}, "session.voice"),
+        ({"type": "realtime", "audio": {"output": {"voice": "Nova"}}}, "session.audio.output.voice"),
+    ],
+)
+def test_vertex_rejects_an_undocumented_voice_on_the_session_update(session, param):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+
+    rejection: Final = cfg.setup_session_update_rejection("gemini-live-2.5-flash", session, setup_sent=False)
+
+    assert rejection is not None
+    assert (rejection.code, rejection.param) == ("invalid_value", param)
+
+
+@pytest.mark.parametrize("voice", ["Kore", "alloy"])
+def test_vertex_accepts_documented_and_openai_stock_voices_on_the_session_update(voice):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", {"voice": voice}, setup_sent=False) is None
+
+
+def test_vertex_drops_an_undocumented_voice_with_drop_params():
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1", drop_params=True)
+    session_update: Final = {"type": "session.update", "session": {"voice": "Nova", "instructions": "Be brief."}}
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", session_update["session"], setup_sent=False) is None
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+    assert "speechConfig" not in json.loads(messages[0])["setup"].get("generationConfig", {})

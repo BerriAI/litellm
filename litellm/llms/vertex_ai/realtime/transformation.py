@@ -51,6 +51,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     def _rejects_vad_tuning_with_detection_off(self) -> bool:
         return False
 
+    def _rejects_undocumented_voices(self) -> bool:
+        return True
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------
