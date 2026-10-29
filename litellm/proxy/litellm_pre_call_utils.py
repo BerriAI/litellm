@@ -638,7 +638,7 @@ def _has_tag_budget(tag: "LiteLLM_TagTable | None") -> bool:
     return tag.litellm_budget_table.max_budget is not None
 
 
-def _normalized_metadata_slot(
+def normalized_metadata_slot(
     request_data: MutableMapping[str, object], metadata_variable_name: str
 ) -> dict[str, object]:
     """Return the request's metadata slot as a dict, normalising it in place first.
@@ -2407,7 +2407,7 @@ class LiteLLMProxyRequestSetup:
             return
         tags: Final = _STRING_TAGS_ADAPTER.validate_python(raw_tags)
         slot: Final = metadata_key if metadata_key is not None else get_metadata_variable_name_from_kwargs(request_data)
-        metadata: Final = _normalized_metadata_slot(request_data, slot)
+        metadata: Final = normalized_metadata_slot(request_data, slot)
         existing: Final = metadata.get("tags")
         if existing and not isinstance(existing, list):
             return
@@ -2441,7 +2441,7 @@ class LiteLLMProxyRequestSetup:
         caller_tags: Final = caller_metadata.get("tags") if isinstance(caller_metadata, dict) else None
         if not isinstance(caller_tags, list) or not caller_tags:
             return
-        metadata: Final = _normalized_metadata_slot(request_data, slot)
+        metadata: Final = normalized_metadata_slot(request_data, slot)
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
             request_tags=existing_tags if isinstance(existing_tags, list) else None,
@@ -2463,7 +2463,7 @@ class LiteLLMProxyRequestSetup:
             return
 
         _metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_data)
-        metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
+        metadata: Final = normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
@@ -2515,7 +2515,7 @@ class LiteLLMProxyRequestSetup:
         # from (litellm_metadata vs metadata) so the merged tags are visible
         # to _tag_max_budget_check.
         _metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_data)
-        metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
+        metadata: Final = normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
