@@ -6,6 +6,7 @@ from typing import Final
 import httpx
 import pytest
 
+from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.llms.custom_httpx.http2_connection_spread import (
     HTTP2_STREAMS_PER_CONNECTION,
     AsyncHTTP2ConnectionSpread,
@@ -208,14 +209,27 @@ async def test_async_spread_frees_the_streams_of_responses_dropped_without_closi
 
 
 class _TwoChunks(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        yield b"o"
-        yield b"k"
+        try:
+            yield b"o"
+            yield b"k"
+        finally:
+            self.closed = True
 
 
 class _TwoChunkConnection(httpx.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.stream: Final = _TwoChunks()
+        self.closed = False
+
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, stream=_TwoChunks())
+        return httpx.Response(200, stream=self.stream)
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 @pytest.fixture
@@ -230,11 +244,21 @@ async def _read_one_chunk_and_drop(client: httpx.AsyncClient) -> bytes:
     return await anext(response.aiter_raw())
 
 
+def _reaped(closer: EvictedClientCloser, client: httpx.AsyncClient) -> bool:
+    closer.reap()
+    return client.is_closed
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("cyclic_gc_off")
-async def test_async_spread_frees_the_stream_of_a_partly_read_response_dropped_without_closing():
-    spread: Final = AsyncHTTP2ConnectionSpread(lambda _limits: _TwoChunkConnection(), UNCAPPED)
-    async with httpx.AsyncClient(transport=spread) as client:
-        assert await _read_one_chunk_and_drop(client) == b"o"
+async def test_an_evicted_client_closes_once_a_partly_read_response_is_dropped_without_closing():
+    connection: Final = _TwoChunkConnection()
+    client: Final = httpx.AsyncClient(transport=AsyncHTTP2ConnectionSpread(lambda _limits: connection, UNCAPPED))
+    closer: Final = EvictedClientCloser(grace_seconds=0.0)
+    closer.mark_owned(client)
+    closer.schedule(client)
 
-        await _until(lambda: not spread.has_request_in_flight())
+    assert await _read_one_chunk_and_drop(client) == b"o"
+
+    await _until(lambda: _reaped(closer, client))
+    await _until(lambda: connection.closed and connection.stream.closed)
