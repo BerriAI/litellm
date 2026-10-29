@@ -541,6 +541,31 @@ class VertexBase:
             return _TokenState.FRESH
         return _TokenState.INVALID
 
+    def _load_and_cache_credentials_sync(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        credential_cache_key: _VertexCredentialCacheKey,
+    ) -> tuple[_VertexCredentialsObject, str | None]:
+        with self._sync_refresh_lock:
+            cached_credentials, cached_project_id = self._unpack_cached_credentials(credential_cache_key)
+            if cached_credentials is not None:
+                return cached_credentials, cached_project_id
+            try:
+                loaded_credentials, loaded_project_id = self.load_auth(credentials=credentials, project_id=project_id)
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
+                    e,
+                )
+                raise
+            if loaded_credentials is None:
+                raise ValueError(
+                    f"Could not resolve credentials - either dynamically or from environment, for project_id: {project_id}"
+                )
+            self._cache_credentials(credential_cache_key, loaded_credentials, loaded_project_id)
+            return loaded_credentials, loaded_project_id
+
     async def _load_and_cache_credentials(
         self,
         credentials: VERTEX_CREDENTIALS_TYPES | None,
@@ -975,22 +1000,11 @@ class VertexBase:
             verbose_logger.debug(
                 "Credential cache key not found for project_id: %s, loading new credentials", project_id
             )
-
-            try:
-                _credentials, credential_project_id = self.load_auth(credentials=credentials, project_id=project_id)
-            except Exception as e:
-                verbose_logger.exception(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
-                    e,
-                )
-                raise e
-
-            if _credentials is None:
-                raise ValueError(
-                    f"Could not resolve credentials - either dynamically or from environment, for project_id: {project_id}"
-                )
-            # Cache the project_id and credentials from load_auth result (resolved project_id)
-            self._cache_credentials(credential_cache_key, _credentials, credential_project_id)
+            _credentials, credential_project_id = self._load_and_cache_credentials_sync(
+                credentials=credentials,
+                project_id=project_id,
+                credential_cache_key=credential_cache_key,
+            )
 
         ## VALIDATE CREDENTIALS
         verbose_logger.debug("Validating credentials")

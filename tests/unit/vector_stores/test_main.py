@@ -7,7 +7,9 @@ executor, and it must never leak into litellm_params/kwargs where logging would
 model_dump() it (the #19550 serialization trap).
 """
 
+import asyncio
 import json
+import time
 import uuid
 from collections.abc import Mapping
 from typing import Final
@@ -212,7 +214,7 @@ async def test_direct_sdk_vector_store_writes_send_the_callers_metadata_unchange
         ("rag_api", ":retrieveContexts", {"contexts": {"contexts": []}}),
     ),
 )
-async def test_vertex_searches_with_the_same_credentials_refresh_the_google_token_once(
+async def test_concurrent_vertex_searches_with_the_same_credentials_fetch_one_google_token(
     api_type: str,
     search_method: str,
     search_response: dict[str, object],
@@ -229,25 +231,31 @@ async def test_vertex_searches_with_the_same_credentials_refresh_the_google_toke
             "refresh_token": f"unit-refresh-{uuid.uuid4().hex}",
         }
     )
-    token_route: Final = requests_mock.post(
-        "https://oauth2.googleapis.com/token",
-        json={"access_token": "ya29.unit-token", "expires_in": 3600, "token_type": "Bearer"},
-    )
+
+    def slow_token_response(request, context) -> dict[str, object]:
+        time.sleep(0.2)
+        return {"access_token": "ya29.unit-token", "expires_in": 3600, "token_type": "Bearer"}
+
+    token_route: Final = requests_mock.post("https://oauth2.googleapis.com/token", json=slow_token_response)
     search_route: Final = respx_mock.post(f"https://vertex.test/{api_type}{search_method}").mock(
         return_value=httpx.Response(200, json=search_response)
     )
 
-    for _ in range(3):
-        await litellm.vector_stores.asearch(
-            query="what is LiteLLM?",
-            vector_store_id="unit-store",
-            custom_llm_provider=f"vertex_ai/{api_type}",
-            api_base=f"https://vertex.test/{api_type}",
-            vertex_project="unit-project",
-            vertex_location="us-central1",
-            vertex_credentials=credentials,
+    await asyncio.gather(
+        *(
+            litellm.vector_stores.asearch(
+                query="what is LiteLLM?",
+                vector_store_id="unit-store",
+                custom_llm_provider=f"vertex_ai/{api_type}",
+                api_base=f"https://vertex.test/{api_type}",
+                vertex_project="unit-project",
+                vertex_location="us-central1",
+                vertex_credentials=credentials,
+            )
+            for _ in range(5)
         )
+    )
 
-    assert search_route.call_count == 3
+    assert search_route.call_count == 5
     assert token_route.call_count == 1
     assert search_route.calls.last.request.headers["authorization"] == "Bearer ya29.unit-token"
