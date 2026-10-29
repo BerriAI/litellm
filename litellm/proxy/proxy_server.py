@@ -762,6 +762,7 @@ from litellm.proxy.management_endpoints.request_error_endpoints import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimError, scim_error_response
 from litellm.proxy.management_endpoints.session_endpoints import (
     router as session_management_router,
 )
@@ -2300,6 +2301,12 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
 async def management_problem_exception_handler(request: Request, exc: ManagementProblem):
     _close_dangling_otel_server_span(request, exc.problem.status, exc=exc)
     return problem_response(exc.problem)
+
+
+@app.exception_handler(ScimError)
+async def scim_error_exception_handler(request: Request, exc: ScimError) -> JSONResponse:
+    _close_dangling_otel_server_span(request, exc.status_code, exc=exc)
+    return scim_error_response(exc)
 
 
 class _ConfigParamRow(Protocol):

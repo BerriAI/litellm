@@ -65,6 +65,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimRoute, scim_error_from
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
@@ -290,6 +291,7 @@ scim_router: Final = APIRouter(
     prefix="/scim/v2",
     tags=["✨ SCIM v2 (Enterprise Only)"],
     dependencies=[Depends(premium_user_check)],
+    route_class=ScimRoute,
 )
 
 SCIM_MAX_PAGE_SIZE: Final = 100
@@ -904,10 +906,6 @@ class _UserIdWhere(TypedDict):
     user_id: ReadOnly[str]
 
 
-class _ScimErrorDetail(TypedDict):
-    error: ReadOnly[str]
-
-
 async def _ensure_group_member_user(
     user_id: str,
     created_via: str,
@@ -928,7 +926,7 @@ async def _ensure_group_member_user(
     existing: Final = await _table(UserRepository(prisma_client)).find_unique(where=where)
     if existing is not None:
         return None
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": f"Failed to create user '{user_id}' while provisioning group membership."
     }
     raise HTTPException(status_code=500, detail=detail)
@@ -943,14 +941,14 @@ async def _raise_if_batch_over_license_limit(new_user_count: int, prisma_client:
         return
     billable_users: Final = await UserRepository(prisma_client).count_billable_users()
     if _license_check.is_over_limit(total_users=billable_users + new_user_count):
-        detail: Final[_ScimErrorDetail] = {
+        detail: Final[ScimErrorDetail] = {
             "error": "License is over limit. Please contact support@berri.ai to upgrade your license."
         }
         raise HTTPException(status_code=403, detail=detail)
 
 
 def _member_not_provisioned_error(user_id: str) -> HTTPException:
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": f"User with ID '{user_id}' does not exist. "
         "Please create the user first via POST /Users before adding to group."
     }
@@ -1850,10 +1848,11 @@ async def create_user(
         if user.userName:
             existing_user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": user.userName})
             if existing_user:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"error": f"User already exists with username: {user.userName}"},
-                )
+                duplicate: Final[ScimErrorDetail] = {
+                    "error": f"User already exists with username: {user.userName}",
+                    "scimType": "uniqueness",
+                }
+                raise HTTPException(status_code=409, detail=duplicate)
 
         # Create user in database
         user_id: Final = user.userName or str(uuid.uuid4())
@@ -1896,10 +1895,16 @@ async def create_user(
 
         scim_user: Final = await ScimTransformations.transform_litellm_user_to_scim_user(user=created_user)
         return scim_user
-    except HTTPException as e:  # allow exceptions like SCIMUserAlreadyExists to be raised
-        raise e
     except Exception as e:
-        raise handle_exception_on_proxy(e)
+        failure: Final = e if isinstance(e, HTTPException) else handle_exception_on_proxy(e)
+        answered: Final = scim_error_from(failure)
+        verbose_proxy_logger.warning(
+            "SCIM create user %s failed with %s: %s",
+            sanitize_for_log(user.userName),
+            answered.status_code,
+            sanitize_for_log(answered.error.detail),
+        )
+        raise failure
 
 
 @scim_router.put(
@@ -2116,7 +2121,7 @@ async def merge_placeholder(
         keys: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=owned_keys)
         rejection: Final = _placeholder_rejection(placeholder, resolved, len(keys))
         if rejection is not None:
-            detail: Final[_ScimErrorDetail] = {"error": rejection}
+            detail: Final[ScimErrorDetail] = {"error": rejection}
             raise HTTPException(status_code=409, detail=detail)
 
         target_user_id: Final = resolved[0]
@@ -2976,10 +2981,11 @@ async def create_group(
         existing_team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
 
         if existing_team:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": f"Group already exists with ID: {team_id}"},
-            )
+            duplicate: Final[ScimErrorDetail] = {
+                "error": f"Group already exists with ID: {team_id}",
+                "scimType": "uniqueness",
+            }
+            raise HTTPException(status_code=409, detail=duplicate)
 
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)
@@ -3130,7 +3136,7 @@ def _pathless_group_resource(op: SCIMPatchOperation) -> Mapping[str, object] | N
     resource: Final = _json_object_fields(op.value)
     if op.op != "remove" and resource is not None:
         return resource
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": (
             "A remove operation requires a 'path' (RFC 7644 Section 3.5.2.2)"
             if op.op == "remove"
