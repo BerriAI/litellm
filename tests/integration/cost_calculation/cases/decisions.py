@@ -162,6 +162,37 @@ TYPESAFE_JEV_LATEST_SYSTEMONE: Final = CostTrackingTestCase(
         completion_tokens=22,
     ),
 )
+TYPESAFE_JEV_PREVIEW_ANSWERED_AS_PRICED_VERSION_SYSTEMONE: Final = CostTrackingTestCase(
+    name="typesafe/jev-preview-answered-as-priced-version-systemone",
+    covers="quota_management.spend_tracking.systemone.logs_cost",
+    model="typesafe/jev-preview",
+    endpoint="/v1/systemone",
+    request={
+        "model": "$MODEL",
+        "state": "The replacement part arrived but the wrong size.",
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    },
+    upstream_body={
+        "model": "jev-preview",
+        "state": "The replacement part arrived but the wrong size.",
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "jev-latest",
+            "answers": {"is_refund": {"type": "noul", "noul": 0.31}},
+            "usage": {"input_tokens": 311, "output_tokens": 9},
+        },
+    ),
+    expected=ExactExpected(
+        spend=311 * 4.2e-08,
+        input_cost=311 * 4.2e-08,
+        output_cost=0.0,
+        prompt_tokens=311,
+        completion_tokens=9,
+    ),
+)
 
 # perplexity/pplx-decider-v1-27b
 PERPLEXITY_PPLX_DECIDER_V1_27B_DECISIONS: Final = CostTrackingTestCase(
@@ -514,6 +545,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OPENAI_GPT_6_LUNA_SYSTEMONE,
     TYPESAFE_JEV_LATEST_DECISIONS,
     TYPESAFE_JEV_LATEST_SYSTEMONE,
+    TYPESAFE_JEV_PREVIEW_ANSWERED_AS_PRICED_VERSION_SYSTEMONE,
     PERPLEXITY_PPLX_DECIDER_V1_27B_DECISIONS,
     PERPLEXITY_PPLX_DECIDER_V1_27B_SYSTEMONE,
     CLOUDFLARE_CLEF_FLASH_DECISIONS,
