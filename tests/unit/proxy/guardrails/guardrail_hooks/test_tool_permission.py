@@ -1534,6 +1534,125 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("call_type", "message", "rewritten"),
+        [
+            (
+                "anthropic_messages",
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [{"type": "tool_reference", "tool_name": "mcp__weather__lookup"}],
+                        },
+                        {"type": "text", "text": "Tool loaded."},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Permission denied: tool mcp__weather__lookup is not available",
+                                }
+                            ],
+                        },
+                        {"type": "text", "text": "Tool loaded."},
+                    ],
+                },
+            ),
+            (
+                "anthropic_messages",
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_search_tool_result",
+                            "tool_use_id": "srvtoolu_1",
+                            "content": {
+                                "type": "tool_search_tool_search_result",
+                                "tool_references": [
+                                    {"type": "tool_reference", "tool_name": "mcp__weather__lookup"},
+                                    {"type": "tool_reference", "tool_name": "get_weather"},
+                                ],
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_search_tool_result",
+                            "tool_use_id": "srvtoolu_1",
+                            "content": {
+                                "type": "tool_search_tool_search_result",
+                                "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                            },
+                        }
+                    ],
+                },
+            ),
+            (
+                "acompletion",
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "tool_reference", "tool_name": "mcp__weather__lookup"},
+                        {"type": "tool_reference", "tool_name": "get_weather"},
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                },
+            ),
+        ],
+    )
+    async def test_pre_call_rewrite_drops_references_to_a_removed_tool(self, call_type, message, rewritten) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "weather in Istanbul"}, message],
+            "tools": [
+                {"name": "get_weather", "input_schema": {"type": "object"}, "defer_loading": True},
+                {"name": "mcp__weather__lookup", "input_schema": {"type": "object"}, "defer_loading": True},
+            ],
+        }
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert [tool["name"] for tool in result["tools"]] == ["get_weather"]
+        assert result["messages"] == [{"role": "user", "content": "weather in Istanbul"}, rewritten]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_choice", ["required", {"type": "function", "name": "get_weather"}])
+    async def test_pre_call_rewrite_keeps_tool_choice_when_only_loaded_tools_remain(self, tool_choice) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        get_weather = {"type": "function", "name": "get_weather"}
+        lookup = {"type": "function", "name": "mcp__weather__lookup"}
+        data = {
+            "model": "m",
+            "input": [{"role": "user", "content": "hi"}, {"type": "tool_search_output", "tools": [get_weather, lookup]}],
+            "tools": [lookup],
+            "tool_choice": tool_choice,
+        }
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == []
+        assert result["input"][1] == {"type": "tool_search_output", "tools": [get_weather]}
+        assert result["tool_choice"] == tool_choice
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         ("rule", "tools", "tool_choice"),
         [
             (

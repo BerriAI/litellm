@@ -158,6 +158,62 @@ def _loaded_input_tools(data: object) -> tuple[object, ...]:
     return tuple(chain.from_iterable(_tool_search_output_tools(item) or () for item in _input_items(data)))
 
 
+def _reference_name(part: object) -> str | None:
+    fields: Final = _object_mapping(part)
+    is_reference: Final = fields is not None and fields.get("type") == "tool_reference"
+    return _non_empty_string(fields.get("tool_name")) if fields is not None and is_reference else None
+
+
+def _references_one_of(part: object, names: frozenset[str]) -> bool:
+    name: Final = _reference_name(part)
+    return name is not None and name in names
+
+
+def _without_references_to(parts: Sequence[object], names: frozenset[str]) -> Sequence[object]:
+    removed: Final = [name for name in map(_reference_name, parts) if name is not None and name in names]
+    kept: Final = [part for part in parts if not _references_one_of(part, names)]
+    if kept or not removed:
+        return kept
+    return [{"type": "text", "text": f"Permission denied: tool {', '.join(removed)} is not available"}]
+
+
+def _tool_result_without_references(fields: Mapping[str, object], names: frozenset[str]) -> object:
+    parts: Final = _object_list(fields.get("content"))
+    return {**fields, "content": _without_references_to(parts, names)} if parts else fields
+
+
+def _search_result_without_references(fields: Mapping[str, object], names: frozenset[str]) -> object:
+    result: Final = _object_mapping(fields.get("content"))
+    references: Final = _object_list(result.get("tool_references")) if result is not None else None
+    if result is None or references is None:
+        return fields
+    kept: Final = [reference for reference in references if not _references_one_of(reference, names)]
+    return {**fields, "content": {**result, "tool_references": kept}}
+
+
+def _without_references_in_block(block: object, names: frozenset[str]) -> object:
+    fields: Final = _object_mapping(block)
+    if fields is None:
+        return block
+    match fields.get("type"):
+        case "tool_result":
+            return _tool_result_without_references(fields, names)
+        case "tool_search_tool_result":
+            return _search_result_without_references(fields, names)
+        case _:
+            return block
+
+
+def _without_references_in_message(message: object, names: frozenset[str]) -> object:
+    fields: Final = _object_mapping(message)
+    content: Final = _object_list(fields.get("content")) if fields is not None else None
+    if fields is None or content is None:
+        return message
+    if fields.get("role") == "tool":
+        return {**fields, "content": _without_references_to(content, names)}
+    return {**fields, "content": [_without_references_in_block(block, names) for block in content]}
+
+
 def _allowed_tool_entries(tool_choice: Mapping[str, object]) -> Sequence[object] | None:
     if tool_choice.get("type") != "allowed_tools":
         return None
@@ -920,17 +976,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
             if tools is not None and kept_tools is not None
             else frozenset()
         )
-        tool_choice: Final = _REQUEST_DATA.validate_python(data.get("tool_choice"))
-        if tool_choice is not None:
-            data["tool_choice"] = self._rewritten_tool_choice(
-                tool_choice, removed_names, removed_types, bool(kept_tools) or bool(kept_functions)
-            )
-
         input_items: Final = _input_items(data)
         if any(_tool_search_output_tools(item) is not None for item in input_items):
             data["input"] = [
                 self._with_kept_loaded_tools(item, denied_targets, denied_names, call_type) for item in input_items
             ]
+
+        tools_remain: Final = bool(kept_tools) or bool(kept_functions) or bool(_loaded_input_tools(data))
+        tool_choice: Final = _REQUEST_DATA.validate_python(data.get("tool_choice"))
+        if tool_choice is not None:
+            data["tool_choice"] = self._rewritten_tool_choice(tool_choice, removed_names, removed_types, tools_remain)
 
         named_function_call: Final = self._get_named_function_call(data)
         if named_function_call in denied_names:
@@ -938,7 +993,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         messages: Final = without_tool_search_items_loading(_REQUEST_DATA.validate_python(data), denied_names)
         if messages is not None:
-            data["messages"] = messages  # rebind-ok: rewrite mode edits the request in place
+            data["messages"] = [  # rebind-ok: rewrite mode edits the request in place
+                _without_references_in_message(message, removed_names) for message in messages
+            ]
 
         return data
 
