@@ -145,7 +145,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     is_tinyfish_agent_url,
@@ -2014,7 +2014,7 @@ async def pass_through_request(
                 original_exception=e,
                 request_data=_build_passthrough_failure_request_payload(
                     parsed_body=e.request_data,
-                    kwargs=None,
+                    kwargs={"call_type": CallTypes.pass_through.value},
                     logging_obj=None,
                     custom_llm_provider=custom_llm_provider,
                     url=url,

@@ -34,6 +34,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -8805,6 +8806,7 @@ async def test_passthrough_guardrail_block_logs_model_from_url(
     assert isinstance(failure.original_exception, ModifyResponseException)
     assert failure.request_data["model"] == expected_model
     assert failure.request_data["custom_llm_provider"] == expected_provider
+    assert PrometheusLogger._extract_api_provider_from_request_data(failure.request_data) == expected_provider
 
 
 @pytest.mark.asyncio

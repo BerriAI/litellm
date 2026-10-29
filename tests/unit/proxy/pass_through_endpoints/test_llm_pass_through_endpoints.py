@@ -25,6 +25,7 @@ from starlette.datastructures import FormData
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypesLiteral
@@ -6371,9 +6372,9 @@ class TestVertexAILiveWebsocketPassthrough:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
 
-        assert [(d["model"], d["custom_llm_provider"]) for d in recorder.request_data] == [
-            (expected_model, "vertex_ai")
-        ]
+        assert [
+            (d["model"], PrometheusLogger._extract_api_provider_from_request_data(d)) for d in recorder.request_data
+        ] == [(expected_model, "vertex_ai")]
 
 
 class TestAnthropicProxyRoute:
