@@ -37,7 +37,7 @@ from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
-from litellm.utils import supports_prompt_caching
+from litellm.utils import _invalidate_model_cost_lowercase_map, supports_prompt_caching
 import os
 import threading
 from unittest.mock import MagicMock, patch
@@ -603,6 +603,101 @@ def test_completion_cost_bills_requested_model_regional_row_when_response_names_
     cost: Final = completion_cost(completion_response=response)
 
     assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["bedrock/eu-central-1/sol-regional-test"], usage))
+
+
+def test_completion_cost_keeps_served_row_rates_filled_by_a_rule_over_the_requested_alias(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "sol-fill-snapshot-test", {"litellm_provider": "openai", "mode": "chat"})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "sol-fill-alias-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    filled_rates: Final = {"input_cost_per_token": 5e-6, "output_cost_per_token": 11e-6}
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model="sol-fill-snapshot-test", choices=[], usage=usage)
+    response._hidden_params.update({"litellm_model_name": "openai/sol-fill-alias-test", "custom_llm_provider": "openai"})
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    set_fallback_generalizations(
+        [
+            {
+                "name": "sol-fill-snapshot-rates",
+                "pattern": r"^sol-fill-snapshot-test$",
+                "fill_missing_for_providers": ["openai"],
+                "model_info": filled_rates,
+            }
+        ]
+    )
+    try:
+        cost: Final = completion_cost(completion_response=response)
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+    assert cost == pytest.approx(_token_rates_cost(filled_rates, usage))
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "requested_model", "served_model", "bucket"),
+    [
+        (
+            "fireworks_ai",
+            "fireworks_ai/accounts/fireworks/models/sol-bucket-requested-test",
+            "accounts/fireworks/models/sol-bucket-405b-test",
+            "fireworks-ai-above-16b",
+        ),
+        ("together_ai", "together_ai/sol-bucket-requested-test", "meta-llama/Sol-Bucket-8B-Test", "together-ai-4.1b-8b"),
+    ],
+)
+def test_completion_cost_keeps_served_size_bucket_rates_over_the_requested_model(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    requested_model: str,
+    served_model: str,
+    bucket: str,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {
+            "litellm_provider": custom_llm_provider,
+            "mode": "chat",
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 7e-6,
+        },
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model=served_model, choices=[], usage=usage)
+    response._hidden_params.update({"litellm_model_name": requested_model, "custom_llm_provider": custom_llm_provider})
+
+    cost: Final = completion_cost(completion_response=response)
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[bucket], usage))
+
+
+def test_completion_cost_bills_a_requested_model_priced_after_an_unpriced_lookup(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-late-priced-test"
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    def display_name_response() -> ModelResponse:
+        response: Final = ModelResponse(model="Sol Late Display", choices=[], usage=usage)
+        response._hidden_params.update({"litellm_model_name": requested_model, "custom_llm_provider": "fireworks_ai"})
+        return response
+
+    completion_cost(completion_response=display_name_response())
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    cost: Final = completion_cost(completion_response=display_name_response())
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], usage))
 
 
 def test_completion_cost_orders_candidates_without_extra_huggingface_config_requests(

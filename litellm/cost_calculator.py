@@ -73,6 +73,10 @@ from litellm.llms.deepseek.cost_calculator import (
     cost_per_token as deepseek_cost_per_token,
 )
 from litellm.llms.fireworks_ai.cost_calculator import (
+    FIREWORKS_AI_DEFAULT_PRICING_MODEL,
+    get_base_model_for_pricing,
+)
+from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
 from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
@@ -152,7 +156,9 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
+    cached_cost_map_key,
     cached_get_model_info_helper,
+    mapped_model_fill_missing,
     model_info_with_pricing_overrides,
     runtime_model_cost_registrations,
     token_counter,
@@ -1032,25 +1038,40 @@ def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_nam
     return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
 
 
-def _cost_map_row_key(model: str, custom_llm_provider: str | None) -> str | None:
-    try:
-        return cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)["key"]
-    except Exception:
-        return None
-
-
-def _row_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
-    key: Final = _cost_map_row_key(model, custom_llm_provider)
-    return key is not None and cost_map_key_prices_anything(key)
-
-
 def _rule_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
     rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
     return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
 
 
 def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
-    return _row_declares_rates(model, custom_llm_provider) or _rule_declares_rates(model, custom_llm_provider)
+    key: Final = cached_cost_map_key(model, custom_llm_provider)
+    if key is None:
+        return False
+    entry: Final = _raw_cost_map_entry(key)
+    if entry is None:
+        return _rule_declares_rates(model, custom_llm_provider)
+    fill_missing: Final = mapped_model_fill_missing(key, entry)
+    return _cost_map_entry_prices_anything(entry if fill_missing is None else {**fill_missing, **entry})
+
+
+def _size_pricing_bucket(model: str, custom_llm_provider: str | None) -> str | None:
+    match custom_llm_provider:
+        case "fireworks_ai":
+            bucket: Final = get_base_model_for_pricing(model)
+            return None if bucket == FIREWORKS_AI_DEFAULT_PRICING_MODEL else bucket
+        case "together_ai":
+            return get_model_params_and_category(model, call_type=CallTypes.completion)
+        case _:
+            return None
+
+
+def _size_bucket_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
+    bucket: Final = _size_pricing_bucket(model, custom_llm_provider)
+    return bucket is not None and cost_map_key_prices_anything(bucket)
+
+
+def _served_model_has_rates(model: str, custom_llm_provider: str | None) -> bool:
+    return _resolves_to_rates(model, custom_llm_provider) or _size_bucket_declares_rates(model, custom_llm_provider)
 
 
 def _served_or_priced_requested_model(
@@ -1063,9 +1084,9 @@ def _served_or_priced_requested_model(
     if served in (requested, requested.partition("/")[2]):
         return served
     pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
-    if not _resolves_to_rates(requested, pricing_provider):
+    if _served_model_has_rates(served, pricing_provider):
         return served
-    return served if _resolves_to_rates(served, pricing_provider) else requested
+    return requested if _resolves_to_rates(requested, pricing_provider) else served
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
