@@ -1994,3 +1994,58 @@ async def test_authenticated_browser_identity_checks_embedded_session(
     )
     request: Final = Request({"type": "http", "headers": [(b"cookie", ("token=" + cookie).encode())]})
     assert await get_authenticated_browser_user_id(request) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cookie_user_id,key_owner,proxy_admin_id,cli_owner,byok_user_id",
+    [
+        ("default_user_id", "litellm-qa-admin-id", "litellm-qa-admin-id", "litellm-qa-admin-id", None),
+        ("default_user_id", "default_user_id", "litellm-qa-admin-id", "default_user_id", "default_user_id"),
+        ("default_user_id", "bob", "litellm-qa-admin-id", None, None),
+        ("default_user_id", "litellm-qa-admin-id", None, None, None),
+        ("alice", "litellm-qa-admin-id", "litellm-qa-admin-id", None, None),
+        ("alice", "alice", "litellm-qa-admin-id", "alice", "alice"),
+    ],
+)
+async def test_cli_browser_session_accepts_the_proxy_admin_key_that_login_issues(
+    monkeypatch: pytest.MonkeyPatch,
+    cookie_user_id: str,
+    key_owner: str,
+    proxy_admin_id: str | None,
+    cli_owner: str | None,
+    byok_user_id: str | None,
+) -> None:
+    from datetime import datetime, timezone
+
+    import jwt
+    from starlette.requests import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import (
+        get_authenticated_browser_session,
+        get_authenticated_browser_user_id,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "local-test-encryption-key")
+    if proxy_admin_id is None:
+        monkeypatch.delenv("PROXY_ADMIN_ID", raising=False)
+    else:
+        monkeypatch.setenv("PROXY_ADMIN_ID", proxy_admin_id)
+    monkeypatch.setattr(proxy_server, "master_key", "local-test-cookie-signing-key-32-bytes")
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    session: Final = UserAPIKeyAuth(
+        user_id=key_owner, expires=datetime(2099, 1, 1, tzinfo=timezone.utc), is_session_token=True
+    )
+    key: Final = encrypt_bearer_token(session.model_dump_json(exclude_none=True), LITELLM_SESSION_TOKEN_PREFIX)
+    cookie: Final = jwt.encode(
+        {"user_id": cookie_user_id, "key": key, "login_method": "username_password", "exp": 9999999999},
+        "local-test-cookie-signing-key-32-bytes",
+        algorithm="HS256",
+    )
+    request: Final = Request({"type": "http", "headers": [(b"cookie", ("token=" + cookie).encode())]})
+    cli_session: Final = await get_authenticated_browser_session(request)
+    assert (None if cli_session is None else cli_session.user_id) == cli_owner
+    assert await get_authenticated_browser_user_id(request) == byok_user_id

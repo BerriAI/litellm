@@ -15,6 +15,7 @@ Endpoints implemented here:
 import base64
 import hashlib
 import html as _html_module
+import os
 import time
 import uuid
 from typing import Final, cast
@@ -25,6 +26,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.catalog import public_catalog_operation
 from litellm.proxy.mcp_server.db import store_user_credential
@@ -176,11 +178,28 @@ async def _session_key_is_live(session_key: str | None) -> bool:
 
 
 async def get_authenticated_browser_user_id(request: Request) -> str | None:
-    session: Final = await get_authenticated_browser_session(request)
-    return None if session is None else session.user_id
+    session: Final = await _live_browser_session(request)
+    if session is None:
+        return None
+    cookie_user_id, auth = session
+    return cookie_user_id if auth.user_id == cookie_user_id else None
 
 
 async def get_authenticated_browser_session(request: Request) -> UserAPIKeyAuth | None:
+    session: Final = await _live_browser_session(request)
+    if session is None:
+        return None
+    cookie_user_id, auth = session
+    return auth if auth.user_id in _session_key_owners(cookie_user_id) else None
+
+
+def _session_key_owners(cookie_user_id: str) -> frozenset[str]:
+    if cookie_user_id != LITELLM_PROXY_ADMIN_NAME:
+        return frozenset({cookie_user_id})
+    return frozenset({cookie_user_id, os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)})
+
+
+async def _live_browser_session(request: Request) -> tuple[str, UserAPIKeyAuth] | None:
     from datetime import datetime, timezone
 
     from pydantic import TypeAdapter, ValidationError
@@ -206,14 +225,14 @@ async def get_authenticated_browser_session(request: Request) -> UserAPIKeyAuth 
         )
     except Exception:
         return None
-    if auth is None or auth.user_id != user_id or auth.blocked or auth.expires is None:
+    if auth is None or auth.blocked or auth.expires is None:
         return None
     try:
         expiration: Final = TypeAdapter(datetime).validate_python(auth.expires)
     except ValidationError:
         return None
     expires: Final = expiration.replace(tzinfo=timezone.utc) if expiration.tzinfo is None else expiration
-    return auth if expires > datetime.now(timezone.utc) else None
+    return (user_id, auth) if expires > datetime.now(timezone.utc) else None
 
 
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
