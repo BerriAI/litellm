@@ -62,6 +62,13 @@ def _text_parts(message: Mapping[str, object]) -> tuple[Mapping[str, object], ..
     return tuple(part for part in parts if part.get("type") == "text")
 
 
+def _with_only_text_parts(message: AllMessageValues) -> AllMessageValues:
+    if audio_or_image_in_message_content(message) or not (text_parts := _text_parts(message)):
+        return message
+    text_only: Final = {**message, "content": list(text_parts)}
+    return cast(AllMessageValues, text_only)  # cast-ok: the same message, text parts only
+
+
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
     def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
         usage: Final = chunk.get("usage")
@@ -265,7 +272,8 @@ class AzureAIStudioConfig(OpenAIConfig):
                part can carry the breakpoint (a message-level one is silently ignored), so those keep
                their text parts, with each Anthropic `cache_control` mark renamed to a breakpoint the
                way the openai provider renames it. Every other part is dropped, exactly as the string
-               conversion drops it.
+               conversion drops it, before the marks are renamed, so a message-level mark lands on the
+               last text part.
             3. If message contains an image or audio, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
@@ -275,7 +283,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, "azure_ai")
         stripped_messages: Final = (
             [
-                AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message)
+                AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(_with_only_text_parts(message))
                 for message in copied_messages
             ]
             if reads_breakpoints

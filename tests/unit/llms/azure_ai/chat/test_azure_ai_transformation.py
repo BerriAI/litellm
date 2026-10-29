@@ -1025,6 +1025,29 @@ def test_azure_ai_drops_a_file_part_next_to_the_breakpoint_like_the_string_conve
     assert flattened["messages"][0]["content"] == "summarize"
 
 
+def test_azure_ai_puts_a_message_level_mark_on_the_last_text_part_when_a_file_part_follows(_local_model_cost_map):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "user",
+                "cache_control": {"type": "ephemeral"},
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "file", "file": {"file_id": "file-held-by-another-provider"}},
+                ],
+            }
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
 @pytest.mark.parametrize(
     ("registered", "keeps_parts"),
     [

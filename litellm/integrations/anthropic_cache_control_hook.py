@@ -72,6 +72,7 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
 _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+_PROVIDERS_NAMED_BY_A_REGISTERED_KEY_PREFIX: Final = frozenset({"azure_ai"})
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
@@ -176,9 +177,10 @@ def _hosted_openai_dialect_flag(
     third-party host is still not assumed to speak the dialect. A bare deployment name
     another provider serves (``gpt-6-astra`` on azure_ai) may collide with the openai
     row of the same name, so an exact entry only speaks for a deployment when it is
-    keyed for that deployment's provider. A deployment's ``model_info`` is registered
-    under its provider-prefixed key without a ``litellm_provider``, so that prefix
-    names the provider the entry speaks for.
+    keyed for that deployment's provider. An azure_ai deployment's ``model_info`` is
+    registered under its provider-prefixed key without a ``litellm_provider``, so for
+    azure_ai that prefix names the provider the entry speaks for. Other providers keep
+    ignoring such an entry until their own path is proven to read it.
     """
     import litellm
 
@@ -202,10 +204,12 @@ def _hosted_openai_dialect_flag(
         names["stripped_model_name"],
         names["provider_prefixed_model_name"],
     )
-    provider_prefix: Final = f"{provider}/"
+    provider_prefix: Final = f"{provider}/" if provider in _PROVIDERS_NAMED_BY_A_REGISTERED_KEY_PREFIX else None
     entries: Final = ((candidate, litellm.model_cost.get(candidate)) for candidate in candidates)
     flags: Final = (
-        _hosted_entry_flag(entry, lambda: provider, provider if candidate.startswith(provider_prefix) else None)
+        _hosted_entry_flag(
+            entry, lambda: provider, provider if provider_prefix and candidate.startswith(provider_prefix) else None
+        )
         for candidate, entry in entries
         if isinstance(entry, dict)
     )
