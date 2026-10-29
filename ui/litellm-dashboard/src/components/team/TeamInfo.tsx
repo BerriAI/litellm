@@ -73,7 +73,7 @@ import {
 import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
 import {
   computeTeamModelBadges,
-  normalizeTeamModelSelection,
+  teamModelsUpdatePayload,
   TeamAccessGroupModelGrant,
   teamPerModelLimitOptions,
   TeamModelBadge,
@@ -1064,7 +1064,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
-        models: normalizeTeamModelSelection(values.models),
+        models: teamModelsUpdatePayload(values.models, info.models),
         tpm_limit: numberOrNull(values.tpm_limit),
         rpm_limit: numberOrNull(values.rpm_limit),
         tpd_limit: numberOrNull(values.tpd_limit),

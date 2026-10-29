@@ -42,6 +42,19 @@ export function normalizeTeamModelSelection(models: string[] | undefined): strin
   return models && models.length > 0 ? models : [NO_DEFAULT_MODELS];
 }
 
+// An empty selection is ambiguous: it can mean an unrestricted team stored as [] (all proxy
+// models) that was never touched, or an admin clearing the field on purpose. normalizeTeamModelSelection
+// treats empty as "no default models", which is the opposite of unrestricted, so applying it on every
+// save silently blocks an unrestricted team's keys when an unrelated field is edited. Only normalize when
+// the selection actually changed from what is stored; otherwise keep the stored value verbatim.
+export function teamModelsUpdatePayload(selected: string[] | undefined, stored: string[] | undefined): string[] {
+  const sortedSelected = [...(selected ?? [])].sort();
+  const sortedStored = [...(stored ?? [])].sort();
+  const unchanged =
+    sortedSelected.length === sortedStored.length && sortedSelected.every((model, i) => model === sortedStored[i]);
+  return unchanged ? (stored ?? []) : normalizeTeamModelSelection(selected);
+}
+
 export const describeGroups = (names: string[]): string =>
   names.length > 1 ? `access groups ${names.join(", ")}` : `access group ${names[0]}`;
 

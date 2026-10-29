@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
+  teamModelsUpdatePayload,
   TeamAccessGroupModelGrant,
   teamPerModelLimitOptions,
 } from "./teamModelAccess";
@@ -20,6 +21,27 @@ describe("normalizeTeamModelSelection", () => {
   it("passes a non-empty selection through untouched", () => {
     expect(normalizeTeamModelSelection(["gpt-4o-mini"])).toEqual(["gpt-4o-mini"]);
     expect(normalizeTeamModelSelection(["all-proxy-models"])).toEqual(["all-proxy-models"]);
+  });
+});
+
+describe("teamModelsUpdatePayload", () => {
+  it("keeps an unrestricted team unrestricted when its empty selection is untouched", () => {
+    expect(teamModelsUpdatePayload([], [])).toEqual([]);
+    expect(teamModelsUpdatePayload(undefined, [])).toEqual([]);
+  });
+
+  it("preserves a stored selection verbatim when it has not changed", () => {
+    expect(teamModelsUpdatePayload(["gpt-4o-mini"], ["gpt-4o-mini"])).toEqual(["gpt-4o-mini"]);
+    expect(teamModelsUpdatePayload(["b", "a"], ["a", "b"])).toEqual(["a", "b"]);
+    expect(teamModelsUpdatePayload(["no-default-models"], ["no-default-models"])).toEqual(["no-default-models"]);
+  });
+
+  it("normalizes to the no-default sentinel only when the selection is actually cleared", () => {
+    expect(teamModelsUpdatePayload([], ["gpt-4o-mini"])).toEqual(["no-default-models"]);
+  });
+
+  it("passes a changed non-empty selection through", () => {
+    expect(teamModelsUpdatePayload(["gpt-4o"], ["gpt-4o-mini"])).toEqual(["gpt-4o"]);
   });
 });
 
