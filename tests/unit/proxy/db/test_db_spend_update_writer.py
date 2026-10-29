@@ -3,10 +3,10 @@ import copy
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -37,6 +37,10 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -4334,6 +4338,36 @@ def _batch_cost_payload() -> dict:
     }
 
 
+def _background_response_cost_payload() -> dict:
+    return {
+        **_minimal_spend_payload(),
+        "request_id": "resp_abc_background_cost",
+        "call_type": "pass_through_endpoint",
+        "status": "success",
+    }
+
+
+_BATCH_RETRIEVE_KWARGS: Final = MappingProxyType({"model": "gpt-5.6-luna", "call_type": "aretrieve_batch"})
+_PASSTHROUGH_CALL_KWARGS: Final = MappingProxyType(
+    {"model": "gpt-5.6", "call_type": "pass_through_endpoint", SETTLES_BACKGROUND_RESPONSE_KWARG: None}
+)
+_BACKGROUND_SETTLEMENT_KWARGS: Final = MappingProxyType(
+    {**_PASSTHROUGH_CALL_KWARGS, SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES}
+)
+_EVERY_CHARGE_ONCE_ROW: Final = pytest.mark.parametrize(
+    ("cost_payload", "cost_kwargs"),
+    [
+        (_batch_cost_payload(), _BATCH_RETRIEVE_KWARGS),
+        (_background_response_cost_payload(), _BACKGROUND_SETTLEMENT_KWARGS),
+    ],
+    ids=["batch_retrieve", "finished_background_response_read"],
+)
+
+
+def _existing_row(cost_payload: dict, **fields: object) -> SimpleNamespace:
+    return SimpleNamespace(**{"call_type": cost_payload["call_type"], "status": "success", **fields})
+
+
 def _spend_logs_prisma(inserted: int, existing: object, taken_over: int = 1) -> MagicMock:
     prisma = _tool_usage_prisma()
     prisma.jsonify_object = lambda data: dict(data)
@@ -4349,6 +4383,7 @@ async def _update_database_with(
     payload: dict,
     disable_spend_logs: bool = False,
     response_cost: float = 0.25,
+    kwargs: Mapping[str, object] | None = _BATCH_RETRIEVE_KWARGS,
 ) -> bool:
     with (
         patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
@@ -4371,7 +4406,7 @@ async def _update_database_with(
             end_user_id=None,
             team_id=None,
             org_id=None,
-            kwargs={"model": "gpt-5.6-luna", "call_type": "aretrieve_batch"},
+            kwargs=None if kwargs is None else dict(kwargs),
             completion_response=None,
             start_time=datetime.now(timezone.utc),
             end_time=datetime.now(timezone.utc),
@@ -4382,73 +4417,79 @@ async def _update_database_with(
 
 
 @pytest.mark.asyncio
+@_EVERY_CHARGE_ONCE_ROW
 @pytest.mark.parametrize(
-    ("inserted", "existing", "charged"),
+    ("inserted", "existing_fields", "charged"),
     [
         (1, None, True),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25), False),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.0), True),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="failure", spend=0.0), True),
-        (0, SimpleNamespace(call_type="aembedding", status="success", spend=0.25), True),
+        (0, {"spend": 0.25}, False),
+        (0, {"spend": 0.0}, True),
+        (0, {"status": "failure", "spend": 0.0}, True),
+        (0, {"call_type": "aembedding", "spend": 0.25}, True),
         (0, None, True),
     ],
     ids=[
-        "first_retrieve_owns_the_row",
-        "another_retrieve_already_charged",
-        "an_older_proxy_left_a_zero_row_while_the_batch_ran",
-        "failed_retrieve_holds_the_row",
+        "first_read_owns_the_row",
+        "another_read_already_charged",
+        "an_older_proxy_left_a_zero_row",
+        "failed_read_holds_the_row",
         "client_chosen_call_id_holds_the_row",
         "row_gone_between_insert_and_lookup",
     ],
 )
-async def test_update_database_charges_a_batch_only_from_the_retrieve_that_wrote_its_row(
-    inserted: int, existing: object, charged: bool
+async def test_update_database_charges_a_cost_row_only_from_the_read_that_wrote_it(
+    cost_payload: dict,
+    cost_kwargs: Mapping[str, object],
+    inserted: int,
+    existing_fields: dict | None,
+    charged: bool,
 ):
     """
-    Every retrieve of one batch shares one spend row, so the insert that lands first is
-    the charge and every later retrieve must leave the counters alone (LIT-7048). A row
-    that recorded no charge must not be able to take the charge away: neither one a
-    client planted under the batch id, nor the $0 row a pre-upgrade proxy wrote every
-    time it polled the batch while it was still running.
+    Every retrieve of one batch, and every read of one finished background response, shares
+    one spend row, so the insert that lands first is the charge and every later read must
+    leave the counters alone (LIT-7048). A row that recorded no charge must not be able to
+    take the charge away: neither one a client planted under the row's id, nor the $0 row a
+    pre-upgrade proxy wrote every time it polled a batch while it was still running.
     """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
+    existing = None if existing_fields is None else _existing_row(cost_payload, **existing_fields)
     prisma = _spend_logs_prisma(inserted, existing)
 
-    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is charged
+    assert await _update_database_with(db_writer, prisma, cost_payload, kwargs=cost_kwargs) is charged
 
     claimed_rows = prisma.db.litellm_spendlogs.create_many.await_args.kwargs
     assert claimed_rows["skip_duplicates"] is True
-    assert [(row["request_id"], row["spend"]) for row in claimed_rows["data"]] == [("batch_abc_batch_cost", 0.25)]
+    assert [(row["request_id"], row["spend"]) for row in claimed_rows["data"]] == [(cost_payload["request_id"], 0.25)]
     assert prisma.spend_log_transactions == []
     assert db_writer._batch_database_updates.await_count == (1 if charged else 0)
 
 
 @pytest.mark.asyncio
+@_EVERY_CHARGE_ONCE_ROW
 @pytest.mark.parametrize(
     ("taken_over", "charged"),
     [(1, True), (0, False)],
-    ids=["this_retrieve_takes_it_over", "another_one_got_there_first"],
+    ids=["this_read_takes_it_over", "another_one_got_there_first"],
 )
-async def test_update_database_charges_a_batch_whose_row_a_pre_upgrade_poll_left_at_zero(
-    taken_over: int, charged: bool
+async def test_update_database_charges_a_cost_row_left_at_zero(
+    cost_payload: dict, cost_kwargs: Mapping[str, object], taken_over: int, charged: bool
 ):
     """
-    A proxy without this fix wrote the batch's row at $0 on every poll of a running batch,
+    A proxy without the batch fix wrote the batch's row at $0 on every poll of a running batch,
     and the row outlives the upgrade, so the charge has to land on the row itself. Charging
-    without writing it there would charge again on every later retrieve (LIT-7048).
+    without writing it there would charge again on every later read (LIT-7048).
     """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
-    existing = SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.0)
-    prisma = _spend_logs_prisma(0, existing, taken_over)
+    prisma = _spend_logs_prisma(0, _existing_row(cost_payload, spend=0.0), taken_over)
 
-    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is charged
+    assert await _update_database_with(db_writer, prisma, cost_payload, kwargs=cost_kwargs) is charged
 
     taken = prisma.db.litellm_spendlogs.update_many.await_args.kwargs
     assert taken["where"] == {
-        "request_id": "batch_abc_batch_cost",
-        "call_type": "aretrieve_batch",
+        "request_id": cost_payload["request_id"],
+        "call_type": cost_payload["call_type"],
         "status": "success",
         "spend": 0.0,
     }
@@ -4494,26 +4535,24 @@ async def test_update_database_leaves_a_batch_that_cost_nothing_to_the_retrieve_
 
 
 @pytest.mark.asyncio
+@_EVERY_CHARGE_ONCE_ROW
 @pytest.mark.parametrize(
-    ("inserted", "existing", "charged"),
-    [
-        (1, None, True),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25), False),
-    ],
-    ids=["first_retrieve_owns_the_row", "another_retrieve_already_charged"],
+    ("inserted", "already_charged", "charged"),
+    [(1, False, True), (0, True, False)],
+    ids=["first_read_owns_the_row", "another_read_already_charged"],
 )
-async def test_update_database_charges_a_batch_once_even_with_spend_logs_disabled(
-    inserted: int, existing: object, charged: bool
+async def test_update_database_charges_a_cost_row_once_even_with_spend_logs_disabled(
+    cost_payload: dict, cost_kwargs: Mapping[str, object], inserted: int, already_charged: bool, charged: bool
 ):
     """
-    disable_spend_logs drops the per-request logs, not the batch's charge, so the one row
-    that makes a batch chargeable exactly once is still written and still read back.
+    disable_spend_logs drops the per-request logs, not the charge, so the one row that makes
+    a batch or a background response chargeable exactly once is still written and read back.
     """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
-    prisma = _spend_logs_prisma(inserted, existing)
+    prisma = _spend_logs_prisma(inserted, _existing_row(cost_payload, spend=0.25) if already_charged else None)
 
-    assert await _update_database_with(db_writer, prisma, _batch_cost_payload(), True) is charged
+    assert await _update_database_with(db_writer, prisma, cost_payload, True, kwargs=cost_kwargs) is charged
 
     assert prisma.db.litellm_spendlogs.create_many.await_count == 1
     assert db_writer._batch_database_updates.await_count == (1 if charged else 0)
@@ -4606,16 +4645,30 @@ async def test_update_database_queues_a_batch_cost_row_it_could_not_claim():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "payload",
-    [{**_batch_cost_payload(), "call_type": "acompletion"}, {**_batch_cost_payload(), "status": "failure"}],
-    ids=["not_a_batch_retrieve", "failed_batch_retrieve"],
+    ("payload", "kwargs"),
+    [
+        ({**_batch_cost_payload(), "call_type": "acompletion"}, _BATCH_RETRIEVE_KWARGS),
+        ({**_batch_cost_payload(), "status": "failure"}, _BATCH_RETRIEVE_KWARGS),
+        (_background_response_cost_payload(), _PASSTHROUGH_CALL_KWARGS),
+        (_background_response_cost_payload(), None),
+        ({**_background_response_cost_payload(), "status": "failure"}, _BACKGROUND_SETTLEMENT_KWARGS),
+    ],
+    ids=[
+        "not_a_batch_retrieve",
+        "failed_batch_retrieve",
+        "passthrough_call_that_settles_nothing",
+        "call_without_kwargs",
+        "failed_background_response_read",
+    ],
 )
-async def test_update_database_queues_every_other_spend_row_for_the_next_flush(payload: dict):
+async def test_update_database_queues_every_other_spend_row_for_the_next_flush(
+    payload: dict, kwargs: Mapping[str, object] | None
+):
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
     prisma = _spend_logs_prisma(1, None)
 
-    assert await _update_database_with(db_writer, prisma, payload) is True
+    assert await _update_database_with(db_writer, prisma, payload, kwargs=kwargs) is True
 
     prisma.db.litellm_spendlogs.create_many.assert_not_called()
     assert prisma.spend_log_transactions == [payload]
