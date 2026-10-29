@@ -1396,9 +1396,9 @@ def _apply_cost_margin(
 
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: LitellmLoggingObject | None,
-    prompt_tokens_cost_usd_dollar: float,
-    completion_tokens_cost_usd_dollar: float,
-    cost_for_built_in_tools_cost_usd_dollar: float,
+    prompt_tokens_cost_usd_dollar: float | None,
+    completion_tokens_cost_usd_dollar: float | None,
+    cost_for_built_in_tools_cost_usd_dollar: float | None,
     total_cost_usd_dollar: float,
     additional_costs: dict | None = None,
     original_cost: float | None = None,
@@ -1503,6 +1503,39 @@ def _response_time_ms_for_cost(
     if litellm_logging_obj is not None:
         return litellm_logging_obj.get_response_ms()
     return 0.0
+
+
+def _adjusted_provider_billed_cost(
+    reported_cost: float,
+    custom_llm_provider: str | None,
+    model: str | None,
+    region_name: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> float:
+    discounted_cost, discount_percent, discount_amount = _apply_cost_discount(
+        base_cost=reported_cost, custom_llm_provider=custom_llm_provider, model=model, region_name=region_name
+    )
+    adjusted_cost, margin_percent, margin_fixed_amount, margin_total_amount = _apply_cost_margin(
+        base_cost=discounted_cost, custom_llm_provider=custom_llm_provider
+    )
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=None,
+        completion_tokens_cost_usd_dollar=None,
+        cost_for_built_in_tools_cost_usd_dollar=None,
+        total_cost_usd_dollar=adjusted_cost,
+        original_cost=reported_cost,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        margin_percent=margin_percent,
+        margin_fixed_amount=margin_fixed_amount,
+        margin_total_amount=margin_total_amount,
+        service_tier=service_tier,
+        data_residency=data_residency,
+    )
+    return adjusted_cost
 
 
 def completion_cost(
@@ -1674,6 +1707,7 @@ def completion_cost(
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
+        priced_response: Final[object] = completion_response
         for idx, (model, candidate_pricing_provider) in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -1991,6 +2025,19 @@ def completion_cost(
                     total_time=total_time,
                 )
                 model_for_discount = custom_priced_request_model or model
+                if (
+                    not explicit_pricing
+                    and (reported_cost := billed_usage_cost(priced_response, custom_llm_provider)) is not None
+                ):
+                    return _adjusted_provider_billed_cost(
+                        reported_cost=reported_cost,
+                        custom_llm_provider=custom_llm_provider,
+                        model=model_for_discount,
+                        region_name=region_name if isinstance(region_name, str) else None,
+                        litellm_logging_obj=litellm_logging_obj,
+                        service_tier=service_tier,
+                        data_residency=data_residency,
+                    )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
@@ -2210,16 +2257,6 @@ def _billable_header_cost(value: object) -> float | None:
     return cost if math.isfinite(cost) and cost >= 0 else None
 
 
-def _with_cost_adjustments(
-    cost: float, custom_llm_provider: str | None, model: str | None, region_name: str | None
-) -> float:
-    discounted_cost, _, _ = _apply_cost_discount(
-        base_cost=cost, custom_llm_provider=custom_llm_provider, model=model, region_name=region_name
-    )
-    adjusted_cost, _, _, _ = _apply_cost_margin(base_cost=discounted_cost, custom_llm_provider=custom_llm_provider)
-    return adjusted_cost
-
-
 def response_cost_calculator(
     response_object: ModelResponse
     | EmbeddingResponse
@@ -2302,9 +2339,6 @@ def response_cost_calculator(
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
                     if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
-            usage_cost: Final = billed_usage_cost(response_object, custom_llm_provider)
-            if usage_cost is not None and not custom_pricing and base_model is None:
-                return _with_cost_adjustments(usage_cost, custom_llm_provider, model, region_name)
 
             response_cost = completion_cost(
                 completion_response=response_object,

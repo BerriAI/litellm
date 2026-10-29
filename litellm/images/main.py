@@ -644,6 +644,8 @@ def image_generation(
                     timeout=timeout,
                     client=custom_client,
                 )
+        elif custom_llm_provider == LlmProviders.KYMA.value:
+            raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
         return model_response
     except Exception as e:

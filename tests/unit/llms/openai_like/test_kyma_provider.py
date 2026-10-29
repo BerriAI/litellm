@@ -1,4 +1,3 @@
-import contextlib
 import json
 import re
 from collections.abc import Callable
@@ -14,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+from litellm.proxy.common_request_processing import cost_headers
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[4]
@@ -253,6 +253,45 @@ def test_interaction_on_kyma_is_billed_at_the_cost_kyma_reports():
     assert interaction._hidden_params["response_cost"] == pytest.approx(reported_cost)
 
 
+@pytest.mark.parametrize("model", ("openrouter/openai/gpt-4o-mini", "deepseek/deepseek-chat"))
+def test_interaction_on_another_provider_keeps_its_upstream_cost_out_of_the_body(model: str):
+    chat_usage: Final = {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": 0.00721}
+    responses_body: Final = {
+        "id": "resp_upstream",
+        "object": "response",
+        "created_at": 1_792_000_000,
+        "status": "completed",
+        "model": "x",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_upstream",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7, "cost": 0.00721},
+    }
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route(path__regex=r".*/chat/completions$").respond(200, json=_kyma_chat_body(chat_usage))
+        upstream.route(path__regex=r".*/responses$").respond(200, json=responses_body)
+        interaction: Final = litellm.interactions.create(model=model, input="ping", api_key="k")
+
+    assert "cost" not in interaction.model_dump(exclude_none=True)["usage"]
+
+
+def test_sdk_completion_cost_prices_kyma_at_the_cost_kyma_reports():
+    reported_cost: Final = 0.00721
+    with respx.mock() as upstream:
+        upstream.post(_CHAT_URL).respond(
+            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
+        )
+        response: Final = litellm.completion(model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k")
+
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(reported_cost)
+
+
 def _with_kyma_discount_and_margin(monkeypatch: pytest.MonkeyPatch) -> float:
     monkeypatch.setattr(litellm, "cost_discount_config", {"kyma": 0.5})
     monkeypatch.setattr(litellm, "cost_margin_config", {"kyma": 0.1})
@@ -309,6 +348,57 @@ def test_streamed_cost_kyma_reports_takes_the_configured_discount_and_margin(mon
 
     assert logging_obj.response_cost_calculator(result=response) == pytest.approx(0.008 * adjustment)
 
+
+def test_cost_headers_show_the_discount_and_margin_taken_from_the_cost_kyma_reports(monkeypatch: pytest.MonkeyPatch):
+    _with_kyma_discount_and_margin(monkeypatch)
+    logging_obj: Final = LiteLLMLogging(
+        model="sonar",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="kyma-call",
+        function_id="kyma-function",
+    )
+    logging_obj.update_environment_variables(
+        model="sonar",
+        user=None,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "kyma"},
+        custom_llm_provider="kyma",
+    )
+    response: Final = litellm.ModelResponse(
+        model="sonar", usage=Usage(prompt_tokens=4, completion_tokens=3, total_tokens=7, cost=0.008)
+    )
+
+    headers: Final = cost_headers(logging_obj.response_cost_calculator(result=response), logging_obj)
+
+    assert float(headers["x-litellm-response-cost-original"] or "nan") == pytest.approx(0.008)
+    assert float(headers["x-litellm-response-cost-discount-amount"] or "nan") == pytest.approx(0.004)
+    assert float(headers["x-litellm-response-cost-margin-amount"] or "nan") == pytest.approx(0.0004)
+    assert float(headers["x-litellm-response-cost"] or "nan") == pytest.approx(0.0044)
+    assert headers["x-litellm-response-cost-input"] is None
+    assert headers["x-litellm-response-cost-output"] is None
+
+
+@pytest.mark.parametrize("thinking", ({"type": "enabled", "budget_tokens": 1024}, {"type": "adaptive"}))
+def test_messages_thinking_on_a_kyma_claude_model_is_sent_as_reasoning_effort(thinking: dict[str, object]):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_URL).respond(
+            200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
+        )
+        litellm.anthropic.messages.create(
+            model="kyma/claude-haiku-4-5",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": "ping"}],
+            thinking=thinking,
+            api_key="k",
+        )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert "thinking" not in sent
+    assert sent["reasoning_effort"] in ("low", "medium", "high")
+
 def test_kyma_model_missing_from_the_catalog_keeps_its_tools():
     tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
     with respx.mock() as upstream:
@@ -333,10 +423,10 @@ def _transcribe() -> object:
 
 
 @pytest.mark.parametrize("call", (_generate_image, _transcribe))
-def test_unpriced_kyma_media_calls_are_never_sent_to_kyma(call: Callable[[], object]):
+def test_unpriced_kyma_media_calls_are_refused_without_calling_kyma(call: Callable[[], object]):
     with respx.mock(assert_all_called=False) as upstream:
         kyma: Final = upstream.route(host="kymaapi.com").respond(202, json={"id": "job_kyma"})
-        with contextlib.suppress(Exception):
+        with pytest.raises(litellm.BadRequestError):
             call()
 
     assert kyma.call_count == 0
