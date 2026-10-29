@@ -12614,7 +12614,11 @@ class Router:
             return "", ""
 
     def _set_model_group_info(
-        self, model_group: str, user_facing_model_group_name: str, team_id: str | None = None
+        self,
+        model_group: str,
+        user_facing_model_group_name: str,
+        team_id: str | None = None,
+        deployment: Deployment | None = None,
     ) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
@@ -12632,7 +12636,11 @@ class Router:
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
-        model_list: Final = self.get_model_list_of_routed_group(model_group)
+        model_list: Final = (
+            (cast(DeploymentTypedDict, deployment.model_dump(exclude_none=True)),)  # cast-ok: router deployment schema
+            if deployment is not None
+            else self.get_model_list_of_routed_group(model_group)
+        )
         model_group_description: Final[str | None] = next(
             (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
@@ -12640,7 +12648,8 @@ class Router:
         for model in model_list:
             is_match = False
             if (
-                "model_name" in model
+                deployment is not None
+                or "model_name" in model
                 and model["model_name"] == model_group
                 or "model_name" in model
                 and self.pattern_router.route(model_group) is not None
@@ -12901,8 +12910,9 @@ class Router:
         - ModelGroupInfo if able to construct a model group
         - None if error constructing model group info or hidden model group (unless include_hidden)
         """
+        deployment: Final = self._pinned_deployment(model_group)
         ## Check if model group alias
-        if model_group in self.model_group_alias:
+        if deployment is None and model_group in self.model_group_alias:
             item: Final = self.model_group_alias[model_group]
             if isinstance(item, str):
                 _router_model_group = item
@@ -12922,7 +12932,10 @@ class Router:
 
         ## Check if actual model
         return self._set_model_group_info(
-            model_group=model_group, user_facing_model_group_name=model_group, team_id=team_id
+            model_group=model_group,
+            user_facing_model_group_name=model_group,
+            team_id=team_id,
+            deployment=deployment,
         )
 
     async def get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:

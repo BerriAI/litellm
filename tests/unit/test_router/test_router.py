@@ -2414,6 +2414,67 @@ def test_cached_get_model_group_info():
     assert result5 is result6
 
 
+@pytest.mark.parametrize("wildcard", [False, True])
+@pytest.mark.parametrize("collision", ["none", "group", "alias", "hidden-alias"])
+def test_model_group_info_respects_deployment_id_precedence(
+    wildcard: bool, collision: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "example-pool",
+                "litellm_params": {"model": "openai/example-model", "api_key": "fake", "rpm": 10, "tpm": 100},
+                "model_info": {"id": "deployment-a", "input_cost_per_token": 0.001},
+            },
+            {
+                "model_name": "deployment-a" if collision == "group" else "example-pool",
+                "litellm_params": {"model": "openai/example-model", "api_key": "fake", "rpm": 20, "tpm": 200},
+                "model_info": {"id": "deployment-b", "input_cost_per_token": 0.002},
+            },
+            *([{"model_name": "*", "litellm_params": {"model": "*"}}] if wildcard else []),
+        ],
+        model_group_alias={
+            **({"deployment-a": "example-pool"} if collision == "alias" else {}),
+            **({"deployment-a": {"model": "example-pool", "hidden": True}} if collision == "hidden-alias" else {}),
+            "visible": "example-pool",
+        },
+    )
+    before: Final = copy.deepcopy(router.model_list)
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        info: Final = router.get_model_group_info("deployment-a")
+    assert info is not None
+    assert (info.model_group, info.providers) == ("deployment-a", ["openai"])
+    assert (info.rpm, info.tpm, info.input_cost_per_token) == (
+        (20, 200, 0.002) if collision == "group" else (10, 100, 0.001)
+    )
+    assert all(record.levelno < logging.ERROR for record in caplog.records)
+    assert router.model_list == before
+    pooled: Final = router.get_model_group_info("visible")
+    assert pooled is not None
+    assert (pooled.rpm, pooled.tpm) == ((10, 100) if collision == "group" else (30, 300))
+
+
+def test_model_group_info_does_not_resolve_an_alias_target_as_a_deployment_id() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "example-pool",
+                "litellm_params": {"model": "openai/example-model", "api_key": "fake", "rpm": 10},
+                "model_info": {"id": "deployment-a"},
+            },
+            {
+                "model_name": "deployment-a",
+                "litellm_params": {"model": "openai/example-model", "api_key": "fake", "rpm": 20},
+                "model_info": {"id": "deployment-b"},
+            },
+        ],
+        model_group_alias={"visible": "deployment-a"},
+    )
+    info: Final = router.get_model_group_info("visible")
+    assert info is not None
+    assert (info.model_group, info.providers, info.rpm) == ("visible", ["openai"], 20)
+
+
 def test_model_group_info_cost_from_db_model_info():
     """
     When get_deployment_model_info fails (model_info is None fallback),
