@@ -365,6 +365,28 @@ def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     assert "tool_choice" not in supported_params
 
 
+# https://api.fireworks.ai/v1/serverless/models?format=nested, read 2026-10-29
+_LATEST_ROUTER_ALIAS_TARGETS: Final = (
+    ("accounts/fireworks/routers/minimax-latest", "accounts/fireworks/models/minimax-m3"),
+    ("accounts/fireworks/routers/kimi-latest", "accounts/fireworks/models/kimi-k3"),
+    ("accounts/fireworks/routers/kimi-fast-latest", "accounts/fireworks/routers/kimi-k3-fast"),
+    ("accounts/fireworks/routers/qwen-max-latest", "accounts/fireworks/models/qwen3p8-max"),
+    ("accounts/fireworks/routers/glm-latest", "accounts/fireworks/models/glm-5p3"),
+    ("accounts/fireworks/routers/glm-fast-latest", "accounts/fireworks/routers/glm-5p3-fast"),
+    ("accounts/fireworks/routers/glm-flash-latest", "accounts/fireworks/models/glm-5p3-flash"),
+    ("accounts/fireworks/routers/deepseek-flash-latest", "accounts/fireworks/models/deepseek-v4p1-flash-1017"),
+)
+
+
+@pytest.mark.parametrize(("alias", "target"), _LATEST_ROUTER_ALIAS_TARGETS)
+def test_latest_router_alias_accepts_the_same_params_as_the_model_it_points_to(alias: str, target: str) -> None:
+    config: Final = FireworksAIConfig()
+    alias_params: Final = set(config.get_supported_openai_params(alias))
+
+    assert alias_params == set(config.get_supported_openai_params(target))
+    assert "tool_choice" in alias_params
+
+
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
     """Test that Fireworks only overrides supports_reasoning for supported models."""
     config = FireworksAIConfig()
