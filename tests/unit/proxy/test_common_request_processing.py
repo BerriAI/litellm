@@ -516,6 +516,67 @@ class TestProxyBaseLLMRequestProcessing:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("gate_allows", "expected_cache_controls", "expected_fallback_cache_controls"),
+        [
+            (True, {"ttl": 60}, {}),
+            (False, {"ttl": 60, "no-cache": True, "no-store": True}, {"no-cache": True, "no-store": True}),
+        ],
+        ids=["allowed", "rejected"],
+    )
+    async def test_common_processing_pre_call_logic_applies_the_semantic_cache_gate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        gate_allows: bool,
+        expected_cache_controls: dict[str, object],
+        expected_fallback_cache_controls: dict[str, object],
+    ) -> None:
+        from litellm.caching.caching import Cache
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+        from litellm.types.caching import LiteLLMCacheType
+
+        class _Gate(CustomLogger):
+            async def async_should_semantic_cache(
+                self, user_api_key_dict: ProxyUserAPIKeyAuth, data: Mapping[str, object], call_type: str
+            ) -> bool:
+                return gate_allows
+
+        monkeypatch.setattr(litellm, "callbacks", [_Gate()])
+        monkeypatch.setattr(
+            litellm,
+            "cache",
+            Cache(type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8),
+        )
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            }
+        )
+
+        returned_data, _ = await ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+                "cache": {"ttl": 60},
+                "fallbacks": [{"model": "gpt-4o", "cache": {}}],
+            }
+        ).common_processing_pre_call_logic(
+            request=request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-hashed", team_id="team-other"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            proxy_config=RealProxyConfig(),
+            route_type="acompletion",
+        )
+
+        assert returned_data["cache"] == expected_cache_controls
+        assert returned_data["fallbacks"] == [{"model": "gpt-4o", "cache": expected_fallback_cache_controls}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         ("path", "route_type", "has_router", "priority_header", "body_priority", "expected_priority"),
         [
             ("/v1/chat/completions", "acompletion", True, "0", 5, 0),

@@ -22,6 +22,7 @@ class GenerateContentCompletionKwargs(TypedDict, total=False):
     stream: bool
     metadata: dict[str, object]
     litellm_metadata: ReadOnly[Mapping[str, object]]
+    cache: ReadOnly[Mapping[str, object]]
     stream_options: ReadOnly[ChatCompletionStreamOptionsParam]
     extra_headers: dict[str, str] | None
     proxy_server_request: dict[str, object] | None

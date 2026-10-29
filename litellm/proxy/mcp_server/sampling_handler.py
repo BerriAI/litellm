@@ -37,6 +37,8 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.proxy.common_utils.semantic_cache_gate import gated_cache_overrides
+from litellm.proxy.utils import ProxyLogging
 
 # Guard imports that require the mcp package
 try:
@@ -1125,14 +1127,24 @@ async def _run_guardrails_and_call_llm(
 
     import litellm
 
+    call_kwargs: Final = {
+        **completion_kwargs,
+        **await gated_cache_overrides(
+            data=completion_kwargs,
+            user_api_key_dict=user_api_key_auth,
+            call_type="acompletion",
+            gates=ProxyLogging.callback_capabilities().semantic_cache_gates,
+            cache=litellm.cache,
+        ),
+    }
     try:
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is not None:
-            return await _AcompletionCall(fn=llm_router.acompletion).fn(**completion_kwargs)
-        return await _AcompletionCall(fn=litellm.acompletion).fn(**completion_kwargs)
+            return await _AcompletionCall(fn=llm_router.acompletion).fn(**call_kwargs)
+        return await _AcompletionCall(fn=litellm.acompletion).fn(**call_kwargs)
     except ImportError:
-        return await _AcompletionCall(fn=litellm.acompletion).fn(**completion_kwargs)
+        return await _AcompletionCall(fn=litellm.acompletion).fn(**call_kwargs)
 
 
 async def handle_sampling_create_message(

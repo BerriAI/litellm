@@ -23,6 +23,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import Cache, requested_skip_controls
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
@@ -180,6 +181,16 @@ async def _resolve_backend_auth(
         litellm_params=databricks_auth.litellm_params,
         header=await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider),
     )
+
+
+def _request_cache_controls(
+    agent_params: Mapping[str, object], data: Mapping[str, object], cache: Cache | None
+) -> Mapping[str, object]:
+    bypass: Final = requested_skip_controls(data.get("cache"))
+    if cache is None or not cache.is_semantic_cache() or not bypass:
+        return {}
+    agent_cache: Final = agent_params.get("cache")
+    return {"cache": {**(agent_cache if isinstance(agent_cache, Mapping) else {}), **bypass}}
 
 
 def _forwarding_headers(
@@ -842,7 +853,10 @@ async def invoke_agent_a2a(
             ),
             backend_auth_header=backend_auth.header,
         )
-        forwarded_litellm_params: Final = backend_auth.litellm_params
+        forwarded_litellm_params: Final = {
+            **backend_auth.litellm_params,
+            **_request_cache_controls(backend_auth.litellm_params, data, litellm.cache),
+        }
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model

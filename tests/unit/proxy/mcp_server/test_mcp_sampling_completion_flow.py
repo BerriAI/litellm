@@ -7,11 +7,21 @@ through the proxy router / guardrails, and the end-to-end
 `handle_sampling_create_message` success and error-propagation behaviour.
 """
 
+from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp.types import CreateMessageResult, ErrorData
+
+import litellm
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.router import Router
+from litellm.types.caching import LiteLLMCacheType
+from litellm.types.utils import CallTypes
 
 from litellm.proxy.mcp_server.sampling_handler import (
     _build_completion_kwargs,
@@ -117,6 +127,48 @@ class TestRunGuardrailsAndCallLlm:
 
         assert result == "router-response"
         router.acompletion.assert_awaited_once()
+
+    async def test_should_skip_the_semantic_cache_for_a_key_the_semantic_cache_check_rejects(self) -> None:
+        class _RejectEveryTeam(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.deployment_cache_controls: list[object] = []
+
+            async def async_should_semantic_cache(
+                self, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str
+            ) -> bool:
+                return False
+
+            async def async_pre_call_deployment_hook(
+                self, kwargs: dict[str, object], call_type: CallTypes | None
+            ) -> dict[str, object] | None:
+                self.deployment_cache_controls.append(kwargs.get("cache"))
+                return None
+
+        gate: Final = _RejectEveryTeam()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test", "mock_response": "hi"},
+                }
+            ]
+        )
+        semantic_cache: Final = Cache(
+            type=LiteLLMCacheType.VALKEY_SEMANTIC, host="localhost", port="6379", similarity_threshold=0.8
+        )
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch.object(litellm, "callbacks", [gate]),
+            patch.object(litellm, "cache", semantic_cache),
+        ):
+            await _run_guardrails_and_call_llm(
+                completion_kwargs={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", team_id="team-other"),
+            )
+
+        assert gate.deployment_cache_controls == [{"no-cache": True, "no-store": True}]
 
     async def test_should_propagate_guardrail_rejection(self):
         plo = MagicMock()
