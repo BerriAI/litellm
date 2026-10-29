@@ -239,10 +239,10 @@ from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.common_utils import uses_azure_entra_id_auth
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
-from .llms.azure_ai.common_utils import has_azure_entra_params
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
@@ -8843,15 +8843,13 @@ def speech(
                 optional_params.get("extra_body", {}).pop("azure_ad_token", None)
             )
             request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
-            deployment_uses_entra: Final = (
-                request_azure_ad_token is not None
-                or request_kwargs.get("azure_ad_token_provider") is not None
-                or has_azure_entra_params(request_kwargs)
+            uses_entra_id: Final = request_azure_ad_token is not None or uses_azure_entra_id_auth(
+                request_kwargs, os.environ, litellm.enable_azure_ad_token_refresh is True
             )
 
             api_key = (
                 api_key
-                or (None if deployment_uses_entra else provider_api_key)
+                or (None if uses_entra_id else provider_api_key)
                 or litellm.api_key
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
