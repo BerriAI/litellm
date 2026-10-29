@@ -341,8 +341,9 @@ def _catalog_override(argv: Sequence[JsonValue]) -> str | None:
 
 def test_lite_codex_writes_the_shared_catalog(gateway: Gateway, tmp_path: Path) -> None:
     """`lite codex` writes the installed Codex's own entry for a proxy model whose name is a stock slug and
-    the fallback entry for any other; the proxy's configured tiers never reach the file (Decision 17)."""
+    the fallback entry for any other, each under the display name and service tiers the proxy serves for it."""
     stock_slug: Final = f"codex-stock-{uuid.uuid4().hex}"
+    stock_display_name: Final = "Stock Model via LiteLLM"
     stock_tiers: Final = [{"id": "priority", "name": "Fast", "description": "1.5x speed"}]
     stock: Final = {
         "models": [
@@ -360,7 +361,7 @@ def test_lite_codex_writes_the_shared_catalog(gateway: Gateway, tmp_path: Path) 
     }
     launch_path, environment = _install_shim(tmp_path, stock)
     with gateway.scenario() as scenario:
-        _new_model(scenario, stock_slug, {"service_tiers": ["ultrafast"]})
+        _new_model(scenario, stock_slug, {"service_tiers": ["ultrafast"], "display_name": stock_display_name})
         fallback: Final = scenario.model(model_info={"service_tiers": ["priority"]})
         key: Final = scenario.key(models=[stock_slug, fallback])
         completed: Final = _run_lite_codex(gateway, key, environment)
@@ -390,17 +391,19 @@ def test_lite_codex_writes_the_shared_catalog(gateway: Gateway, tmp_path: Path) 
             seconds=CONVERGENCE_SECONDS,
         )
         assert list(file_entries) == list(served), (list(file_entries), list(served))
-        assert file_entries[stock_slug]["service_tiers"] == stock_tiers, file_entries[stock_slug]
+        assert file_entries[stock_slug]["service_tiers"] == [_generic_tier("ultrafast")], file_entries[stock_slug]
+        assert file_entries[stock_slug]["display_name"] == stock_display_name, file_entries[stock_slug]
         assert file_entries[stock_slug]["visibility"] == "list", file_entries[stock_slug]
         assert file_entries[stock_slug]["supported_in_api"] is True, file_entries[stock_slug]
         assert file_entries[stock_slug]["priority"] == list(file_entries).index(stock_slug), file_entries[stock_slug]
         assert file_entries[stock_slug]["supported_reasoning_levels"] == [
             {"effort": "high", "description": "thinks longer"}
         ]
-        assert file_entries[fallback]["service_tiers"] == [], file_entries[fallback]
+        assert file_entries[fallback]["service_tiers"] == [_generic_tier("priority")], file_entries[fallback]
         assert file_entries[fallback]["display_name"] == fallback, file_entries[fallback]
         assert string_value(file_entries[fallback]["base_instructions"]), fallback
         assert served[stock_slug]["service_tiers"] == [_generic_tier("ultrafast")], served[stock_slug]
+        assert served[stock_slug]["display_name"] == stock_display_name, served[stock_slug]
         assert served[fallback]["service_tiers"] == [_generic_tier("priority")], served[fallback]
 
 
