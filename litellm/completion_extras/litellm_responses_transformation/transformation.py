@@ -807,7 +807,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if isinstance(choice_type, str) and choice_type in ("auto", "none", "required"):
             return choice_type
         if choice_type == "allowed_tools":
-            parsed: Final = parse_chat_allowed_tools_tool_choice(tool_choice)
+            parsed: Final = parse_chat_allowed_tools_tool_choice(
+                cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                    object, tool_choice
+                )
+            )
             flat: Final = responses_allowed_tools_tool_choice(parsed) if parsed is not None else None
             if flat is not None:
                 return flat

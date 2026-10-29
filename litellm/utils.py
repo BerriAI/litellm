@@ -9069,7 +9069,17 @@ def validate_chat_completion_tool_choice(
         tool_choice_type = tool_choice.get("type")
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
-        if tool_choice_type == "allowed_tools" and parse_chat_allowed_tools_tool_choice(tool_choice) is None:
+        if (
+            tool_choice_type == "allowed_tools"
+            and (
+                parse_chat_allowed_tools_tool_choice(
+                    cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                        object, tool_choice
+                    )
+                )
+                is None
+            )
+        ):
             raise BadRequestError(
                 message=(
                     f"Invalid tool choice, tool_choice={tool_choice}. On chat completions allowed_tools is "
