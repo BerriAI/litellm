@@ -255,6 +255,12 @@ class FakeRouter:
     def get_model_list(self, model_name: str | None = None) -> None:
         return None
 
+    def get_model_from_alias(self, model: str) -> None:
+        return None
+
+    def get_model_list_of_routed_group(self, model_group: str) -> list[object]:
+        return []
+
 
 class FakeStorageBackend:
     def __init__(self, contents: Mapping[str, bytes]) -> None:
