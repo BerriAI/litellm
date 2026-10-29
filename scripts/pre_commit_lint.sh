@@ -110,7 +110,6 @@ e2e_py_files=$(scope_match "$e2e_py_pattern")
 test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
-# Keep spec_pattern in step with the ui-api-types change filter in .github/workflows/test-linting.yml.
 spec_files=$(scope_match "$spec_pattern")
 # CI's ui job runs prettier over a wider extension set than eslint; keep that
 # split so this flags exactly what the job would.
