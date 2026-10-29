@@ -1,8 +1,12 @@
-"""Console entry points for `lite` and `litellm-proxy`.
+"""Console entry points for `litellm`, `lite` and `litellm-proxy`.
+
+`litellm` imports the proxy only when it runs. Every worker that `--num_workers` spawns
+imports this module again before it can answer uvicorn's first health ping, which fails
+within 5 s, so importing the SDK here makes slow hosts kill each new worker in a loop.
 
 The CLI is a thin HTTP client, but it lives inside the `litellm` package, so a plain
-import would run the whole SDK `__init__` before Click parses argv. These entry points
-import the CLI against an uninitialized `litellm` package object instead. CLI code under
+import would run the whole SDK `__init__` before Click parses argv. `lite` and
+`litellm-proxy` import the CLI against an uninitialized `litellm` package object instead. CLI code under
 `litellm.proxy.client`, and whatever it imports, loads without the SDK whenever it is
 first imported. The first attribute read on the SDK, or the first import of any other
 new code under `litellm`, initializes the SDK in place before that code runs, so code
@@ -181,3 +185,9 @@ def cli() -> None:
 def litellm_proxy_cli() -> None:
     _, deprecated_litellm_proxy = _entry_points()
     deprecated_litellm_proxy()
+
+
+def proxy_server() -> None:
+    from litellm.proxy.proxy_cli import run_server
+
+    run_server()

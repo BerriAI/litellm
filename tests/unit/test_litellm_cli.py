@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
@@ -191,6 +192,24 @@ from litellm_cli.main import cli
 cli()
 """
 
+_PYPROJECT: Final = Path(__file__).resolve().parents[2] / "pyproject.toml"
+
+_RUN_ENTRY_POINT_HELP: Final = """
+import contextlib, io, json, sys
+from {module} import {function}
+imported_sdk = "litellm" in sys.modules
+sys.argv = ["litellm", "--help"]
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    try:
+        {function}()
+    except SystemExit as stopped:
+        code = stopped.code
+    else:
+        code = 0
+print(json.dumps({{"imported_sdk": imported_sdk, "exit": code, "help": output.getvalue()}}))
+"""
+
 _COMMAND_MODULES_LOADED_BY: Final = """
 import json, sys
 from litellm_cli.main import cli
@@ -225,6 +244,14 @@ def cli_runs(tmp_path_factory: pytest.TempPathFactory) -> Mapping[str, dict[str,
             _RUN_EACH_ARGV.format(module="litellm.proxy.client.cli.main"), argv, tmp_path_factory.mktemp("full")
         ),
     }
+
+
+def test_litellm_command_imports_the_proxy_only_when_it_runs(tmp_path: Path):
+    module, _, function = tomllib.loads(_PYPROJECT.read_text())["project"]["scripts"]["litellm"].partition(":")
+    run: Final = _run(_RUN_ENTRY_POINT_HELP.format(module=module, function=function), (), tmp_path)
+    assert run["imported_sdk"] is False
+    assert run["exit"] == 0
+    assert "--num_workers" in str(run["help"])
 
 
 def test_lite_runs_commands_without_initializing_the_sdk(cli_runs: Mapping[str, dict[str, object]]):

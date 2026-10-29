@@ -8,6 +8,9 @@ handed the loopback URL it listens on. A pre-existing ``DATABASE_URL`` wins in
 wins under token auth too, so exporting it here is enough for every worker to
 pick the pooled URL up unchanged.
 
+LiteLLM imports wait for ``main``: every uvicorn worker imports this module again
+before it can answer its first 5 s health ping, so a slow host would kill each one.
+
 Run with:
     python -m gateway.launch --workers 4 --host 0.0.0.0 --port 4000
 """
@@ -15,17 +18,13 @@ Run with:
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from uvicorn.main import main as uvicorn_main
 
-from litellm.proxy.db.db_url_settings import DatabaseURLSettings
-from litellm.proxy.db.pgbouncer import (
-    PgBouncerError,
-    PgBouncerSettings,
-    export_pooled_database_url,
-    start_in_container_pgbouncer,
-)
+if TYPE_CHECKING:
+    from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+    from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
 
 GATEWAY_APP: Final = "gateway.main:app"
 KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
@@ -40,16 +39,18 @@ def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, 
 
 
 def pool_database_url(
-    settings: DatabaseURLSettings,
-    pgbouncer: PgBouncerSettings,
+    settings: "DatabaseURLSettings",
+    pgbouncer: "PgBouncerSettings",
     environ: Mapping[str, str],
-) -> str | PgBouncerError | None:
+) -> "str | PgBouncerError | None":
     """Start the in-container PgBouncer and return its loopback URL, or None when ``pgbouncer.enabled`` is off.
 
     The upstream URL is whatever ``apply_to_env`` assembled from the discrete
     ``DATABASE_*`` vars (or an operator-pinned ``DATABASE_URL``). Under token
     auth the pooler mints and renews the upstream token itself.
     """
+    from litellm.proxy.db.pgbouncer import PgBouncerError, start_in_container_pgbouncer
+
     if not pgbouncer.enabled:
         return None
     upstream_url: Final = environ.get("DATABASE_URL")
@@ -63,6 +64,9 @@ def _serve(argv: Sequence[str]) -> None:
 
 
 def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+    from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, export_pooled_database_url
+
     settings: Final = DatabaseURLSettings.from_env()
     settings.apply_to_env()
     pooled_url: Final = pool_database_url(settings, PgBouncerSettings(), os.environ)

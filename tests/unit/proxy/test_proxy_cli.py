@@ -27,7 +27,7 @@ from uvicorn.importer import import_from_string
 
 import litellm
 from litellm._logging import turn_on_json
-from litellm.constants import DEFAULT_WORKER_HEALTHCHECK_TIMEOUT_SECONDS, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
+from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
@@ -159,45 +159,6 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
-
-    @pytest.mark.parametrize(
-        ("flag_value", "expected"),
-        [(None, DEFAULT_WORKER_HEALTHCHECK_TIMEOUT_SECONDS), (15, 15)],
-    )
-    def test_uvicorn_worker_healthcheck_timeout_reaches_uvicorn(self, flag_value: int | None, expected: int):
-        args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(
-            "localhost", 8000, timeout_worker_healthcheck=flag_value
-        )
-
-        assert uvicorn.Config(**args).timeout_worker_healthcheck == expected
-
-    def test_worker_healthcheck_timeout_on_uvicorn_without_the_parameter(
-        self, capsys: pytest.CaptureFixture[str]
-    ):
-        class _OldUvicornConfig:
-            def __init__(self, timeout_keep_alive: int | None = None):
-                pass
-
-        with patch("uvicorn.Config", _OldUvicornConfig):
-            single_worker_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
-            assert "timeout_worker_healthcheck" not in single_worker_args
-            assert capsys.readouterr().out == ""
-
-            multi_worker_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(
-                "localhost", 8000, num_workers=2
-            )
-            assert "timeout_worker_healthcheck" not in multi_worker_args
-            multi_worker_output: Final = capsys.readouterr().out
-            assert "fixed 5 s" in multi_worker_output
-            assert "uvicorn>=0.37.0" in multi_worker_output
-
-            flagged_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(
-                "localhost", 8000, timeout_worker_healthcheck=15, num_workers=2
-            )
-            assert "timeout_worker_healthcheck" not in flagged_args
-            flagged_output: Final = capsys.readouterr().out
-            assert "requires uvicorn>=0.37.0" in flagged_output
-            assert "fixed 5 s" not in flagged_output
 
     @pytest.mark.parametrize(
         ("raw_timeout", "expected"),
@@ -1569,7 +1530,6 @@ class TestProxyInitializationHelpers:
                 log_config=None,
                 keepalive_timeout=30,
                 timeout_worker_healthcheck=None,
-                num_workers=1,
             )
             mock_uvicorn_run.assert_called_once()
 
@@ -1646,7 +1606,6 @@ class TestProxyInitializationHelpers:
                 log_config=None,
                 keepalive_timeout=None,
                 timeout_worker_healthcheck=15,
-                num_workers=1,
             )
 
     @patch("uvicorn.run")
@@ -2455,47 +2414,6 @@ class TestQueryEngineReaperWiring:
             }
             result = runner.invoke(run_server, args)
         return result, mock_uvicorn_run, mock_start_reaper
-
-    @pytest.mark.parametrize(
-        ("args", "warns"),
-        [
-            (["--local", "--num_workers", "2"], True),
-            (["--local", "--num_workers", "1"], False),
-            (["--local", "--num_workers", "2", "--run_granian"], False),
-        ],
-    )
-    def test_old_uvicorn_warns_only_for_multi_worker_uvicorn(self, args: list[str], warns: bool):
-        from click.testing import CliRunner
-
-        from litellm.proxy.proxy_cli import run_server
-
-        class _OldUvicornConfig:
-            def __init__(self, timeout_keep_alive: int | None = None):
-                pass
-
-        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
-        with (
-            patch.dict(os.environ, clean_env, clear=True),
-            patch.dict(
-                "sys.modules",
-                {
-                    "proxy_server": MagicMock(
-                        app=MagicMock(),
-                        ProxyConfig=MagicMock(),
-                        KeyManagementSettings=MagicMock(),
-                        save_worker_config=MagicMock(),
-                    )
-                },
-            ),
-            patch("uvicorn.Config", _OldUvicornConfig),
-            patch("uvicorn.run"),
-            patch("litellm.proxy.proxy_cli.start_query_engine_reaper"),
-            patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.init_granian_server"),
-        ):
-            result: Final = CliRunner().invoke(run_server, args)
-
-        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
-        assert ("uvicorn>=0.37.0" in result.output) is warns
 
     def test_multi_worker_uvicorn_starts_reaper(self):
         result, mock_uvicorn_run, mock_start_reaper = self._invoke_run_server(
