@@ -1517,8 +1517,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         if not put_back:
             return _FilteredText(text=put_back_text, holds_unsettled_numbers=holds_unsettled_numbers)
         put_back_spans: Final = _SortedSpans.of(put_back)
-        detected_patterns: Final = frozenset(
-            detection["pattern_name"]
+        detected_rules: Final = frozenset(
+            (detection["pattern_name"], detection["action"])
             for detection in (detections or ())[first_detection:]
             if detection["type"] == "pattern"
         )
@@ -1528,7 +1528,11 @@ class ContentFilterGuardrail(CustomGuardrail):
                     masked_so_far,
                     pattern_entry,
                     *self._matches_on_put_back_numbers(masked_so_far, pattern_entry, put_back_spans),
-                    None if pattern_entry["pattern_name"] in detected_patterns else detections,
+                    (
+                        None
+                        if (pattern_entry["pattern_name"], pattern_entry["action"].value) in detected_rules
+                        else detections
+                    ),
                 ),
                 (pattern_entry for pattern_entry in self.compiled_patterns if pattern_entry["validator"] is None),
                 _MaskedText(text=put_back_text),
