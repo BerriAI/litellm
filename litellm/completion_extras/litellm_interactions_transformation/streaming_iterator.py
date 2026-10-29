@@ -5,12 +5,13 @@ import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, NoReturn, TypeAlias
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.exceptions import APIConnectionError
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
@@ -94,16 +95,40 @@ def _arguments_delta_piece(delta_map: JsonMapping) -> str:
     return next((piece for piece in candidates if piece is not None), "")
 
 
+def _format_stream_error(event: JsonMapping, interaction_map: JsonMapping) -> str:
+    raw_err: Final = event.get("error") or interaction_map.get("error")
+    if isinstance(raw_err, dict):
+        raw_code: Final = raw_err.get("code")
+        raw_msg: Final = raw_err.get("message")
+        code_str: Final = str(raw_code) if raw_code is not None and str(raw_code) else None
+        msg_str: Final = str(raw_msg) if raw_msg is not None and str(raw_msg) else None
+        if code_str and msg_str:
+            return f"[{code_str}] {msg_str}"
+        if msg_str:
+            return msg_str
+        if code_str:
+            return code_str
+        return json.dumps(raw_err)
+    if isinstance(raw_err, str) and raw_err:
+        return raw_err
+    fallback_msg: Final = event.get("message") or interaction_map.get("status_message")
+    if isinstance(fallback_msg, str) and fallback_msg:
+        return fallback_msg
+    return "Interactions stream failed"
+
+
 class InteractionsChatStreamingIterator:
     def __init__(
         self,
         *,
         model: str,
+        custom_llm_provider: str = "gemini",
         sync_lines: LineStreamSync | None = None,
         async_lines: LineStreamAsync | None = None,
         http_response: httpx.Response | None = None,
     ) -> None:
         self._model: Final = model
+        self._custom_llm_provider: Final = custom_llm_provider
         self._sync_lines: Final = sync_lines
         self._async_lines: Final = async_lines
         self.http_response: httpx.Response | None = http_response
@@ -286,6 +311,30 @@ class InteractionsChatStreamingIterator:
             case _:
                 return ()
 
+    def _raise_stream_failure(
+        self,
+        event: JsonMapping,
+        interaction_map: JsonMapping = _EMPTY_JSON_MAP,
+    ) -> NoReturn:
+        message: Final = _format_stream_error(event, interaction_map)
+        self._done = True
+        if self._async_lines is None:
+            self.close()
+        raw_req: Final[object] = (
+            getattr(self.http_response, "_request", None) if self.http_response is not None else None
+        )
+        effective_req: Final = (
+            raw_req
+            if isinstance(raw_req, httpx.Request)
+            else httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/interactions")
+        )
+        raise APIConnectionError(
+            message=message,
+            llm_provider=self._custom_llm_provider,
+            model=self._model,
+            request=effective_req,
+        )
+
     def _handle_completed(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
         raw_interaction: Final = event.get("interaction")
         interaction_map: Final = raw_interaction if isinstance(raw_interaction, dict) else _EMPTY_JSON_MAP
@@ -294,6 +343,8 @@ class InteractionsChatStreamingIterator:
             self._stream_id = maybe_id
 
         raw_status: Final = interaction_map.get("status") or event.get("status")
+        if raw_status == "failed" or event.get("error") is not None or interaction_map.get("error") is not None:
+            self._raise_stream_failure(event, interaction_map)
         finish_reason: Final = map_interactions_status_to_finish_reason(
             raw_status if isinstance(raw_status, str) else None,
             has_tool_calls=bool(self._tool_slots_by_step),
@@ -327,6 +378,18 @@ class InteractionsChatStreamingIterator:
                 self._buffer.extend(self._handle_step_delta(event))
             case "interaction.completed" | "interaction.complete":
                 self._buffer.extend(self._handle_completed(event))
+            case "error" | "interaction.failed":
+                failed_inter: Final = event.get("interaction")
+                self._raise_stream_failure(
+                    event,
+                    failed_inter if isinstance(failed_inter, dict) else _EMPTY_JSON_MAP,
+                )
+            case "interaction.status_update":
+                status_inter: Final = event.get("interaction")
+                status_map: Final = status_inter if isinstance(status_inter, dict) else _EMPTY_JSON_MAP
+                status_val: Final = status_map.get("status") or event.get("status")
+                if status_val == "failed" or event.get("error") is not None or status_map.get("error") is not None:
+                    self._raise_stream_failure(event, status_map)
             case _:
                 pass
 
@@ -361,5 +424,9 @@ class InteractionsChatStreamingIterator:
                 self._done = True
                 await self.aclose()
                 raise
-            self.feed_line(line)
+            try:
+                self.feed_line(line)
+            except Exception:
+                await self.aclose()
+                raise
         return self._buffer.popleft()

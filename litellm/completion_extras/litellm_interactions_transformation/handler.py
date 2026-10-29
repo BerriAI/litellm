@@ -349,6 +349,7 @@ class InteractionsToCompletionBridgeHandler:
         if wire.is_stream:
             iterator: Final = InteractionsChatStreamingIterator(
                 model=model,
+                custom_llm_provider=custom_llm_provider,
                 sync_lines=raw_response.iter_lines(),
                 http_response=raw_response,
             )
@@ -445,6 +446,7 @@ class InteractionsToCompletionBridgeHandler:
         if wire.is_stream:
             iterator: Final = InteractionsChatStreamingIterator(
                 model=model,
+                custom_llm_provider=custom_llm_provider,
                 async_lines=raw_response.aiter_lines(),
                 http_response=raw_response,
             )

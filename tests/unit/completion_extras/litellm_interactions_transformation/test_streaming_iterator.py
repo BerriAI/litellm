@@ -1,13 +1,16 @@
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Final
 
+import httpx
 import pytest
 
 from litellm.completion_extras.litellm_interactions_transformation import (
     InteractionsChatStreamingIterator,
     transform_chat_to_interactions_request,
 )
+from litellm.exceptions import APIConnectionError, MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
     stream_chunk_builder,  # pyright: ignore[reportUnknownVariableType]  # upstream signature uses bare list
@@ -157,3 +160,95 @@ async def test_async_parallel_tool_call_stream_rebuilds_and_roundtrips_turn2() -
             "result": [{"type": "text", "text": '{"temp": 15}'}],
         },
     ]
+
+
+@pytest.mark.parametrize(
+    ("error_line", "expected_substr"),
+    (
+        (
+            'data: {"event_type": "error", "error": {"code": "internal_error", "message": "Backend stream aborted"}}',
+            "[internal_error] Backend stream aborted",
+        ),
+        (
+            'data: {"event_type": "interaction.failed", "interaction": {"id": "v1_fail", "status": "failed", "error": {"code": "deadline_exceeded", "message": "Upstream timed out"}}}',
+            "[deadline_exceeded] Upstream timed out",
+        ),
+        (
+            'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_fail2", "status": "failed", "error": {"message": "Completed in failed state"}}}',
+            "Completed in failed state",
+        ),
+    ),
+)
+def test_sync_mid_stream_error_events_close_response_and_raise(
+    error_line: str,
+    expected_substr: str,
+) -> None:
+    sse_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_err_sync", "status": "in_progress"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"type": "model_output", "content": [{"type": "text", "text": "Partial"}]}}',
+        error_line,
+    )
+    sync_resp: Final = httpx.Response(200, stream=httpx.ByteStream(b""))
+    iterator: Final = InteractionsChatStreamingIterator(
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        sync_lines=iter(sse_lines),
+        http_response=sync_resp,
+    )
+
+    first_chunk: Final = next(iterator)
+    assert first_chunk.choices[0].delta.content == "Partial"
+    with pytest.raises(APIConnectionError, match=re.escape(expected_substr)) as exc_info:
+        next(iterator)
+    assert getattr(exc_info.value, "llm_provider", None) == "gemini"
+    assert getattr(exc_info.value, "model", None) == "gemini-3-flash-preview"
+    assert sync_resp.is_stream_consumed or sync_resp.is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_line", "expected_substr"),
+    (
+        (
+            'data: {"event_type": "error", "error": {"code": "unavailable", "message": "Worker reset"}}',
+            "Worker reset",
+        ),
+        (
+            'data: {"event_type": "interaction.failed", "error": {"code": "aborted", "message": "Generation failed"}}',
+            "Generation failed",
+        ),
+    ),
+)
+async def test_async_mid_stream_error_events_surface_through_stream_wrapper(
+    error_line: str,
+    expected_substr: str,
+) -> None:
+    sse_lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_err_async", "status": "in_progress"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"type": "model_output", "content": [{"type": "text", "text": "Start"}]}}',
+        error_line,
+    )
+
+    async def line_gen() -> AsyncIterator[str]:
+        for item in sse_lines:
+            yield item
+
+    async_resp: Final = httpx.Response(200, stream=httpx.AsyncByteStream())
+    iterator: Final = InteractionsChatStreamingIterator(
+        model="gemini-3-flash-preview",
+        custom_llm_provider="vertex_ai",
+        async_lines=line_gen(),
+        http_response=async_resp,
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iterator,
+        model="gemini-3-flash-preview",
+        custom_llm_provider="vertex_ai",
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+    )
+
+    first_chunk: Final = await anext(wrapper)
+    assert first_chunk.choices[0].delta.content == "Start"
+    with pytest.raises(MidStreamFallbackError, match=re.escape(expected_substr)):
+        await anext(wrapper)
+    assert async_resp.is_closed
