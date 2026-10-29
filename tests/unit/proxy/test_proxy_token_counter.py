@@ -7407,10 +7407,9 @@ _INPUT_AUDIO: Final = MappingProxyType({"type": "input_audio", "input_audio": {"
 @pytest.mark.parametrize(
     ("fields", "param"),
     [
-        ({"input": [{"role": "user", "content": [dict(_INPUT_AUDIO)]}]}, "input"),
-        ({"input": "hi", "instructions": [dict(_INPUT_AUDIO)]}, "instructions"),
+        ({"input": "hi", "instructions": [dict(_FUTURE_BLOCK)]}, "instructions"),
     ],
-    ids=["block-in-input", "block-in-instructions"],
+    ids=["block-in-instructions"],
 )
 def test_responses_input_tokens_points_param_at_the_field_holding_a_block_the_local_counter_cannot_read(
     monkeypatch: pytest.MonkeyPatch, fields: Mapping[str, JsonValue], param: str
@@ -7427,7 +7426,25 @@ def test_responses_input_tokens_points_param_at_the_field_holding_a_block_the_lo
     assert response.status_code == 400, response.text
     error: Final = response.json()["error"]
     assert (error["type"], error["param"]) == ("invalid_request_error", param), error
-    assert error["message"] == "The token counter can't count content blocks of type input_audio", error
+    assert error["message"] == "The token counter can't count content blocks of type future_block", error
+
+
+def test_responses_input_tokens_counts_an_input_audio_block_in_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "model_name": "count-local-vllm",
+        "litellm_params": {"model": "hosted_vllm/zai-org/GLM-5.3", "api_base": "http://127.0.0.1:9/v1"},
+    }
+
+    response: Final = _post_count(
+        monkeypatch,
+        "/v1/responses/input_tokens",
+        deployment,
+        {"model": "count-local-vllm", "input": [{"role": "user", "content": [dict(_INPUT_AUDIO)]}]},
+        {},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["input_tokens"] >= 300, response.text
 
 
 def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
