@@ -54,6 +54,14 @@ from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_tea
 from .conftest import normalize
 
 
+@pytest.fixture(autouse=True)
+def _apply_user_budget_to_team_keys(monkeypatch):
+    """These pins count a team key's spend against the user counter, which the proxy only does
+    when ``apply_user_budget_to_team_keys`` opts in; the default exemption is pinned in
+    tests/unit/proxy/spend_tracking/test_team_key_user_spend_exemption.py."""
+    monkeypatch.setitem(ps.general_settings, "apply_user_budget_to_team_keys", True)
+
+
 def _make_spend_counter_cache(
     *,
     redis_get_value=None,

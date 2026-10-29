@@ -147,7 +147,10 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
-from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
+from litellm.proxy.spend_tracking.spend_counter_batch import (
+    SPEND_COUNTERS_TARGET,
+    is_team_key_exempt_from_user_budget,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -1379,8 +1382,7 @@ async def common_checks(
             # 4.1 personal budget
             if user_object is None or user_object.max_budget is None:
                 return
-            is_team_key: Final = team_object is not None and team_object.team_id is not None
-            if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
+            if team_object is not None and is_team_key_exempt_from_user_budget(team_object.team_id):
                 return
 
             from litellm.proxy.proxy_server import get_current_spend

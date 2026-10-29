@@ -36,6 +36,14 @@ TOKEN_KEYS = frozenset(
 )
 
 
+@pytest.fixture(autouse=True)
+def _apply_user_budget_to_team_keys(monkeypatch):
+    """These pins count a team key's spend against the user counter, which the proxy only does
+    when ``apply_user_budget_to_team_keys`` opts in; the default exemption is pinned in
+    test_team_key_user_spend_exemption.py."""
+    monkeypatch.setitem(ps.general_settings, "apply_user_budget_to_team_keys", True)
+
+
 class CountingRedis(RedisCache):
     def __init__(self, store: dict[str, object] | None = None, fail: bool = False) -> None:
         self.store: dict[str, object] = dict(store or {})
