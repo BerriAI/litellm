@@ -83,6 +83,18 @@ TOOL_ONLY_STREAM: Final = SseResponse(
     ),
 )
 
+WHITESPACE_TOOL_STREAM: Final = SseResponse(
+    content_type="text/event-stream",
+    frames=(
+        CHAT_CHUNK + '[{"index":0,"delta":{"role":"assistant","reasoning_content":"I need the basket totals"},'
+        '"finish_reason":null}]}',
+        CHAT_CHUNK + '[{"index":0,"delta":{"content":"\\n\\n"},"finish_reason":null}]}',
+        CHAT_CHUNK + '[{"index":0,"delta":{"tool_calls":[' + TOOL_CALL + ']},"finish_reason":null}]}',
+        CHAT_CHUNK + '[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+        "data: [DONE]",
+    ),
+)
+
 _Stream = tuple[frozenset[str], tuple[dict[str, JsonValue], ...]]
 
 
@@ -181,4 +193,16 @@ def test_a_replayed_chat_stream_without_text_sends_the_reasoning_before_the_tool
     called: Final = [index for index, delta in enumerate(deltas) if delta.get("tool_calls")]
     assert _joined(deltas, "reasoning_content") == "I need the basket totals", deltas
     assert reasoning and called and max(reasoning) < min(called), deltas
+    assert deltas[-1]["finish_reason"] == "tool_calls", deltas
+
+
+def test_a_replayed_chat_stream_keeps_whitespace_only_text_between_the_reasoning_and_the_tool_call(
+    gateway: Gateway,
+) -> None:
+    deltas: Final = _replayed(gateway, WHITESPACE_TOOL_STREAM)
+    reasoning: Final = [index for index, delta in enumerate(deltas) if delta.get("reasoning_content")]
+    text: Final = [index for index, delta in enumerate(deltas) if delta.get("content")]
+    called: Final = [index for index, delta in enumerate(deltas) if delta.get("tool_calls")]
+    assert _joined(deltas, "content") == "\n\n", deltas
+    assert reasoning and text and called and max(reasoning) < min(text) and max(text) < min(called), deltas
     assert deltas[-1]["finish_reason"] == "tool_calls", deltas

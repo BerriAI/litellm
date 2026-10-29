@@ -157,7 +157,7 @@ def _fields_in(fields: Mapping[str, object], keys: frozenset[str]) -> dict[str, 
 def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
     fields: Final[dict[str, object]] = delta.model_dump(exclude_none=True)
     lead: Final = _fields_in(fields, _REPLAY_LEAD_FIELDS) if _REPLAY_REASONING_FIELDS.intersection(fields) else {}
-    pieces: Final = _split_assembled_content_for_replay(delta.content)
+    pieces: Final = _split_assembled_content_for_replay(delta.content) or ([delta.content] if delta.content else [])
     if not pieces and not lead:
         return (delta,)
     if not pieces:

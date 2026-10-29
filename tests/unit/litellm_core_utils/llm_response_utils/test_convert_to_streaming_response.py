@@ -587,3 +587,27 @@ async def test_a_cached_tool_turn_without_text_streams_the_reasoning_before_the_
     assert reasoning and called and max(reasoning) < min(called)
     assert [deltas[i]["tool_calls"] for i in called] == [[tool_call]]
     assert deltas[-1]["finish"] == "stop"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.parametrize("whitespace", ["\n\n", " "], ids=["newlines", "space"])
+async def test_a_cached_tool_turn_keeps_its_whitespace_only_text_between_the_reasoning_and_the_tool_call(
+    replay: Literal["async", "sync"], whitespace: str
+) -> None:
+    tool_call: Final[JsonValue] = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "count_apples", "arguments": '{"basket": "all"}'},
+        "index": 0,
+    }
+    deltas: Final = await _client_stream(
+        {"content": whitespace, "reasoning_content": "I need the basket totals", "tool_calls": [tool_call]}, replay
+    )
+    reasoning: Final = [i for i, delta in enumerate(deltas) if "reasoning_content" in delta]
+    text: Final = [i for i, delta in enumerate(deltas) if delta.get("content")]
+    called: Final = [i for i, delta in enumerate(deltas) if delta.get("tool_calls")]
+    assert "".join(str(deltas[i]["content"]) for i in text) == whitespace
+    assert reasoning and text and called and max(reasoning) < min(text) and max(text) < min(called)
+    assert [deltas[i]["tool_calls"] for i in called] == [[tool_call]]
+    assert deltas[-1]["finish"] == "stop"
