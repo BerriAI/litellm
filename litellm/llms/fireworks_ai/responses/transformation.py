@@ -6,7 +6,10 @@ from urllib.parse import unquote
 import httpx
 
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.base_llm.responses.transformation import SUMMARY_ONLY_REASONING_FIELD_VALUES, ReasoningFieldValues
+from litellm.llms.base_llm.responses.transformation import (
+    STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES,
+    ReasoningFieldValues,
+)
 from litellm.llms.fireworks_ai.common_utils import (
     FIREWORKS_FORWARD_USER_ID_PARAM,
     get_fireworks_forwarded_user_id,
@@ -132,7 +135,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return False
 
     def reasoning_field_values(self) -> ReasoningFieldValues:
-        return SUMMARY_ONLY_REASONING_FIELD_VALUES
+        return STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES
 
     def ignores_unsupported_reasoning_fields(self) -> bool:
         return True

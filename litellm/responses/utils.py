@@ -1428,10 +1428,16 @@ def _declared_values(values: Sequence[str] | None) -> frozenset[str | None] | No
     return None if values is None else frozenset(values)
 
 
+_ANY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = MappingProxyType(
+    {"summary": REASONING_SUMMARY_VALUES, "mode": None, "context": None}
+)
+_REFUSABLE_REASONING_FIELDS: Final = frozenset({"mode", "context"})
+
+
 def _openai_reasoning_field_values(model: str) -> ReasoningFieldValues:
     model_info: Final = _openai_model_info(model)
     if model_info is None:
-        return MappingProxyType({"summary": REASONING_SUMMARY_VALUES, "mode": None, "context": None})
+        return _ANY_REASONING_FIELD_VALUES
     if not model_info.get("supports_reasoning"):
         return MappingProxyType({})
     return MappingProxyType(
@@ -1451,30 +1457,36 @@ def _catalog_values(values: object) -> frozenset[str | None]:
 
 
 def _with_catalog_reasoning_values(
-    declared: ReasoningFieldValues, model: str, custom_llm_provider: str
-) -> ReasoningFieldValues:
+    defaults: ReasoningFieldValues | None, model: str, custom_llm_provider: str
+) -> ReasoningFieldValues | None:
     catalog: Final = cast(Mapping[str, object], litellm.model_cost)  # cast-ok: read-only view of the legacy registry
     row: Final = as_str_mapping(catalog.get(f"{custom_llm_provider}/{model.removeprefix('responses/')}"))
     if row is None:
-        return declared
+        return defaults
     overrides: Final = {
         field: _catalog_values(row[key]) for field, key in _CATALOG_REASONING_FIELDS if isinstance(row.get(key), list)
     }
-    return MappingProxyType({**declared, **overrides}) if overrides else declared
+    if not overrides:
+        return defaults
+    return MappingProxyType({**(_ANY_REASONING_FIELD_VALUES if defaults is None else defaults), **overrides})
+
+
+def _openai_catalog_model(model: str, base_model: str | None, custom_llm_provider: str) -> str | None:
+    names: Final = (
+        name.removeprefix(f"{custom_llm_provider}/").removeprefix("openai/") for name in (base_model, model) if name
+    )
+    return next((name for name in names if OpenAIGPTConfig.is_openai_catalog_model(name)), None)
 
 
 def _reasoning_field_values(
-    model: str, custom_llm_provider: str, responses_config: BaseResponsesAPIConfig | None
+    model: str, base_model: str | None, custom_llm_provider: str, responses_config: BaseResponsesAPIConfig | None
 ) -> ReasoningFieldValues | None:
     declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
-    if declared is not None:
-        return _with_catalog_reasoning_values(declared, model, custom_llm_provider)
-    catalog_model: Final = model.removeprefix("openai/")
-    return (
-        _openai_reasoning_field_values(catalog_model)
-        if OpenAIGPTConfig.is_openai_catalog_model(catalog_model)
-        else None
+    catalog_model: Final = (
+        None if declared is not None else _openai_catalog_model(model, base_model, custom_llm_provider)
     )
+    defaults: Final = declared if catalog_model is None else _openai_reasoning_field_values(catalog_model)
+    return _with_catalog_reasoning_values(defaults, model, custom_llm_provider)
 
 
 def _accepts_reasoning_field(key: str, value: object, values_by_field: ReasoningFieldValues) -> bool:
@@ -1519,6 +1531,7 @@ def bridge_reasoning(
     effort_kept: bool,
     summary_alias: object,
     model: str,
+    base_model: str | None,
     custom_llm_provider: str,
     drop_params: bool,
     additional_drop_params: object,
@@ -1537,9 +1550,13 @@ def bridge_reasoning(
         or {}
     )
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(custom_llm_provider, model)
-    values_by_field: Final = _reasoning_field_values(model, custom_llm_provider, responses_config)
+    values_by_field: Final = _reasoning_field_values(model, base_model, custom_llm_provider, responses_config)
     accepted: Final = sent if values_by_field is None else _accepted_reasoning(sent, values_by_field)
-    refused: Final = tuple(key for key, value in sent.items() if key not in accepted and value is not None)
+    refused: Final = tuple(
+        key
+        for key, value in sent.items()
+        if key in _REFUSABLE_REASONING_FIELDS and key not in accepted and value is not None
+    )
     if (
         refused
         and not drop_params

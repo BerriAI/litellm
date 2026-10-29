@@ -2549,9 +2549,9 @@ def non_openai_responses_bridge(
         ("github_copilot", {"effort": "low", "mode": "standard", "context": "all_turns"}),
         ("databricks", {"effort": "low", "mode": "pro", "context": "all_turns"}),
         ("openrouter", {"effort": "low", "mode": "pro", "context": "all_turns"}),
-        ("perplexity", {"effort": "low"}),
-        ("xai", {"effort": "low"}),
-        ("fireworks_ai", {"effort": "low"}),
+        ("perplexity", {"effort": "low", "mode": "standard", "context": "all_turns", "generate_summary": "auto"}),
+        ("xai", {"effort": "low", "mode": "standard", "generate_summary": "auto"}),
+        ("fireworks_ai", {"effort": "low", "mode": "standard", "generate_summary": "auto"}),
     ],
 )
 @pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
@@ -2595,7 +2595,12 @@ def test_non_openai_responses_bridge_sends_the_whole_reasoning_effort_dict_with_
             {"effort": "low", "mode": "pro", "context": "all_turns"},
             {"effort": "low", "context": "all_turns"},
         ),
-        ("perplexity", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
+        (
+            "perplexity",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+            {"effort": "low", "context": "all_turns"},
+        ),
+        ("perplexity", {"effort": "low", "mode": "standard", "context": "every_turn"}, {"effort": "low", "mode": "standard"}),
         ("xai", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
         ("fireworks_ai", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
     ],
@@ -2624,7 +2629,8 @@ def test_non_openai_responses_bridge_drops_reasoning_fields_the_backend_refuses_
 @pytest.mark.parametrize(
     ("backend", "ignored"),
     [
-        ("perplexity", {"context": "all_turns"}),
+        ("perplexity", {"mode": "pro"}),
+        ("perplexity", {"context": "every_turn"}),
         ("xai", {"context": "all_turns"}),
         ("fireworks_ai", {"context": "all_turns"}),
         ("github_copilot", {"mode": "pro"}),
@@ -2713,6 +2719,52 @@ def test_chatgpt_bridge_keeps_a_reasoning_mode_its_catalog_row_declares_under_dr
     )
 
     assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "mode": "pro"}
+
+
+def test_azure_bridge_reads_reasoning_modes_from_the_deployment_base_model_under_drop_params(
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("azure")
+
+    litellm.completion(
+        model="azure/responses/custom-deployment-name",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        model_info={"base_model": "azure/gpt-6.1-standard-only"},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "context": "all_turns"}
+
+
+def test_azure_bridge_reads_reasoning_modes_from_the_deployment_cost_map_row_under_drop_params(
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("azure")
+    litellm.register_model(
+        {
+            "azure/custom-standard-deployment": {
+                "litellm_provider": "azure",
+                "mode": "responses",
+                "supports_reasoning": True,
+                "reasoning_modes": ["standard"],
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    litellm.completion(
+        model="azure/responses/custom-standard-deployment",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "context": "all_turns"}
 
 
 def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(

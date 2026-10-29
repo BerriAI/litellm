@@ -29,11 +29,11 @@ else:
 ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
 ReasoningFieldValues: TypeAlias = Mapping[str, frozenset[str | None] | None]
 REASONING_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
-SUMMARY_ONLY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
-    {"summary": REASONING_SUMMARY_VALUES}
+STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {"summary": REASONING_SUMMARY_VALUES, "mode": frozenset({"standard"})}
 )
 STANDARD_MODE_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
-    {"summary": REASONING_SUMMARY_VALUES, "mode": frozenset({"standard"}), "context": None}
+    {**STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES, "context": None}
 )
 
 

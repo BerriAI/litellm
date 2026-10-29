@@ -6156,6 +6156,7 @@ def completion(
                     effort_kept="reasoning_effort" in optional_params,
                     summary_alias=rs_val,
                     model=model,
+                    base_model=base_model if isinstance(base_model, str) else None,
                     custom_llm_provider=custom_llm_provider,
                     drop_params=drop_unsupported_reasoning,
                     additional_drop_params=routing_kwargs.get("additional_drop_params"),
