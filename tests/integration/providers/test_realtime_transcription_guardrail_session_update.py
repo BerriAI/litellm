@@ -1513,13 +1513,6 @@ def test_muse_semantic_vad_without_drop_params_is_refused(guardrail_proxy: Owned
         assert _upgrades(observed) == (), observed
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "a push-to-talk Muse session reached by model alone is forced to ENDPOINTING: the first-update injection "
-        "runs before the backend session event flags the session as transcription-only"
-    ),
-)
 def test_muse_push_to_talk_session_without_intent_keeps_push_to_talk(
     guardrail_proxy: OwnedProxy, tls_upstream: str, record_property: RecordProperty
 ) -> None:

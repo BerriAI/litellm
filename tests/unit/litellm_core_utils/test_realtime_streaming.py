@@ -3824,6 +3824,48 @@ async def test_provider_transcription_session_created_flags_session_without_inte
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("synthetic_session_type", "forwarded_turn_detection"),
+    [
+        pytest.param("transcription", None, id="transcription-session-keeps-push-to-talk"),
+        pytest.param(
+            "realtime", {"type": "server_vad", "create_response": False}, id="voice-session-still-gets-the-gate"
+        ),
+    ],
+)
+async def test_synthetic_session_created_decides_whether_guardrail_gates_push_to_talk(
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_session_type: str,
+    forwarded_turn_detection: dict[str, object] | None,
+):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"turn_detection": None}}},
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, _mock_logging())
+
+    await streaming.send_synthetic_session_created(
+        {"type": "session.created", "session": {"id": "sess_1", "type": synthetic_session_type}}
+    )
+    await streaming.client_ack_messages()
+
+    assert json.loads(client_ws.send_text.await_args_list[0].args[0])["session"]["type"] == synthetic_session_type
+    forwarded: Final = json.loads(backend_ws.send.await_args.args[0])
+    assert forwarded["session"]["audio"]["input"]["turn_detection"] == forwarded_turn_detection, forwarded
+
+
+@pytest.mark.asyncio
 async def test_transcription_guardrail_still_disables_auto_response_on_realtime_session_update(
     monkeypatch: pytest.MonkeyPatch,
 ):
