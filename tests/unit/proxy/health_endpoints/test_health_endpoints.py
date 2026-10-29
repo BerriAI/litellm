@@ -44,7 +44,7 @@ from litellm.types.workload_identity import (
 from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
-from tests.unit.proxy.conftest import create_proxy_test_client
+from tests.unit.proxy.conftest import VERTEX_CLAUDE_REPLY, create_proxy_test_client
 
 
 @pytest.mark.asyncio
@@ -5548,3 +5548,45 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_probes_the_region_a_deployment_sets_and_also_drop_lists(
+    respx_mock: respx.MockRouter, httpx_transport: None, vertex_credentials: str
+) -> None:
+    vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=VERTEX_CLAUDE_REPLY)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-eu",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-haiku-5-5",
+                    "vertex_project": "region-project",
+                    "vertex_location": "eu",
+                    "vertex_credentials": vertex_credentials,
+                    "additional_drop_params": ["store", "vertex_location"],
+                },
+                "model_info": {"id": "claude-eu-id"},
+            }
+        ]
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+        ):
+            result: Final = await health_test_model_connection(
+                request=MagicMock(),
+                mode=None,
+                litellm_params={"model": "vertex_ai/claude-haiku-5-5"},
+                model_info={"id": "claude-eu-id"},
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            )
+    finally:
+        router.discard()
+
+    assert result["status"] == "success", result
+    assert vertex_route.calls.last.request.url.host == "aiplatform.eu.rep.googleapis.com"
+    assert "/locations/eu/" in vertex_route.calls.last.request.url.path

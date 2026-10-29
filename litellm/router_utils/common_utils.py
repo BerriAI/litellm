@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -59,6 +60,36 @@ def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+def deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
+    value: Final = deployment_litellm_params.get(key)
+    if value is None:
+        return False
+    field: Final = LiteLLM_Params.model_fields.get(key)
+    return field is None or value != field.default
+
+
+def drop_listed_litellm_params(deployment_litellm_params: Mapping[str, object]) -> frozenset[str]:
+    drop_list: Final = deployment_litellm_params.get("additional_drop_params")
+    if drop_list.__class__ is not list:
+        return frozenset()
+    return frozenset(
+        name for name in iter_items(drop_list) if isinstance(name, str) and name in LiteLLM_Params.model_fields
+    )
+
+
+def drop_list_keeping_deployment_settings(
+    deployment_litellm_params: Mapping[str, object], drop_list: object
+) -> tuple[str, ...] | None:
+    kept: Final = frozenset(
+        name
+        for name in drop_listed_litellm_params(deployment_litellm_params)
+        if deployment_sets_litellm_param(deployment_litellm_params, name)
+    )
+    if not kept or drop_list.__class__ is not list:
+        return None
+    return tuple(name for name in iter_items(drop_list) if isinstance(name, str) and name not in kept)
 
 
 def as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:

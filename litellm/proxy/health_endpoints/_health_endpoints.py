@@ -62,6 +62,7 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
+    probe_drop_list_override,
     resolve_health_check_mode,
     run_with_timeout,
     update_litellm_params_for_health_check,
@@ -2352,6 +2353,7 @@ async def test_model_connection(
         )
         health_check_params: Final = {
             **_OBJECT_MAPPING.validate_python(litellm_params),
+            **probe_drop_list_override(_OBJECT_MAPPING.validate_python(litellm_params)),
             **_admin_api_key_from_request(
                 _OBJECT_MAPPING.validate_python(request_litellm_params),
                 _OBJECT_MAPPING.validate_python(litellm_params),

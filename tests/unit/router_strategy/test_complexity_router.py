@@ -88,6 +88,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
     TrainedTierArtifact,
 )
+from litellm.router_utils.common_utils import deployment_sets_litellm_param
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import (
     Deployment,
@@ -5639,12 +5640,12 @@ class TestRouterPreRoutingSharedAliasName:
     def test_deployment_sets_litellm_param(self):
         params = {"aws_region_name": "us-east-1", "timeout": None, "use_litellm_proxy": False, "custom_flag": False}
 
-        assert Router._deployment_sets_litellm_param(params, "aws_region_name") is True
-        assert Router._deployment_sets_litellm_param(params, "timeout") is False
-        assert Router._deployment_sets_litellm_param(params, "missing") is False
-        assert Router._deployment_sets_litellm_param(params, "use_litellm_proxy") is False
-        assert Router._deployment_sets_litellm_param({"use_litellm_proxy": True}, "use_litellm_proxy") is True
-        assert Router._deployment_sets_litellm_param(params, "custom_flag") is True
+        assert deployment_sets_litellm_param(params, "aws_region_name") is True
+        assert deployment_sets_litellm_param(params, "timeout") is False
+        assert deployment_sets_litellm_param(params, "missing") is False
+        assert deployment_sets_litellm_param(params, "use_litellm_proxy") is False
+        assert deployment_sets_litellm_param({"use_litellm_proxy": True}, "use_litellm_proxy") is True
+        assert deployment_sets_litellm_param(params, "custom_flag") is True
 
 
 class TestAdaptiveSoftFloors:

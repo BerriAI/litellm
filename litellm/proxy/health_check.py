@@ -32,7 +32,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
-from litellm.router_utils.common_utils import is_model_capability_field
+from litellm.router_utils.common_utils import drop_list_keeping_deployment_settings, is_model_capability_field
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
@@ -597,9 +597,12 @@ async def _run_model_health_check(model: dict):
         model_info, litellm_params
     )
     timeout: Final = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
-    probe_params: Final = (
-        {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
-    )
+    probe_view: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params)
+    probe_params: Final = {
+        **probe_view,
+        **probe_drop_list_override(probe_view),
+        **({"model_info": {"mode": model_info["mode"]}} if "mode" in model_info else {}),
+    }
 
     return await run_with_timeout(
         litellm.ahealth_check(
@@ -829,6 +832,13 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
 
 _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def probe_drop_list_override(probe_params: Mapping[str, object]) -> Mapping[str, object]:
+    kept_drop_list: Final = drop_list_keeping_deployment_settings(
+        probe_params, probe_params.get("additional_drop_params")
+    )
+    return MappingProxyType({} if kept_drop_list is None else {"additional_drop_params": list(kept_drop_list)})
 
 
 def update_litellm_params_for_health_check(

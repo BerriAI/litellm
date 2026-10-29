@@ -124,7 +124,6 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
-    iter_items,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
@@ -237,7 +236,10 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     as_retry_skipped_deployment_ids,
+    deployment_sets_litellm_param,
     deployments_the_caller_may_use,
+    drop_list_keeping_deployment_settings,
+    drop_listed_litellm_params,
     filter_team_based_models,
     filter_web_search_deployments,
     format_content_policy_fallback_hint,
@@ -4925,7 +4927,7 @@ class Router:
             if isinstance(raw_deployment_params, LiteLLM_Params)
             else raw_deployment_params
         )
-        drop_listed_settings: Final = self._drop_listed_settings(deployment_context)
+        drop_listed_settings: Final = drop_listed_litellm_params(deployment_context)
         for key in (
             *self._forwarded_alias_marker_keys_the_deployment_sets(
                 deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
@@ -5117,9 +5119,8 @@ class Router:
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
-        spared_drop_list: Final = self._drop_list_sparing(
+        spared_drop_list: Final = drop_list_keeping_deployment_settings(
             deployment_context,
-            drop_listed_settings,
             request_context.get("additional_drop_params", deployment_context.get("additional_drop_params")),
         )
         if spared_drop_list is not None:
@@ -16258,38 +16259,8 @@ class Router:
         return tuple(
             key
             for key in forwarded_keys
-            if isinstance(key, str) and Router._deployment_sets_litellm_param(deployment_litellm_params, key)
+            if isinstance(key, str) and deployment_sets_litellm_param(deployment_litellm_params, key)
         )
-
-    @staticmethod
-    def _drop_listed_settings(deployment_litellm_params: Mapping[str, object]) -> frozenset[str]:
-        drop_list: Final = deployment_litellm_params.get("additional_drop_params")
-        if drop_list.__class__ is not list:
-            return frozenset()
-        return frozenset(
-            name for name in iter_items(drop_list) if isinstance(name, str) and name in LiteLLM_Params.model_fields
-        )
-
-    @staticmethod
-    def _drop_list_sparing(
-        deployment_litellm_params: Mapping[str, object], drop_listed_settings: frozenset[str], drop_list: object
-    ) -> tuple[str, ...] | None:
-        spared: Final = frozenset(
-            name
-            for name in drop_listed_settings
-            if Router._deployment_sets_litellm_param(deployment_litellm_params, name)
-        )
-        if not spared or drop_list.__class__ is not list:
-            return None
-        return tuple(name for name in iter_items(drop_list) if isinstance(name, str) and name not in spared)
-
-    @staticmethod
-    def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
-        value: Final = deployment_litellm_params.get(key)
-        if value is None:
-            return False
-        field: Final = LiteLLM_Params.model_fields.get(key)
-        return field is None or value != field.default
 
     def _consumed_request_tags_stamp(
         self,
