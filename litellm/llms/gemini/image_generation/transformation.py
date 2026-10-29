@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -36,6 +37,7 @@ else:
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
 )
@@ -88,14 +90,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         complete_url: str = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
 
-        complete_url = complete_url.rstrip("/")
-
         # Gemini Flash Image Preview models use generateContent endpoint
         if is_gemini_image_model(model):
-            complete_url = f"{complete_url}/models/{model}:generateContent"
+            complete_url = join_api_base(complete_url, f"models/{model}:generateContent")
         else:
             # All other Imagen models use predict endpoint
-            complete_url = f"{complete_url}/models/{model}:predict"
+            complete_url = join_api_base(complete_url, f"models/{model}:predict")
 
         return complete_url
 
@@ -189,7 +189,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         Transform Google AI Imagen response to litellm ImageResponse format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -227,9 +227,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                             )
 
             # Extract usage metadata for Gemini models
-            if "usageMetadata" in response_data:
+            if "usageMetadata" in response_object:
                 model_response.usage = transform_gemini_image_usage(
-                    _JSON_DICT.validate_python(response_data["usageMetadata"])
+                    _JSON_DICT.validate_python(response_object["usageMetadata"])
                 )
             web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
             if web_search_requests and model_response.usage is not None:

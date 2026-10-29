@@ -48,6 +48,7 @@ class CostMapEntry(BaseModel):
     supports_reasoning: bool | None = None
     supports_prompt_caching: bool | None = None
     supported_endpoints: tuple[str, ...] | None = None
+    use_openai_responses_path: bool | None = None
     supports_bedrock_runtime_chat_completions_tools_with_reasoning: bool | None = None
     supports_bedrock_runtime_chat_completions_response_format: bool | None = None
     cache_creation_input_token_cost_above_100k_tokens: float | None = None
@@ -84,6 +85,16 @@ class CostMapEntry(BaseModel):
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_12hr: float | None = None
+    cache_creation_input_token_cost_above_12hr_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_ultrafast: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: float | None = None
     cache_creation_input_token_cost_above_1hr_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
@@ -93,6 +104,7 @@ class CostMapEntry(BaseModel):
     tiered_pricing: tuple[TieredPrice, ...] | None = None
     output_cost_per_reasoning_token: float | None = None
     input_cost_per_audio_token: float | None = None
+    input_cost_per_audio_token_priority: float | None = None
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     input_cost_per_character: float | None = None
@@ -235,6 +247,8 @@ class RealtimeResponse(BaseModel):
     session_type: str | None = None
     created_event: Literal["session.created", "transcription_session.created"] = "session.created"
     created_repeats: int = 1
+    created_after_first_frame: bool = False
+    dialect: Literal["openai", "xai"] = "openai"
 
 
 StoredResponse: TypeAlias = Annotated[
@@ -570,6 +584,7 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "deepgram": "deepgram",
         "text-completion-openai": "text-completion-openai",
         "cohere": "cohere",
+        "vertex_ai": "vertex_ai",
         "vertex_ai-language-models": "vertex_ai",
         "vertex_ai-image-models": "vertex_ai",
         "vertex_ai-anthropic_models": "vertex_ai",
@@ -619,6 +634,9 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "deepgram": MappingProxyType({}),
         "text-completion-openai": MappingProxyType({}),
         "cohere": MappingProxyType({}),
+        "vertex_ai": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
         "vertex_ai-language-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),

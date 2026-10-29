@@ -2,7 +2,6 @@ import asyncio
 import itertools
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -28,7 +27,10 @@ from integration._support.openai_wire import answering_model_discovery
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _CLAUDE: Final = cc.OPUS
 _BEDROCK_CLAUDE: Final = "anthropic.claude-sonnet-5-5"
@@ -339,12 +341,6 @@ def _assert_each_lands_once(
         assert by_status[match] == "success", rows
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _health_counts(gateway: Gateway, model: str) -> tuple[int, int]:
     response: Final = gateway.request("GET", f"/health?model={model}", None)
     assert response.status_code in (200, 503), response.text
@@ -382,7 +378,7 @@ async def test_mixed_burst_carries_the_search_call_on_every_endpoint_and_lands_e
 async def test_vendor_outage_fails_each_call_cleanly_and_the_recovered_vendor_gets_the_tool_search(
     gateway: Gateway,
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(15, ("responses", "chat", "messages"))
     after: Final = _calls(15, ("responses", "chat", "messages"))
     with gateway.scenario() as scenario:
@@ -535,7 +531,7 @@ def _marked_posts(received: tuple[Request, ...], marker: str) -> tuple[Request, 
 
 
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
-def test_a_previous_response_id_turn_replays_the_function_call_without_the_search_call(owned_rig: _OwnedRig) -> None:
+def test_a_previous_response_id_turn_replays_the_search_call_beside_the_function_call(owned_rig: _OwnedRig) -> None:
     marker: Final = uuid.uuid4().hex
     owned_rig.wire.drain()
     proxy: Final = owned_rig.proxy.gateway
@@ -572,11 +568,8 @@ def test_a_previous_response_id_turn_replays_the_function_call_without_the_searc
         _assert_forwarded_with_tool_search(opening)
         _assert_forwarded_with_tool_search(replay)
         messages: Final = rv.ITEMS.validate_python(rv.JSON_OBJECT.validate_json(replay.body)["messages"])
-        assert "srvtoolu_" not in json.dumps(messages) and "tool_search" not in json.dumps(messages), messages
         (assistant,) = [turn for turn in messages if turn["role"] == "assistant"]
-        blocks: Final = rv.ITEMS.validate_python(assistant["content"])
-        tool_uses: Final = [(block["type"], block.get("id")) for block in blocks if block["type"] == "tool_use"]
-        assert tool_uses == [("tool_use", f"toolu_{marker}")], blocks
+        assert assistant["content"] == _message(marker)["content"], assistant
         assert [block["tool_use_id"] for block in _tool_results(messages)] == [f"toolu_{marker}"], messages
 
 

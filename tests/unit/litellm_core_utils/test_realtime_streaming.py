@@ -13,6 +13,7 @@ from websockets.frames import Close
 
 import litellm
 from litellm.constants import (
+    BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
@@ -541,6 +542,32 @@ async def test_backend_to_client_stores_normalized_events_for_logging():
     sent = json.loads(client_ws.send_text.call_args_list[0].args[0])
     assert sent["response"]["usage"]["total_tokens"] == 0
     assert streaming.messages[0]["response"]["usage"]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_client_ack_messages_replays_the_opening_message_a_refused_bedrock_stream_left():
+    opening_message: Final = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What is 17 * 3?"}]},
+        }
+    )
+    next_message: Final = json.dumps({"type": "response.create"})
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [], BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: opening_message}
+    client_ws.receive_text = AsyncMock(side_effect=[next_message, Exception("connection closed")])
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.client_ack_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in backend_ws.send.call_args_list]
+    assert sent_types == ["conversation.item.create", "response.create"]
+    assert json.loads(backend_ws.send.call_args_list[0].args[0])["item"]["content"][0]["text"] == "What is 17 * 3?"
+    assert BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY not in client_ws.scope
 
 
 @pytest.mark.asyncio
@@ -2351,8 +2378,7 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
     injected_turn_detection = session_obj.get("turn_detection") or session_obj.get("audio", {}).get("input", {}).get(
         "turn_detection"
     )
-    assert isinstance(injected_turn_detection, dict)
-    assert injected_turn_detection["create_response"] is False
+    assert injected_turn_detection == {"type": "server_vad", "create_response": False}
     assert streaming._guardrail_turn_detection_update_sent is True
 
 
@@ -2417,8 +2443,7 @@ async def test_subsequent_session_update_cannot_reenable_vad_when_guardrails_act
     forwarded_turn_detection = session_obj.get("turn_detection") or session_obj.get("audio", {}).get("input", {}).get(
         "turn_detection"
     )
-    assert isinstance(forwarded_turn_detection, dict)
-    assert forwarded_turn_detection["create_response"] is False
+    assert forwarded_turn_detection == {"type": "server_vad", "create_response": False}
 
 
 @pytest.mark.asyncio
@@ -3927,3 +3952,317 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     sent_to_backend: Final = [call.args[0] for call in backend_ws.send.await_args_list]
     assert sent_to_backend == [], sent_to_backend
     assert backend_ws.close.await_count == (1 if expect_session_closed else 0)
+
+
+_GA_GUARDRAIL_GATE: Final = {
+    "type": "realtime",
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
+}
+
+
+async def _forwarded_ga_session_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    *client_sessions: dict[str, object],
+    event_normalizer: XAIRealtimeNormalizer | None = None,
+) -> tuple[dict[str, object], ...]:
+    """Run a GA client's session.updates through a transcript-guardrailed proxy and return the forwarded sessions."""
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = AsyncMock()
+    client_ws.scope = {"headers": []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            *(json.dumps({"type": "session.update", "session": session}) for session in client_sessions),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj, event_normalizer=event_normalizer).client_ack_messages()
+    return tuple(json.loads(call.args[0])["session"] for call in backend_ws.send.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_first_ga_session_update_keeps_client_turn_detection_when_guardrail_disables_auto_response(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A transcript guardrail only flips create_response: the client's nested GA
+    turn_detection, its type included, must reach the backend intact, or OpenAI
+    rejects the whole update and the client's session config is lost."""
+    forwarded: Final = await _forwarded_ga_session_updates(
+        monkeypatch,
+        {
+            "type": "realtime",
+            "instructions": "hi",
+            "audio": {
+                "input": {
+                    "turn_detection": {"type": "server_vad", "silence_duration_ms": 700, "create_response": True},
+                    "transcription": {"model": "gpt-4o-transcribe"},
+                }
+            },
+        },
+    )
+
+    gate, client_update = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert "turn_detection" not in client_update
+    assert client_update["instructions"] == "hi"
+    assert client_update["audio"]["input"] == {
+        "turn_detection": {"type": "server_vad", "silence_duration_ms": 700, "create_response": False},
+        "transcription": {"model": "gpt-4o-transcribe"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_first_ga_session_update_without_turn_detection_gets_a_typed_gate(monkeypatch: pytest.MonkeyPatch):
+    forwarded: Final = await _forwarded_ga_session_updates(monkeypatch, {"type": "realtime", "instructions": "hi"})
+
+    gate, client_update = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert "turn_detection" not in client_update
+    assert client_update["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
+
+
+@pytest.mark.asyncio
+async def test_later_ga_session_update_without_turn_detection_is_forwarded_without_one(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenAI keeps the earlier create_response=false for a field left unset, while a
+    bare create_response carries no type and gets the whole update rejected."""
+    forwarded: Final = await _forwarded_ga_session_updates(
+        monkeypatch,
+        {"type": "realtime", "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": True}}}},
+        {"type": "realtime", "instructions": "later"},
+    )
+
+    gate, first, later = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert first["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
+    assert later == {"type": "realtime", "instructions": "later"}
+
+
+_XAI_TYPED_VAD_SESSION: Final = {
+    "type": "realtime",
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 700}}},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_sessions",
+    [
+        pytest.param(({"type": "realtime", "instructions": "hi"},), id="no-turn-detection"),
+        pytest.param(({"type": "realtime", "audio": {"input": {"turn_detection": None}}},), id="push-to-talk"),
+        pytest.param((_XAI_TYPED_VAD_SESSION,), id="typed-server-vad"),
+        pytest.param(
+            ({"type": "realtime", "instructions": "hi"}, _XAI_TYPED_VAD_SESSION), id="later-typed-server-vad"
+        ),
+    ],
+)
+async def test_xai_session_update_gate_leaves_out_the_vad_type(
+    monkeypatch: pytest.MonkeyPatch, client_sessions: tuple[dict[str, object], ...]
+):
+    """xAI answers on its own under a typed turn_detection even with create_response off,
+    so every turn_detection the proxy forwards to xAI under the guardrail must carry no type."""
+    forwarded: Final = await _forwarded_ga_session_updates(
+        monkeypatch, *client_sessions, event_normalizer=XAIRealtimeNormalizer()
+    )
+
+    assert [session["audio"]["input"]["turn_detection"] for session in forwarded] == [
+        {"create_response": False}
+    ] * (len(client_sessions) + 1)
+
+
+@pytest.mark.asyncio
+async def test_xai_session_created_gate_leaves_out_the_vad_type(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.created", "session": {"turn_detection": {"type": None}}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj, event_normalizer=XAIRealtimeNormalizer())
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert sent == [
+        {
+            "type": "session.update",
+            "session": {"type": "realtime", "audio": {"input": {"turn_detection": {"create_response": False}}}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_turn_detection",
+    [
+        pytest.param({"type": "semantic_vad", "eagerness": "low"}, id="semantic-vad"),
+        pytest.param({"type": "server_vad", "silence_duration_ms": 700}, id="tuned-server-vad"),
+    ],
+)
+async def test_guardrail_gate_goes_ahead_of_a_session_update_sent_before_session_created(
+    monkeypatch: pytest.MonkeyPatch, client_turn_detection: dict[str, object]
+):
+    """OpenAI applies events in order, so the gate must precede a client update sent on connect:
+    the client's turn_detection then wins, and when OpenAI refuses that update the gate still holds."""
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = AsyncMock()
+    client_ws.scope = {"headers": []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "realtime", "audio": {"input": {"turn_detection": client_turn_detection}}},
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps({"type": "session.created", "session": {}}).encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [event["session"]["audio"]["input"]["turn_detection"] for event in sent] == [
+        {"type": "server_vad", "create_response": False},
+        {**client_turn_detection, "create_response": False},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkeypatch: pytest.MonkeyPatch):
+    """OpenAI answers the guardrail's response.cancel with response_cancel_not_active when nothing
+    is answering yet, an error about an event the client never sent."""
+
+    class _BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("blocked")
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _BlockingGuardrail(
+                guardrail_name="blocking", event_hook=GuardrailEventHooks.realtime_input_transcription, default_on=True
+            )
+        ],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    def cancel_not_active(event_id: str) -> bytes:
+        return json.dumps(
+            {"type": "error", "error": {"code": "response_cancel_not_active", "event_id": event_id}}
+        ).encode()
+
+    def proxy_cancel_event_id() -> str:
+        sent = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+        return next(event["event_id"] for event in sent if event["type"] == "response.cancel")
+
+    backend_frames: Final = iter(
+        (
+            lambda: _make_transcript_event("blocked words"),
+            lambda: cancel_not_active(proxy_cancel_event_id()),
+            lambda: cancel_not_active("evt_from_client"),
+            lambda: cancel_not_active("litellm_guardrail_from_client"),
+        )
+    )
+
+    async def recv(**_kwargs: object) -> bytes:
+        frame = next(backend_frames, None)
+        if frame is None:
+            raise ConnectionClosed(None, None)
+        return frame()
+
+    backend_ws.recv = recv
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    client_errors: Final = [
+        event["error"] for call in client_ws.send_text.await_args_list if (event := json.loads(call.args[0]))["type"] == "error"
+    ]
+    assert [(error["code"], error.get("event_id")) for error in client_errors] == [
+        ("content_policy_violation", None),
+        ("response_cancel_not_active", "evt_from_client"),
+        ("response_cancel_not_active", "litellm_guardrail_from_client"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_normalizer", "expected_frames"),
+    [
+        (None, ["response.cancel", "conversation.item.delete", "conversation.item.create", "response.create"]),
+        (XAIRealtimeNormalizer(), ["response.cancel", "conversation.item.create", "response.create"]),
+    ],
+    ids=["deletes_the_blocked_item", "xai_keeps_the_item_it_cannot_delete"],
+)
+async def test_blocked_transcript_is_removed_from_the_conversation_before_the_refusal_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    event_normalizer: XAIRealtimeNormalizer | None,
+    expected_frames: list[str],
+):
+    class _BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("blocked")
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _BlockingGuardrail(
+                guardrail_name="blocking", event_hook=GuardrailEventHooks.realtime_input_transcription, default_on=True
+            )
+        ],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_frames: Final = iter((_make_transcript_event("blocked words", item_id="item_blocked"),))
+
+    async def recv(**_kwargs: object) -> bytes:
+        frame = next(backend_frames, None)
+        if frame is None:
+            raise ConnectionClosed(None, None)
+        return frame
+
+    backend_ws.recv = recv
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    await RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, event_normalizer=event_normalizer
+    ).backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [event["type"] for event in sent] == expected_frames
+    assert all(event["item_id"] == "item_blocked" for event in sent if event["type"] == "conversation.item.delete")

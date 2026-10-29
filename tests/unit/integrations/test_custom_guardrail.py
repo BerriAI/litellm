@@ -2790,7 +2790,7 @@ class TestLoggingOnlyApplyGuardrail:
         assert out_kwargs["messages"] == kwargs["messages"]
         assert (
             out_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"]
-            == "guardrail_intervened"
+            == "guardrail_flagged"
         )
 
     @pytest.mark.asyncio
