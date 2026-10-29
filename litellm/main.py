@@ -8359,7 +8359,7 @@ def transcription(
         litellm_logging_obj.model_call_details["client"] = str(client)
 
     if max_retries is None:
-        max_retries = openai.DEFAULT_MAX_RETRIES
+        max_retries = litellm.DEFAULT_MAX_RETRIES
 
     model_response: Final = litellm.utils.TranscriptionResponse()
 
@@ -8678,7 +8678,7 @@ def speech(
         else timeout_or_default
     )
     if max_retries is None:
-        max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
+        max_retries = litellm.num_retries or litellm.DEFAULT_MAX_RETRIES
     litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
 
     # Get provider-specific text-to-speech config and map parameters

@@ -33,17 +33,19 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
 from litellm.types.utils import CallTypes
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 AzureSdkClient = AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI
 
 
-async def _send_chat_completion(client: AzureSdkClient | None, is_async: bool) -> None:
-    assert client is not None
-    response: Final = client.chat.completions.create(
-        model="test-deployment", messages=[{"role": "user", "content": "hi"}]
-    )
-    if is_async:
-        await response
+async def _send_chat_completion(client: AzureSdkClient | None) -> None:
+    match client:
+        case AsyncOpenAI():
+            await client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "hi"}])
+        case OpenAI():
+            client.chat.completions.create(model="test-deployment", messages=[{"role": "user", "content": "hi"}])
+        case None:
+            pytest.fail("expected an SDK client")
 
 
 # Mock the necessary dependencies
@@ -462,6 +464,34 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
     )
 
     assert completed.stdout.strip() == "0"
+
+
+def test_default_max_retries_env_var_reaches_azure_audio_clients() -> None:
+    code: Final = (
+        "import httpx, litellm, openai, respx\n"
+        "router = respx.Router(assert_all_mocked=True)\n"
+        "route = router.route().respond(\n"
+        "    429, json={'error': {'message': 'rate limited'}}, headers={'retry-after-ms': '1'}\n"
+        ")\n"
+        "litellm.client_session = httpx.Client(transport=httpx.MockTransport(router.handler))\n"
+        "shared = dict(\n"
+        "    api_key='test-key', api_base='https://audio-env-retry-test.openai.azure.com', api_version='2024-02-01'\n"
+        ")\n"
+        "audio = ('hello.wav', b'RIFF0000WAVEfmt ', 'audio/wav')\n"
+        "for call in (\n"
+        "    lambda: litellm.transcription(model='azure/whisper', file=audio, **shared),\n"
+        "    lambda: litellm.speech(model='azure/tts', input='hi', voice='alloy', **shared),\n"
+        "):\n"
+        "    try:\n"
+        "        call()\n"
+        "    except openai.RateLimitError:\n"
+        "        pass\n"
+        "print(route.call_count)"
+    )
+    completed: Final = run_child_interpreter(code, env={**os.environ, "DEFAULT_MAX_RETRIES": "0"}, timeout=120)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines()[-1] == "2"
 
 
 @pytest.mark.parametrize(
@@ -2552,7 +2582,7 @@ async def test_azure_client_cache_respects_retry_limit(
             assert client_for({}) is initial
             assert client_for({"max_retries": DEFAULT_MAX_RETRIES}) is initial
         with pytest.raises(RateLimitError):
-            await _send_chat_completion(no_retry, is_async)
+            await _send_chat_completion(no_retry)
         assert rate_limited.call_count == 1
         assert no_retry is not initial
         assert client_for({"max_retries": 0}) is no_retry
@@ -2602,8 +2632,8 @@ async def test_azure_client_cache_keeps_each_timeout_on_its_own_client(
         short_client: Final = client_for({"timeout": 0.1})
         long_client: Final = client_for({"timeout": 30.0})
         default_client: Final = client_for({})
-        await _send_chat_completion(short_client, is_async)
-        await _send_chat_completion(long_client, is_async)
+        await _send_chat_completion(short_client)
+        await _send_chat_completion(long_client)
 
         assert [call.request.extensions["timeout"]["read"] for call in completes.calls] == [0.1, 30.0]
         assert default_client is not short_client
