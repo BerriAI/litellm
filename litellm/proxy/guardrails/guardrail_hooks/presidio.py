@@ -1570,7 +1570,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     ) -> tuple[object, ...]:
         rest_chunks: Final = [chunk async for chunk in rest]
         chunks: Final = (first_chunk, *rest_chunks)
-        assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
+        assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True, through_upstream_error=True)
         if assembled is None:
             verbose_proxy_logger.warning(
                 "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "

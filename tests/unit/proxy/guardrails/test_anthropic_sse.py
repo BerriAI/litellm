@@ -322,15 +322,29 @@ def test_rewritten_stream_drops_the_verdict_of_a_tool_use_whose_input_the_guardr
         (_upstream_stream({})[:-2], [0]),
         (_upstream_stream({})[:-3], []),
         (_upstream_stream({}, tool_uses=(("toolu_cut_off", "Bash"),))[:-3], [0]),
+        (
+            (
+                *_upstream_stream({}, tool_uses=(("toolu_cut_off", "Bash"),))[:-4],
+                _frame(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 1,
+                        "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'},
+                    },
+                ),
+            ),
+            [0],
+        ),
     ],
-    ids=["text-block-stopped", "text-block-cut-off", "tool-use-block-cut-off"],
+    ids=["text-block-stopped", "text-block-cut-off", "tool-use-block-cut-off", "tool-use-input-cut-off"],
 )
 def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error(
     delivered_content: tuple[bytes, ...], upstream_stopped_indices: list[int]
 ):
     upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
     upstream: Final = (*delivered_content, _frame("error", upstream_error))
-    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True)
+    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True, through_upstream_error=True)
     assert assembled is not None
     _set_text("call [PHONE]")(assembled)
 
@@ -344,3 +358,6 @@ def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error(
     assert [payload["index"] for event, payload in rewritten if event == "content_block_stop"] == (
         upstream_stopped_indices
     ), "a block the upstream never finished must not be re-emitted as finished"
+    assert not any(payload.get("content_block", {}).get("type") == "tool_use" for _, payload in rewritten), (
+        "a tool call the upstream cut off must not be re-emitted as one the client can run"
+    )

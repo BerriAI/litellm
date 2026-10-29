@@ -951,7 +951,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        anthropic_response: Final = assemble_anthropic_sse_stream(all_chunks)
+        anthropic_response: Final = assemble_anthropic_sse_stream(all_chunks, through_upstream_error=True)
         if anthropic_response is None:
             if is_raw_sse_stream(all_chunks) and not is_sse_error_stream(all_chunks):
                 raise GuardrailRaisedException(

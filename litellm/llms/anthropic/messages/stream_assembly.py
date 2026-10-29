@@ -444,7 +444,8 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
         (
             message
             for event_data in _parsed_sse_events(sse_stream)
-            if event_data.get("type") == "message_start" and isinstance(message := event_data.get("message"), dict)
+            if event_data.get("type") == "message_start"
+            and (message := as_str_mapping(event_data.get("message"))) is not None
         ),
         None,
     )
@@ -497,8 +498,8 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     """The ``error`` events of the stream, as raw SSE event text.
 
     A stream whose upstream fails after it started ends with an ``error`` event in place of
-    ``message_stop``. That frame is the outcome the client is owed, not content, so assembly leaves
-    it out and a caller re-emitting a rewritten response puts it back.
+    ``message_stop``. That frame is the outcome the client is owed, not content, so assembly through
+    the upstream error leaves it out and a caller re-emitting a rewritten response puts it back.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     return tuple(event for event in split_sse_chunk_into_events(sse_stream) if _is_error_event(event))
@@ -515,17 +516,70 @@ def anthropic_sse_stopped_block_index(event: str) -> object:
     )
 
 
-def anthropic_sse_stopped_block_indices(all_chunks: Sequence[object]) -> frozenset[object]:
-    sse_stream: Final = _joined_sse_stream(all_chunks) or ""
-    return frozenset(
-        index
+def _block_index(event_data: Mapping[str, object]) -> int | None:
+    index: Final = event_data.get("index")
+    return index if isinstance(index, int) else None
+
+
+def _started_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, Mapping[str, object]]:
+    starts: Final = (event for event in events if event.get("type") == "content_block_start")
+    return MappingProxyType(
+        {
+            index: block
+            for event in starts
+            if (index := _block_index(event)) is not None
+            and (block := as_str_mapping(event.get("content_block"))) is not None
+        }
+    )
+
+
+def anthropic_sse_started_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
+    """The ``content_block`` each ``content_block_start`` of the stream opened, by block index."""
+    return _started_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def _unfinished_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, Mapping[str, object]]:
+    stopped: Final = frozenset(_block_index(event) for event in events if event.get("type") == "content_block_stop")
+    return MappingProxyType({index: block for index, block in _started_blocks(events).items() if index not in stopped})
+
+
+def anthropic_sse_unfinished_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
+    """The blocks the stream opened and never stopped, which only a failed upstream leaves."""
+    return _unfinished_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    return tuple(
+        (event, event_data)
         for event in split_sse_chunk_into_events(sse_stream)
-        if (index := anthropic_sse_stopped_block_index(event)) is not None
+        if (event_data := extract_sse_data(event)) is not None
+    )
+
+
+def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...]:
+    """The stream's events minus its upstream ``error`` and every cut-off block assembly cannot read.
+
+    A cut-off text block is still text the client was sent, so it stays. A cut-off tool call's
+    input is a JSON prefix, and a cut-off thinking block has no signature, so neither is a block the
+    client can act on, and both are left out.
+    """
+    events: Final = _sse_events_with_data(sse_stream)
+    if not any(event_data.get("type") == "error" for _, event_data in events):
+        return (sse_stream,)
+    cut_off: Final = frozenset(
+        index
+        for index, block in _unfinished_blocks(tuple(event_data for _, event_data in events)).items()
+        if block.get("type") != "text"
+    )
+    return tuple(
+        event
+        for event, event_data in events
+        if event_data.get("type") != "error" and _block_index(event_data) not in cut_off
     )
 
 
 def assemble_anthropic_sse_stream(
-    all_chunks: Sequence[object], *, restore_identity: bool = False
+    all_chunks: Sequence[object], *, restore_identity: bool = False, through_upstream_error: bool = False
 ) -> ModelResponse | None:
     """Assemble raw Anthropic SSE frames into a ModelResponse.
 
@@ -533,6 +587,11 @@ def assemble_anthropic_sse_stream(
     assembler does not carry through. It is off by default so callers that re-emit the assembled
     response keep the wire shape they had before this helper was shared. The writes land on a
     freshly built object that is unreachable from caller state until returned.
+
+    A stream whose upstream failed after it started ends with an ``error`` event in place of
+    ``message_stop`` and assembles to None, unless ``through_upstream_error`` asks for the content
+    the client was sent before the failure. That is for a guardrail that scans the stream and then
+    passes the upstream error on; a caller recording what was served keeps None.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
@@ -541,8 +600,8 @@ def assemble_anthropic_sse_stream(
     if message_start is None:
         return None
     model: Final = message_start.get("model") if restore_identity else None
-    content_events: Final = tuple(
-        event for event in split_sse_chunk_into_events(sse_stream) if not _is_error_event(event)
+    content_events: Final = (
+        _content_events_before_upstream_error(sse_stream) if through_upstream_error else (sse_stream,)
     )
     try:
         assembled: Final = build_complete_streaming_response(

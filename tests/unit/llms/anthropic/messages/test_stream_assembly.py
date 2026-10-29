@@ -168,6 +168,39 @@ def test_anthropic_message_delta_fields_reads_a_message_delta_whose_json_holds_u
     assert dict(fields) == {"safeguard_results": safeguard_results}
 
 
+CUT_OFF_TOOL_USE: Final = (
+    _frame(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_cut_off", "name": "Bash", "input": {}},
+        },
+    ),
+    _frame(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'}},
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [(*ANTHROPIC_STREAM[:4], ANTHROPIC_ERROR), (*ANTHROPIC_STREAM[:5], *CUT_OFF_TOOL_USE, ANTHROPIC_ERROR)],
+    ids=["text-cut-off", "tool-input-cut-off"],
+)
+def test_stream_cut_off_by_an_upstream_error_assembles_its_text_only_through_the_error(chunks: tuple[bytes, ...]):
+    assert assemble_anthropic_sse_stream(chunks) is None, "a caller recording what was served must not log a reply the upstream never finished"
+
+    assembled: Final = assemble_anthropic_sse_stream(chunks, through_upstream_error=True)
+
+    assert assembled is not None
+    choice: Final = assembled.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.content == "Hello there"
+    assert not choice.message.tool_calls, "a tool call whose input the upstream cut off is not a call the client can run"
+
+
 @pytest.mark.parametrize(
     "chunks",
     [GOOGLE_STREAM, INVALID_UTF8, (ANTHROPIC_ERROR,), ()],

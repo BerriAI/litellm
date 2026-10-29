@@ -18,8 +18,9 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_message_delta_fields,
     anthropic_sse_error_events,
     anthropic_sse_event_type,
+    anthropic_sse_started_blocks,
     anthropic_sse_stopped_block_index,
-    anthropic_sse_stopped_block_indices,
+    anthropic_sse_unfinished_blocks,
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
@@ -110,12 +111,27 @@ def _rewritten_message_delta_fields(
 _MESSAGE_END_EVENT_TYPES: Final = frozenset({"message_delta", "message_stop"})
 
 
-def _sent_by_the_failed_upstream(chunk: bytes, upstream_stopped_block_indices: frozenset[object]) -> bool:
+def _text_blocks_left_open(rewritten_chunks: Sequence[bytes], source_chunks: Sequence[object]) -> frozenset[int]:
+    """Indices of the rewritten text blocks when the failed upstream never stopped its text block.
+
+    Assembly keeps a cut-off text block and drops every other cut-off block, and the round trip
+    merges all text into one block, so that block carries text the upstream left open.
+    """
+    upstream_left_text_open: Final = any(
+        block.get("type") == "text" for block in anthropic_sse_unfinished_blocks(source_chunks).values()
+    )
+    if not upstream_left_text_open:
+        return frozenset()
+    return frozenset(
+        index for index, block in anthropic_sse_started_blocks(rewritten_chunks).items() if block.get("type") == "text"
+    )
+
+
+def _sent_by_the_failed_upstream(chunk: bytes, blocks_left_open: frozenset[int]) -> bool:
     event: Final = chunk.decode()
     if anthropic_sse_event_type(event) in _MESSAGE_END_EVENT_TYPES:
         return False
-    stopped_block_index: Final = anthropic_sse_stopped_block_index(event)
-    return stopped_block_index is None or stopped_block_index in upstream_stopped_block_indices
+    return anthropic_sse_stopped_block_index(event) not in blocks_left_open
 
 
 def anthropic_sse_chunks_from_response(
@@ -139,7 +155,7 @@ def anthropic_sse_chunks_from_response(
 
     adapter: Final = LiteLLMAnthropicMessagesAdapter()
     anthropic_response: Final = adapter.translate_openai_response_to_anthropic(response=assembled)
-    source_response: Final = assemble_anthropic_sse_stream(source_chunks)
+    source_response: Final = assemble_anthropic_sse_stream(source_chunks, through_upstream_error=True)
     source_content: Final = (
         adapter.translate_openai_response_to_anthropic(response=source_response).get("content")
         if source_response is not None
@@ -155,8 +171,8 @@ def anthropic_sse_chunks_from_response(
     error_events: Final = anthropic_sse_error_events(source_chunks)
     if not error_events:
         return tuple(rewritten_chunks)
-    upstream_stopped_block_indices: Final = anthropic_sse_stopped_block_indices(source_chunks)
+    blocks_left_open: Final = _text_blocks_left_open(rewritten_chunks, source_chunks)
     return (
-        *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, upstream_stopped_block_indices)),
+        *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, blocks_left_open)),
         *(f"{event}\n\n".encode() for event in error_events),
     )
