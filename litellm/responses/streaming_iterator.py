@@ -39,7 +39,11 @@ from litellm.constants import (
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import (
+    process_response_headers,
+    provider_reported_usage_cost,
+    set_response_cost_in_hidden_params,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import (
     is_background_response,
@@ -1825,20 +1829,32 @@ def _estimate_usage_safely(
 def stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
-    if response_obj is None or logging_obj is None:
+    """The terminal response's ``usage.cost`` is the bill litellm writes to the spend row. It is priced on a copy
+    shaped the way the success handler shapes the spend row's result (the reported ``usage.cost`` in the
+    response-cost header, the usage in chat shape), so the client and the row read the same number."""
+    if response_obj is None:
         return
     usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
     if usage_obj is None:
         return
-    response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
-    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
+    response_obj.usage = usage_obj  # rebind-ok: the typed usage has to ride on the response the client receives
+    if logging_obj is None:
         return
+    priced: Final = response_obj.model_copy(
+        update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)}
+    )
+    priced.hidden_params = {}
+    set_response_cost_in_hidden_params(
+        priced, provider_reported_usage_cost(usage_obj, logging_obj.model_call_details.get("custom_llm_provider"))
+    )
     try:
-        cost: Final[float | None] = logging_obj.response_cost_calculator(result=response_obj)
-    except Exception:
+        bill: Final = logging_obj.response_cost_calculator(result=priced)
+    except Exception:  # noqa: BLE001  # a pricing failure leaves the client usage as the upstream sent it
         return
-    if isinstance(cost, (int, float)) and cost > 0:
-        setattr(usage_obj, "cost", cost)
+    if isinstance(bill, bool) or not isinstance(bill, (int, float)):
+        return
+    if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
+        setattr(usage_obj, "cost", float(bill))
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:

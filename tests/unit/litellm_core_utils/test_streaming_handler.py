@@ -6316,6 +6316,22 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
     assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
 
 
+def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row() -> None:
+    from litellm.litellm_core_utils.streaming_handler import (
+        _stamp_usage_cost,  # pyright: ignore[reportPrivateUsage]  # the helper under test
+    )
+
+    complete: Final = ModelResponse(model="omni-model", usage=Usage(prompt_tokens=100, completion_tokens=20))
+    complete.hidden_params = {"response_cost": 0.00032}
+    chunk_usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    setattr(chunk_usage, "cost", 0.037)
+    usage_chunk: Final = ModelResponseStream(id="chunk-1", model="omni-model", choices=[], usage=chunk_usage)
+
+    _stamp_usage_cost(usage_chunk, complete)
+
+    assert usage_chunk.usage is not None and usage_chunk.usage.cost == 0.00032, "the client sees what the row bills"
+
+
 def test_chunk_creator_keeps_provider_model_private_across_stream():
     from litellm.router_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,
