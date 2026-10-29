@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -7,7 +8,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebSearchOptions
-from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
+from litellm.types.utils import ModelResponse, ServerToolUse, StandardBuiltInToolsParams, Usage
 
 
 def test_web_search_cost_low():
@@ -1050,6 +1051,97 @@ def test_azure_ai_non_claude_web_search_keeps_generic_fallback() -> None:
     usage = Usage(prompt_tokens=1840, completion_tokens=412, total_tokens=2252)
 
     assert get_cost_for_web_search_request(custom_llm_provider="azure_ai", usage=usage, model_info=model_info) is None
+
+
+def _register_priced_vertex_deployment(model: str, search_cost_per_query: float) -> str:
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "priced-vertex-deployment",
+                "litellm_params": {"model": model, "vertex_project": "p", "vertex_location": "global"},
+                "model_info": {
+                    "input_cost_per_token": 3e-6,
+                    "output_cost_per_token": 1.5e-5,
+                    "search_context_cost_per_query": {
+                        "search_context_size_low": search_cost_per_query,
+                        "search_context_size_medium": search_cost_per_query,
+                        "search_context_size_high": search_cost_per_query,
+                    },
+                },
+            }
+        ]
+    )
+    return router.model_list[0]["model_info"]["id"]
+
+
+def _vertex_claude_chat_response(web_search_requests: int) -> tuple[object, Usage | None]:
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=web_search_requests),
+    )
+    return ModelResponse(model="claude-sonnet-5-5", usage=usage), usage
+
+
+def _vertex_claude_messages_response(web_search_requests: int) -> tuple[object, Usage | None]:
+    return {
+        "id": "msg_vertex_claude_web_search",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "scripted answer"}],
+        "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "server_tool_use": {"web_search_requests": web_search_requests},
+        },
+    }, None
+
+
+@pytest.mark.parametrize("build_response", [_vertex_claude_chat_response, _vertex_claude_messages_response])
+@pytest.mark.parametrize(("web_search_requests", "search_cost_per_query"), [(2, 0.01), (3, 0.01), (2, 0.0)])
+def test_vertex_claude_deployment_priced_web_search_billed_per_request(
+    local_model_cost_map: None,
+    build_response: Callable[[int], tuple[object, Usage | None]],
+    web_search_requests: int,
+    search_cost_per_query: float,
+) -> None:
+    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/claude-sonnet-5-5", search_cost_per_query)
+    response_object, usage = build_response(web_search_requests)
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=response_object,
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(web_search_requests * search_cost_per_query)
+
+
+def test_vertex_gemini_deployment_priced_web_search_stays_per_prompt(local_model_cost_map: None) -> None:
+    search_cost_per_prompt: Final = 0.03
+    deployment_id: Final = _register_priced_vertex_deployment("vertex_ai/gemini-2.5-flash", search_cost_per_prompt)
+    usage: Final = Usage(
+        prompt_tokens=1840,
+        completion_tokens=412,
+        total_tokens=2252,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+
+    cost: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=deployment_id,
+        response_object=ModelResponse(model="gemini-2.5-flash", usage=usage),
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(search_cost_per_prompt)
 
 
 @pytest.mark.parametrize(

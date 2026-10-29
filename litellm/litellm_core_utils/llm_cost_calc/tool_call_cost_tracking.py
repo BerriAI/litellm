@@ -208,11 +208,13 @@ class StandardBuiltInToolCostTracking:
             usage=usage, response_object=response_object
         )
 
+        response_model: Final = _output_item_field(response_object, "model")
         if model_info is not None and resolved_usage is not None and resolved_provider is not None:
             result: Final = get_cost_for_web_search_request(
                 custom_llm_provider=resolved_provider,
                 usage=resolved_usage,
                 model_info=model_info,
+                response_model=response_model if isinstance(response_model, str) else None,
             )
             if result is not None:
                 return result

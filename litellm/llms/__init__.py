@@ -30,7 +30,9 @@ def get_cost_for_google_maps_grounding_request(
     return cost_per_google_maps_grounding_request(usage=usage, model_info=model_info)
 
 
-def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
+def get_cost_for_web_search_request(
+    custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo", response_model: str | None = None
+) -> float | None:
     """
     Get the cost for a web search request for a given model.
 
@@ -38,6 +40,7 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         custom_llm_provider: The custom LLM provider.
         usage: The usage object.
         model_info: The model info.
+        response_model: The model the provider response names.
     """
     if custom_llm_provider == "gemini":
         from .gemini.cost_calculator import cost_per_web_search_request
@@ -52,7 +55,7 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         # (same as the direct Anthropic API), not prompt_tokens_details.web_search_requests
         # (which is the Gemini field). Route claude-* models to the Anthropic calculator.
         model_key: Final[str] = model_info.get("key", "") if model_info else ""
-        if "claude" in model_key.lower():
+        if "claude" in model_key.lower() or "claude" in (response_model or "").lower():
             from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
 
             verbose_logger.debug("vertex_ai/claude model detected — routing web search cost to Anthropic calculator")
