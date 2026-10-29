@@ -302,10 +302,14 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
                     texts.append(data["delta"]["text"])
         return texts
 
-    def test_off_schema_delta_is_skipped_without_ending_the_text_scan(self):
+    @pytest.mark.parametrize(
+        "off_schema_delta",
+        [None, "stray", {"type": "text_delta", "text": 5}, {"type": "thinking_delta", "text": None}],
+    )
+    def test_off_schema_delta_is_skipped_without_ending_the_text_scan(self, off_schema_delta):
         events = [
             {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "abc"}},
-            {"type": "content_block_delta", "index": 1, "delta": {"type": "thinking_delta", "text": None}},
+            {"type": "content_block_delta", "index": 1, "delta": off_schema_delta},
             {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "def"}},
         ]
         chunk = "".join(f"event: content_block_delta\ndata: {json.dumps(event)}\n\n" for event in events).encode()

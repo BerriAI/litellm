@@ -1,8 +1,8 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.exceptions import UnsupportedParamsError
@@ -21,22 +21,35 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
+_TOKEN_COUNT_ADAPTER: Final[TypeAdapter[int | float]] = TypeAdapter(int | float)
+
+
+def _token_count_or_none(value: object) -> int | float | None:
+    try:
+        return _TOKEN_COUNT_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+_TokenCount: TypeAlias = Annotated[int | float | None, BeforeValidator(_token_count_or_none)]
+
+
 @with_config(ConfigDict(extra="allow"))
 class _MAIImageUsageDetails(TypedDict, total=False):
-    text_tokens: ReadOnly[NotRequired[int | float | None]]
-    image_tokens: ReadOnly[NotRequired[int | float | None]]
+    text_tokens: ReadOnly[NotRequired[_TokenCount]]
+    image_tokens: ReadOnly[NotRequired[_TokenCount]]
 
 
 @with_config(ConfigDict(extra="allow"))
 class _MAIImageUsage(TypedDict, total=False):
     input_tokens_details: ReadOnly[NotRequired[object]]
-    num_input_text_tokens: ReadOnly[NotRequired[int | float | None]]
-    num_input_image_tokens: ReadOnly[NotRequired[int | float | None]]
-    input_tokens: ReadOnly[NotRequired[int | float | None]]
-    output_tokens: ReadOnly[NotRequired[int | float | None]]
-    num_output_tokens: ReadOnly[NotRequired[int | float | None]]
-    output_image_tokens: ReadOnly[NotRequired[int | float | None]]
-    total_tokens: ReadOnly[NotRequired[int | float | None]]
+    num_input_text_tokens: ReadOnly[NotRequired[_TokenCount]]
+    num_input_image_tokens: ReadOnly[NotRequired[_TokenCount]]
+    input_tokens: ReadOnly[NotRequired[_TokenCount]]
+    output_tokens: ReadOnly[NotRequired[_TokenCount]]
+    num_output_tokens: ReadOnly[NotRequired[_TokenCount]]
+    output_image_tokens: ReadOnly[NotRequired[_TokenCount]]
+    total_tokens: ReadOnly[NotRequired[_TokenCount]]
 
 
 @with_config(ConfigDict(extra="allow"))
@@ -46,6 +59,7 @@ class _MAIImageResponse(TypedDict, total=False):
 
 _MAI_IMAGE_USAGE_DETAILS_ADAPTER: Final[TypeAdapter[_MAIImageUsageDetails]] = TypeAdapter(_MAIImageUsageDetails)
 _MAI_IMAGE_USAGE_ADAPTER: Final[TypeAdapter[_MAIImageUsage]] = TypeAdapter(_MAIImageUsage)
+_MAI_RAW_USAGE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _MAI_IMAGE_RESPONSE_ADAPTER: Final[TypeAdapter[_MAIImageResponse]] = TypeAdapter(_MAIImageResponse)
 
 
@@ -119,7 +133,8 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
                 "total_tokens": 0,
             }
 
-        normalized_usage: Final[_MAIImageUsage] = _MAI_IMAGE_USAGE_ADAPTER.validate_python(usage)
+        raw_usage: Final = _MAI_RAW_USAGE_ADAPTER.validate_python(usage)
+        normalized_usage: Final[_MAIImageUsage] = _MAI_IMAGE_USAGE_ADAPTER.validate_python(raw_usage)
         input_tokens_details_value: Final = normalized_usage.get("input_tokens_details")
         input_tokens_details: Final[_MAIImageUsageDetails] = (
             _MAI_IMAGE_USAGE_DETAILS_ADAPTER.validate_python(input_tokens_details_value)
@@ -156,7 +171,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
             total_tokens = input_tokens + output_tokens
 
         return {
-            **normalized_usage,
+            **raw_usage,
             "input_tokens": input_tokens,
             "input_tokens_details": {
                 "image_tokens": image_tokens,

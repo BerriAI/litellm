@@ -1827,7 +1827,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
                     except ValidationError:
-                        verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                        verbose_proxy_logger.warning(
+                            "Skipping a content_block_delta SSE event with an unexpected shape"
+                        )
 
         except Exception as e:
             verbose_proxy_logger.error("Error extracting text from SSE: %s", e)
@@ -1891,7 +1893,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                                 if stop_reason is not None:
                                     return True
                             except ValidationError:
-                                verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                                verbose_proxy_logger.warning(
+                                    "Skipping a message_delta SSE event with an unexpected shape"
+                                )
 
                 except Exception as e:
                     verbose_proxy_logger.error("Error checking streaming end in SSE: %s", e)
