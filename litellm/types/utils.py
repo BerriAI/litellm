@@ -7,6 +7,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -37,6 +38,7 @@ from openai.types.moderation_create_response import (
 )
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     FieldSerializationInfo,
@@ -44,6 +46,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
     field_serializer,
     field_validator,
 )
@@ -1234,6 +1237,8 @@ class ChatCompletionTokenLogprob(OpenAIObject):
 
 
 class ChoiceLogprobs(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     content: list[ChatCompletionTokenLogprob] | None = None
     """A list of message content tokens with log probability information."""
 
@@ -1248,6 +1253,21 @@ class ChoiceLogprobs(OpenAIObject):
     def __getitem__(self, key):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
+
+
+def _sdk_logprobs_as_dict(logprobs: object) -> object:
+    if isinstance(logprobs, ChoiceLogprobs) or not isinstance(logprobs, BaseModel):
+        return logprobs
+    return logprobs.model_dump()
+
+
+CHOICE_LOGPROBS_OR_JSON: Final[TypeAdapter[ChoiceLogprobs | JsonValue]] = TypeAdapter(
+    Annotated[
+        ChoiceLogprobs | JsonValue,
+        Field(union_mode="left_to_right"),
+        BeforeValidator(_sdk_logprobs_as_dict),
+    ]
+)
 
 
 class FunctionCall(OpenAIObject):
@@ -2130,7 +2150,7 @@ class StreamingChoices(OpenAIObject):
             self.enhancements = enhancements
 
         if logprobs is not None and isinstance(logprobs, dict):
-            self.logprobs = ChoiceLogprobs(**logprobs)
+            self.logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
         else:
             self.logprobs = logprobs
 
