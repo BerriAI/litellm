@@ -7,7 +7,7 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -8031,19 +8031,14 @@ async def test_pass_through_route_pings_while_the_upstream_call_is_still_running
     assert collected[-1] in (MESSAGE_START_SSE_FRAME, MESSAGE_START_SSE_FRAME.decode())
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("custom_llm_provider, expect_error_event", [("anthropic", True), (None, False)])
-async def test_pass_through_route_sends_a_late_upstream_rejection_in_the_providers_error_shape(
-    custom_llm_provider, expect_error_event
-):
-    """Once a ping is out the upstream's 401 status never reaches the client, and an
-    Anthropic client only sees an error that arrives as an `event: error`."""
-    from fastapi import Response
-    from fastapi.responses import StreamingResponse
+_LATE_REJECTION: Final = {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
 
+
+async def _wire_after_a_late_rejection(open_route: Callable[[Request], Awaitable[Response]]) -> bytes:
+    """Once a ping is out the upstream's 401 status never reaches the client, so
+    only the bytes written after the pings can carry the rejection."""
     module = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
-    envelope = {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
-    payload = json.dumps(envelope).encode()
+    payload = json.dumps(_LATE_REJECTION).encode()
 
     async def _rejection():
         yield payload
@@ -8068,14 +8063,6 @@ async def test_pass_through_route_sends_a_late_upstream_rejection_in_the_provide
         stack.enter_context(patch(f"{module}.pass_through_request", slow_rejection))
         stack.enter_context(patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05))
 
-        endpoint_func = create_pass_through_route(
-            endpoint="/anthropic/v1/messages",
-            target="https://api.anthropic.com/v1/messages",
-            custom_headers={},
-            custom_llm_provider=custom_llm_provider,
-            is_streaming_request=True,
-        )
-
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
         mock_request.url = httpx.URL("http://test-proxy.com/anthropic/v1/messages")
@@ -8085,20 +8072,52 @@ async def test_pass_through_route_sends_a_late_upstream_rejection_in_the_provide
         mock_request.query_params = QueryParams({})
         mock_request.state = SimpleNamespace()
 
-        response = await endpoint_func(
-            request=mock_request,
-            fastapi_response=Response(),
-            user_api_key_dict=MagicMock(),
-        )
-        wire = b"".join([chunk async for chunk in response.body_iterator])
+        response = await open_route(mock_request)
+        return b"".join([chunk async for chunk in response.body_iterator])
 
-    error_events = [
-        json.loads(frame.split(b"data: ", 1)[1])
-        for frame in wire.split(b"\n\n")
-        if frame.startswith(b"event: error\n")
+
+def _error_events(wire: bytes) -> list[object]:
+    return [
+        json.loads(frame.split(b"data: ", 1)[1]) for frame in wire.split(b"\n\n") if frame.startswith(b"event: error\n")
     ]
-    assert error_events == ([envelope] if expect_error_event else [])
-    assert wire.endswith(payload) is not expect_error_event
+
+
+@pytest.mark.asyncio
+async def test_anthropic_pass_through_sends_a_late_upstream_rejection_as_an_error_event(monkeypatch):
+    """An Anthropic client only sees an error that arrives as an `event: error`."""
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import anthropic_proxy_route
+
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-late-rejection")
+
+    wire = await _wire_after_a_late_rejection(
+        lambda request: anthropic_proxy_route(
+            endpoint="v1/messages",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+        )
+    )
+
+    assert _error_events(wire) == [_LATE_REJECTION]
+
+
+@pytest.mark.asyncio
+async def test_generic_pass_through_relays_a_late_upstream_rejection_body_as_sent():
+    endpoint_func = create_pass_through_route(
+        endpoint="/v1/messages",
+        target="https://api.anthropic.com/v1/messages",
+        custom_headers={},
+        is_streaming_request=True,
+    )
+
+    wire = await _wire_after_a_late_rejection(
+        lambda request: endpoint_func(request=request, fastapi_response=Response(), user_api_key_dict=MagicMock())
+    )
+
+    assert _error_events(wire) == []
+    assert wire.endswith(json.dumps(_LATE_REJECTION).encode())
 
 
 def test_passthrough_carries_the_per_model_budgets():

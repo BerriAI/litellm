@@ -95,6 +95,7 @@ from litellm.proxy.common_request_processing import (
     AnthropicSseErrors,
     OpenAISseErrors,
     ProxyBaseLLMRequestProcessing,
+    SseErrorDialect,
     log_llm_api_exception,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
@@ -1130,6 +1131,14 @@ from litellm.passthrough.timeout_utils import (
 
 def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
+
+
+def openai_sse_errors(_request: Request) -> SseErrorDialect:
+    return OpenAISseErrors()
+
+
+def anthropic_sse_errors(request: Request) -> SseErrorDialect:
+    return AnthropicSseErrors(request_id=request.headers.get("x-request-id"), call_id=lambda: None)
 
 
 async def pass_through_request(
@@ -2182,6 +2191,7 @@ def create_pass_through_route(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    sse_errors: Callable[[Request], SseErrorDialect] = openai_sse_errors,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2340,11 +2350,7 @@ def create_pass_through_route(
             return await open_sse_before_first_byte(
                 _relay(),
                 ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_stream else None),
-                error_dialect=(
-                    AnthropicSseErrors(request_id=request.headers.get("x-request-id"), call_id=lambda: None)
-                    if custom_llm_provider == "anthropic"
-                    else OpenAISseErrors()
-                ),
+                error_dialect=sse_errors(request),
             )
 
     setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
