@@ -43,7 +43,7 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackGetResponse,
     FallbackResponse,
 )
-from litellm.types.router import ContentPolicyFallbackRule, ContentPolicyFallbackRules
+from litellm.types.router import ContentPolicyFallbackRule, ContentPolicyFallbackRules, FallbackTargets
 
 router: Final = APIRouter()
 
@@ -54,6 +54,7 @@ _STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
 _JSON_RULES: Final = TypeAdapter(list[JsonValue])
 _OPTIONAL_JSON_RULES: Final[TypeAdapter[Sequence[JsonValue] | None]] = TypeAdapter(Sequence[JsonValue] | None)
 _CONTENT_POLICY_FALLBACK_RULE: Final[TypeAdapter[ContentPolicyFallbackRule]] = TypeAdapter(ContentPolicyFallbackRule)
+_FALLBACK_TARGETS: Final[TypeAdapter[FallbackTargets]] = TypeAdapter(FallbackTargets)
 
 
 def _rule_covers(entry: StoredFallback, model: str) -> bool:
@@ -307,7 +308,9 @@ async def get_fallback(
             )
 
         # Get fallbacks using the existing utility function
-        fallback_targets: Final = get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
+        fallback_targets: Final = _FALLBACK_TARGETS.validate_python(
+            get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
+        )
         fallback_models: Final = [
             name for target in fallback_targets if (name := fallback_target_model_name(target)) is not None
         ]

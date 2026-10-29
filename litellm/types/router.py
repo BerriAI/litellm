@@ -190,9 +190,8 @@ OptionalPreCallChecks = list[
 ]
 
 
-ContentPolicyFallbackRule: TypeAlias = Annotated[
-    Mapping[str, Sequence[str | Mapping[str, JsonValue]]], Field(min_length=1, max_length=1)
-]
+FallbackTargets: TypeAlias = Sequence[str | Mapping[str, JsonValue]]
+ContentPolicyFallbackRule: TypeAlias = Annotated[Mapping[str, FallbackTargets], Field(min_length=1, max_length=1)]
 ContentPolicyFallbackRules: TypeAlias = Sequence[ContentPolicyFallbackRule]
 
 

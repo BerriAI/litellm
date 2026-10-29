@@ -392,6 +392,14 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert response.fallback_models == ["gpt-5.4-mini", "team-fallback"]
 
+    async def test_get_answers_an_error_for_a_string_valued_rule_instead_of_its_characters(self) -> None:
+        router: Final = _team_router()
+        router.update_settings(fallbacks=[{"team-primary": "team-fallback"}])
+        with patch("litellm.proxy.proxy_server.llm_router", router), pytest.raises(HTTPException) as raised:
+            await get_fallback("team-primary", "general", MagicMock())
+
+        assert raised.value.status_code == 500
+
     async def test_a_create_keeps_a_rule_another_instance_stored_since_this_one_last_read(self) -> None:
         stored: Final = _StoredRouterSettings({})
         await get_config_param(stored.prisma_client, "router_settings")
