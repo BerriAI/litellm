@@ -32,6 +32,7 @@ from litellm.constants import (
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
+    COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
@@ -116,6 +117,9 @@ _CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "co
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+
+SCHEDULER_PRIORITY_HEADER: Final = "x-litellm-priority"
+ROUTER_SCHEDULED_ROUTE_TYPES: Final = frozenset({"acompletion", "atext_completion"})
 
 # W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
 # e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
@@ -210,13 +214,46 @@ def _caller_session_beside_trace_header(
     return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
-def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
+def _child_tier_session_metadata(
+    normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
+) -> Mapping[str, str | None]:
+    parent: Final = normalized_headers.get("x-parent-session-id")
+    if not parent or not _SESSION_ID_VALUE_RE.fullmatch(parent):
+        return {}
+    own_headers: Final = {
+        key: value
+        for key, value in normalized_headers.items()
+        if key not in ("x-parent-session-id", "x-litellm-trace-id")
+    }
+    active: Final = data.get(metadata_variable_name)
+    inactive: Final = data.get("litellm_metadata")
+    inactive_session: Final = (
+        _caller_body_session_id(data, "litellm_metadata")
+        if metadata_variable_name == "metadata"
+        and not (isinstance(active, Mapping) and "session_id" in active)
+        and isinstance(inactive, Mapping)
+        else None
+    )
+    own_session: Final = (
+        get_chain_id_from_headers(own_headers)
+        or _get_anthropic_session_id_from_metadata(data.get("metadata"))
+        or _caller_body_session_id(data, metadata_variable_name)
+        or inactive_session
+        or _session_id_from_baggage(normalized_headers.get("baggage", ""))
+    )
+    return {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: own_session if own_session != parent else None}
+
+
+def _drop_client_session_metadata(request_body: Mapping[str, object]) -> None:
     for metadata_key in ("metadata", "litellm_metadata"):
         if isinstance(metadata := request_body.get(metadata_key), dict):
-            metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
+            for key in (CALLER_SESSION_ID_METADATA_KEY, COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY):
+                cast(dict[str, object], metadata).pop(key, None)  # cast-ok: request metadata is a str-keyed JSON object
 
 
-_PROXY_SET_METADATA_KEYS: Final = frozenset({CALLER_SESSION_ID_METADATA_KEY, BAGGAGE_MAPPED_TAGS_METADATA_KEY})
+_PROXY_SET_METADATA_KEYS: Final = frozenset(
+    {CALLER_SESSION_ID_METADATA_KEY, BAGGAGE_MAPPED_TAGS_METADATA_KEY, COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY}
+)
 _METADATA_TAGS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
@@ -656,7 +693,7 @@ def _metadata_string_tags(metadata_objects: Iterable[Mapping[str, object]]) -> t
 
 
 def _strip_untrusted_request_header_controls(
-    headers: Any,
+    headers: object,
     *,
     allow_client_message_redaction_opt_out: bool = False,
 ) -> None:
@@ -1679,7 +1716,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def add_internal_user_from_user_mapping(
-        general_settings: dict | None,
+        general_settings: Mapping[str, object] | None,
         user_api_key_dict: UserAPIKeyAuth,
         headers: dict,
     ) -> UserAPIKeyAuth:
@@ -1698,7 +1735,7 @@ class LiteLLMProxyRequestSetup:
         return user_api_key_dict
 
     @staticmethod
-    def get_user_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
+    def get_user_from_headers(headers: dict, general_settings: Mapping[str, object] | None = None) -> str | None:
         """
         Get the user from the specified header if `general_settings.user_header_name` is set.
         """
@@ -1719,7 +1756,9 @@ class LiteLLMProxyRequestSetup:
         return user
 
     @staticmethod
-    def get_openai_org_id_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
+    def get_openai_org_id_from_headers(
+        headers: dict, general_settings: Mapping[str, object] | None = None
+    ) -> str | None:
         """
         Get the OpenAI Org ID from the headers.
         """
@@ -1810,7 +1849,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: dict[str, object] | None = None,
+        general_settings: Mapping[str, object] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers
@@ -1876,7 +1915,7 @@ class LiteLLMProxyRequestSetup:
 
         metadata_from_headers: Final = LitellmMetadataFromRequestHeaders()
         request_body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
-        _drop_client_caller_session(request_body)
+        _drop_client_session_metadata(request_body)
         spend_logs_metadata: Final = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
@@ -1891,6 +1930,9 @@ class LiteLLMProxyRequestSetup:
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
         chain_id: Final = get_chain_id_from_headers(dict(headers))
+        child_tier_metadata: Final = _child_tier_session_metadata(
+            normalized_headers, request_body, _metadata_variable_name
+        )
 
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
@@ -1960,9 +2002,15 @@ class LiteLLMProxyRequestSetup:
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(
-                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: caller_session_beside_trace}
-                if caller_session_beside_trace
-                else metadata_from_headers
+                {
+                    **metadata_from_headers,
+                    **child_tier_metadata,
+                    **(
+                        {CALLER_SESSION_ID_METADATA_KEY: caller_session_beside_trace}
+                        if caller_session_beside_trace
+                        else {}
+                    ),
+                }
             )
         return data
 
@@ -2999,13 +3047,7 @@ async def add_litellm_data_to_request(
         getattr(request.state, "litellm_roi_estimator", False) is True
     )
 
-    verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s",
-        data,
-    )
-
     # Team/Project credential overrides from model_config
-    # Placed after the debug log to avoid leaking credential secrets in logs
     _apply_credential_overrides_from_model_config(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -3265,7 +3307,7 @@ def _per_user_credential_names_for_groups(
         GITHUB_COPILOT_AUTH_TYPE_KEY,
         GITHUB_COPILOT_PER_USER_AUTH_TYPE,
     )
-    from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
+    from litellm.router_strategy.auto_router.auto_router_model_naming import classify_strategy_router_model
 
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
