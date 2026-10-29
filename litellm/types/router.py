@@ -35,7 +35,6 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.router import Router
 
 from .completion import CompletionRequest
@@ -1090,7 +1089,7 @@ class GuardrailTypedDict(TypedDict, total=False):
 
     guardrail_name: Required[str]
     litellm_params: Required[GuardrailLiteLLMParams]
-    callback: "ReadOnly[CustomGuardrail | None]"  # The CustomGuardrail instance
+    callback: Any  # The CustomGuardrail instance
     id: str | None  # Unique identifier for the guardrail deployment
 
 

@@ -407,15 +407,13 @@ class RedisSemanticCache(BaseCache):
 
         # Convert string representation to Python object
         try:
-            cached_response = json.loads(response_text)
+            return json.loads(response_text)
         except json.JSONDecodeError:
             try:
-                cached_response = ast.literal_eval(response_text)
+                return ast.literal_eval(response_text)
             except (ValueError, SyntaxError) as e:
                 print_verbose(f"Error parsing cached response: {e}")
                 return None
-
-        return cached_response
 
     def set_cache(self, key: str, value: object, **kwargs) -> None:
         """
