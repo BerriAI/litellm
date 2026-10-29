@@ -142,30 +142,26 @@ async def test_list_vector_stores_rejects_non_positive_page_size_with_400(page_s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("page", [0, -1])
-async def test_list_vector_stores_accepts_non_positive_page_like_base(page):
+async def test_list_vector_stores_rejects_non_positive_page_with_400(
+    page: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.vector_store_endpoints.management_endpoints import (
         list_vector_stores,
     )
 
     import litellm
+    from litellm.proxy import proxy_server
 
     admin: Final = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN.value,
         user_id="admin-1",
     )
 
-    mock_prisma: Final = MagicMock()
-    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
 
-    with patch.dict("litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True):
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
-            with patch.object(litellm, "vector_store_registry", None):
-                with patch(
-                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry.get_vector_stores_from_db",
-                    new=AsyncMock(return_value=[]),
-                ):
-                    response: Final = await list_vector_stores(user_api_key_dict=admin, page=page, page_size=10)
+    with pytest.raises(HTTPException) as exc_info:
+        await list_vector_stores(user_api_key_dict=admin, page=page, page_size=10)
 
-    assert response["current_page"] == page
-    assert response["total_count"] == 0
-    assert response["data"] == []
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == f"page must be >= 1, got page={page}"

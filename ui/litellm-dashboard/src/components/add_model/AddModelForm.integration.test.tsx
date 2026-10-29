@@ -35,6 +35,7 @@ vi.mock("../networking", async () => {
       guardrails: [{ guardrail_name: "test-guardrail-1" }, { guardrail_name: "test-guardrail-2" }],
     }),
     tagListCall: vi.fn().mockResolvedValue({}),
+    vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
     modelAvailableCall: vi.fn().mockResolvedValue({
       data: [{ id: "model-group-1" }, { id: "model-group-2" }],
     }),
