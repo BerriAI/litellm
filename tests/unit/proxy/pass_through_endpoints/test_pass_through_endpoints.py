@@ -10497,10 +10497,21 @@ def _client_request(method: str, headers: Mapping[str, str], body: bytes) -> Req
     [
         pytest.param("DELETE", {}, b"", None, id="delete-without-body"),
         pytest.param(
+            "DELETE",
+            {"content-type": "application/json", "content-length": "2"},
+            b"{}",
+            {},
+            id="delete-explicit-empty-object",
+        ),
+        pytest.param("GET", {}, b"", None, id="get-without-body"),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "0"}, b"", {}, id="sdk-post-without-body"
+        ),
+        pytest.param(
             "POST",
             {"content-type": "application/x-www-form-urlencoded", "content-length": "0"},
             b"",
-            None,
+            {},
             id="curl-empty-form",
         ),
         pytest.param(
@@ -10518,7 +10529,7 @@ def _client_request(method: str, headers: Mapping[str, str], body: bytes) -> Req
         ),
     ],
 )
-async def test_pass_through_request_sends_a_body_upstream_only_when_the_client_sent_one(
+async def test_pass_through_request_sends_no_body_on_a_get_or_delete_sent_without_one(
     stream: bool,
     method: str,
     client_headers: Mapping[str, str],
@@ -10558,3 +10569,4 @@ async def test_pass_through_request_sends_a_body_upstream_only_when_the_client_s
     assert len(received) == 1
     upstream_body: Final = received[0].content
     assert (json.loads(upstream_body) if upstream_body else None) == expected_upstream_json
+    assert received[0].headers.get("content-type") == (None if expected_upstream_json is None else "application/json")

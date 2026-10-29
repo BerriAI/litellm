@@ -1131,10 +1131,16 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+_METHODS_WITHOUT_REQUEST_BODY: Final = frozenset({"GET", "DELETE"})
+
+
 def _forwarded_json_body(
-    parsed_body: Mapping[str, object] | None, request_headers: Mapping[str, str]
+    parsed_body: Mapping[str, object] | None, method: str, request_headers: Mapping[str, str]
 ) -> Mapping[str, object] | None:
-    return parsed_body if parsed_body or request_declares_body(request_headers) else None
+    sends_body: Final = (
+        method not in _METHODS_WITHOUT_REQUEST_BODY or bool(parsed_body) or request_declares_body(request_headers)
+    )
+    return parsed_body if sends_body else None
 
 
 async def pass_through_request(
@@ -1531,7 +1537,7 @@ async def pass_through_request(
             parsed_body=_parsed_body or {},
             stream=stream,
         )
-        forwarded_json_body: Final = _forwarded_json_body(_parsed_body, request.headers)
+        forwarded_json_body: Final = _forwarded_json_body(_parsed_body, request.method, request.headers)
 
         if stream:
             logging_obj.stream = True
