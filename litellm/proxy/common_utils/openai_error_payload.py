@@ -145,7 +145,7 @@ def route_failure_proxy_exception(
     answered_status: Final = answered_status_code(message, error_status_code(exc, default_status_code))
     return ProxyException(
         message=message,
-        type=openai_error_type(exc, answered_status),
+        type=_catch_all_error_type(exc, answered_status),
         param=openai_error_param(exc),
         headers=headers,
         openai_code=openai_code,

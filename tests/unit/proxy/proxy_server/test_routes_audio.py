@@ -270,7 +270,7 @@ def test_audio_transcription_over_the_file_size_cap_is_rejected_as_a_bad_request
     assert error["param"] == "file"
 
 
-def test_audio_speech_tag_routing_denial_is_typed_as_an_authentication_error(
+def test_audio_speech_tag_routing_denial_is_typed_as_a_proxy_auth_error(
     client, auth_as, patched_speech_error, monkeypatch
 ):
     async def _deny(*args, **kwargs):
@@ -281,10 +281,10 @@ def test_audio_speech_tag_routing_denial_is_typed_as_an_authentication_error(
         response = client.post("/v1/audio/speech", json={"model": "tts-1", "input": "Hi", "voice": "alloy"})
     assert response.status_code == 401
     error = response.json()["error"]
-    assert (error["type"], error["param"]) == ("authentication_error", None)
+    assert (error["type"], error["param"]) == ("auth_error", None)
 
 
-def test_audio_transcription_tag_routing_denial_is_typed_as_an_authentication_error(
+def test_audio_transcription_tag_routing_denial_is_typed_as_a_proxy_auth_error(
     client, auth_as, patched_transcription, monkeypatch
 ):
     async def _deny(*args, **kwargs):
@@ -296,7 +296,7 @@ def test_audio_transcription_tag_routing_denial_is_typed_as_an_authentication_er
         response = client.post("/v1/audio/transcriptions", files=files, data={"model": "whisper-1"})
     assert response.status_code == 401
     error = response.json()["error"]
-    assert (error["type"], error["param"]) == ("authentication_error", None)
+    assert (error["type"], error["param"]) == ("auth_error", None)
 
 
 @pytest.mark.parametrize(

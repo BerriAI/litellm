@@ -134,7 +134,7 @@ def test_completion_pipeline_error(client, auth_as, completion_pipeline_raises, 
         pytest.param(
             ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=gpt-4o and tags=['x']"),
             401,
-            "authentication_error",
+            "auth_error",
             id="tag_routing_denial",
         ),
     ],
