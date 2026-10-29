@@ -678,8 +678,9 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
 ) -> None:
     """``acme-lite`` has a deployment of its own, ``acme-pro`` is an alias of it, ``acme-max`` is a
     routing group over it, and ``my-openai/gpt-acme-*`` is a narrower wildcard, so calls to those names
-    never reach the catch-all or ``my-openai/*``, which still list them. Such a row may go unpriced, but
-    any price a row shows must be the one its calls are billed at."""
+    never reach the catch-all or ``my-openai/*``, which still list them. Such a row shows no price, even
+    where another provider's model goes by the same name, and every price shown is the one calls are
+    billed at."""
     from litellm.proxy.auth import model_checks
 
     catalog: Final = {
@@ -711,6 +712,18 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
             "input_cost_per_token": 3e-07,
             "output_cost_per_token": 4e-07,
             "litellm_provider": "openai",
+            "mode": "chat",
+        },
+        "acme-pro": {
+            "input_cost_per_token": 9e-07,
+            "output_cost_per_token": 1e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "acme-max": {
+            "input_cost_per_token": 1.1e-06,
+            "output_cost_per_token": 1.2e-06,
+            "litellm_provider": "deepseek",
             "mode": "chat",
         },
     }
@@ -779,6 +792,12 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
         ("openai-wildcard", "my-openai/gpt-acme-lite"),
     ]
     assert listed[("deepseek-acme-lite", "acme-lite")] == (7e-07, 8e-07)
+    assert {key: prices for key, prices in listed.items() if key[0] != "deepseek-acme-lite"} == {
+        ("fireworks-wildcard", "acme-lite"): (None, None),
+        ("fireworks-wildcard", "acme-max"): (None, None),
+        ("fireworks-wildcard", "acme-pro"): (None, None),
+        ("openai-wildcard", "my-openai/gpt-acme-lite"): (None, None),
+    }
     calls: Final = {
         model_name: router.completion(
             model=model_name, messages=[{"role": "user", "content": "hi"}], mock_response="hello there"

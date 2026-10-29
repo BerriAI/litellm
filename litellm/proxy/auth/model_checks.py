@@ -565,28 +565,22 @@ def wildcard_filled_model(model_name_pattern: str, litellm_model: str, listed_na
     )
 
 
-def _deployment_routed_model(source: Mapping[str, object], listed_name: str) -> str | None:
-    source_pattern: Final = source.get("model_name")
-    source_model: Final = _litellm_model(source)
-    return (
-        wildcard_filled_model(source_pattern, source_model, listed_name)
-        if isinstance(source_pattern, str) and isinstance(source_model, str)
-        else None
-    )
-
-
-def wildcard_routed_model(row: Mapping[str, object], llm_router: Router | None) -> str | None:
+def wildcard_row_priced_model(row: Mapping[str, object], llm_router: Router | None) -> str | None:
     model_id: Final = _model_info_field(row, "id")
     listed_name: Final = row.get("model_name")
     if llm_router is None or not isinstance(model_id, str) or not isinstance(listed_name, str):
         return None
     registry: Final = llm_router.registry()
     source: Final = _router_deployment(registry, model_id)
-    if source is None or _litellm_model(row) == _litellm_model(source):
+    if source is None:
+        return None
+    source_pattern: Final = source.get("model_name")
+    source_model: Final = _litellm_model(source)
+    if not isinstance(source_pattern, str) or not isinstance(source_model, str) or _litellm_model(row) == source_model:
         return None
     if model_id not in registry.names(listed_name, kind="route_candidates", team_id=_deployment_team_id(row)):
-        return None
-    return _deployment_routed_model(source, listed_name)
+        return source_model
+    return wildcard_filled_model(source_pattern, source_model, listed_name) or source_model
 
 
 def _get_wildcard_models(
