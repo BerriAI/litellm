@@ -1459,6 +1459,10 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         pytest.param(
             "*", "openai/*", "openai/gpt-partial-route-9*", set(), id="provider-prefixed-key-filter-over-catch-all"
         ),
+        pytest.param("*", "openai/*", None, {f"openai/{_ROUTE_OPENAI_ID}"}, id="catch-all-over-provider-wildcard"),
+        pytest.param(
+            "*", "gemini/*", None, {_ROUTE_GEMINI_ID}, id="catch-all-over-provider-wildcard-with-prefixed-catalog-ids"
+        ),
         pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
         pytest.param("*", "gemini/gemini-partial-route-9*", None, set(), id="catch-all-over-mid-word-deployment"),
         pytest.param("*", "openai/responses/gpt-partial-route-9*", None, set(), id="catch-all-over-mid-word-route"),
@@ -1511,16 +1515,23 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
             infer_model_from_keys=False,
             llm_router=router,
         )
-        model_info_names: Final = [
-            str(row["model_name"])
+        model_info_rows: Final = [
+            row
             for row in expand_wildcard_deployments_for_model_info(
                 [dict(deployment) for deployment in router.get_model_list() or []], router
             )
             if row["model_name"] != model_name
         ]
+        model_info_names: Final = [str(row["model_name"]) for row in model_info_rows]
         listed_v1_models: Final = routed_catalog_ids(v1_models)
         listed_model_info_names: Final = routed_catalog_ids(model_info_names)
 
+    rows_naming_another_upstream_model: Final = [
+        row
+        for row in model_info_rows
+        if LiteLLM_Params.model_validate(row["litellm_params"]).model != routed_model(str(row["model_name"]))
+    ]
+    assert rows_naming_another_upstream_model == []
     unrouted_ids: Final = [
         listed_id
         for listed_id in [*v1_models, *model_info_names]
@@ -1574,6 +1585,29 @@ def test_catch_all_lists_no_id_a_more_specific_sibling_wildcard_routes_elsewhere
 
     assert routed_models(v1_models) == {"unshadowed-route-org/model-d": unshadowed_id}
     assert routed_models(model_info_names) == {"unshadowed-route-org/model-d": unshadowed_id}
+
+
+def test_catch_all_lists_an_id_an_explicit_deployment_also_serves_once() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": _ROUTE_OPENAI_ID, "litellm_params": {"model": f"openai/{_ROUTE_OPENAI_ID}"}},
+            {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+        ]
+    )
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
+        v1_models: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=router.get_model_names(),
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+
+    assert [listed_id for listed_id in v1_models if _ROUTE_OPENAI_ID in listed_id] == [_ROUTE_OPENAI_ID]
 
 
 def test_wildcard_lists_an_id_a_more_specific_sibling_serves_with_the_same_model() -> None:

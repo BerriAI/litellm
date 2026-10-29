@@ -216,7 +216,7 @@ def get_complete_model_list(
     If list contains wildcard -> return known provider models
     """
 
-    unique_models: Final = []
+    unique_models: Final = list[str]()
 
     def append_unique(models):
         for model in models:
@@ -253,9 +253,7 @@ def get_complete_model_list(
         team_id=team_id,
     )
 
-    complete_model_list: Final = unique_models + all_wildcard_models
-
-    return complete_model_list
+    return list(dict.fromkeys(unique_models + all_wildcard_models))
 
 
 def _hydrate_litellm_credential_name(
@@ -394,11 +392,12 @@ def _routes_to_model(
     return lambda listed_id, model: routed_models is None or model in routed_models(listed_id, team_id)
 
 
-def _deployment_pattern_naming_listed_ids(wildcard_suffix: str, litellm_params: LiteLLM_Params | None) -> str | None:
+def _deployment_pattern_naming_listed_ids(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> str | None:
     if litellm_params is None or "/" not in litellm_params.model or not _check_wildcard_routing(litellm_params.model):
         return None
+    name_suffix: Final = wildcard_model.partition("/")[2]
     deployment_suffix: Final = litellm_params.model.partition("/")[2]
-    return litellm_params.model if wildcard_suffix != "*" or deployment_suffix != "*" else None
+    return None if name_suffix == deployment_suffix == "*" else litellm_params.model
 
 
 def get_known_models_from_wildcard(
@@ -418,7 +417,7 @@ def get_known_models_from_wildcard(
         wildcard_provider_prefix, wildcard_suffix = wildcard_model_to_expand.split("/", 1)
     except ValueError:  # safely fail
         return []
-    deployment_pattern_naming_listed_ids: Final = _deployment_pattern_naming_listed_ids(wildcard_suffix, litellm_params)
+    deployment_pattern_naming_listed_ids: Final = _deployment_pattern_naming_listed_ids(wildcard_model, litellm_params)
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
@@ -523,12 +522,15 @@ def expand_wildcard_deployments_for_model_info(
             expanded.append(deployment)
             continue
 
-        for name in expanded_names:
+        wildcard_regex = re.compile(PatternMatchRouter().pattern_to_regex(wildcard_pattern))
+        for name_match in filter(None, map(wildcard_regex.match, expanded_names)):
             row = copy.deepcopy(deployment)
-            row["model_name"] = name
+            row["model_name"] = name_match.string
             params = row.get("litellm_params")
             if isinstance(params, dict):
-                params["model"] = name
+                params["model"] = PatternMatchRouter.set_deployment_model_name(
+                    matched_pattern=name_match, litellm_deployment_litellm_model=litellm_model
+                )
             expanded.append(row)
 
     return expanded
