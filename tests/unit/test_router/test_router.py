@@ -30351,7 +30351,9 @@ def test_pre_call_checks_refuses_a_stand_in_count_past_the_margin():
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
     largest_window_past_margin: Final = (tokens - 1) // STAND_IN_OVERCOUNT_MARGIN
 
-    with pytest.raises(litellm.ContextWindowExceededError):
+    with pytest.raises(
+        litellm.ContextWindowExceededError, match=f"Max Input Tokens={largest_window_past_margin}, Got={tokens}"
+    ):
         _kept_ids(_single_deployment("openai/my-fake-model", largest_window_past_margin), _RUSSIAN_PROMPT)
 
 

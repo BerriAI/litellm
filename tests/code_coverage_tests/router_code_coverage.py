@@ -185,7 +185,7 @@ ignored_function_names = [
     "_pre_call_check_token_count",  # Run by _pre_call_check_token_counts, tested through the per-deployment pre-call check tests in test_router.py
     "_pre_call_check_token_counts",  # Run by _pre_call_checks and _acount_pre_call_check_tokens, tested through the pre-call check tests in test_router.py
     "_resolve_pre_call_check_token_counts",  # Run by _pre_call_checks, tested through the precounted and inline pre-call check tests in test_router.py
-    "_context_window_exceeded_line",  # Builds the ContextWindowExceededError text, tested through the Got= assertions in test_router.py
+    "_context_window_exceeded_line",  # Builds the ContextWindowExceededError text, tested through the stand-in margin refusal test in test_router.py
 ]
 
 
