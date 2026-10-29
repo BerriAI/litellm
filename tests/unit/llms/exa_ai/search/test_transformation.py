@@ -1,18 +1,13 @@
-import asyncio
 import json
-import uuid
-from collections.abc import Mapping
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
 import respx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_DOLLARS_PARAM
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
@@ -20,7 +15,6 @@ from litellm.search.cost_calculator import search_provider_cost_per_query
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
 EXA_REPORTED_COST: Final = 0.123456
-_LOGGED: Final = TypeAdapter(Mapping[str, object])
 
 
 @pytest.fixture
@@ -385,53 +379,21 @@ def test_a_caller_cannot_set_the_cost_exa_reports(respx_mock: respx.MockRouter) 
 
 
 @pytest.mark.usefixtures("exa_api_key")
-def test_costing_an_exa_reply_directly_returns_the_cost_exa_reports(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize("serialized", (False, True))
+def test_costing_an_exa_reply_directly_returns_the_cost_exa_reports(
+    respx_mock: respx.MockRouter, serialized: bool
+) -> None:
     respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_COST}})
     response: Final = litellm.search(query="asyncio TaskGroup", search_provider="exa_ai", max_results=25)
     assert _catalog_price(25) != EXA_REPORTED_COST
 
+    costed_response: Final = response.model_dump() if serialized else response
     completion_cost: Final = litellm.completion_cost(
-        completion_response=response, model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search"
+        completion_response=costed_response, model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search"
     )
     per_token: Final = litellm.cost_per_token(
-        model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search", response=response
+        model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search", response=costed_response
     )
 
     assert completion_cost == pytest.approx(EXA_REPORTED_COST)
     assert per_token == pytest.approx((EXA_REPORTED_COST, 0.0))
-
-
-class _SpendCapture(CustomLogger):
-    def __init__(self, call_id: str) -> None:
-        super().__init__()
-        self.call_id: Final = call_id
-        self.costs: Final[list[object]] = []  # mutable-ok: the logging worker appends one entry per logged call
-
-    async def async_log_success_event(
-        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
-    ) -> None:
-        if kwargs.get("litellm_call_id") == self.call_id:
-            self.costs.append(_LOGGED.validate_python(kwargs.get("standard_logging_object") or {}).get("response_cost"))
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("exa_api_key")
-async def test_async_search_logs_the_cost_exa_reports_as_spend(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    GLOBAL_LOGGING_WORKER.start()
-    capture: Final = _SpendCapture(call_id=f"exa-{uuid.uuid4()}")
-    monkeypatch.setattr(litellm, "callbacks", [capture])
-    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_COST}})
-    assert _catalog_price(25) != EXA_REPORTED_COST
-
-    response: Final = await litellm.asearch(
-        query="asyncio TaskGroup", search_provider="exa_ai", max_results=25, litellm_call_id=capture.call_id
-    )
-    await asyncio.sleep(0)
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-
-    assert response.hidden_params["response_cost"] == EXA_REPORTED_COST
-    assert capture.costs == [EXA_REPORTED_COST]

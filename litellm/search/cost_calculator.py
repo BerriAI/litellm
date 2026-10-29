@@ -39,25 +39,14 @@ def _provider_usage(
         return None
 
 
-def _generic_search_entry(model: str, custom_llm_provider: str | None) -> str:
-    generic_model: Final = f"{custom_llm_provider}/search"
-    return generic_model if model == f"{custom_llm_provider}/{generic_model}" else model
-
-
 def _live_entry(entry: str) -> object:
     return litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
-
-
-def _registered_at_runtime(entry: str) -> bool:
-    """Whether `entry`'s live price differs from the catalog as loaded, i.e. `register_model` changed it."""
-    live: Final[object] = litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
-    return live != GetModelCostMap.loaded_model_cost_map().get(entry)  # pyright: ignore[reportUnknownVariableType]  # `live` comes from the untyped registry
 
 
 def _operator_priced(model: str, provider: str | None) -> bool:
     if provider == "exa_ai":
         return bool(exa_ai_price_fields(model, _live_entry(model)))
-    return _registered_at_runtime(model)
+    return _live_entry(model) != GetModelCostMap.loaded_model_cost_map().get(model)
 
 
 def _pricing_model(
@@ -122,14 +111,12 @@ def search_provider_cost_per_query(
         return (input_cost, 0.0)
 
     pricing_model: Final = _pricing_model(model, custom_llm_provider, optional_params)
+    exa_model: Final = (
+        pricing_model.removeprefix("exa_ai/") if pricing_model == "exa_ai/exa_ai/search" else pricing_model
+    )
     params: Final = optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS
     exa_price_fields: Final[frozenset[str]] = (
-        exa_ai_price_fields(
-            _generic_search_entry(pricing_model, custom_llm_provider),
-            _live_entry(_generic_search_entry(pricing_model, custom_llm_provider)),
-        )
-        if custom_llm_provider == "exa_ai"
-        else frozenset()
+        exa_ai_price_fields(exa_model, _live_entry(exa_model)) if custom_llm_provider == "exa_ai" else frozenset()
     )
     reported_cost: Final = (
         exa_ai_reported_cost(params, response) if custom_llm_provider == "exa_ai" and not exa_price_fields else None
