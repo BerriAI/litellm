@@ -1718,10 +1718,14 @@ async def test_streamed_refusal_deltas_become_one_refusal_part_of_the_message(sy
 
     events: Final = await _collect_events(iterator, sync_mode)
 
+    parts_added: Final = [
+        event.model_dump()["part"] for event in events if event.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+    ]
     refusal_done: Final = [event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE]
     message_done: Final = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     finished: Final = events[-1]
     expected_content: Final = [{"type": "refusal", "refusal": "I'm sorry, I can't help with that."}]
+    assert parts_added == [{"type": "refusal", "refusal": ""}]
     assert [event.refusal for event in refusal_done] == [expected_content[0]["refusal"]]
     assert [item.model_dump()["content"] for item in message_done] == [expected_content]
     assert [item.model_dump()["content"] for item in finished.response.output] == [expected_content]

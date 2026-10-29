@@ -69,6 +69,7 @@ from pydantic import (
     FieldSerializationInfo,
     NonNegativeInt,
     PrivateAttr,
+    SerializeAsAny,
     SerializerFunctionWrapHandler,
     field_serializer,
     field_validator,
@@ -1846,7 +1847,7 @@ class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: BaseLiteLLMOpenAIResponseObject
+    part: SerializeAsAny[BaseLiteLLMOpenAIResponseObject]
 
 
 class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
