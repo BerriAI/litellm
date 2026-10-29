@@ -319,6 +319,19 @@ def test_a_commit_soniox_answers_after_its_endpoint_already_ended_the_turn_adds_
     assert [event["transcript"] for event in events if "transcript" in event] == ["Hello"]
 
 
+def test_a_server_vad_turn_answers_only_the_oldest_pending_commit():
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(_append(), MODEL)
+    _events(config, [_token("Hello")])
+    config.transform_realtime_request(_event("input_audio_buffer.commit"), MODEL)
+    config.transform_realtime_request(_append(), MODEL)
+    config.transform_realtime_request(_event("input_audio_buffer.commit"), MODEL)
+
+    events = _events(config, [_token("<end>"), _token("<fin>"), _token("<fin>")])
+
+    assert [event["transcript"] for event in events if "transcript" in event] == ["Hello", ""]
+
+
 def test_a_clear_without_speech_still_answers_nothing():
     config = SonioxRealtimeConfig()
     config.transform_realtime_request(_append(), MODEL)

@@ -2,7 +2,6 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
 from itertools import chain, groupby
 from types import MappingProxyType, TracebackType
 from typing import Final
@@ -261,19 +260,13 @@ def _soniox_error(response: _SonioxResponse) -> SonioxException | None:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _PendingFinalize:
-    discards_turn: bool
-    endpoint_turns: int
-
-
 class SonioxEventTransformer:
     def __init__(self, *, drops_originals: bool) -> None:
         self._drops_originals: Final = drops_originals
         self._item_id: str | None = None
         self._final_tokens: Final[list[_SonioxToken]] = []  # mutable-ok: a turn's tokens append in O(1) each
-        self._finalizes: Final[deque[_PendingFinalize]] = deque()  # mutable-ok: pending finalizes pop in O(1)
-        self._endpoint_turns: int = 0
+        self._finalizes: Final[deque[bool]] = deque()  # mutable-ok: pending finalizes queue and pop in O(1) each
+        self._oldest_commit_answered: bool = False
         self._processed_ms: int = 0
         self._billed_ms: int = 0
         self._refusal: SonioxException | None = None
@@ -297,7 +290,7 @@ class SonioxEventTransformer:
         if discards_turn and not self._finalizes:
             self._item_id = None
             self._final_tokens.clear()
-        self._finalizes.append(_PendingFinalize(discards_turn=discards_turn, endpoint_turns=self._endpoint_turns))
+        self._finalizes.append(discards_turn)
 
     def take_unbilled_usage(self, stream_ms: int = 0) -> RealtimeInputAudioTranscriptionUsage | None:
         billable_ms: Final = max(self._processed_ms, stream_ms)
@@ -322,7 +315,7 @@ class SonioxEventTransformer:
         if self._discarding:
             return ()
         if token.text == _ENDPOINT_TOKEN:
-            return self._complete(speech_stopped=True)
+            return self._end_turn()
         started: Final = self._start()
         if not token.is_final or (self._drops_originals and token.translation_status == "original"):
             return started
@@ -331,17 +324,25 @@ class SonioxEventTransformer:
 
     @property
     def _discarding(self) -> bool:
-        return bool(self._finalizes) and self._finalizes[0].discards_turn
+        return bool(self._finalizes) and self._finalizes[0]
 
     def _finalized(self) -> tuple[OpenAIRealtimeEvents, ...]:
-        pending: Final = self._finalizes.popleft() if self._finalizes else None
-        if pending is not None and pending.discards_turn:
+        discarded: Final = self._finalizes.popleft() if self._finalizes else None
+        answered: Final = self._oldest_commit_answered
+        self._oldest_commit_answered = False
+        if discarded:
             return ()
         if self._item_id is not None:
             return self._complete(speech_stopped=False)
-        if pending is None or pending.endpoint_turns != self._endpoint_turns:
+        if discarded is None or answered:
             return ()
         return (_completed(_new_item_id(), (), self.take_unbilled_usage()),)
+
+    def _end_turn(self) -> tuple[OpenAIRealtimeEvents, ...]:
+        events: Final = self._complete(speech_stopped=True)
+        if events and self._finalizes:
+            self._oldest_commit_answered = True
+        return events
 
     def _start(self) -> tuple[OpenAIRealtimeEvents, ...]:
         if self._item_id is not None:
@@ -361,7 +362,6 @@ class SonioxEventTransformer:
         tokens: Final = tuple(self._final_tokens)
         self._item_id = None
         self._final_tokens.clear()
-        self._endpoint_turns += speech_stopped
         stopped: Final[tuple[OpenAIRealtimeEvents, ...]] = (
             (speech_event("input_audio_buffer.speech_stopped", item_id),) if speech_stopped else ()
         )
