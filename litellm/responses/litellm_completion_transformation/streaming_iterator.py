@@ -153,7 +153,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_item_done_event: bool = False
         self._annotation_index: int = 0
         self._annotations_awaiting_message: tuple[ChatCompletionAnnotation, ...] = ()
-        self._saw_content_delta: bool = False
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
         self.completed_response = None
         self.final_text: str = ""
@@ -424,7 +423,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 fn_name = str(getattr(fn, "name", "") or "")
                 fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
             if call_id not in self._tool_output_index_by_call_id:
-                self._queue_held_annotations(final_message_exists=self._saw_content_delta)
+                self._queue_held_annotations()
             output_index = self._get_or_assign_tool_output_index(call_id)
 
             if self._is_tool_search_call(call_id, fn_name):
@@ -1076,9 +1075,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self.litellm_model_response:
             self._queue_compaction_item_added()
             self._queue_compaction_item_done()
-            self._queue_held_annotations(
-                final_message_exists=self.litellm_model_response.choices[0].message.content is not None
-            )
+            self._queue_held_annotations()
             if self._pending_response_events:
                 return self._pending_response_events.pop(0)
             # If tool calls exist, emit tool events before finishing/response.completed.
@@ -1239,10 +1236,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             self._snapshot_chunk_for_stream_chunk_builder(chunk)
                         )
                         self._queue_reasoning_done_events_on_reasoning_end(chunk)
-                        response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
-                        if response_api_chunk:
-                            self._pending_response_events.append(response_api_chunk)
-                        self._queue_annotation_events(chunk)
+                        self._queue_chunk_events(chunk)
 
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
@@ -1303,10 +1297,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._snapshot_chunk_for_stream_chunk_builder(cast(ModelResponseStream, chunk))
                     )
                     self._queue_reasoning_done_events_on_reasoning_end(chunk)
-                    response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
-                    if response_api_chunk:
-                        self._pending_response_events.append(response_api_chunk)
-                    self._queue_annotation_events(chunk)
+                    self._queue_chunk_events(chunk)
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
                     # Otherwise, loop to next chunk
@@ -1317,20 +1308,21 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.finished = True
             raise e
 
-    def _queue_annotation_events(self, chunk: ModelResponseStream) -> None:
-        chunk_annotations: Final = (getattr(chunk.choices[0].delta, "annotations", None) or ()) if chunk.choices else ()
-        annotations: Final = (*self._annotations_awaiting_message, *chunk_annotations)
-        if not annotations:
-            return
-        if not self.sent_message_item_added_event:
-            self._annotations_awaiting_message = annotations
-            return
-        self._annotations_awaiting_message = ()
-        self._queue_annotation_added_events(annotations)
+    def _queue_chunk_events(self, chunk: ModelResponseStream) -> None:
+        self._hold_chunk_annotations(chunk)
+        response_api_chunk: Final = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+        if response_api_chunk:
+            self._pending_response_events.append(response_api_chunk)
+        if self.sent_message_item_added_event:
+            self._queue_held_annotations()
 
-    def _queue_held_annotations(self, final_message_exists: bool) -> None:
+    def _hold_chunk_annotations(self, chunk: ModelResponseStream) -> None:
+        chunk_annotations: Final = (getattr(chunk.choices[0].delta, "annotations", None) or ()) if chunk.choices else ()
+        self._annotations_awaiting_message = (*self._annotations_awaiting_message, *chunk_annotations)
+
+    def _queue_held_annotations(self) -> None:
         annotations: Final = self._annotations_awaiting_message
-        if not annotations or not final_message_exists:
+        if not annotations:
             return
         self._annotations_awaiting_message = ()
         self._queue_reasoning_done_events()
@@ -1377,8 +1369,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         This currently handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API
         and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         """
-        if chunk.choices and chunk.choices[0].delta.content is not None:
-            self._saw_content_delta = True
         item_id: Final = self._message_item_id()
 
         # Priority 1: Handle reasoning content (highest priority)

@@ -988,6 +988,15 @@ def _with_reasoning(chunk: ModelResponseStream, reasoning: str) -> ModelResponse
     )
 
 
+def _with_citation(chunk: ModelResponseStream) -> ModelResponseStream:
+    choice: Final = chunk.choices[0]
+    annotations: Final = _annotation_only_chunk().choices[0].delta.annotations
+    delta: Final = Delta(**{**choice.delta.model_dump(), "annotations": annotations})
+    return chunk.model_copy(
+        update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason=choice.finish_reason)]}
+    )
+
+
 def _reasoning_then_text_chunks() -> tuple[ModelResponseStream, ...]:
     return (_reasoning_chunk("let me think"), _chunk("Hello"), _chunk("!", finish_reason="stop"))
 
@@ -1701,15 +1710,20 @@ def _citation_between_reasoning_then_empty_finish_chunks() -> tuple[ModelRespons
     return (*_citation_between_reasoning_chunks(), _chunk("", finish_reason="stop"))
 
 
+def _tool_call_then_citation_finishing_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_tool_call_chunk(), _annotation_only_chunk())
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
-    ("stream_chunks", "expected_citations"),
+    "stream_chunks",
     [
-        (_citation_then_tool_call_finishing_chunks, 0),
-        (_reasoning_citation_then_tool_call_finishing_chunks, 0),
-        (_reasoning_citation_tool_call_then_empty_finish_chunks, 1),
-        (_citation_between_reasoning_then_empty_finish_chunks, 1),
-        (_citation_between_reasoning_chunks, 1),
+        _citation_then_tool_call_finishing_chunks,
+        _reasoning_citation_then_tool_call_finishing_chunks,
+        _reasoning_citation_tool_call_then_empty_finish_chunks,
+        _citation_between_reasoning_then_empty_finish_chunks,
+        _citation_between_reasoning_chunks,
+        _tool_call_then_citation_finishing_chunks,
     ],
     ids=[
         "citation_then_tool_call",
@@ -1717,12 +1731,11 @@ def _citation_between_reasoning_then_empty_finish_chunks() -> tuple[ModelRespons
         "reasoning_citation_tool_call_then_empty_finish",
         "citation_between_reasoning_then_empty_finish",
         "citation_between_reasoning_without_finish",
+        "tool_call_then_citation_without_text",
     ],
 )
 @pytest.mark.asyncio
-async def test_streamed_citations_match_the_completed_message(
-    stream_chunks: StreamChunks, expected_citations: int, sync_mode: bool
-) -> None:
+async def test_streamed_citations_match_the_completed_message(stream_chunks: StreamChunks, sync_mode: bool) -> None:
     events: Final = await _collect_events(_build_iterator(stream_chunks()), sync_mode)
 
     output: Final = events[-1].response.output
@@ -1740,7 +1753,7 @@ async def test_streamed_citations_match_the_completed_message(
     ]
     message_added: Final = [index for index, event in enumerate(events) if _is_message_item(event)]
 
-    assert len(citations) == expected_citations
+    assert len(citations) == 1
     assert [event.annotation for event in citations] == completed_annotations
     assert sorted(set(streamed_message_indexes)) == completed_message_indexes
     assert all(event.output_index in completed_message_indexes for event in citations)
@@ -1756,14 +1769,33 @@ def _reasoning_empty_text_citation_then_tool_call_chunks() -> tuple[ModelRespons
     return (_reasoning_chunk("let me think"), *_empty_text_citation_then_tool_call_chunks())
 
 
+def _empty_text_then_cited_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_chunk(""), _with_citation(_tool_call_chunk(finish_reason="tool_calls")))
+
+
+def _citation_tool_call_then_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_annotation_only_chunk(), _tool_call_chunk(), _chunk("Claim", finish_reason="tool_calls"))
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     ("stream_chunks", "expected_order"),
     [
         (_empty_text_citation_then_tool_call_chunks, ("message", "function_call")),
         (_reasoning_empty_text_citation_then_tool_call_chunks, ("reasoning", "message", "function_call")),
+        (_empty_text_then_cited_tool_call_chunks, ("message", "function_call")),
+        (_citation_tool_call_then_text_chunks, ("message", "function_call")),
+        (_citation_then_tool_call_finishing_chunks, ("message", "function_call")),
+        (_reasoning_citation_tool_call_then_empty_finish_chunks, ("reasoning", "message", "function_call")),
     ],
-    ids=["empty_text_citation_then_tool_call", "reasoning_empty_text_citation_then_tool_call"],
+    ids=[
+        "empty_text_citation_then_tool_call",
+        "reasoning_empty_text_citation_then_tool_call",
+        "empty_text_then_cited_tool_call",
+        "citation_tool_call_then_text",
+        "citation_then_tool_call_without_text",
+        "reasoning_citation_tool_call_then_empty_finish",
+    ],
 )
 @pytest.mark.asyncio
 async def test_citation_before_a_tool_call_keeps_the_message_ahead_of_it(

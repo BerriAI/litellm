@@ -3565,7 +3565,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif choice.message.content is not None:
+            elif choice.message.content is not None or getattr(choice.message, "annotations", None):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3639,7 +3639,7 @@ class LiteLLMCompletionResponsesConfig:
 
         return OutputText(
             type="output_text",
-            text=message.content,
+            text=message.content or "",
             annotations=transformed_annotations,
         )
 
