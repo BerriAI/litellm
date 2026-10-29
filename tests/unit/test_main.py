@@ -5605,14 +5605,16 @@ def test_speech_azure_ai_keeps_the_deployments_entra_token_over_the_provider_sco
         ({"AZURE_TENANT_ID": "t", "AZURE_CLIENT_ID": "c", "AZURE_CLIENT_SECRET": "s"}, {}, False),
         ({"AZURE_CLIENT_SECRET": "s"}, {"tenant_id": "t", "client_id": "c"}, False),
         ({}, {}, True),
+        ({"AZURE_AD_TOKEN": "env-entra-token"}, {}, False),
+        ({}, {"extra_body": {"azure_ad_token": "request-entra-token"}}, False),
     ],
-    ids=["service-principal-in-env", "ids-in-config-secret-in-env", "token-refresh"],
+    ids=["service-principal-in-env", "ids-in-config-secret-in-env", "token-refresh", "ad-token-in-env", "ad-token-in-extra-body"],
 )
 def test_speech_azure_ai_entra_id_setups_keep_the_key_chain_they_had_before_the_provider_key(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     entra_env: dict[str, str],
-    deployment_params: dict[str, str],
+    deployment_params: Mapping[str, object],
     token_refresh: bool,
 ):
     _clear_global_tts_keys(monkeypatch)
@@ -5623,6 +5625,7 @@ def test_speech_azure_ai_entra_id_setups_keep_the_key_chain_they_had_before_the_
             "AZURE_TENANT_ID": None,
             "AZURE_CLIENT_ID": None,
             "AZURE_CLIENT_SECRET": None,
+            "AZURE_AD_TOKEN": None,
             "AZURE_OPENAI_API_KEY": None,
             "AZURE_AI_API_KEY": "key-for-another-resource",
             "AZURE_API_KEY": "generic-azure-key",

@@ -8842,9 +8842,13 @@ def speech(
             request_azure_ad_token: Final = OPTIONAL_STR.validate_python(
                 optional_params.get("extra_body", {}).pop("azure_ad_token", None)
             )
+            azure_ad_token: Final[str | None] = request_azure_ad_token or get_secret("AZURE_AD_TOKEN")
             request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
-            uses_entra_id: Final = request_azure_ad_token is not None or uses_azure_entra_id_auth(
-                request_kwargs, os.environ, litellm.enable_azure_ad_token_refresh is True
+            request_extra_body: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs.get("extra_body") or {})
+            uses_entra_id: Final = (
+                bool(azure_ad_token)
+                or bool(request_extra_body.get("azure_ad_token"))
+                or uses_azure_entra_id_auth(request_kwargs, os.environ, litellm.enable_azure_ad_token_refresh is True)
             )
 
             api_key = (
@@ -8855,8 +8859,6 @@ def speech(
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")
             )
-
-            azure_ad_token: Final[str | None] = request_azure_ad_token or get_secret("AZURE_AD_TOKEN")
 
             if extra_headers:
                 optional_params["extra_headers"] = extra_headers
