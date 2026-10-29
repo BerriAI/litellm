@@ -699,10 +699,12 @@ def _malformed_request_params_the_deployment_sets(
     deployment_params: Mapping[str, object], defaults: Mapping[str, object], request: Mapping[str, object]
 ) -> frozenset[str]:
     overrides: Final = {
-        key: request[key]
-        for key in SUPPLEMENTAL_KWARGS_KEYS
-        if key in request and deployment_params.get(key) is not None
+        key: value
+        for key, value in request.items()
+        if key in SUPPLEMENTAL_KWARGS_KEYS and deployment_params.get(key) is not None
     }
+    if not overrides:
+        return frozenset()
     try:
         validate_litellm_params_strictly(GenericLiteLLMParams, overrides)
     except ValidationError as error:
