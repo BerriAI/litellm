@@ -74,7 +74,7 @@ class TestBlockedResponseUsage:
     """Blocked responses report the blocked LLM response's real usage."""
 
     def test_uses_original_response_usage(self):
-        from litellm.proxy.anthropic_endpoints.endpoints import _blocked_response_usage
+        from litellm.llms.base_llm.guardrail_translation.utils import blocked_response_usage as _blocked_response_usage
 
         # original_response is the AnthropicMessagesResponse the LLM produced
         # before the guardrail blocked it; its usage is real.
@@ -85,7 +85,7 @@ class TestBlockedResponseUsage:
         }
 
     def test_zero_usage_when_no_original_response(self):
-        from litellm.proxy.anthropic_endpoints.endpoints import _blocked_response_usage
+        from litellm.llms.base_llm.guardrail_translation.utils import blocked_response_usage as _blocked_response_usage
 
         # Pre-call blocks never invoked the LLM -> nothing consumed.
         assert _blocked_response_usage(None) == {
@@ -130,6 +130,66 @@ class TestBlockedResponseUsage:
         assert response["content"][0]["text"] == "blocked by guardrail"
         assert response["usage"] == {"input_tokens": 12, "output_tokens": 5}
         mock_logging.post_call_failure_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_streaming_block_answers_anthropic_events_with_the_call_id(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.caching.dual_cache import DualCache
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.utils import ProxyLogging
+
+        call_id: Final = "messages-stream-block"
+        exc: Final = ModifyResponseException(
+            message="blocked by guardrail",
+            model="claude-haiku-5-5",
+            request_data={"model": "claude-haiku-5-5", "stream": True},
+            guardrail_name="deny-list",
+        )
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_call_id": call_id}
+            raise exc
+
+        with (
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-haiku-5-5", "stream": True})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
+            ),  # test-quality-ok: the guardrail block happens inside this call; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
+            ),  # test-quality-ok: module global imported at call time; no injection seam
+        ):
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+            body: Final = b"".join(
+                [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+            ).decode()
+
+        frames: Final = tuple(frame for frame in body.split("\n\n") if frame.strip())
+        events: Final = tuple(
+            (frame.split("\n")[0].removeprefix("event: "), json.loads(frame.split("\n")[1].removeprefix("data: ")))
+            for frame in frames
+        )
+        assert response.media_type == "text/event-stream"
+        assert response.headers["x-litellm-call-id"] == call_id
+        assert [name for name, _ in events] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        assert all(payload["type"] == name for name, payload in events)
+        assert events[2][1]["delta"] == {"type": "text_delta", "text": "blocked by guardrail"}
+        assert events[4][1]["delta"]["stop_reason"] == "end_turn"
 
 
 class TestProxyExceptionAnthropicEnvelope:
