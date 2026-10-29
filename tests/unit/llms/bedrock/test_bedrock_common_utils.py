@@ -219,11 +219,6 @@ def test_system_defined_inference_profile_arn_still_routes_to_converse():
     ["provisioned-model/abcdefgh1234", "imported-model/abcdefgh1234", "custom-model-deployment/abcdefgh1234"],
 )
 def test_bare_opaque_arn_with_no_invoke_provider_routes_to_converse(arn_segment: str):
-    """
-    A bare provisioned-model, imported-model, or custom-model-deployment ARN names no Invoke provider,
-    so Invoke could only fail locally with "Unknown provider=None". It goes to Converse instead, and a
-    caller who needs Invoke for one still names the provider (``bedrock/llama/arn:...``).
-    """
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     model: Final = f"bedrock/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}"

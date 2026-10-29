@@ -1221,16 +1221,26 @@ def test_transform_request_drops_lookaround_regex_when_the_deployment_model_info
     assert properties == _LOOKAROUND_FREE_PROPERTIES
 
 
-def test_transform_request_drops_lookaround_regex_for_a_model_the_cost_map_does_not_list():
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        ("us.newvendor.model-1", None),
+        ("converse/us.newvendor.model-1", None),
+        ("us-east-1/us.newvendor.model-1", None),
+        ("us.newvendor.model-1", {"base_model": "bedrock/converse/us.newvendor.model-1"}),
+    ],
+)
+def test_transform_request_drops_lookaround_regex_for_a_model_the_cost_map_does_not_list(model, litellm_params):
     assert "us.newvendor.model-1" not in litellm.model_cost
 
-    assert _tool_schema_properties("us.newvendor.model-1", _ARTIFACT_DATA_ANTHROPIC_TOOL) == _LOOKAROUND_FREE_PROPERTIES
+    properties: Final = _tool_schema_properties(model, _ARTIFACT_DATA_ANTHROPIC_TOOL, litellm_params)
+
+    assert properties == _LOOKAROUND_FREE_PROPERTIES
 
 
 @pytest.mark.parametrize(
     "model",
     [
-        "converse/us.newvendor.model-1",
         "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123",
         "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
         "us.anthropic.claude-unreleased-v1:0",
@@ -1254,7 +1264,16 @@ def test_transform_request_keeps_lookaround_regex_for_an_unlisted_model_whose_de
     assert properties == _ARTIFACT_DATA_INPUT_SCHEMA["properties"]
 
 
-def test_a_router_deployment_of_a_model_the_cost_map_does_not_list_drops_lookaround_regex(respx_mock):
+@pytest.mark.parametrize(
+    "deployment_params",
+    [
+        {"model": "bedrock/us.newvendor.model-1"},
+        {"model": "bedrock/converse/us.newvendor.model-1", "allowed_openai_params": ["tools"]},
+    ],
+)
+def test_a_router_deployment_of_a_model_the_cost_map_does_not_list_drops_lookaround_regex(
+    respx_mock, deployment_params
+):
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.newvendor.model-1/converse"
     ).mock(
@@ -1272,7 +1291,7 @@ def test_a_router_deployment_of_a_model_the_cost_map_does_not_list_drops_lookaro
             {
                 "model_name": "unlisted",
                 "litellm_params": {
-                    "model": "bedrock/us.newvendor.model-1",
+                    **deployment_params,
                     "aws_access_key_id": "fake-access-key",
                     "aws_secret_access_key": "fake-secret-key",
                     "aws_region_name": "us-east-1",
@@ -9373,6 +9392,26 @@ def test_model_missing_from_cost_map_sends_tools_to_converse():
     tool_config: Final = json.loads(sent[0].content)["toolConfig"]
     assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == ["get_weather"]
     assert tool_config["toolChoice"] == {"auto": {}}
+
+
+def test_a_price_only_row_for_an_unlisted_model_still_sends_tools_to_converse(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost, "us.newvendor.priced-1", {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+    )
+    sent: Final[list[httpx.Request]] = []
+
+    completion(
+        model="bedrock/us.newvendor.priced-1",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[_WEATHER_TOOL],
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    tool_config: Final = json.loads(sent[0].content)["toolConfig"]
+    assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == ["get_weather"]
 
 
 def test_explicit_converse_route_to_an_unlisted_model_still_drops_tools_under_drop_params():

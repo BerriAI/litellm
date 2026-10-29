@@ -1109,6 +1109,11 @@ def _model_cost_entry(key: str) -> Mapping[str, object] | None:
     return None if raw is None else _MODEL_COST_ENTRY_ADAPTER.validate_python(raw)
 
 
+def _cost_map_row_names_a_provider(key: str) -> bool:
+    entry: Final = _model_cost_entry(key)
+    return entry is not None and entry.get("litellm_provider") is not None
+
+
 def _bedrock_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
     return tuple(
         _model_cost_entry(key)
@@ -1579,7 +1584,7 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
     The deployment's ``model_info.supports_regex_lookaround`` wins, then the
     ``model_prices_and_context_window.json`` entry of its ``base_model``, then the
     entry of ``model`` itself. A model nobody flagged keeps its schema as sent, unless
-    every candidate is a bare id that ``bedrock_model_is_unknown`` describes.
+    no candidate names a model LiteLLM knows, whatever route prefix it carries.
     """
     params: Final = litellm_params or {}
     deployment_flag: Final = deployment_model_info(params).get("supports_regex_lookaround")
@@ -1591,22 +1596,16 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
     flag: Final = next((flag for flag in flags if flag is not None), None)
     if flag is not None:
         return flag
-    return not all(bedrock_model_is_unknown(candidate) for candidate in candidates)
+    return not all(bedrock_model_is_unknown(split_bedrock_region_path(candidate)[1]) for candidate in candidates)
 
 
 def bedrock_model_is_unknown(model: str) -> bool:
-    """
-    Whether ``model`` is a bare Bedrock model id that no cost-map row describes and whose vendor
-    has no Invoke handler, so it routes to Converse with nothing to say what the model accepts.
-
-    An id carrying a route or provider prefix, a region path, or an ARN is never unknown.
-    """
     model_id: Final = model.removeprefix("bedrock/")
     if "/" in model_id:
         return False
     base: Final = get_bedrock_base_model(model_id)
     regional_ids: Final = (f"{region}.{base}" for region in get_bedrock_cross_region_inference_regions())
-    if any(_model_cost_entry(key) is not None for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)):
+    if any(_cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)):
         return False
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
