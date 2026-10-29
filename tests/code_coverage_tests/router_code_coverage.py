@@ -107,6 +107,7 @@ ignored_function_names = [
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
+    "_search_tool_support",  # Tested through the test_get_search_tool_support_* tests
     "_mid_stream_retry_trigger",  # Tested through the retry policy mid-stream budget test in test_router.py
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
@@ -181,6 +182,10 @@ ignored_function_names = [
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
     "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
+    "_pre_call_check_token_count",  # Run by _pre_call_check_token_counts, tested through the per-deployment pre-call check tests in test_router.py
+    "_pre_call_check_token_counts",  # Run by _pre_call_checks and _acount_pre_call_check_tokens, tested through the pre-call check tests in test_router.py
+    "_resolve_pre_call_check_token_counts",  # Run by _pre_call_checks, tested through the precounted and inline pre-call check tests in test_router.py
+    "_context_window_exceeded_line",  # Builds the ContextWindowExceededError text, tested through the Got= assertions in test_router.py
 ]
 
 
