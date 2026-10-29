@@ -184,6 +184,7 @@ from litellm.llms.openai_like.model_info import (
     get_openai_compatible_model_info,
 )
 from litellm.responses.bridge_check import keep_registered_mode
+from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -4870,7 +4871,7 @@ class Router:
         Handles inserting this as either "metadata" or "litellm_metadata" depending on the metadata_variable_name
         """
         # 1) copy your defaults and pull out metadata
-        defaults: Final = self.default_litellm_params.copy()
+        defaults: Final = dict(without_retrieve_stream_defaults(self.default_litellm_params, kwargs))
         metadata_defaults: Final = defaults.pop("metadata", {}) or {}
 
         # 2) add any non-metadata defaults that aren't already in kwargs
@@ -5111,12 +5112,13 @@ class Router:
                 router_timeout=_router_timeout,
                 router_stream_timeout=_router_stream_timeout,
             )
+            timeout_request: Final = {**kwargs, "stream": True} if requests_streamed_retrieval(kwargs) else kwargs
             kwargs.update(
                 CompletionTimeout.stream_request_kwargs(
-                    passthrough_timeout(kwargs={**kwargs, "stream": False}), passthrough_timeout(kwargs=kwargs)
+                    passthrough_timeout(kwargs={**kwargs, "stream": False}), passthrough_timeout(kwargs=timeout_request)
                 )
-                if splits_stream_timeout and kwargs.get("stream")
-                else {"timeout": passthrough_timeout(kwargs=kwargs)}
+                if splits_stream_timeout and timeout_request.get("stream")
+                else {"timeout": passthrough_timeout(kwargs=timeout_request)}
             )
         elif splits_stream_timeout:
             request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
@@ -6450,7 +6452,7 @@ class Router:
             generic_function_name: Final[str] = getattr(original_generic_function, "__name__", "")
 
             response_kwargs: Final = {
-                **data,
+                **without_retrieve_stream_defaults(data, kwargs),
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,

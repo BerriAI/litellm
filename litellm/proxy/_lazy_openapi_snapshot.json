@@ -33641,7 +33641,7 @@
           ]
         },
         "get": {
-          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Resume a background response's event stream after sequence number 7\ncurl -N \"http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "get_response_openai_v1_responses__response_id__get",
           "parameters": [
             {
@@ -33652,6 +33652,46 @@
                 "title": "Response Id",
                 "type": "string"
               }
+            },
+            {
+              "description": "Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry)",
+              "in": "query",
+              "name": "stream",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "description": "With stream=true, replay only the events after this sequence number",
+              "in": "query",
+              "name": "starting_after",
+              "required": false,
+              "schema": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Additional output data to include, forwarded to the provider",
+              "in": "query",
+              "name": "include",
+              "required": false,
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            {
+              "description": "With stream=true, whether delta events carry obfuscation padding",
+              "in": "query",
+              "name": "include_obfuscation",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -33660,6 +33700,12 @@
                 "application/json": {
                   "schema": {
                     "$ref": "#/components/schemas/ResponsesAPIResponse"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "description": "Server sent events when stream=true",
+                    "type": "string"
                   }
                 }
               },
