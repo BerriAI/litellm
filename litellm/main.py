@@ -156,6 +156,7 @@ from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_strictly
 from litellm.types.utils import (
+    AgenticLoopParams,
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
@@ -1295,6 +1296,16 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
         if deployment_id is not None:
             return str(deployment_id)
     return None
+
+
+def _record_agentic_loop_params(
+    logging_obj: object, requested_model: str, custom_llm_provider: str, owns_agentic_loop: bool
+) -> None:
+    if not owns_agentic_loop or not isinstance(logging_obj, LiteLLMLoggingObj):
+        return
+    logging_obj.record_agentic_loop_params(
+        AgenticLoopParams(model=requested_model, custom_llm_provider=custom_llm_provider)
+    )
 
 
 def _register_custom_pricing_for_request(
@@ -5718,6 +5729,7 @@ def completion(
             model = deployment_id
             custom_llm_provider = "azure"
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -5725,16 +5737,23 @@ def completion(
             api_key=api_key,
             litellm_params=supplemental_params.params,
         )
+        _record_agentic_loop_params(
+            logging_obj=logging,
+            requested_model=requested_model,
+            custom_llm_provider=custom_llm_provider,
+            owns_agentic_loop=not skip_responses_api_bridge,
+        )
 
+        deployment_model_info: Final = str_keyed_mapping(
+            cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+        )
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
-            deployment_model_info=str_keyed_mapping(
-                cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
-            ),
+            deployment_model_info=deployment_model_info,
         )
         drop_unsupported_reasoning: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
@@ -5830,7 +5849,15 @@ def completion(
             )
 
         if provider_config is not None:
-            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
+            translated_messages: Final = list(
+                provider_config.translate_developer_role_to_system_role(
+                    messages=messages,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
+                    model_info=deployment_model_info,
+                )
+            )
             history_for_route: Final = _history_without_unanswered_tool_search_calls(
                 translated_messages, custom_llm_provider, provider_config
             )

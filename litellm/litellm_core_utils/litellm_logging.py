@@ -165,6 +165,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
+    AgenticLoopParams,
     CachingDetails,
     CallTypes,
     CostBreakdown,
@@ -1157,6 +1158,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
+        self.model_call_details["agentic_loop_params"] = params
 
     def record_applied_timeout(self, timeout: float | Timeout) -> None:
         self.applied_timeout = timeout

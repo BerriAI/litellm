@@ -263,10 +263,10 @@ class AgenticLoopParams(TypedDict, total=False):
     """
 
     model: str
-    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    """The model as the caller requested it, usually with its provider prefix (e.g., 'bedrock/invoke/...')"""
 
     custom_llm_provider: str
-    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+    """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
 
 class OffPeakWindow(TypedDict, total=False):
