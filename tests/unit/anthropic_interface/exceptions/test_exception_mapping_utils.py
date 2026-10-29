@@ -63,27 +63,16 @@ class TestCreateErrorResponse:
         )
         assert response["request_id"] == "req_123"
 
-    @pytest.mark.parametrize(
-        ("status_code", "expected_error_type"),
-        [
-            (402, "billing_error"),
-            (409, "conflict_error"),
-            (504, "timeout_error"),
-            (405, "invalid_request_error"),
-            (418, "invalid_request_error"),
-            (422, "invalid_request_error"),
-            (499, "invalid_request_error"),
-            (408, "api_error"),
-            (502, "api_error"),
-            (503, "api_error"),
-            (599, "api_error"),
-        ],
-    )
-    def test_a_status_the_docs_do_not_name_is_a_request_error_below_500_except_a_timeout_and_an_api_error_from_500(
-        self, status_code: int, expected_error_type: str
-    ):
+    @pytest.mark.parametrize("status_code", [402, 405, 409, 418, 422, 504])
+    def test_a_status_outside_the_table_stays_an_api_error_for_the_sdk_and_stream_frames(self, status_code: int):
         response = AnthropicExceptionMapping.create_error_response(status_code, "scripted status")
-        assert response["error"]["type"] == expected_error_type
+        frame = anthropic_error_sse_frame(status_code=status_code, raw_message="scripted status")
+        assert response["error"]["type"] == "api_error"
+        assert frame.error_response["error"]["type"] == "api_error"
+
+    def test_an_explicit_error_type_wins_over_the_status_table(self):
+        response = AnthropicExceptionMapping.create_error_response(402, "Budget exceeded", error_type="billing_error")
+        assert response["error"]["type"] == "billing_error"
 
 
 class TestExtractErrorMessage:

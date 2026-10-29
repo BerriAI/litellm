@@ -182,6 +182,14 @@ describe("toast", () => {
       expect(sonner.error).toHaveBeenCalledWith(title, { description: "boom", duration: 6000 });
     });
 
+    it.each([
+      ["an OpenAI envelope", { error: { type: "invalid_request_error", message: "boom" } }],
+      ["a body with no Anthropic type", { detail: { error: "boom" } }],
+    ])("keeps the plain Error title for %s after a status in the message", (_, payload) => {
+      toast.fromError(`Request failed: 404 ${JSON.stringify(payload)}`);
+      expect(sonner.error).toHaveBeenCalledWith("Error", { description: "Request failed: 404 boom", duration: 6000 });
+    });
+
     it("reads no status from a number longer than three digits before the envelope", () => {
       toast.fromError(`request 98765 ${JSON.stringify({ error: { message: "boom" } })}`);
       expect(sonner.error).toHaveBeenCalledWith("Error", { description: "request 98765 boom", duration: 6000 });

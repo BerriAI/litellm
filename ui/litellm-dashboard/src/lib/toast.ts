@@ -13,6 +13,7 @@ export type ToastOptions = {
 type ErrorFacts = {
   readonly status: number | undefined;
   readonly proxyType: string | undefined;
+  readonly anthropicType: string | undefined;
   readonly text: string;
 };
 
@@ -90,6 +91,12 @@ const proxyTypeOf = (payload: unknown): string | undefined => {
   return typeof type === "string" ? type : undefined;
 };
 
+const anthropicTypeOf = (payload: unknown): string | undefined => {
+  const record = asRecord(payload);
+  const type = asRecord(record?.error)?.type;
+  return record?.type === "error" && typeof type === "string" ? type : undefined;
+};
+
 const EMBEDDED_JSON = /\{[\s\S]*\}/;
 const STATUS_BEFORE_JSON = /(?<!\d)([1-5]\d{2})\s*$/;
 
@@ -100,18 +107,26 @@ const describeText = (text: string): ErrorFacts => {
   const embedded = text.match(EMBEDDED_JSON)?.[0];
   const parsed = embedded === undefined ? undefined : parseJson(embedded);
   if (embedded === undefined || asRecord(parsed) === undefined) {
-    return { status: undefined, proxyType: undefined, text: unwrapProxyErrorMessage(text) };
+    return { status: undefined, proxyType: undefined, anthropicType: undefined, text: unwrapProxyErrorMessage(text) };
   }
+  const anthropicType = anthropicTypeOf(parsed);
   return {
-    status: toStatus(proxyEnvelope(parsed)?.code) ?? statusBefore(text, embedded),
+    status:
+      toStatus(proxyEnvelope(parsed)?.code) ?? (anthropicType === undefined ? undefined : statusBefore(text, embedded)),
     proxyType: proxyTypeOf(parsed),
+    anthropicType,
     text: text.replace(embedded, unwrapProxyErrorMessage(deriveErrorMessage(parsed))).trim(),
   };
 };
 
 const describeError = (input: unknown): ErrorFacts => {
   if (input instanceof ApiError) {
-    return { status: input.status, proxyType: proxyTypeOf(input.body), text: unwrapProxyErrorMessage(input.message) };
+    return {
+      status: input.status,
+      proxyType: proxyTypeOf(input.body),
+      anthropicType: anthropicTypeOf(input.body),
+      text: unwrapProxyErrorMessage(input.message),
+    };
   }
   if (input instanceof Error || typeof input === "string") {
     return describeText(input instanceof Error ? input.message : input);
@@ -126,6 +141,7 @@ const describeError = (input: unknown): ErrorFacts => {
       toStatus(record.code) ??
       toStatus(proxyEnvelope(payload)?.code),
     proxyType: proxyTypeOf(payload),
+    anthropicType: anthropicTypeOf(payload),
     text: unwrapProxyErrorMessage(deriveErrorMessage(payload)),
   };
 };
@@ -138,12 +154,12 @@ const titleForStatus = (status: number): string => {
   return "Error";
 };
 
-const titleFor = ({ status, proxyType }: ErrorFacts): string => {
+const titleFor = ({ status, proxyType, anthropicType }: ErrorFacts): string => {
   if (proxyType?.endsWith("_access_denied")) return "Access Denied";
   const byType = proxyType === undefined ? undefined : PROXY_TYPE_TITLES[proxyType];
   if (byType !== undefined) return byType;
   if (status !== undefined) return titleForStatus(status);
-  return (proxyType === undefined ? undefined : ANTHROPIC_TYPE_TITLES[proxyType]) ?? "Error";
+  return (anthropicType === undefined ? undefined : ANTHROPIC_TYPE_TITLES[anthropicType]) ?? "Error";
 };
 
 const show = (kind: ToastKind, message: ReactNode, options?: ToastOptions): void => {

@@ -20,18 +20,13 @@ _PARSED_ERROR_BODY: Final = TypeAdapter(object)
 ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     400: "invalid_request_error",
     401: "authentication_error",
-    402: "billing_error",
     403: "permission_error",
     404: "not_found_error",
-    409: "conflict_error",
     413: "request_too_large",
     429: "rate_limit_error",
     500: "api_error",
-    504: "timeout_error",
     529: "overloaded_error",
 }
-
-REQUEST_TIMEOUT_STATUS: Final = 408
 
 
 class AnthropicExceptionMapping:
@@ -44,18 +39,14 @@ class AnthropicExceptionMapping:
     @staticmethod
     def get_error_type(status_code: int) -> AnthropicErrorType:
         """Map HTTP status code to Anthropic error type."""
-        named: Final = ANTHROPIC_ERROR_TYPE_MAP.get(status_code)
-        if named is not None:
-            return named
-        if status_code == REQUEST_TIMEOUT_STATUS or not 400 <= status_code < 500:
-            return "api_error"
-        return "invalid_request_error"
+        return ANTHROPIC_ERROR_TYPE_MAP.get(status_code, "api_error")
 
     @staticmethod
     def create_error_response(
         status_code: int,
         message: str,
         request_id: str | None = None,
+        error_type: AnthropicErrorType | None = None,
     ) -> AnthropicErrorResponse:
         """
         Create an Anthropic-formatted error response dict.
@@ -67,12 +58,10 @@ class AnthropicExceptionMapping:
             "request_id": "req_..."
         }
         """
-        error_type: Final = AnthropicExceptionMapping.get_error_type(status_code)
-
         response: Final[AnthropicErrorResponse] = {
             "type": "error",
             "error": {
-                "type": error_type,
+                "type": error_type or AnthropicExceptionMapping.get_error_type(status_code),
                 "message": message,
             },
         }
@@ -141,6 +130,7 @@ class AnthropicExceptionMapping:
         status_code: int,
         raw_message: str,
         request_id: str | None = None,
+        error_type: AnthropicErrorType | None = None,
     ) -> AnthropicErrorResponse:
         """
         Transform an error message to Anthropic format.
@@ -154,6 +144,7 @@ class AnthropicExceptionMapping:
             status_code: HTTP status code
             raw_message: Raw error message (may be JSON string or plain text)
             request_id: Optional request ID to include
+            error_type: Anthropic error type to use instead of the one the status maps to
 
         Returns:
             AnthropicErrorResponse dict
@@ -179,6 +170,7 @@ class AnthropicExceptionMapping:
             status_code=status_code,
             message=message,
             request_id=request_id,
+            error_type=error_type,
         )
 
 

@@ -12,14 +12,14 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from litellm.anthropic_interface.exceptions import AnthropicErrorType, AnthropicExceptionMapping
+from litellm.anthropic_interface.exceptions import AnthropicErrorType
 from litellm.constants import (
     MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB,
     MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB,
     MAX_REQUEST_BODY_DECOMPRESSION_RATIO,
 )
 from litellm.proxy.auth.auth_utils import get_request_route
-from litellm.proxy.common_utils.anthropic_error_payload import route_error_content
+from litellm.proxy.common_utils.anthropic_error_payload import proxy_error_type, route_error_content
 from litellm.proxy.middleware.request_size_limit_middleware import MaxRequestSizeGetter, send_request_too_large
 
 RFC_9659_ZSTD_WINDOW_LOG_MAX: Final = 23
@@ -300,9 +300,7 @@ def _error_response(
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     anthropic_type: Final[AnthropicErrorType] = (
-        "overloaded_error"
-        if error_type == "overloaded_error"
-        else AnthropicExceptionMapping.get_error_type(status_code)
+        "overloaded_error" if error_type == "overloaded_error" else proxy_error_type(status_code)
     )
     return JSONResponse(
         route_error_content(

@@ -217,6 +217,12 @@ async def test_openai_exception_handler_answers_the_anthropic_envelope_on_the_me
         (403, "permission_error"),
         (404, "not_found_error"),
         (429, "rate_limit_error"),
+        (402, "billing_error"),
+        (409, "conflict_error"),
+        (504, "timeout_error"),
+        (405, "invalid_request_error"),
+        (408, "api_error"),
+        (502, "api_error"),
     ],
 )
 async def test_openai_exception_handler_maps_messages_failures_to_anthropic_error_types(

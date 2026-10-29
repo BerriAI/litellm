@@ -2,6 +2,7 @@
 handler runs, so the central handlers pick the Anthropic envelope from the request route."""
 
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import Request, status
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.types import Scope
 
 from litellm.anthropic_interface.exceptions import (
+    ANTHROPIC_ERROR_TYPE_MAP,
     AnthropicErrorDetail,
     AnthropicErrorResponse,
     AnthropicErrorType,
@@ -31,6 +33,18 @@ ANTHROPIC_PASS_THROUGH_PREFIX: Final = "/anthropic/"
 ANTHROPIC_SHAPED_MODEL_LIST_ROUTES: Final[frozenset[str]] = frozenset(
     {"/v1/models", "/models", "/claude_code_gateway/v1/models"}
 )
+PROXY_ERROR_TYPE_BY_STATUS: Final[Mapping[int, AnthropicErrorType]] = MappingProxyType(
+    {**ANTHROPIC_ERROR_TYPE_MAP, 402: "billing_error", 409: "conflict_error", 504: "timeout_error"}
+)
+
+
+def proxy_error_type(status_code: int) -> AnthropicErrorType:
+    named: Final = PROXY_ERROR_TYPE_BY_STATUS.get(status_code)
+    if named is not None:
+        return named
+    if status_code == status.HTTP_408_REQUEST_TIMEOUT or not 400 <= status_code < 500:
+        return "api_error"
+    return "invalid_request_error"
 
 
 def uses_anthropic_error_envelope(request: Request) -> bool:
@@ -81,16 +95,18 @@ def _with_call_id(detail: AnthropicErrorDetail, call_id: str | None) -> Anthropi
     return with_call_id
 
 
-def anthropic_handler_error_content(
+def _anthropic_content(
     exc: ProxyException,
     status_code: int,
     request_id: str | None,
     general_settings: Mapping[str, object],
+    error_type: AnthropicErrorType | None,
 ) -> AnthropicErrorResponse:
     envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
         status_code=status_code,
         raw_message=exc.message,
         request_id=request_id,
+        error_type=error_type,
     )
     body_call_id: Final = error_body_call_id(general_settings, exc.headers.get(LITELLM_CALL_ID_HEADER))
     content: Final[AnthropicErrorResponse] = {
@@ -100,13 +116,22 @@ def anthropic_handler_error_content(
     return content
 
 
+def anthropic_handler_error_content(
+    exc: ProxyException,
+    status_code: int,
+    request_id: str | None,
+    general_settings: Mapping[str, object],
+) -> AnthropicErrorResponse:
+    return _anthropic_content(exc, status_code, request_id, general_settings, None)
+
+
 def anthropic_error_content(
     exc: ProxyException,
     status_code: int,
     request_id: str | None,
     general_settings: Mapping[str, object],
 ) -> AnthropicErrorResponse:
-    content: Final = anthropic_handler_error_content(exc, status_code, request_id, general_settings)
+    content: Final = _anthropic_content(exc, status_code, request_id, general_settings, proxy_error_type(status_code))
     with_type: Final[AnthropicErrorResponse] = {
         **content,
         "error": _with_litellm_error_type(exc, status_code, content["error"]),
