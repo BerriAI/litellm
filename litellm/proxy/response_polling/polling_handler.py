@@ -3,7 +3,7 @@ Response Polling Handler for Background Responses with Cache
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final
 
@@ -18,6 +18,24 @@ from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
+_SCRIPT_REPLY: Final = TypeAdapter(int)
+_WRITTEN: Final = 1
+
+_WRITE_UNLESS_CANCELLED_SCRIPT: Final = """
+local current = redis.call('GET', KEYS[1])
+if current == false then
+  return 0
+end
+local decoded, stored = pcall(cjson.decode, current)
+if decoded and type(stored) == 'string' then
+  decoded, stored = pcall(cjson.decode, stored)
+end
+if decoded and type(stored) == 'table' and stored['status'] == 'cancelled' then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+return 1
+"""
 
 
 class ResponsePollingHandler:
@@ -102,7 +120,7 @@ class ResponsePollingHandler:
         incomplete_details: dict | None = None,
         reasoning: dict | None = None,
         tool_choice: object | None = None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         output: list | None = None,
         # Additional ResponsesAPIResponse fields
         model: str | None = None,
@@ -212,12 +230,19 @@ class ResponsePollingHandler:
         if store is not None:
             state["store"] = store
 
-        # Update cache with configured TTL
-        await self.redis_cache.async_set_cache(
-            key=cache_key,
-            value=json.dumps(state),
-            ttl=self.ttl,
-        )
+        write_unless_cancelled: Final = self.redis_cache.async_register_script(_WRITE_UNLESS_CANCELLED_SCRIPT)
+        try:
+            written: Final = _SCRIPT_REPLY.validate_python(
+                await write_unless_cancelled(keys=(cache_key,), args=(json.dumps(json.dumps(state)), int(self.ttl)))
+            )
+        except Exception as write_error:  # noqa: BLE001  # a Redis fault must not end the background stream
+            verbose_proxy_logger.error("Failed to write the polling state for %s: %s", polling_id, write_error)
+            return
+        if written != _WRITTEN:
+            verbose_proxy_logger.debug(
+                "Skipped the polling state write for %s: the response was cancelled or has expired", polling_id
+            )
+            return
 
         output_count: Final = len(_JSON_LIST.validate_python(state.get("output", [])))
         verbose_proxy_logger.debug(
@@ -268,7 +293,7 @@ def should_use_polling_for_request(
     redis_cache,  # RedisCache or None
     model: str,
     llm_router,  # Router instance or None
-    native_background_mode: list[str] | None = None,  # List of models that should use native background mode
+    native_background_mode: Sequence[str] | None = None,  # List of models that should use native background mode
 ) -> bool:
     """
     Determine if polling via cache should be used for a request.

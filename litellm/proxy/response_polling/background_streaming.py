@@ -10,7 +10,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, Callable, Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import Request, Response
@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 
 _JsonDict: TypeAlias = dict[str, object]
 _JsonList: TypeAlias = list[object]
+
+CANCELLATION_POLL_SECONDS: Final = 1.0
 
 
 class _OutputItem(TypedDict, total=False):
@@ -81,6 +83,10 @@ class _StreamsBody(Protocol):
     def body_iterator(self) -> AsyncIterable[str | bytes | memoryview]: ...
 
 
+class PollingStateReader(Protocol):
+    async def get_state(self, polling_id: str) -> Mapping[str, object] | None: ...
+
+
 def _sse_frame_data(frame: str) -> str | None:
     return next((line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: ")), None)
 
@@ -97,6 +103,42 @@ def detach_request_from_client(request: Request) -> Request:
     upstream call must not be cancelled by the client-disconnect guards.
     """
     return Request(request.scope, _never_receive)
+
+
+async def _reads_cancelled(polling_id: str, polling_state: PollingStateReader) -> bool:
+    try:
+        state: Final = await polling_state.get_state(polling_id)
+    except Exception as error:  # noqa: BLE001  # a failed read must never stop the upstream call
+        verbose_proxy_logger.warning(
+            "Could not read the polling state of %s, so it keeps streaming: %s", polling_id, error
+        )
+        return False
+    return state is not None and state.get("status") == "cancelled"
+
+
+async def _wait_until_cancelled(polling_id: str, polling_state: PollingStateReader, poll_seconds: float) -> None:
+    while not await _reads_cancelled(polling_id, polling_state):
+        await asyncio.sleep(poll_seconds)
+
+
+async def stream_until_cancelled(
+    polling_id: str,
+    stream: Coroutine[object, object, None],
+    polling_state: PollingStateReader,
+    poll_seconds: float = CANCELLATION_POLL_SECONDS,
+) -> None:
+    streaming: Final = asyncio.create_task(stream)
+    watching: Final = asyncio.create_task(_wait_until_cancelled(polling_id, polling_state, poll_seconds))
+    try:
+        await asyncio.wait((streaming, watching), return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        streaming.cancel()
+        watching.cancel()
+        await asyncio.gather(streaming, watching, return_exceptions=True)
+    if streaming.cancelled():
+        verbose_proxy_logger.info("Stopped the background stream for %s because it was cancelled", polling_id)
+        return
+    streaming.result()
 
 
 async def background_streaming_task(
@@ -117,7 +159,51 @@ async def background_streaming_task(
     user_max_tokens: int | None,
     user_api_base: str | None,
     version: str | None,
-):
+) -> None:
+    await stream_until_cancelled(
+        polling_id,
+        _stream_into_polling_state(
+            polling_id=polling_id,
+            data=data,
+            polling_handler=polling_handler,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            proxy_config=proxy_config,
+            proxy_logging_obj=proxy_logging_obj,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        ),
+        polling_handler,
+    )
+
+
+async def _stream_into_polling_state(
+    polling_id: str,
+    data: dict[str, object],
+    polling_handler: ResponsePollingHandler,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: dict[str, object],
+    llm_router: "Router | None",
+    proxy_config: "ProxyConfig",
+    proxy_logging_obj: "ProxyLogging",
+    select_data_generator: Callable[..., object] | None,
+    user_model: str | None,
+    user_temperature: float | None,
+    user_request_timeout: float | None,
+    user_max_tokens: int | None,
+    user_api_base: str | None,
+    version: str | None,
+) -> None:
     """
     Background task to stream response and update cache
 
