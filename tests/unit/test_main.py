@@ -2509,6 +2509,17 @@ def non_openai_responses_bridge(
             "https://api.perplexity.ai/v1/responses",
             {"api_key": "fake-key"},
         ),
+        "xai": ("xai/responses/grok-bridge-test", "https://api.x.ai/v1/responses", {"api_key": "fake-key"}),
+        "fireworks_ai": (
+            "fireworks_ai/responses/accounts/fireworks/models/bridge-test",
+            "https://api.fireworks.ai/inference/v1/responses",
+            {"api_key": "fake-key"},
+        ),
+        "openrouter": (
+            "openrouter/responses/openai/gpt-6.1-standard-only",
+            "https://openrouter.ai/api/v1/responses",
+            {"api_key": "fake-key"},
+        ),
     }
 
     def route_backend(backend: str) -> tuple[str, Mapping[str, str], respx.Route]:
@@ -2527,7 +2538,10 @@ def non_openai_responses_bridge(
         ("azure", {"effort": "low", "mode": "pro", "context": "all_turns"}),
         ("chatgpt", {"effort": "low", "mode": "pro", "context": "all_turns"}),
         ("databricks", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("openrouter", {"effort": "low", "mode": "pro", "context": "all_turns"}),
         ("perplexity", {"effort": "low"}),
+        ("xai", {"effort": "low"}),
+        ("fireworks_ai", {"effort": "low"}),
     ],
 )
 @pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
@@ -2561,7 +2575,14 @@ def test_non_openai_responses_bridge_sends_the_whole_reasoning_effort_dict_with_
             {"effort": "low", "mode": "standard", "context": "current_turn"},
             {"effort": "low", "mode": "standard", "context": "current_turn"},
         ),
+        (
+            "openrouter",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+            {"effort": "low", "context": "all_turns"},
+        ),
         ("perplexity", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
+        ("xai", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
+        ("fireworks_ai", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
     ],
 )
 @pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
@@ -2585,12 +2606,14 @@ def test_non_openai_responses_bridge_drops_reasoning_fields_the_backend_refuses_
     assert json.loads(route.calls[0].request.content)["reasoning"] == {**expected_reasoning, **summary}
 
 
+@pytest.mark.parametrize("backend", ["perplexity", "xai", "fireworks_ai"])
 @pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
-def test_perplexity_responses_bridge_rejects_reasoning_fields_perplexity_ignores_without_drop_params(
+def test_responses_bridge_rejects_reasoning_fields_the_backend_ignores_without_drop_params(
+    backend: str,
     summary: dict[str, str],
     non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
 ):
-    model, kwargs, route = non_openai_responses_bridge("perplexity")
+    model, kwargs, route = non_openai_responses_bridge(backend)
 
     with pytest.raises(litellm.UnsupportedParamsError, match=r"reasoning_effort\.context") as raised:
         litellm.completion(

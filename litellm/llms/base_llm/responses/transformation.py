@@ -29,6 +29,9 @@ else:
 ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
 ReasoningFieldValues: TypeAlias = Mapping[str, frozenset[str | None] | None]
 REASONING_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
+SUMMARY_ONLY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {"summary": REASONING_SUMMARY_VALUES}
+)
 
 
 class BaseResponsesAPIConfig(ABC):

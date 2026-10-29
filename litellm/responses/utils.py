@@ -1446,7 +1446,12 @@ def _reasoning_field_values(model: str, responses_config: BaseResponsesAPIConfig
     declared: Final = None if responses_config is None else responses_config.reasoning_field_values()
     if declared is not None:
         return declared
-    return _openai_reasoning_field_values(model) if OpenAIGPTConfig.is_openai_catalog_model(model) else None
+    catalog_model: Final = model.removeprefix("openai/")
+    return (
+        _openai_reasoning_field_values(catalog_model)
+        if OpenAIGPTConfig.is_openai_catalog_model(catalog_model)
+        else None
+    )
 
 
 def _accepts_reasoning_field(key: str, value: object, values_by_field: ReasoningFieldValues) -> bool:
