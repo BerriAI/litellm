@@ -4289,7 +4289,9 @@ _RESTRICTED_TEAM_KEY = UserAPIKeyAuth(
     ("caller", "expected_ids"),
     [(_PROVIDER_WILDCARD_KEY, {"id-prefixed-nano", "id-mini"}), (_RESTRICTED_TEAM_KEY, {"id-mini"})],
 )
-async def test_health_endpoint_probes_the_deployments_auth_lets_the_key_request(caller, expected_ids):
+async def test_health_endpoint_probes_the_deployments_auth_lets_the_key_request(
+    caller: UserAPIKeyAuth, expected_ids: set[str]
+):
     probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
 
     assert probed == expected_ids
@@ -4301,7 +4303,7 @@ async def test_health_endpoint_probes_the_deployments_auth_lets_the_key_request(
     [(_PROVIDER_WILDCARD_KEY, ["id-prefixed-nano", "id-mini"]), (_RESTRICTED_TEAM_KEY, ["id-mini"])],
 )
 async def test_health_endpoint_returns_the_deployments_auth_lets_the_key_request_on_background_cache_path(
-    caller, expected_ids
+    caller: UserAPIKeyAuth, expected_ids: list[str]
 ):
     from fastapi import Response
 
@@ -4320,7 +4322,7 @@ async def test_health_endpoint_returns_the_deployments_auth_lets_the_key_request
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_background_health_checks", [False, True])
-async def test_health_endpoint_refuses_a_deployment_the_team_allowlist_forbids(use_background_health_checks):
+async def test_health_endpoint_refuses_a_deployment_the_team_allowlist_forbids(use_background_health_checks: bool):
     from fastapi import HTTPException, Response
 
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
@@ -4369,7 +4371,7 @@ def _router_with_aliases(model_group_alias: Mapping[str, str]) -> Router:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
 async def test_health_endpoint_probes_the_deployment_an_alias_sends_the_key_to_not_the_one_it_shadows(
-    caller, model_group_alias
+    caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
 ):
     probed = await _live_probed_model_ids(
         _PROVIDER_PREFIXED_MODEL_LIST, caller, llm_router=_router_with_aliases(model_group_alias)
@@ -4381,7 +4383,7 @@ async def test_health_endpoint_probes_the_deployment_an_alias_sends_the_key_to_n
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("caller", "model_group_alias"), _ALIAS_SHADOW_CASES)
 async def test_health_endpoint_returns_the_deployment_an_alias_sends_the_key_to_on_background_cache_path(
-    caller, model_group_alias
+    caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
 ):
     from fastapi import Response
 
@@ -4400,7 +4402,7 @@ async def test_health_endpoint_returns_the_deployment_an_alias_sends_the_key_to_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_background_health_checks", [False, True])
-async def test_health_endpoint_refuses_the_deployment_a_key_alias_shadows(use_background_health_checks):
+async def test_health_endpoint_refuses_the_deployment_a_key_alias_shadows(use_background_health_checks: bool):
     from fastapi import HTTPException, Response
 
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
@@ -4436,6 +4438,102 @@ async def test_health_endpoint_never_probes_a_deployment_without_a_model_name_fo
     )
 
     assert probed == {"id-mini"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_never_probes_the_deployment_a_keys_router_alias_sends_it_to_but_forbids():
+    caller = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["gpt-5.4-mini", "openai/gpt-5.4-nano"],
+        router_settings={"model_group_alias": {"gpt-5.4-mini": "claude-haiku-5-5"}},
+    )
+
+    probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
+
+    assert probed == {"id-prefixed-nano"}
+
+
+_WILDCARD_DEPLOYMENT = {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "id-wild"}}
+_CATCH_ALL_DEPLOYMENT = {"model_name": "*", "litellm_params": {"model": "*"}, "model_info": {"id": "id-star"}}
+_TEAM_WILDCARD_DEPLOYMENT = {
+    "model_name": "openai-wild_team-a_7c1e",
+    "litellm_params": {"model": "openai/*"},
+    "model_info": {"id": "id-team-wild", "team_id": "team-a", "team_public_model_name": "openai/*"},
+}
+
+
+def _team_key(team_models: list[str], team_model_aliases: Mapping[str, str] | None = None) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=[],
+        team_id="team-a",
+        team_models=team_models,
+        team_model_aliases=dict(team_model_aliases) if team_model_aliases is not None else None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_list", "model_group_alias", "caller", "expected_ids"),
+    [
+        pytest.param(
+            [_WILDCARD_DEPLOYMENT, _PROVIDER_PREFIXED_MODEL_LIST[2]],
+            {},
+            _team_key(["openai/gpt-5.4-nano"]),
+            {"id-wild"},
+            id="team-name-served-by-provider-wildcard",
+        ),
+        pytest.param(
+            [_TEAM_WILDCARD_DEPLOYMENT, _PROVIDER_PREFIXED_MODEL_LIST[2]],
+            {},
+            _team_key(["openai/gpt-5.4-nano"]),
+            {"id-team-wild"},
+            id="team-name-served-by-teams-own-wildcard",
+        ),
+        pytest.param(
+            [_CATCH_ALL_DEPLOYMENT],
+            {},
+            _team_key(["gpt-5.4-mini"]),
+            {"id-star"},
+            id="team-name-served-by-catch-all",
+        ),
+        pytest.param(
+            _PROVIDER_PREFIXED_MODEL_LIST,
+            {"gpt-4": "gpt-5.4-mini"},
+            _team_key(["gpt-4"]),
+            {"id-mini"},
+            id="team-allows-router-alias",
+        ),
+        pytest.param(
+            _PROVIDER_PREFIXED_MODEL_LIST,
+            {},
+            _team_key(["my-alias"], {"my-alias": "gpt-5.4-mini"}),
+            {"id-mini"},
+            id="team-allows-team-alias",
+        ),
+        pytest.param(
+            _PROVIDER_PREFIXED_MODEL_LIST,
+            {"claude-haiku-5-5": "gpt-5.4-mini"},
+            UserAPIKeyAuth(api_key="hashed-test-key", models=[]),
+            {"id-prefixed-nano", "id-mini", "id-haiku"},
+            id="unrestricted-key-calls-shadowed-deployment-by-id",
+        ),
+    ],
+)
+async def test_health_endpoint_probes_every_deployment_the_callers_allowed_names_route_to(
+    model_list: Sequence[Mapping[str, object]],
+    model_group_alias: Mapping[str, str],
+    caller: UserAPIKeyAuth,
+    expected_ids: set[str],
+):
+    llm_router = Router(
+        model_list=copy.deepcopy([dict(deployment) for deployment in model_list]),
+        model_group_alias=dict(model_group_alias),
+    )
+
+    probed = await _live_probed_model_ids(model_list, caller, llm_router=llm_router)
+
+    assert probed == expected_ids
 
 
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():

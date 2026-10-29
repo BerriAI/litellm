@@ -7,7 +7,9 @@ import secrets
 import time
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict
 
@@ -81,6 +83,7 @@ from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import reject_server_owned_wif_fields
@@ -255,7 +258,7 @@ def get_callback_identifier(callback):
 
 router: Final = APIRouter()
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
-_DEPLOYMENT_LIST: Final = TypeAdapter(tuple[object, ...])
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
 services = (
     Literal[
         "slack_budget_alerts",
@@ -1101,34 +1104,139 @@ async def _caller_aliases(user_api_key_dict: UserAPIKeyAuth) -> CallerAliases:
     )
 
 
-def _served_model_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
+def _model_auth_checks(model_name: str, aliases: CallerAliases) -> str:
+    return resolve_model_group_alias(aliases.router, model_name) or model_name
+
+
+def _deployment_id(deployment: object) -> str | None:
+    match deployment:
+        case {"model_info": {"id": str(model_id)}}:
+            return model_id
+        case _:
+            return None
+
+
+def _granted_names(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+    grants: Final = (
+        *_OBJECTS.validate_python(user_api_key_dict.models),
+        *_OBJECTS.validate_python(user_api_key_dict.team_models),
+    )
+    return frozenset(name for name in grants if isinstance(name, str))
+
+
+def _served_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
     dispatched: Final = dispatched_model(model_name, aliases)
     return llm_router.routable_model_group(dispatched) if llm_router is not None else dispatched
 
 
-async def _model_groups_key_may_reach(
-    llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
-) -> frozenset[str]:
-    requested_names: Final = frozenset[str]().union(
-        *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list)
+def _name_id_pairs(deployment: object, team_id: str | None) -> tuple[tuple[str, str], ...]:
+    model_id: Final = _deployment_id(deployment)
+    if model_id is None:
+        return ()
+    return tuple((name, model_id) for name in _names_caller_may_request(deployment, team_id) | {model_id})
+
+
+def _ids_by_requested_name(llm_model_list: Sequence[object], team_id: str | None) -> Mapping[str, frozenset[str]]:
+    pairs: Final = sorted(chain.from_iterable(_name_id_pairs(deployment, team_id) for deployment in llm_model_list))
+    return MappingProxyType(
+        {name: frozenset(model_id for _, model_id in group) for name, group in groupby(pairs, key=lambda pair: pair[0])}
     )
-    aliases: Final = await _caller_aliases(user_api_key_dict)
+
+
+def _ids_serving_group(
+    group: str,
+    ids_by_name: Mapping[str, frozenset[str]],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+) -> frozenset[str]:
+    named: Final = ids_by_name.get(group)
+    if named is not None or llm_router is None:
+        return named or frozenset()
+    routed: Final = llm_router.get_routable_deployments(
+        group, {"metadata": {"user_api_key_team_id": user_api_key_dict.team_id}}
+    )
+    return frozenset(model_id for model_id in map(_deployment_id, routed) if model_id is not None)
+
+
+async def _names_key_may_request(
+    names: Iterable[str], aliases: CallerAliases, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> frozenset[str]:
     return frozenset(
         [
-            _served_model_group(name, aliases, llm_router)
-            for name in requested_names
-            if await _key_may_call_model(name, user_api_key_dict, llm_router)
+            name
+            for name in names
+            if await _key_may_call_model(_model_auth_checks(name, aliases), user_api_key_dict, llm_router)
         ]
     )
 
 
+def _ids_serving(
+    groups: Iterable[str],
+    ids_by_name: Mapping[str, frozenset[str]],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router | None,
+) -> frozenset[str]:
+    return frozenset[str]().union(
+        *(_ids_serving_group(group, ids_by_name, user_api_key_dict, llm_router) for group in groups)
+    )
+
+
+def _shadowed_ids(
+    llm_model_list: Sequence[object], admitted_names: frozenset[str], reached_ids: frozenset[str], team_id: str | None
+) -> frozenset[str]:
+    ids_of_admitted_names: Final = (
+        _deployment_id(deployment)
+        for deployment in llm_model_list
+        if not admitted_names.isdisjoint(_names_caller_may_request(deployment, team_id))
+    )
+    return frozenset(model_id for model_id in ids_of_admitted_names if model_id is not None) - reached_ids
+
+
+@dataclass(frozen=True, slots=True)
+class _ReachableDeployments:
+    model_ids: frozenset[str]
+    groups: frozenset[str]
+
+    def include(self, deployment: object, team_id: str | None) -> bool:
+        model_id: Final = _deployment_id(deployment)
+        if model_id is None:
+            return not self.groups.isdisjoint(_names_caller_may_request(deployment, team_id))
+        return model_id in self.model_ids
+
+
+_NOTHING_REACHABLE: Final = _ReachableDeployments(frozenset(), frozenset())
+
+
+async def _deployments_key_may_reach(
+    llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> _ReachableDeployments:
+    aliases: Final = await _caller_aliases(user_api_key_dict)
+    candidate_names: Final = _granted_names(user_api_key_dict).union(
+        *(_names_caller_may_request(deployment, user_api_key_dict.team_id) for deployment in llm_model_list)
+    )
+    admitted_names: Final = await _names_key_may_request(candidate_names, aliases, user_api_key_dict, llm_router)
+    groups: Final = frozenset(_served_group(name, aliases, llm_router) for name in admitted_names)
+    ids_by_name: Final = _ids_by_requested_name(llm_model_list, user_api_key_dict.team_id)
+    reached_ids: Final = _ids_serving(groups, ids_by_name, user_api_key_dict, llm_router)
+    admitted_ids: Final = await _names_key_may_request(
+        _shadowed_ids(llm_model_list, admitted_names, reached_ids, user_api_key_dict.team_id),
+        aliases,
+        user_api_key_dict,
+        llm_router,
+    )
+    id_groups: Final = frozenset(_served_group(model_id, aliases, llm_router) for model_id in admitted_ids)
+    return _ReachableDeployments(
+        reached_ids | _ids_serving(id_groups, ids_by_name, user_api_key_dict, llm_router), groups
+    )
+
+
 def _caller_may_probe_deployment(
-    deployment: Mapping[str, object], reachable_groups: frozenset[str], team_id: str | None, caller_is_admin: bool
+    deployment: Mapping[str, object], reachable: _ReachableDeployments, team_id: str | None, caller_is_admin: bool
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
     if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
         return False
-    return not reachable_groups.isdisjoint(_names_caller_may_request(deployment, team_id))
+    return reachable.include(deployment, team_id)
 
 
 def _resolve_targeted_model_ids(
@@ -1353,18 +1461,16 @@ async def health_endpoint(
                 detail={"error": "Model list not initialized"},
             )
         restrict_to_allowed_models: Final = not is_admin or not _key_models_unrestricted(user_api_key_dict)
-        reachable_groups: Final = (
-            await _model_groups_key_may_reach(
-                _DEPLOYMENT_LIST.validate_python(llm_model_list), user_api_key_dict, llm_router
-            )
+        reachable: Final = (
+            await _deployments_key_may_reach(_OBJECTS.validate_python(llm_model_list), user_api_key_dict, llm_router)
             if restrict_to_allowed_models
-            else frozenset[str]()
+            else _NOTHING_REACHABLE
         )
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
             if not restrict_to_allowed_models
-            or _caller_may_probe_deployment(m, reachable_groups, user_api_key_dict.team_id, is_admin)
+            or _caller_may_probe_deployment(m, reachable, user_api_key_dict.team_id, is_admin)
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id, user_api_key_dict.team_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
