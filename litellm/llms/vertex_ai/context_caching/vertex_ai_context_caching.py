@@ -422,14 +422,14 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
         skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, optional_params.get("tools"), model, custom_llm_provider, api_base
+            cached_messages, optional_params.get("tools"), target.model, custom_llm_provider, api_base
         )
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
             return messages, optional_params, None
 
-        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
 
@@ -573,14 +573,14 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
         skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, optional_params.get("tools"), model, custom_llm_provider, api_base
+            cached_messages, optional_params.get("tools"), target.model, custom_llm_provider, api_base
         )
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
             return messages, optional_params, None
 
-        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
 

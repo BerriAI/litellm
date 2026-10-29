@@ -1430,6 +1430,41 @@ class TestContextCachingEndpoints:
 
         self._token_check_patcher.start()
 
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_check_and_create_cache_applies_the_api_base_model_minimum(
+        self, local_model_cost_map, is_async: bool
+    ):
+        self._token_check_patcher.stop()
+        messages: Final = [
+            {"role": "system", "content": " ".join(["word"] * 1500), "cache_control": {"type": "ephemeral"}},
+            {"role": "user", "content": "Hello"},
+        ]
+        call_args: Final = dict(
+            messages=messages,
+            optional_params={},
+            api_key="unused",
+            api_base="https://gateway.example.com/v1/projects/base-project/locations/global/publishers/google/models/gemini-2.5-pro",
+            model="gemini-2.5-flash",
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            custom_llm_provider="vertex_ai",
+            vertex_project="config-project",
+            vertex_location="us-central1",
+            vertex_auth_header="vertex-token",
+        )
+
+        result: Final = (
+            await self.context_caching.async_check_and_create_cache(client=self.mock_async_client, **call_args)
+            if is_async
+            else self.context_caching.check_and_create_cache(client=self.mock_client, **call_args)
+        )
+
+        self._token_check_patcher.start()
+        assert result == (messages, {}, None)
+        assert not self.mock_client.mock_calls
+        assert not self.mock_async_client.mock_calls
+
     @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
     @patch("litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages")
     @pytest.mark.asyncio
