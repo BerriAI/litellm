@@ -6,10 +6,12 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
@@ -222,11 +224,9 @@ class TestModelRateLimitingCheck:
 
         check.log_success_event(kwargs, None, None, None)
 
-        # Verify increment_cache was called
-        mock_cache.increment_cache.assert_called_once()
-        _, kwarg_params = mock_cache.increment_cache.call_args
-        assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
-        assert kwarg_params["value"] == 50
+        keys = tuple(call.kwargs["key"] for call in mock_cache.increment_cache.call_args_list)
+        assert any(key.startswith("test-id:gpt-4:tpm:") for key in keys), keys
+        assert all(call.kwargs["value"] == 50 for call in mock_cache.increment_cache.call_args_list)
 
 
 class TestModelRateLimitingCheckAsync:
@@ -253,7 +253,7 @@ class TestModelRateLimitingCheckAsync:
         """Test that RateLimitError is raised when RPM limit is exceeded (async)."""
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache = AsyncMock(return_value=11)  # Over limit
+        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[11.0])  # Over limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -274,7 +274,7 @@ class TestModelRateLimitingCheckAsync:
         """Test that requests are allowed when under the limit (async)."""
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache = AsyncMock(return_value=6)
+        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[6.0])
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -339,7 +339,7 @@ class TestModelRateLimitingCheckAsync:
     ):
         redis_cache = MagicMock()
         redis_cache.async_get_cache = AsyncMock(side_effect=RedisCircuitBreakerOpenError())
-        redis_cache.async_increment = AsyncMock(return_value=2)
+        redis_cache.async_increment_pipeline = AsyncMock(return_value=[2.0])
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
@@ -375,11 +375,9 @@ class TestModelRateLimitingCheckAsync:
 
         await check.async_log_success_event(kwargs, None, None, None)
 
-        # Verify async_increment_cache was called
-        mock_cache.async_increment_cache.assert_called_once()
-        _, kwarg_params = mock_cache.async_increment_cache.call_args
-        assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
-        assert kwarg_params["value"] == 50
+        keys = tuple(call.kwargs["key"] for call in mock_cache.async_increment_cache.call_args_list)
+        assert any(key.startswith("test-id:gpt-4:tpm:") for key in keys), keys
+        assert all(call.kwargs["value"] == 50 for call in mock_cache.async_increment_cache.call_args_list)
 
 
 class TestRouterWithEnforceModelRateLimits:
@@ -466,3 +464,421 @@ class TestModelRateLimitConcurrency:
 
         assert len(successes) == 2, f"Expected 2 successes, got {len(successes)}"
         assert len(failures) == 2, f"Expected 2 rate limit errors, got {len(failures)}"
+
+
+DAY_ONE = datetime(2026, 10, 28, 23, 59, 30, tzinfo=timezone.utc)
+RPD_DEPLOYMENT = {
+    "litellm_params": {"model": "gpt-4.1-mini", "rpd": 2},
+    "model_info": {"id": "daily-test-id"},
+    "model_name": "daily-model",
+}
+RPM_AND_RPD_DEPLOYMENT = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "rpm": 1, "rpd": 2}}
+
+
+class Clock:
+    def __init__(self, now: datetime):
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def _pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
+    return check.pre_call_check(deployment)
+
+
+async def _async_pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
+    return await check.async_pre_call_check(deployment)
+
+
+async def _async_log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
+    await check.async_log_success_event(kwargs, None, None, None)
+
+
+class TestDailyLimits:
+    def test_pre_call_check_rejects_the_request_over_rpd(self):
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, RPD_DEPLOYMENT)
+
+        assert "RPD limit=2, current usage=3" in str(exc_info.value)
+        assert "rpd limit=2. current usage=3. id=daily-test-id, model_group=daily-model" in exc_info.value.response.text
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_rejects_the_request_over_rpd_and_lets_the_router_retry(self):
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        assert await _async_pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert await _async_pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await _async_pre_call(check, RPD_DEPLOYMENT)
+
+        assert "RPD limit=2" in str(exc_info.value)
+        assert exc_info.value.num_retries is None
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_rejects_once_the_day_tokens_reach_tpd(self):
+        deployment = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "tpd": 100}}
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "daily-test-id",
+                "total_tokens": 60,
+                "hidden_params": {"litellm_model_name": "gpt-4.1-mini"},
+            }
+        }
+
+        await _async_log_success(check, kwargs)
+        assert await _async_pre_call(check, deployment) == deployment
+        await _async_log_success(check, kwargs)
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await _async_pre_call(check, deployment)
+
+        assert "TPD limit=100, current usage=120" in str(exc_info.value)
+
+    def test_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    def test_pre_call_check_rejected_requests_hand_back_rpm_and_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+        assert _pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            _pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_rejected_requests_hand_back_rpm_and_rpd(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1, current usage=2"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        clock.now = DAY_ONE - timedelta(minutes=1)
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+
+        clock.now = DAY_ONE - timedelta(minutes=2)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_refunds_rpm_and_rpd_in_one_cache_trip(self):
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_increment_cache_pipeline = AsyncMock(side_effect=[[1.0, 3.0], [0.0, 2.0]])
+        check = ModelRateLimitingCheck(dual_cache=mock_cache, clock=Clock(DAY_ONE))
+
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
+            await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
+
+        assert mock_cache.async_increment_cache_pipeline.await_count == 2
+        refund = mock_cache.async_increment_cache_pipeline.call_args_list[1].kwargs["increment_list"]
+        assert [(op["key"], op["increment_value"], op["ttl"]) for op in refund] == [
+            ("daily-test-id:gpt-4.1-mini:rpm:23-59", -1, 60),
+            ("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", -1, 86400),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_increments_rpm_and_rpd_in_one_cache_trip(self):
+        mock_cache = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[1.0, 1.0])
+        check = ModelRateLimitingCheck(dual_cache=mock_cache, clock=Clock(DAY_ONE))
+
+        assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
+
+        assert mock_cache.async_increment_cache_pipeline.await_count == 1
+        operations = mock_cache.async_increment_cache_pipeline.call_args.kwargs["increment_list"]
+        assert [(op["key"], op["ttl"]) for op in operations] == [
+            ("daily-test-id:gpt-4.1-mini:rpm:23-59", 60),
+            ("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", 86400),
+        ]
+        assert not mock_cache.async_increment_cache.called
+
+    def test_pre_call_check_reads_the_shared_tpd_count_from_redis(self):
+        redis_cache = MagicMock()
+        redis_cache.get_cache.return_value = 100
+        deployment = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "tpd": 100}}
+        check = ModelRateLimitingCheck(dual_cache=DualCache(redis_cache=redis_cache), clock=Clock(DAY_ONE))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, deployment)
+
+        assert "TPD limit=100, current usage=100" in str(exc_info.value)
+        assert redis_cache.get_cache.call_args.kwargs["key"] == "daily-test-id:gpt-4.1-mini:tpd:2026-10-28"
+
+    def test_rpd_count_starts_fresh_after_utc_midnight(self):
+        clock = Clock(DAY_ONE)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+        _pre_call(check, RPD_DEPLOYMENT)
+        _pre_call(check, RPD_DEPLOYMENT)
+        with pytest.raises(litellm.RateLimitError):
+            _pre_call(check, RPD_DEPLOYMENT)
+
+        clock.now = DAY_ONE + timedelta(seconds=30)
+
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        assert _pre_call(check, RPD_DEPLOYMENT) == RPD_DEPLOYMENT
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, RPD_DEPLOYMENT)
+        assert "current usage=3" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("now", "seconds_to_midnight"),
+        [
+            (DAY_ONE, 30),
+            (datetime(2026, 10, 28, 0, 0, 0, tzinfo=timezone.utc), 86400),
+            (datetime(2026, 10, 28, 12, 30, 15, 500000, tzinfo=timezone.utc), 41384),
+        ],
+    )
+    def test_daily_429_retry_after_is_seconds_until_utc_midnight(self, now: datetime, seconds_to_midnight: int):
+        deployment = {**RPD_DEPLOYMENT, "litellm_params": {"model": "gpt-4.1-mini", "rpd": 0}}
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(now))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, deployment)
+
+        assert exc_info.value.response.headers["retry-after"] == str(seconds_to_midnight)
+
+    @pytest.mark.asyncio
+    async def test_router_serves_the_request_from_the_other_deployment_once_rpd_is_spent(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "daily-group",
+                    "litellm_params": {
+                        "model": "openai/gpt-4.1-mini",
+                        "api_key": "k",
+                        "mock_response": "a",
+                        "rpd": 1,
+                        "order": 1,
+                    },
+                    "model_info": {"id": "spent-first"},
+                },
+                {
+                    "model_name": "daily-group",
+                    "litellm_params": {
+                        "model": "openai/gpt-4.1-mini",
+                        "api_key": "k",
+                        "mock_response": "b",
+                        "order": 2,
+                    },
+                    "model_info": {"id": "always-free"},
+                },
+            ],
+            num_retries=1,
+        )
+        check = ModelRateLimitingCheck(dual_cache=router.cache, clock=Clock(DAY_ONE))
+        router.optional_callbacks = [check]
+        litellm.logging_callback_manager.add_litellm_callback(check)
+        try:
+            served = [
+                (await router.acompletion(model="daily-group", messages=[{"role": "user", "content": "hi"}]))
+                .choices[0]
+                .message.content
+                for _ in range(4)
+            ]
+        finally:
+            router.discard()
+
+        assert served == ["a", "b", "b", "b"]
+
+
+_LOGGED_TOKENS: Final = TypeAdapter[float | None](float | None)
+
+
+async def _tpd_tokens_once_logged(cache: DualCache, key: str) -> int:
+    for _ in range(200):
+        logged: Final = _LOGGED_TOKENS.validate_python(
+            cache.in_memory_cache.get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # InMemoryCache.get_cache is untyped
+        )
+        if logged is not None:
+            return int(logged)
+        await asyncio.sleep(0.01)
+    pytest.fail(f"the success callback never logged tpd tokens under {key}")
+
+
+RESET_AT_EIGHT = datetime(2026, 10, 28, 8, 0, 0, tzinfo=timezone.utc)
+DAILY_RESET_DEPLOYMENT = {
+    **RPD_DEPLOYMENT,
+    "litellm_params": {"model": "gpt-4.1-mini", "rpd": 2, "daily_reset_time": "08:00"},
+}
+
+
+class TestDailyResetTime:
+    def test_rpd_window_starts_over_at_daily_reset_time_not_midnight(self):
+        clock = Clock(RESET_AT_EIGHT - timedelta(hours=9))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert _pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(hours=7)
+        assert _pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(minutes=1)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3") as exc_info:
+            _pre_call(check, DAILY_RESET_DEPLOYMENT)
+        assert exc_info.value.response.headers["retry-after"] == "60"
+
+        clock.now = RESET_AT_EIGHT
+        assert _pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+
+    @pytest.mark.asyncio
+    async def test_async_rpd_window_starts_over_at_daily_reset_time_not_midnight(self):
+        clock = Clock(RESET_AT_EIGHT - timedelta(hours=9))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert await _async_pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(hours=7)
+        assert await _async_pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(minutes=1)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3") as exc_info:
+            await _async_pre_call(check, DAILY_RESET_DEPLOYMENT)
+        assert exc_info.value.response.headers["retry-after"] == "60"
+
+        clock.now = RESET_AT_EIGHT
+        assert await _async_pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+
+    @pytest.mark.parametrize(
+        ("now", "seconds_to_reset"),
+        [
+            (RESET_AT_EIGHT + timedelta(seconds=1), 86399),
+            (datetime(2026, 10, 28, 23, 59, 30, tzinfo=timezone.utc), 28830),
+            (datetime(2026, 10, 29, 7, 30, 0, tzinfo=timezone.utc), 1800),
+        ],
+    )
+    def test_daily_429_retry_after_is_seconds_until_daily_reset_time(self, now: datetime, seconds_to_reset: int):
+        deployment = {
+            **RPD_DEPLOYMENT,
+            "litellm_params": {"model": "gpt-4.1-mini", "rpd": 0, "daily_reset_time": "08:00"},
+        }
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(now))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, deployment)
+
+        assert exc_info.value.response.headers["retry-after"] == str(seconds_to_reset)
+
+    @pytest.mark.asyncio
+    async def test_tokens_logged_before_daily_reset_time_do_not_count_after_it(self):
+        deployment = {
+            **RPD_DEPLOYMENT,
+            "litellm_params": {"model": "gpt-4.1-mini", "tpd": 100, "daily_reset_time": "08:00"},
+        }
+        clock = Clock(RESET_AT_EIGHT - timedelta(minutes=1))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+        await _async_log_success(
+            check,
+            {
+                "litellm_params": {"daily_reset_time": "08:00", "metadata": {}},
+                "standard_logging_object": {
+                    "model_id": "daily-test-id",
+                    "total_tokens": 120,
+                    "hidden_params": {"litellm_model_name": "gpt-4.1-mini"},
+                },
+            },
+        )
+        with pytest.raises(litellm.RateLimitError, match="TPD limit=100, current usage=120"):
+            await _async_pre_call(check, deployment)
+
+        clock.now = RESET_AT_EIGHT
+        assert await _async_pre_call(check, deployment) == deployment
+
+    @pytest.mark.parametrize(
+        "deployment",
+        [
+            {"litellm_params": {"model": "gpt-4.1-mini"}, "model_info": {"id": "x", "rpd": 0}, "model_name": "m"},
+            {"litellm_params": {"model": "gpt-4.1-mini"}, "model_info": {"id": "x"}, "model_name": "m", "rpd": 0},
+        ],
+    )
+    def test_rpd_outside_litellm_params_is_not_a_limit(self, deployment: dict[str, object]):
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        assert _pre_call(check, deployment) == deployment
+
+    @pytest.mark.parametrize("daily_reset_time", ["8am", "08:00:30", "08:00+05:00", "25:00"])
+    def test_router_rejects_a_daily_reset_time_that_is_not_hh_mm(self, daily_reset_time: str):
+        with pytest.raises(Exception, match="daily_reset_time"):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "daily-group",
+                        "litellm_params": {"model": "gpt-4.1-mini", "rpd": 2, "daily_reset_time": daily_reset_time},
+                    }
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_daily_reset_time_sent_in_the_request_does_not_move_the_tokens_out_of_the_deployment_window(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "daily-group",
+                    "litellm_params": {
+                        "model": "openai/gpt-4.1-mini",
+                        "api_key": "k",
+                        "mock_response": "a",
+                        "tpd": 100,
+                    },
+                    "model_info": {"id": "daily-test-id"},
+                }
+            ]
+        )
+        check = ModelRateLimitingCheck(dual_cache=router.cache, clock=Clock(RESET_AT_EIGHT - timedelta(minutes=1)))
+        router.optional_callbacks = [check]
+        litellm.logging_callback_manager.add_litellm_callback(check)
+        try:
+            await router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion kwargs are untyped
+                model="daily-group", messages=[{"role": "user", "content": "hi"}], daily_reset_time="08:00"
+            )
+            logged = await _tpd_tokens_once_logged(router.cache, "daily-test-id:openai/gpt-4.1-mini:tpd:2026-10-28")
+        finally:
+            router.discard()
+
+        assert logged > 0
+        day_before: Final = _LOGGED_TOKENS.validate_python(
+            router.cache.in_memory_cache.get_cache("daily-test-id:openai/gpt-4.1-mini:tpd:2026-10-27")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # InMemoryCache.get_cache is untyped
+        )
+        assert day_before is None
