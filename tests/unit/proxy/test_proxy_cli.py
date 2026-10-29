@@ -1835,10 +1835,9 @@ class TestProxyInitializationHelpers:
         assert "uvicorn exits" not in warning
 
     @patch("uvicorn.run")
-    @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     def test_single_worker_max_requests_warning_printed_on_uvicorn(
-        self, mock_setup_db, mock_print, mock_uvicorn_run
+        self, mock_setup_db, mock_uvicorn_run
     ):
         """uvicorn single-worker startup prints the does-not-recycle warning"""
         from click.testing import CliRunner
@@ -1881,11 +1880,8 @@ class TestProxyInitializationHelpers:
             assert (
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
-            assert any(
-                "--max_requests_before_restart 123 with --num_workers 1" in str(c)
-                and "uvicorn exits the process" in str(c)
-                for c in mock_print.call_args_list
-            )
+            assert "--max_requests_before_restart 123 with --num_workers 1" in result.output
+            assert "uvicorn exits the process" in result.output
 
     @patch("litellm.proxy.proxy_cli.start_query_engine_reaper")
     @patch("uvicorn.run")
@@ -1942,10 +1938,9 @@ class TestProxyInitializationHelpers:
 
     @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.run_gunicorn_server")
     @patch("uvicorn.run")
-    @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     def test_single_worker_max_requests_warning_printed_on_gunicorn(
-        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_run_gunicorn
+        self, mock_setup_db, mock_uvicorn_run, mock_run_gunicorn
     ):
         """--run_gunicorn single-worker startup prints the gunicorn warning variant"""
         from click.testing import CliRunner
@@ -1989,11 +1984,8 @@ class TestProxyInitializationHelpers:
             assert (
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
-            assert any(
-                "--max_requests_before_restart 123 with --num_workers 1" in str(c)
-                and "gunicorn accepts no connections" in str(c)
-                for c in mock_print.call_args_list
-            )
+            assert "--max_requests_before_restart 123 with --num_workers 1" in result.output
+            assert "gunicorn accepts no connections" in result.output
 
     @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.init_hypercorn_server")
     @patch("uvicorn.run")
@@ -2149,7 +2141,7 @@ class TestProxyInitializationHelpers:
         assert [call.args for call in reserved_before_run] == [("the gunicorn master",)]
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
-    def test_gunicorn_jitter_without_base_warns(self):
+    def test_gunicorn_jitter_without_base_warns(self, capsys: pytest.CaptureFixture[str]):
         """gunicorn path warns when jitter is set without --max_requests_before_restart"""
         pytest.importorskip("gunicorn")
 
@@ -2160,7 +2152,6 @@ class TestProxyInitializationHelpers:
 
         with (
             patch("gunicorn.app.base.BaseApplication.run", capture_run),
-            patch("builtins.print") as mock_print,
             patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
                 "litellm.proxy.proxy_cli.start_query_engine_reaper"
             ),
@@ -2178,7 +2169,7 @@ class TestProxyInitializationHelpers:
 
         assert "max_requests" not in captured["options"]
         assert "max_requests_jitter" not in captured["options"]
-        assert any("has no effect" in str(c) for c in mock_print.call_args_list)
+        assert "has no effect" in capsys.readouterr().out
 
     def test_apply_uvicorn_jitter_sets_arg_when_supported(self):
         class _NewUvicornConfig:
@@ -2194,16 +2185,13 @@ class TestProxyInitializationHelpers:
             )
         assert uvicorn_args["limit_max_requests_jitter"] == 50
 
-    def test_apply_uvicorn_jitter_skipped_on_old_uvicorn(self):
+    def test_apply_uvicorn_jitter_skipped_on_old_uvicorn(self, capsys: pytest.CaptureFixture[str]):
         class _FakeUvicornConfig:
             def __init__(self, limit_max_requests=None):
                 pass
 
         uvicorn_args: dict = {}
-        with (
-            patch("uvicorn.Config", _FakeUvicornConfig),
-            patch("builtins.print") as mock_print,
-        ):
+        with patch("uvicorn.Config", _FakeUvicornConfig):
             ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
                 uvicorn_args=uvicorn_args,
                 max_requests_before_restart=1000,
@@ -2211,19 +2199,18 @@ class TestProxyInitializationHelpers:
             )
 
         assert "limit_max_requests_jitter" not in uvicorn_args
-        assert any("0.41.0" in str(c) for c in mock_print.call_args_list)
+        assert "0.41.0" in capsys.readouterr().out
 
-    def test_apply_uvicorn_jitter_without_base_warns(self):
+    def test_apply_uvicorn_jitter_without_base_warns(self, capsys: pytest.CaptureFixture[str]):
         uvicorn_args: dict = {}
-        with patch("builtins.print") as mock_print:
-            ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
-                uvicorn_args=uvicorn_args,
-                max_requests_before_restart=None,
-                jitter=50,
-            )
+        ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
+            uvicorn_args=uvicorn_args,
+            max_requests_before_restart=None,
+            jitter=50,
+        )
 
         assert "limit_max_requests_jitter" not in uvicorn_args
-        assert any("has no effect" in str(c) for c in mock_print.call_args_list)
+        assert "has no effect" in capsys.readouterr().out
 
     @patch.dict(os.environ, {}, clear=True)
     def test_construct_database_url_from_env_vars(self):
@@ -4095,6 +4082,21 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
         config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": {}}))
 
         assert _boot_from_config_file(config_path) is None
+
+    @pytest.mark.parametrize("litellm_settings", [[], "", 0, False])
+    @pytest.mark.parametrize("via_config_file_path_env", [False, True])
+    def test_an_empty_litellm_settings_still_boots(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, litellm_settings: object, via_config_file_path_env: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "suppress_startup_output", False)
+        config_file: Final = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+        exported: Final = (
+            self._env_after_boot("LITELLM_SUPPRESS_STARTUP_OUTPUT", config_file_path_env=config_file)
+            if via_config_file_path_env
+            else self._env_after_boot("LITELLM_SUPPRESS_STARTUP_OUTPUT", config=config_file)
+        )
+        assert exported is None
 
     @pytest.mark.parametrize(("setting", "exported"), [(True, "true"), ("true", None), (False, None)])
     def test_only_a_boolean_suppress_startup_output_reaches_spawned_workers(

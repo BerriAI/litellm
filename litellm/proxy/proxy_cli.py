@@ -10,13 +10,13 @@ import sys
 import urllib.parse as urlparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import click
 import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -228,8 +228,12 @@ def _print_or_hold_enforce_prisma_migration_check_notice(
     return print_once
 
 
+def _empty_as_none(value: object) -> object:
+    return value or None
+
+
 class _ConfigStartupOutputSettings(TypedDict, total=False):
-    litellm_settings: ReadOnly[StartupOutputSettings | None]
+    litellm_settings: ReadOnly[Annotated[StartupOutputSettings | None, BeforeValidator(_empty_as_none)]]
 
 
 _CONFIG_STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(_ConfigStartupOutputSettings)

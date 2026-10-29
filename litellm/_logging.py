@@ -957,7 +957,9 @@ def print_startup_warning(message: str) -> None:
 
 def _write_startup_message(message: str, caller: FrameType | None, level: int) -> None:
     if not litellm.json_logs:
-        print(terminal_text(message), flush=True)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        import click
+
+        click.echo(terminal_text(message))
         return
     text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
     if not text:

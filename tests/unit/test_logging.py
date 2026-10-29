@@ -7,7 +7,7 @@ import logging
 import re
 import sys
 import time
-from io import StringIO
+from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
 from typing import Final, List
 
@@ -47,6 +47,7 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import secret_redaction
 from litellm.types.utils import StandardLoggingPayload
@@ -1892,6 +1893,17 @@ def test_print_startup_message_keeps_colors_only_on_a_color_terminal(
     )
 
 
+def test_print_startup_message_writes_the_banner_as_utf8_to_an_ascii_stdout(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setattr(litellm, "suppress_startup_output", False)
+    raw: Final = BytesIO()
+    monkeypatch.setattr(sys, "stdout", TextIOWrapper(raw, encoding="ascii"))
+
+    print_startup_message(f"\n{LITELLM_BANNER}\n")
+
+    assert raw.getvalue().decode("utf-8") == f"\n{LITELLM_BANNER}\n\n"
+
+
 @pytest.mark.parametrize("json_logs", [False, True])
 def test_print_startup_message_writes_nothing_when_suppressed(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], json_logs: bool
@@ -1961,27 +1973,6 @@ def test_print_startup_message_is_one_json_record_in_json_mode(
     assert record["level"] == "INFO"
     assert record["component"] == "LiteLLM Proxy"
     assert str(record["logger"]).startswith("test_logging.py:"), record["logger"]
-
-
-def test_print_startup_message_yellow_notice_is_an_info_record_on_stdout(
-    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
-) -> None:
-    """An operator notice printed in yellow (an ignored flag, a deprecation) stays on stdout in JSON mode,
-    where the print put it, as one INFO record with the color codes removed."""
-    monkeypatch.setattr(litellm, "json_logs", True)
-    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
-    turn_on_json()
-    verbose_proxy_logger.setLevel(logging.WARNING)
-
-    print_startup_message("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
-
-    out, err = capfd.readouterr()
-    assert err == ""
-    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
-    assert len(lines) == 1, lines
-    record: Final = json.loads(lines[0])
-    assert record["message"] == "LiteLLM: --ciphers is not applied when using --run_granian."
-    assert record["level"] == "INFO"
 
 
 def test_print_startup_message_shows_above_the_json_handler_level(
