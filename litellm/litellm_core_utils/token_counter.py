@@ -15,6 +15,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from pydantic import TypeAdapter
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -842,6 +843,8 @@ def _count_messages(
                     use_default_image_token_count,
                     default_token_count,
                 )
+            elif key == "provider_specific_fields":
+                num_tokens += sum(map(params.count_function, _compaction_summaries(value)))
             elif key == "search_results" and isinstance(value, list):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     extract_search_results_text,
@@ -854,6 +857,22 @@ def _count_messages(
                 # Skip unsupported keys instead of raising an error
                 continue
     return num_tokens
+
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _compaction_summaries(provider_specific_fields: object) -> tuple[str, ...]:
+    fields: Final = as_str_mapping(provider_specific_fields)
+    blocks: Final = fields.get("compaction_blocks") if fields is not None else None
+    block_fields: Final = (
+        tuple(map(as_str_mapping, _OBJECT_LIST.validate_python(blocks))) if isinstance(blocks, list) else ()
+    )
+    return tuple(
+        content
+        for block in block_fields
+        if block is not None and block.get("type") == "compaction" and isinstance(content := block.get("content"), str)
+    )
 
 
 def _count_extra(

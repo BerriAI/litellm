@@ -47,6 +47,7 @@ from litellm.llms.anthropic.wif import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -154,6 +155,23 @@ def requires_native_compaction_beta(
 ) -> bool:
     return custom_llm_provider == "anthropic" and (
         optional_params.get("compaction") is not None or carries_signed_compaction_block(messages)
+    )
+
+
+def context_management_betas(context_management: object) -> tuple[str, ...]:
+    spec: Final = as_str_mapping(context_management)
+    edits: Final = validated_object_list(spec.get("edits")) if spec is not None else None
+    edit_types: Final = tuple(edit.get("type") for edit in map(as_str_mapping, edits or ()) if edit is not None)
+    return tuple(
+        beta
+        for beta, used in (
+            (ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value, "compact_20260112" in edit_types),
+            (
+                ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+                any(edit_type != "compact_20260112" for edit_type in edit_types),
+            ),
+        )
+        if used
     )
 
 
@@ -1315,8 +1333,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
-                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-
                 headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(all_betas) > 0:
             headers["anthropic-beta"] = ",".join(all_betas)

@@ -1651,6 +1651,25 @@ def test_token_counter_with_compaction_block():
     assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
 
 
+def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
+    """
+    Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference
+    sends it to Anthropic as a content block, so the local count includes its summary text and skips its signature.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    replayed = [
+        {"role": "assistant", "content": None, "provider_specific_fields": {"compaction_blocks": [signed_block]}},
+        follow_up,
+    ]
+    as_text = [{"role": "assistant", "content": summary}, follow_up]
+
+    assert token_counter(model=model, messages=replayed) == token_counter(model=model, messages=as_text)
+
+
 def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
     """
     An empty thinking block, a redacted_thinking block (no thinking text at all) and a compaction

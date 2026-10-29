@@ -26,7 +26,11 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import carries_signed_compaction_block, merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import (
+    carries_signed_compaction_block,
+    context_management_betas,
+    merge_anthropic_beta_headers,
+)
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
@@ -373,6 +377,7 @@ class AnthropicCountTokensConfig:
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        context_management: JsonValue = None,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -392,7 +397,11 @@ class AnthropicCountTokensConfig:
                     **MappingProxyType(
                         {
                             key: value
-                            for key, value in (("system", counted_system), ("tools", tools))
+                            for key, value in (
+                                ("system", counted_system),
+                                ("tools", tools),
+                                ("context_management", context_management),
+                            )
                             if value is not None
                         }
                     ),
@@ -404,18 +413,26 @@ class AnthropicCountTokensConfig:
         )
 
     def get_count_tokens_headers(
-        self, auth_header: Mapping[str, str], messages: Sequence[Mapping[str, JsonValue]]
+        self,
+        auth_header: Mapping[str, str],
+        messages: Sequence[Mapping[str, JsonValue]],
+        context_management: JsonValue = None,
     ) -> dict[str, str]:
         """The count-tokens headers around a resolved Anthropic auth header
         (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
         bearer for ``ANTHROPIC_AUTH_TOKEN`` and for sk-ant-oat tokens, whose mandatory oauth beta
         merges with the token-counting beta instead of replacing it. A history that carries a
         signed compaction block also needs the compaction beta, or Anthropic rejects the block
-        as an unknown content type."""
-        request_betas: Final = (
-            (ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+        as an unknown content type, and ``context_management`` edits need the betas inference sends."""
+        compaction_betas: Final = (
+            (ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,)
             if carries_signed_compaction_block(messages)
-            else (ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,)
+            else ()
+        )
+        request_betas: Final = (
+            ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
+            *compaction_betas,
+            *context_management_betas(context_management),
         )
         return {
             "Content-Type": "application/json",

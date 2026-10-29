@@ -26,7 +26,7 @@ from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAn
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
@@ -890,3 +890,45 @@ async def test_handler_sends_the_compaction_beta_with_a_compacted_history(httpx_
     betas = route.calls.last.request.headers["anthropic-beta"].split(",")
     assert COMPACTION_BETA in betas
     assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in betas
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.parametrize(
+    ("edit_type", "sent_beta", "unsent_beta"),
+    (
+        (
+            "compact_20260112",
+            ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+            ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+        ),
+        (
+            "clear_tool_uses_20250919",
+            ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+            ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+        ),
+    ),
+)
+async def test_counter_forwards_context_management_with_the_beta_inference_sends(
+    edit_type: str, sent_beta: str, unsent_beta: str
+) -> None:
+    """Anthropic counts an unsigned compaction block only under the compact_20260112 edit that inference sends,
+    and a clearing edit changes the count, so the count carries the request's context_management and its beta."""
+    context_management: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
+    with respx.mock:
+        route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 259})
+        )
+        result: Final = await AnthropicTokenCounter().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "assistant", "content": [{"type": "compaction", "content": "Recipe app summary."}]}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
+            context_management=CountContextManagement(spec=context_management, drop_invalid_edits=False),
+        )
+
+    sent: Final = route.calls.last.request
+    betas: Final = sent.headers["anthropic-beta"].split(",")
+    assert result is not None and result.total_tokens == 259
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)["context_management"] == context_management
+    assert (sent_beta in betas, unsent_beta in betas) == (True, False)

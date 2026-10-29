@@ -8,16 +8,10 @@ their respective publisher-specific count-tokens endpoints.
 
 from typing import Any, Final
 
-from pydantic import TypeAdapter
-
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import carries_signed_compaction_block
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-
-_MESSAGES: Final = TypeAdapter(list[object])
 
 _COUNT_TOKENS_PUBLISHERS: Final = (
     ("claude", "anthropic"),
@@ -163,14 +157,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         )
 
         # Prepare headers
-        headers: Final = {
-            "Authorization": f"Bearer {access_token}",
-            **(
-                {"anthropic-beta": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value}
-                if carries_signed_compaction_block(_MESSAGES.validate_python(request_data["messages"]))
-                else {}
-            ),
-        }
+        headers: Final = {"Authorization": f"Bearer {access_token}"}
 
         # Get async HTTP client
         from litellm import LlmProviders

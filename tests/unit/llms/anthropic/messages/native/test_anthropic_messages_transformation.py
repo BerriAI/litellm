@@ -17,7 +17,7 @@ from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
-from litellm.types.llms.anthropic import AnthropicFinishReason
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
@@ -234,6 +234,32 @@ def _derived_beta_header(config: AnthropicMessagesConfig) -> dict:
     return config._update_headers_with_anthropic_beta(
         headers={}, optional_params={"safeguards": list(AUTO_MODE_SAFEGUARDS)}, messages=[]
     )
+
+
+_COMPACT_EDIT_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
+_CLEARING_EDIT_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+
+
+@pytest.mark.parametrize(
+    ("edits", "betas"),
+    (
+        pytest.param([{"type": "compact_20260112"}], {_COMPACT_EDIT_BETA}, id="compact"),
+        pytest.param([{"type": "clear_tool_uses_20250919"}], {_CLEARING_EDIT_BETA}, id="clearing"),
+        pytest.param(
+            [{"type": "compact_20260112"}, {"type": "clear_thinking_20251015"}],
+            {_COMPACT_EDIT_BETA, _CLEARING_EDIT_BETA},
+            id="both",
+        ),
+    ),
+)
+def test_context_management_edits_add_the_beta_each_edit_needs(
+    edits: list[dict[str, str]], betas: set[str], local_beta_headers_config: None
+) -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"context_management": {"edits": edits}}, messages=[]
+    )
+
+    assert set(headers["anthropic-beta"].split(",")) == betas
 
 
 @pytest.mark.parametrize("config", _classifier_configs(), ids=type)
