@@ -208,7 +208,9 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     return where
 
 
-def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None):
+def make_ui_spend_logs_mock_prisma(
+    mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None, error_code_index_ready=False
+):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
 
@@ -239,6 +241,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
                 query_observer(sql_query, params)
             if "mcp_tool_call_count" in sql_query:
                 return []
+            if "FROM pg_index" in sql_query:
+                return [{"ready": error_code_index_ready}]
             if 'SELECT DISTINCT "user", team_id' in sql_query:
                 return _emulate_spend_log_owner_lookup(mock_spend_logs, sql_query, params)
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
@@ -4698,7 +4702,8 @@ async def test_view_spend_logs_summarize_unhashed_api_key_without_padding(client
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_with_error_code(client):
+@pytest.mark.parametrize("error_code_index_ready", [True, False], ids=["with_the_index", "without_the_index"])
+async def test_ui_view_spend_logs_with_error_code(client, error_code_index_ready):
     """Test filtering spend logs by error code"""
     mock_spend_logs = [
         {
@@ -4744,7 +4749,9 @@ async def test_ui_view_spend_logs_with_error_code(client):
         with patch.object(
             ps,
             "prisma_client",
-            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code),
+            make_ui_spend_logs_mock_prisma(
+                mock_spend_logs, filter_by_error_code, error_code_index_ready=error_code_index_ready
+            ),
         ):
             start_date, end_date = _default_date_range()
 
@@ -4773,7 +4780,10 @@ async def test_ui_view_spend_logs_with_error_code(client):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_with_a_long_error_code_returns_only_that_exact_code(client: TestClient) -> None:
+@pytest.mark.parametrize("error_code_index_ready", [True, False], ids=["with_the_index", "without_the_index"])
+async def test_ui_view_spend_logs_with_a_long_error_code_returns_only_that_exact_code(
+    client: TestClient, error_code_index_ready: bool
+) -> None:
     prefix: Final = "E" * 128
     codes: Final = MappingProxyType({f"log-{suffix}": prefix + suffix for suffix in ("first", "second")})
     mock_spend_logs: Final = [
@@ -4798,7 +4808,11 @@ async def test_ui_view_spend_logs_with_a_long_error_code_returns_only_that_exact
     )
     try:
         with patch.object(
-            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_exact_error_code)
+            ps,
+            "prisma_client",
+            make_ui_spend_logs_mock_prisma(
+                mock_spend_logs, filter_by_exact_error_code, error_code_index_ready=error_code_index_ready
+            ),
         ):
             start_date, end_date = _default_date_range()
             response = client.get(

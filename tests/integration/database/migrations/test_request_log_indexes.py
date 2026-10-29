@@ -935,7 +935,7 @@ def _seed_spend_logs(database_url: str, partitioned: bool) -> None:
 def _run_the_logged_statements(database_url: str, messages: list[str]) -> None:
     logged: Final = next(message for message in messages if "Not building index" in message)
     with psycopg.connect(database_url, autocommit=True) as conn:
-        for statement in logged.split("finds it in place: ", 1)[1].split("; "):
+        for statement in logged.split("finds it in place:\n", 1)[1].splitlines():
             conn.execute(statement.encode())
 
 

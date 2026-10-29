@@ -95,8 +95,10 @@ _CREATE_INDEX_STATEMENT: Final = re.compile(
 )
 _TABLE_KIND_SQL: Final = "SELECT c.relkind = 'p' AS partitioned FROM pg_class c WHERE c.oid = to_regclass(%s)"
 _TABLE_BYTES_SQL: Final = (
-    "SELECT COALESCE(SUM(pg_table_size(c.oid)), 0)::bigint AS total FROM pg_class c WHERE c.relkind = 'r' "
-    "AND (c.oid = to_regclass(%(table)s) OR c.oid IN (SELECT relid FROM pg_partition_tree(to_regclass(%(table)s))))"
+    "WITH RECURSIVE tree(oid) AS (SELECT to_regclass(%(table)s)::oid "
+    "UNION ALL SELECT i.inhrelid FROM pg_inherits i JOIN tree ON i.inhparent = tree.oid) "
+    "SELECT COALESCE(SUM(pg_table_size(c.oid)), 0)::bigint AS total "
+    "FROM tree JOIN pg_class c ON c.oid = tree.oid WHERE c.relkind = 'r'"
 )
 _CHILDREN_WITHOUT_THE_INDEX_SQL: Final = (
     "SELECT child.relname AS name, n.nspname AS schema, child.relkind = 'p' AS partitioned "
@@ -290,12 +292,16 @@ def _too_large_to_build(
         return False
     logger.warning(
         "Not building index %s on %s: the table takes %s on disk, more than the %s it builds by itself. Build it "
-        "off-peak by running each of these statements on its own, and the next index build finds it in place: %s",
+        "off-peak by running each of these statements on its own, for example with psql -f, and the next index build "
+        "finds it in place:\n%s",
         index.name,
         index.table,
         _gib(size),
         _gib(index.max_bytes),
-        "; ".join(_operator_build_statements(connection, schema, index, index.table, index.name, partitioned)),
+        "".join(
+            f"{statement};\n"
+            for statement in _operator_build_statements(connection, schema, index, index.table, index.name, partitioned)
+        ),
     )
     return True
 

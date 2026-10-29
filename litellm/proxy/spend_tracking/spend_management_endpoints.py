@@ -99,6 +99,10 @@ _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_bat
 _ERROR_CODE_SQL: Final = "metadata->'error_information'->>'error_code'"
 _INDEXED_ERROR_CODE_PREFIX_LENGTH: Final = 128
 _INDEXED_ERROR_CODE_PREFIX_SQL: Final = f"left({_ERROR_CODE_SQL}, {_INDEXED_ERROR_CODE_PREFIX_LENGTH})"
+_ERROR_CODE_INDEX_READY_SQL: Final = (
+    "SELECT EXISTS (SELECT 1 FROM pg_index "
+    "WHERE indexrelid = to_regclass('\"LiteLLM_SpendLogs_error_code_startTime_idx\"') AND indisvalid) AS ready"
+)
 _SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "mcp": f"call_type IN {_MCP_CALL_TYPES_SQL}",
@@ -229,7 +233,18 @@ class _SessionSpendRow(TypedDict):
     session_models: ReadOnly[Sequence[str]]
 
 
-def _error_code_condition(placeholder: str, error_code: str) -> str:
+class _IndexReadyRow(TypedDict):
+    ready: ReadOnly[bool]
+
+
+async def _error_code_index_is_ready(prisma_client: PrismaClient) -> bool:
+    rows: Final[Sequence[_IndexReadyRow]] = await _query_raw(prisma_client, _ERROR_CODE_INDEX_READY_SQL)
+    return bool(rows) and rows[0]["ready"] is True
+
+
+def _error_code_condition(placeholder: str, error_code: str, index_ready: bool) -> str:
+    if not index_ready:
+        return f"{_ERROR_CODE_SQL} = {placeholder}"
     if len(error_code) < _INDEXED_ERROR_CODE_PREFIX_LENGTH:
         return f"{_INDEXED_ERROR_CODE_PREFIX_SQL} = {placeholder}"
     return (
@@ -2947,7 +2962,9 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{key_alias}%")
             p += 1
         if error_code is not None:
-            sql_conditions.append(_error_code_condition(f"${p}", error_code))
+            sql_conditions.append(
+                _error_code_condition(f"${p}", error_code, await _error_code_index_is_ready(prisma_client))
+            )
             sql_params.append(error_code)
             p += 1
         if error_message is not None:
