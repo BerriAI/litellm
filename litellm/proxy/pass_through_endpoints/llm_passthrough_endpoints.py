@@ -3532,6 +3532,7 @@ async def deepgram_listen_websocket_route(
 
 
 _OPENAI_BETA_HEADER: Final = "openai-beta"
+_CLIENT_OPENAI_BETA_RESOURCES: Final = frozenset({"agents", "vaults", "chatkit"})
 
 
 class BaseOpenAIPassThroughHandler:
@@ -3595,20 +3596,15 @@ class BaseOpenAIPassThroughHandler:
     _base_openai_pass_through_handler = base_openai_pass_through_handler
 
     @staticmethod
-    def _openai_beta_route_default(endpoint: str, request: Request) -> str | None:
-        if is_openai_agents_api_path(endpoint):
-            return "agents=v1"
-        if openai_api_resource(endpoint) == "chatkit" or not RouteChecks.is_assistants_api_request(request):
-            return None
-        return "assistants=v2"
-
-    @staticmethod
     def _openai_beta(endpoint: str, request: Request, custom_llm_provider: litellm.LlmProviders) -> str | None:
-        if custom_llm_provider != litellm.LlmProviders.OPENAI:
-            return "assistants=v2" if RouteChecks.is_assistants_api_request(request) else None
-        return request.headers.get(_OPENAI_BETA_HEADER) or BaseOpenAIPassThroughHandler._openai_beta_route_default(
-            endpoint, request
-        )
+        if (
+            custom_llm_provider == litellm.LlmProviders.OPENAI
+            and openai_api_resource(endpoint) in _CLIENT_OPENAI_BETA_RESOURCES
+        ):
+            return request.headers.get(_OPENAI_BETA_HEADER) or (
+                "agents=v1" if is_openai_agents_api_path(endpoint) else None
+            )
+        return "assistants=v2" if RouteChecks.is_assistants_api_request(request) else None
 
     @staticmethod
     def _append_openai_beta_header(

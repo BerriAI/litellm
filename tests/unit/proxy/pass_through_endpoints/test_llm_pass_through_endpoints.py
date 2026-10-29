@@ -4069,6 +4069,30 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
         pytest.param("POST", "/openai/v1", "/assistants", {}, ["assistants=v2"], id="assistants_default"),
         pytest.param("POST", "/openai/v1", "/threads/thread_123/messages", {}, ["assistants=v2"], id="threads_default"),
         pytest.param("POST", "/openai/v1", "/chat/completions", {}, [], id="no_beta"),
+        pytest.param(
+            "POST",
+            "/openai_passthrough/v1",
+            "/responses",
+            {"OpenAI-Beta": "12345"},
+            [],
+            id="client_beta_dropped_off_beta_paths",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/chat/completions",
+            {"OpenAI-Beta": "assistants=v2"},
+            [],
+            id="client_beta_dropped_on_chat_completions",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/threads/thread_123/messages",
+            {"OpenAI-Beta": "assistants=v1"},
+            ["assistants=v2"],
+            id="assistants_client_beta_replaced",
+        ),
     ],
 )
 def test_openai_passthrough_sends_the_openai_beta_header_upstream(
