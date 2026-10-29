@@ -7,7 +7,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 import asyncio
 import ssl
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from openai.types.realtime import RealtimeError, RealtimeErrorEvent
 from pydantic import TypeAdapter
@@ -31,6 +31,7 @@ from ..common_utils import is_openai_backed_api_base
 from ..openai import OpenAIChatCompletion
 
 if TYPE_CHECKING:
+    from fastapi import WebSocket
     from websockets.asyncio.client import ClientConnection
 
 _SERVER_EVENT_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -166,7 +167,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: "WebSocket",
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
