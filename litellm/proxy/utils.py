@@ -162,6 +162,7 @@ from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.resource_ownership import is_proxy_admin
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -9532,6 +9533,16 @@ async def _agent_access_group_visible_models(
     )
 
 
+def access_groups_visible_to_caller(
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_id: str | None,
+) -> Mapping[str, Sequence[str]]:
+    if team_id is None and is_proxy_admin(user_api_key_dict):
+        return llm_router.get_model_access_groups()
+    return llm_router.get_model_access_groups_usable_by_team(team_id)
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -9574,13 +9585,13 @@ async def get_available_models_for_user(
         get_team_models,
     )
 
-    # Get proxy model list and access groups
-    if llm_router is None:
-        proxy_model_list = []
-        model_access_groups = {}
-    else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
+    effective_team_id: Final = team_id or user_api_key_dict.team_id
+    proxy_model_list: Final[Sequence[str]] = llm_router.get_model_names() if llm_router is not None else ()
+    model_access_groups: Final[Mapping[str, Sequence[str]]] = (
+        access_groups_visible_to_caller(llm_router, user_api_key_dict, effective_team_id)
+        if llm_router is not None
+        else MappingProxyType({})
+    )
 
     requested_team_object: Final = (
         await _get_validated_team_object(
@@ -9613,8 +9624,6 @@ async def get_available_models_for_user(
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
     )
-
-    effective_team_id: Final = team_id or user_api_key_dict.team_id
 
     access_group_models: Final = (
         await _get_access_group_models(

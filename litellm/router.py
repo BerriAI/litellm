@@ -14055,6 +14055,37 @@ class Router:
 
         return access_groups
 
+    def _model_name_usable_by_team(self, model_name: str, team_id: str | None) -> bool:
+        return any(
+            self.deployment_usable_by_team(deployment, team_id)
+            for deployment in self.deployments_named(model_name) or ()
+        )
+
+    def get_model_access_groups_usable_by_team(self, team_id: str | None) -> Mapping[str, Sequence[str]]:
+        return MappingProxyType(
+            {
+                group: usable_group_models
+                for group, model_names in self.get_model_access_groups().items()
+                if (
+                    usable_group_models := tuple(
+                        name for name in model_names if self._model_name_usable_by_team(name, team_id)
+                    )
+                )
+            }
+        )
+
+    def get_deployments_usable_by_team(self, model_name: str, team_id: str | None) -> tuple[DeploymentTypedDict, ...]:
+        return tuple(
+            deployment
+            for deployment in self.get_model_list(model_name=model_name, team_id=team_id) or ()
+            if self.deployment_usable_by_team(deployment, team_id)
+        )
+
+    def model_owned_by_other_teams(self, model_name: str, team_id: str | None) -> bool:
+        if self.get_deployments_usable_by_team(model_name, team_id):
+            return False
+        return bool(self.get_model_list(model_name=model_name))
+
     def is_model_access_group_for_wildcard_route(self, model_access_group: str) -> bool:
         """
         Return True if model access group is a wildcard route

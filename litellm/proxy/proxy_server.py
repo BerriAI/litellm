@@ -15899,17 +15899,18 @@ def _resolve_model_grant_to_deployment_ids(
     time (see `_check_model_access_helper`), so both expand to every non-team deployment.
     A grant entry naming an access group also grants that group's members, and naming a
     deployed model that shares the name grants the model itself, matching the union the
-    call-time check applies.
+    call-time check applies. Team-owned deployments are never direct access, whatever the
+    grant names: they reach the caller through team membership (`access_via_team_ids`).
     """
     if not models or SpecialModelNames.all_proxy_models.value in models:
         return tuple(llm_router.get_model_ids(exclude_team_models=True))
 
-    access_groups: Final = llm_router.get_model_access_groups()
+    access_groups: Final = llm_router.get_model_access_groups_usable_by_team(None)
     granted_model_names: Final = tuple(name for model in models for name in (model, *access_groups.get(model, ())))
     return tuple(
         model_id
         for name in granted_model_names
-        for deployment in (llm_router.get_model_list(model_name=name) or ())
+        for deployment in llm_router.get_deployments_usable_by_team(name, None)
         if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
     )
 
@@ -16646,7 +16647,9 @@ async def _gather_team_accessible_model_ids(
 ) -> set[str]:
     """Collect model IDs the team can use from router config and DB."""
     team_accessible_model_ids: Final[set[str]] = set()
-    access_groups: Final = llm_router.get_model_access_groups() if llm_router else {}
+    access_groups: Final[Mapping[str, Sequence[str]]] = (
+        llm_router.get_model_access_groups_usable_by_team(team_id) if llm_router else MappingProxyType({})
+    )
 
     if not team_object.models or SpecialModelNames.all_proxy_models.value in team_object.models:
         model_list: Final = llm_router.get_model_list() if llm_router else []

@@ -345,6 +345,9 @@ class _Router:
     ) -> dict[str, list[str]]:
         return {}
 
+    def model_owned_by_other_teams(self, model_name: str, team_id: str | None) -> bool:
+        return False
+
     async def acompletion(self, **kwargs: object) -> ModelResponse:
         self.calls.append(kwargs)
         return _classifier_response('{"verdicts": {"call_ls": {"flagged": false}}}')
