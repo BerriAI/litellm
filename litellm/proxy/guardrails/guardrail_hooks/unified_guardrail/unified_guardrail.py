@@ -11,6 +11,7 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime_checkable
 
 import anyio
@@ -140,6 +141,25 @@ def _chunk_choices(item: object) -> Sequence[object]:
 
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
     return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
+
+
+def _choices_owing_text(
+    buffered: Sequence[object],
+    emitted_text_per_choice: Mapping[int, str],
+    held_chars_per_choice: Mapping[int, int],
+) -> frozenset[int]:
+    """Choices whose guardrailed text has not reached the client yet.
+
+    A choice that buffered text but has emitted none of it owes text even when no
+    processing round has run, so ``held_chars_per_choice`` has no entry for it.
+    """
+    buffered_text: Final = frozenset(
+        getattr(choice, "index", 0) or 0
+        for choice in chain.from_iterable(_chunk_choices(chunk) for chunk in buffered)
+        if getattr(getattr(choice, "delta", None), "content", None)
+    )
+    unstarted: Final = frozenset(idx for idx in buffered_text if not emitted_text_per_choice.get(idx))
+    return unstarted | _held_choices(held_chars_per_choice)
 
 
 def _recorded_guardrail_information(request_data: _RequestData) -> tuple[StandardLoggingGuardrailInformation, ...]:
@@ -831,7 +851,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                     self._tool_call_passthrough_chunk(
                         buffered_item,
                         finish_reason_per_choice=finish_reason_per_choice,
-                        held_choices=_held_choices(held_chars_per_choice),
+                        held_choices=_choices_owing_text(
+                            inspected_responses, emitted_text_per_choice, held_chars_per_choice
+                        ),
                     )
                     for buffered_item in inspected_responses
                     if self._chunk_has_tool_calls(buffered_item)

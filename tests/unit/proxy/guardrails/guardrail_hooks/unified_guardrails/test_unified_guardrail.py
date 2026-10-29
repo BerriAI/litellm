@@ -1278,6 +1278,28 @@ class TestStreamingTransform:
         assert all(chunk.provider_specific_fields == {"service_tier": "scale"} for chunk in replayed)
 
     @pytest.mark.asyncio
+    async def test_finish_on_a_tool_chunk_never_precedes_the_rewritten_text(self) -> None:
+        """A client that stops at finish_reason must already have the guardrailed text."""
+        def tool(index: int, finish_reason: str | None = None) -> ModelResponseStream:
+            return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                {"index": index, "id": f"call_{index}", "type": "function",
+                 "function": {"name": "contact", "arguments": '{"contact":"ok"}'}},
+            ]), finish_reason=finish_reason)])
+
+        chunks: Final = (tool(0), _stream_chunk("hello SECRET"), tool(1, finish_reason="tool_calls"))
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(), chunks)
+        delivered: Final = tuple(
+            (bool(choice.delta.content), choice.finish_reason is not None)
+            for chunk in out
+            for choice in chunk.choices
+        )
+        carries_text: Final = tuple(position for position, (text, _) in enumerate(delivered) if text)
+        finishes: Final = tuple(position for position, (_, finish) in enumerate(delivered) if finish)
+        assert carries_text and finishes
+        assert max(carries_text) <= min(finishes)
+        assert "".join(_delta_text(chunk) for chunk in out) == "checked:hello MASKED"
+
+    @pytest.mark.asyncio
     async def test_a_mixed_text_and_tool_call_chunk_never_finishes_ahead_of_its_text(self):
         """A client that stops at finish_reason must not lose rewritten text held behind it."""
         mixed: Final = ModelResponseStream(
