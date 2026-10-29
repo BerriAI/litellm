@@ -6292,3 +6292,53 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+def test_async_gemini_streaming_passes_request_timeout_to_http_client():
+    from unittest.mock import AsyncMock
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import make_call
+
+    response = MagicMock(status_code=200, headers={})
+    response.aiter_lines.return_value = iter(())
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    async def run_call():
+        await make_call(
+            client=client,
+            gemini_client=None,
+            api_base="https://example.com",
+            headers={},
+            data="{}",
+            model="gemini-pro",
+            messages=[],
+            logging_obj=MagicMock(),
+            timeout=3.0,
+        )
+
+    asyncio.run(run_call())
+    assert client.post.await_args.kwargs["timeout"] == 3.0
+
+
+def test_sync_gemini_streaming_passes_request_timeout_to_http_client():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import make_sync_call
+
+    response = MagicMock(status_code=200, headers={})
+    response.iter_lines.return_value = iter(())
+    client = MagicMock()
+    client.post.return_value = response
+
+    make_sync_call(
+        client=client,
+        gemini_client=None,
+        api_base="https://example.com",
+        headers={},
+        data="{}",
+        model="gemini-pro",
+        messages=[],
+        logging_obj=MagicMock(),
+        timeout=3.0,
+    )
+
+    assert client.post.call_args.kwargs["timeout"] == 3.0
