@@ -8501,7 +8501,7 @@ class ProxyConfig:
         for key in sorted(unmanaged - self._warned_unmanaged_keys):
             verbose_proxy_logger.warning(
                 "general_settings.%s is stored in the database, but no settings API manages it, so the stored value "
-                "is ignored. Set it in the config file to use it.",
+                "is ignored. Set it in the config file to use it, or remove it with POST /config/field/delete.",
                 key,
             )
         self._warned_unmanaged_keys = unmanaged
@@ -20646,19 +20646,22 @@ async def delete_config_general_settings(
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _reset_general_settings_ui_litellm_field(data.field_name, user_api_key_dict)
 
-    if data.field_name not in ConfigGeneralSettings.model_fields:
+    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
+        where={"param_name": "general_settings"}
+    )
+    stored_keys: Final[frozenset[str]] = (
+        frozenset(dict(db_general_settings.param_value))
+        if db_general_settings is not None and db_general_settings.param_value is not None
+        else frozenset()
+    )
+
+    if data.field_name not in ConfigGeneralSettings.model_fields and data.field_name not in stored_keys:
         raise HTTPException(
             status_code=400,
             detail={"error": f"Invalid field={data.field_name} passed in."},
         )
 
     proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
-
-    ## get general settings from db
-    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-        where={"param_name": "general_settings"}
-    )
-    ### pop the value
 
     if db_general_settings is None or db_general_settings.param_value is None:
         raise HTTPException(
