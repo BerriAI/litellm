@@ -1824,6 +1824,21 @@ def test_responses_ws_failure_frame_uses_the_http_status_for_the_same_failure(
     assert frame["error"]["message"] == handle_exception_on_proxy(failure).message
 
 
+def test_responses_ws_failure_frame_shows_only_the_refusal_for_a_model_that_refuses_the_endpoint():
+    from litellm.exceptions import EndpointNotSupportedByModelError
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+
+    refusal: Final = "/v1/responses is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
+    failure: Final = EndpointNotSupportedByModelError(
+        message=f"{refusal}\n\nLiteLLM: model group 'embed-only' failed with the error above", model="embed-only"
+    )
+
+    assert json.loads(_responses_ws_failure_frame(failure)) == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": refusal},
+    }
+
+
 class TestWSSessionCostTracking:
     @pytest.mark.asyncio
     async def test_router_budget_limiter_skips_arealtime_call_type(self):
