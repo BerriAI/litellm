@@ -2165,7 +2165,10 @@ if MCP_AVAILABLE:
         """Probe with the headers a real tool call sends: the caller's prepared headers with the server's
         resolved static headers on top, so a static ``Authorization`` wins here too. When those cannot be
         resolved yet, such as a per-user variable the caller has not set, the probe fails open like a network
-        error and leaves the error to the call."""
+        error and leaves the error to the call. A legacy delegate probe carries only the caller's token, as in
+        v1.102: it decides whether that token is admitted, so no configured header may stand in for it."""
+        if is_legacy_upstream_delegate(server):
+            return await _probe_upstream_auth(server.url or "", auth_header)
         try:
             static_headers: Final = await global_mcp_server_manager.resolved_static_headers(server, user_api_key_auth)
         except Exception as exc:  # noqa: BLE001  # the probe fails open on anything it cannot reproduce

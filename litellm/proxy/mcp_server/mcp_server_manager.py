@@ -1566,11 +1566,22 @@ async def _materialize_auth_headers(auth: httpx2.Auth | None) -> dict[str, str] 
     return {header_name: header_value} if header_value else None
 
 
+def _has_static_authorization(server: MCPServer) -> bool:
+    """True when the server's ``static_headers`` set ``Authorization`` (any casing)."""
+    return any(isinstance(name, str) and name.lower() == "authorization" for name in server.static_headers or ())
+
+
 def is_legacy_upstream_delegate(server: MCPServer) -> bool:
     """True for an interactive ``auth_type=oauth2`` server with ``delegate_auth_to_upstream=true``, whose
     caller ``Authorization`` is the upstream token. The flow is resolved, not read from the column, so an
     unstamped M2M-shaped row stays excluded: its stored client credentials drive egress, and admitting it
-    anonymously would let any caller act as LiteLLM's service account."""
+    anonymously would let any caller act as LiteLLM's service account. A static ``Authorization`` excludes
+    it too: the operator's credential is sent upstream with or instead of the caller's, so the caller's
+    token proves nothing and admitting it would let any caller ride the operator's credential."""
+    return _is_interactive_delegate_config(server) and not _has_static_authorization(server)
+
+
+def _is_interactive_delegate_config(server: MCPServer) -> bool:
     return (
         server.auth_type == MCPAuth.oauth2
         and server.delegate_auth_to_upstream is True
@@ -1749,6 +1760,15 @@ def _warn_overlapping_tool_policies(server: MCPServer) -> None:
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
     """Point legacy delegated OAuth configurations at the client-forwarded replacements."""
     if not is_legacy_upstream_delegate(server):
+        if _is_interactive_delegate_config(server):
+            verbose_logger.warning(
+                "MCP server %r (id=%s, source=%s) sets delegate_auth_to_upstream=true and a static "
+                "Authorization header, so delegate auth is disabled for it and callers need a LiteLLM key. "
+                "Remove one of the two.",
+                get_server_prefix(server),
+                server.server_id,
+                source,
+            )
         return
     label: Final = get_server_prefix(server)
     verbose_logger.warning(
