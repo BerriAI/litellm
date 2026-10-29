@@ -9,6 +9,7 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
@@ -241,6 +242,18 @@ def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
         function=ChatCompletionToolCallFunctionChunk(
             name=call.get("name", ""), arguments=json.dumps(call.get("args", {}))
         ),
+    )
+
+
+def _system_part_text(part: object) -> str | None:
+    fields: Final = as_str_mapping(part)
+    text: Final = fields.get("text") if fields is not None else None
+    return text if isinstance(text, str) else None
+
+
+def _system_texts(parts: object) -> tuple[str, ...]:
+    return tuple(
+        text for text in map(_system_part_text, parts if isinstance(parts, Sequence) else ()) if text is not None
     )
 
 
@@ -627,8 +640,7 @@ class GoogleGenAIAdapter:
         system_instruction: _GenAISystemInstruction | None = None,
     ) -> list[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
-        system_parts: Final = system_instruction.get("parts", ()) if system_instruction else ()
-        system_texts: Final = tuple(part["text"] for part in system_parts if "text" in part)
+        system_texts: Final = _system_texts(system_instruction.get("parts") if system_instruction else None)
         system_messages: Final = (
             (ChatCompletionSystemMessage(role="system", content="\n".join(system_texts)),) if system_texts else ()
         )

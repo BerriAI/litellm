@@ -39,6 +39,7 @@ from litellm.rust_bridge.token_counter import (
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
+_NON_GEMINI_INPUT_FIELDS: Final = ("messages", "prompt", "input", "query", "documents")
 _GEMINI_SYSTEM_INSTRUCTION_FIELDS: Final = ("systemInstruction", "system_instruction")
 _GEMINI_CACHED_CONTENT_FIELDS: Final = ("cachedContent", "cached_content")
 _GEMINI_FUNCTION_RESPONSE_FIELDS: Final = ("functionResponse", "function_response")
@@ -169,7 +170,7 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 )
             except ValueError:
                 return _count_text_tokens(model=model, text=request_body.get("messages"))
-        if "contents" in request_body:
+        if is_gemini_contents_body(request_body):
             return _count_gemini_input_tokens(request_body=request_body, model=model)
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
@@ -187,6 +188,10 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
+
+
+def is_gemini_contents_body(request_body: Mapping[str, object]) -> bool:
+    return "contents" in request_body and not any(field in request_body for field in _NON_GEMINI_INPUT_FIELDS)
 
 
 def _count_gemini_input_tokens(request_body: Mapping[str, object], model: str) -> int | None:

@@ -8282,10 +8282,10 @@ class TestAzureSpeechRawBodyThroughRealAuth:
 class _CountingCustomAuth:
     def __init__(self, only_accepts: str | None = None) -> None:
         self.only_accepts: Final = only_accepts
-        self.api_keys_seen: list[str] = []
+        self.api_keys_seen: tuple[str, ...] = ()
 
     async def __call__(self, request: Request, api_key: str) -> UserAPIKeyAuth:
-        self.api_keys_seen.append(api_key)
+        self.api_keys_seen = (*self.api_keys_seen, api_key)
         if self.only_accepts is not None and api_key != self.only_accepts:
             raise ValueError("unknown caller")
         return UserAPIKeyAuth(user_id=f"custom-auth-caller-{len(self.api_keys_seen)}")
@@ -8294,12 +8294,12 @@ class _CountingCustomAuth:
 class _ServedCallerRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.served_user_ids: list[str | None] = []
+        self.served_user_ids: tuple[str | None, ...] = ()
 
     async def async_pre_call_hook(
         self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
     ) -> dict:
-        self.served_user_ids.append(user_api_key_dict.user_id)
+        self.served_user_ids = (*self.served_user_ids, user_api_key_dict.user_id)
         return data
 
 
@@ -8378,8 +8378,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
             )
 
         assert response.status_code == 200, response.text
-        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
-        assert recorder.served_user_ids == ["custom-auth-caller-1"]
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
+        assert recorder.served_user_ids == ("custom-auth-caller-1",)
         assert vertex.call_count == 1
 
     def test_discovery_search_runs_custom_auth_once_and_is_served_as_its_caller(
@@ -8400,8 +8400,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
             )
 
         assert (response.status_code, response.json()) == (200, {"results": []})
-        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
-        assert recorder.served_user_ids == ["custom-auth-caller-1"]
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
+        assert recorder.served_user_ids == ("custom-auth-caller-1",)
         assert discovery.call_count == 1
 
     @pytest.mark.parametrize("scheme", ["bearer", "Basic"])
@@ -8445,8 +8445,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
             )
 
         assert response.status_code == 200, response.text
-        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
-        assert recorder.served_user_ids == ["custom-auth-caller-1"]
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
+        assert recorder.served_user_ids == ("custom-auth-caller-1",)
         assert google.call_count == 1
 
     def test_x_litellm_api_key_authenticates_once_and_is_never_forwarded_without_a_vertex_credential(
@@ -8465,7 +8465,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
             )
 
         assert response.status_code == 401, response.text
-        assert custom_auth.api_keys_seen == [self.VIRTUAL_KEY]
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
         assert not google.called
 
     @pytest.mark.parametrize("header", ["x-goog-api-key", "x-api-key", "API-Key", "Ocp-Apim-Subscription-Key"])
@@ -8482,7 +8482,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
 
         assert response.status_code == 401, response.text
         assert self.VIRTUAL_KEY not in custom_auth.api_keys_seen
-        assert recorder.served_user_ids == []
+        assert recorder.served_user_ids == ()
         assert not google.called
 
 

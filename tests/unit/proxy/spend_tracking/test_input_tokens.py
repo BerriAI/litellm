@@ -110,3 +110,11 @@ def test_a_compaction_item_counts_only_its_summary(model: str) -> None:
     assert count_input_tokens_for_model(request_body=padded_body, model=model) == count_input_tokens_for_model(
         request_body=plain_body, model=model
     )
+
+
+@pytest.mark.parametrize("input_field", ("prompt", "input", "query"))
+def test_a_stray_contents_field_never_replaces_the_request_input_count(input_field: str) -> None:
+    body: Final = {"model": CL100K_MODEL, input_field: "count every one of these words " * 200}
+    count: Final = count_input_tokens_for_model(request_body=body, model=CL100K_MODEL)
+    assert count is not None and count > 1000
+    assert count_input_tokens_for_model(request_body={**body, "contents": []}, model=CL100K_MODEL) == count

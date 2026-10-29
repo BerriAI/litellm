@@ -41,7 +41,11 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
+from litellm.proxy.spend_tracking.input_tokens import (
+    count_input_tokens,
+    count_input_tokens_for_model,
+    is_gemini_contents_body,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -1661,6 +1665,8 @@ def _nested_field(request_body: Mapping[str, object], config_field: str, field: 
 
 
 def _gemini_candidate_counts(request_body: Mapping[str, object]) -> tuple[object, ...]:
+    if not is_gemini_contents_body(request_body):
+        return ()
     return tuple(
         _nested_field(request_body, config_field, field)
         for config_field, field in product(_GEMINI_CONFIG_FIELDS, ("candidateCount", "candidate_count"))
@@ -1668,12 +1674,17 @@ def _gemini_candidate_counts(request_body: Mapping[str, object]) -> tuple[object
 
 
 def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+    gemini_output_cap: Final = (
+        _nested_field(request_body, "generationConfig", "maxOutputTokens")
+        if is_gemini_contents_body(request_body)
+        else None
+    )
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         _nested_field(request_body, "inferenceConfig", "maxTokens"),
-        _nested_field(request_body, "generationConfig", "maxOutputTokens"),
+        gemini_output_cap,
     )
-    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
+    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None and tokens > 0), None)
 
 
 def _get_output_multiplier(request_body: Mapping[str, object]) -> int:

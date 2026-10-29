@@ -200,6 +200,27 @@ def test_every_system_instruction_text_part_reaches_the_system_message(
     assert request["messages"][0] == {"role": "system", "content": expected_content}
 
 
+@pytest.mark.parametrize(
+    ("system_parts", "expected_messages"),
+    [
+        (
+            [{"text": "Answer tersely"}, {"text": None}, {"text": 3}, "text", {"text": "Use British spelling"}],
+            [{"role": "system", "content": "Answer tersely\nUse British spelling"}, {"role": "user", "content": "hi"}],
+        ),
+        (None, [{"role": "user", "content": "hi"}]),
+    ],
+)
+def test_a_system_instruction_part_without_string_text_is_skipped(
+    system_parts: object, expected_messages: list[dict[str, str]]
+) -> None:
+    request: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gemini/gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        systemInstruction={"parts": system_parts},
+    )
+    assert request["messages"] == expected_messages
+
+
 def test_adapter_import():
     """Test that the adapter can be imported successfully"""
     from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler

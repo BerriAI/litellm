@@ -292,6 +292,48 @@ def test_gemini_tool_turns_and_thought_signatures_count_as_prompt() -> None:
     assert text_hold < tool_turns_hold < context_window_hold
 
 
+GEMINI_CHAT_BODY: Final = {
+    "model": "gemini-3.8-flash",
+    "messages": [{"role": "user", "content": GEMINI_PROMPT}],
+}
+
+
+def _chat_hold(body: dict[str, object]) -> float | None:
+    return estimate_request_max_cost(
+        request_body=body,
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={},
+    )
+
+
+@pytest.mark.parametrize(
+    "gemini_output_fields",
+    (
+        {"generationConfig": {"maxOutputTokens": 5}},
+        {"generationConfig": {"candidateCount": 3}},
+        {"generation_config": {"candidate_count": 3}},
+        {"contents": [], "generationConfig": {"maxOutputTokens": 5}},
+    ),
+)
+def test_gemini_output_fields_on_a_chat_body_leave_its_hold_alone(gemini_output_fields: dict[str, object]) -> None:
+    plain_hold: Final = _chat_hold(GEMINI_CHAT_BODY)
+    assert plain_hold is not None
+    assert _chat_hold({**GEMINI_CHAT_BODY, **gemini_output_fields}) == plain_hold
+
+
+@pytest.mark.parametrize("cap", (0, -1000))
+def test_an_output_cap_of_zero_or_below_holds_the_default_output(cap: int) -> None:
+    uncapped_gemini_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
+    uncapped_chat_hold: Final = _chat_hold(GEMINI_CHAT_BODY)
+    assert uncapped_gemini_hold is not None and uncapped_chat_hold is not None
+    assert (
+        _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"maxOutputTokens": cap}})
+        == uncapped_gemini_hold
+    )
+    assert _chat_hold({**GEMINI_CHAT_BODY, "max_tokens": cap}) == uncapped_chat_hold
+
+
 def _tiered_deployment(input_cost_per_token: float) -> Deployment:
     return Deployment(
         model_name="tiered-group",
