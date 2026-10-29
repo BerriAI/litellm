@@ -41,6 +41,11 @@ from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, up
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
+from litellm.litellm_core_utils.agentic_loop_refusal import (
+    finalize_refused_responses_turn,
+    is_refused_item,
+    refused_tool_call_identifiers,
+)
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -5865,26 +5870,6 @@ class BaseLLMHTTPHandler:
             return str(tools)
 
     @staticmethod
-    def _refused_agentic_tool_identifiers(tool_calls: object) -> tuple[frozenset[str], frozenset[str]]:
-        """
-        Collect the ids and names of the tool calls a safety rail just refused.
-
-        Callbacks hand back either a bare list of tool calls or a dict wrapping
-        that list under ``tool_calls``, and both the anthropic and responses
-        shapes carry an ``id`` (or ``call_id``) plus a ``name``.
-        """
-        calls: Final = tool_calls.get("tool_calls") if isinstance(tool_calls, dict) else tool_calls
-        if not isinstance(calls, list):
-            return frozenset(), frozenset()
-        dict_calls: Final = (call for call in calls if isinstance(call, dict))
-        fields: Final = tuple((call.get("id"), call.get("call_id"), call.get("name")) for call in dict_calls)
-        ids: Final = frozenset(
-            value for call_id, caller_id, _ in fields for value in (call_id, caller_id) if isinstance(value, str)
-        )
-        names: Final = frozenset(name for _, _, name in fields if isinstance(name, str))
-        return ids, names
-
-    @staticmethod
     def _is_refused_tool_use_block(block: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> bool:
         """
         Whether this response block belongs to a tool call the rail refused.
@@ -5894,21 +5879,12 @@ class BaseLLMHTTPHandler:
         share a name with a refused one. The name is only consulted for tool call
         shapes that arrive without an id.
         """
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
-            return False
-        block_id: Final = block.get("id")
-        if isinstance(block_id, str) and refused_ids:
-            return block_id in refused_ids
-        return block.get("name") in refused_names
+        return is_refused_item(block, "tool_use", "id", refused_ids, refused_names)
 
     @staticmethod
     def _can_replace_turn_with_terminal_response(stream: bool, api_surface: str) -> bool:
         """
         Whether a refused rerun can still be answered with a finalized turn.
-
-        Only the anthropic messages surface can. The responses surface carries a
-        pydantic model the finalizer does not rewrite, so it keeps raising, which
-        is what every surface did before this path learned to end the turn.
 
         The messages and responses call sites pass ``stream=False``, because
         interception converts an intercepted stream to non-streaming before the
@@ -5918,7 +5894,7 @@ class BaseLLMHTTPHandler:
         finalized turn would reach the client as a second message rather than
         as a replacement.
         """
-        return not stream and api_surface == "anthropic_messages"
+        return not stream and api_surface in ("anthropic_messages", "responses")
 
     @staticmethod
     def _finalize_refused_agentic_response(response: object, tool_calls: object) -> object:
@@ -5935,10 +5911,12 @@ class BaseLLMHTTPHandler:
         one is still in the response the stop reason stays ``tool_use`` so the
         client knows to answer it.
         """
+        if isinstance(response, ResponsesAPIResponse):
+            return finalize_refused_responses_turn(response, tool_calls)
         if not isinstance(response, dict):
             return response
 
-        refused_ids, refused_names = BaseLLMHTTPHandler._refused_agentic_tool_identifiers(tool_calls)
+        refused_ids, refused_names = refused_tool_call_identifiers(tool_calls)
         finalized: Final = dict(response)
         content: Final = finalized.get("content")
         if isinstance(content, list):

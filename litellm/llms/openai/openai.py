@@ -646,9 +646,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         # Get custom_llm_provider from litellm_params
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider", "openai")
 
-        for callback in callbacks:
-            if not isinstance(callback, CustomLogger):
-                continue
+        custom_loggers: Final = tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
+        for callback in custom_loggers:
             try:
                 should_run, tool_calls = await callback.async_should_run_chat_completion_agentic_loop(
                     response=response,

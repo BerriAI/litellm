@@ -31,6 +31,7 @@ from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -99,6 +100,29 @@ def _tool_use_names(response: dict) -> list[str]:
     return [block.get("name") for block in response["content"] if block.get("type") == "tool_use"]
 
 
+def _responses_turn(*function_calls: tuple[str, str]) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        status="completed",
+        model="claude-sonnet-4-5",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Let me check one more source.", "annotations": []}],
+            },
+            *(
+                {"type": "function_call", "id": f"fc_{call_id}", "call_id": call_id, "name": name, "arguments": "{}"}
+                for call_id, name in function_calls
+            ),
+        ],
+    )
+
+
 class _InterceptingCallback(CustomLogger):
     """
     Stands in for the websearch interceptor: asks for another loop whenever the
@@ -150,6 +174,18 @@ class _InterceptingCallback(CustomLogger):
         if isinstance(response, dict):
             response["content"] = [*_native_search_blocks(index=2), *response.get("content", [])]
         return response
+
+
+class _ResponsesInterceptingCallback(_InterceptingCallback):
+    async def async_should_run_agentic_loop(
+        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+    ):
+        calls = [
+            {"id": item.call_id, "call_id": item.call_id, "name": item.name}
+            for item in response.output
+            if item.type == "function_call" and item.name == INTERNAL_TOOL_NAME
+        ]
+        return bool(calls), {"tool_calls": calls}
 
 
 def _logging_obj(callback: CustomLogger, converted_stream: bool = False) -> MagicMock:
@@ -347,6 +383,23 @@ class TestCappedLoopReturnsTerminalResponse:
         assert _tool_use_names(result) == []
         assert result["stop_reason"] == "end_turn"
 
+    def test_a_name_only_refusal_keeps_the_native_search_blocks_sharing_that_name(self):
+        """
+        The gate also picks up a bare web_search tool_use, and the native
+        server_tool_use blocks already in the turn carry that same name. Only the
+        tool_use goes, so each web_search_tool_result keeps the block it answers.
+        """
+        response = _response_asking_for_another_search()
+        response["content"][-1] = {"type": "tool_use", "name": "web_search", "input": {}}
+
+        result = BaseLLMHTTPHandler._finalize_refused_agentic_response(
+            response=response,
+            tool_calls={"tool_calls": [{"name": "web_search", "input": {}}]},
+        )
+
+        assert _block_types(result) == ["server_tool_use", "web_search_tool_result", "text"]
+        assert result["stop_reason"] == "end_turn"
+
     @pytest.mark.asyncio
     async def test_streaming_caller_is_left_to_its_existing_behavior(self):
         """
@@ -365,19 +418,39 @@ class TestCappedLoopReturnsTerminalResponse:
         assert self.callback.plan_calls == 0
 
     @pytest.mark.asyncio
-    async def test_responses_surface_is_left_to_its_existing_behavior(self):
+    async def test_responses_surface_drops_the_refused_function_call_and_keeps_the_answer(self):
+        response = _responses_turn(("call_search", INTERNAL_TOOL_NAME), ("call_client", "lookup"))
+        callback = _ResponsesInterceptingCallback()
+
+        result = await _run_hooks(
+            self.handler,
+            callback,
+            kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
+            response=response,
+            api_surface="responses",
+        )
+
+        assert isinstance(result, ResponsesAPIResponse)
+        assert [(item.type, getattr(item, "name", None)) for item in result.output] == [
+            ("message", None),
+            ("function_call", "lookup"),
+        ]
+        assert callback.plan_calls == 0
+
+    def test_responses_refusal_by_call_id_alone_keeps_the_calls_it_did_not_list(self):
         """
-        The responses surface carries a pydantic model rather than the anthropic
-        dict this finalizer rewrites, so it keeps raising instead of being handed
-        a response that was never actually finalized.
+        The code interpreter gate hands over call_id and name with no id, so the
+        call_id is what scopes the refusal there, the same way the id does on
+        /v1/messages.
         """
-        with pytest.raises(AgenticLoopSafetyError):
-            await _run_hooks(
-                self.handler,
-                self.callback,
-                kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
-                api_surface="responses",
-            )
+        response = _responses_turn(("call_search", INTERNAL_TOOL_NAME), ("call_unlisted", INTERNAL_TOOL_NAME))
+
+        result = BaseLLMHTTPHandler._finalize_refused_agentic_response(
+            response=response,
+            tool_calls={"tool_calls": [{"call_id": "call_search", "name": INTERNAL_TOOL_NAME}]},
+        )
+
+        assert [getattr(item, "call_id", None) for item in result.output] == [None, "call_unlisted"]
 
     @pytest.mark.asyncio
     async def test_non_dict_response_is_returned_untouched(self):

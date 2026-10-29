@@ -21,6 +21,7 @@ they stay out of the body even without it.
 """
 
 import datetime
+import json
 from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,6 +44,7 @@ from litellm.types.integrations.custom_logger import (
     WEBSEARCH_INTERCEPTION_PREFIX,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    AgenticLoopSafetyError,
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -398,72 +400,97 @@ async def test_dispatcher_followup_does_not_repeat_a_request_param_found_in_requ
     assert call_kwargs["api_base"] == "https://a"
 
 
+_REFUSED_GATE_TOOL_CALLS: Final = {"tool_calls": [{"id": "call_abc", "name": "litellm_code_execution"}]}
+_REFUSING_RAILS: Final = (
+    {"_agentic_loop_depth": 3, "max_agentic_loops": 3},
+    {
+        "_agentic_loop_depth": 0,
+        "max_agentic_loops": 3,
+        "_agentic_loop_fingerprints": [json.dumps(_REFUSED_GATE_TOOL_CALLS, sort_keys=True, default=str)],
+    },
+)
+
+
+def _tool_call(call_id: str, name: str) -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(id=call_id, type="function", function=Function(name=name, arguments="{}"))
+
+
+async def _run_refused_rerun(
+    response: ModelResponse,
+    rail_kwargs: Dict[str, object],
+    stream: bool = False,
+    gate_tool_calls: Optional[Dict[str, object]] = _REFUSED_GATE_TOOL_CALLS,
+) -> Any:
+    litellm.callbacks = [_GateOnlyLogger(plan=AgenticLoopPlan(run_agentic_loop=True), tool_calls=gate_tool_calls)]
+    acompletion_mock = AsyncMock()
+    with patch.object(litellm, "acompletion", acompletion_mock):
+        try:
+            return await maybe_run_chat_completion_agentic_loop(
+                response=response,
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={},
+                kwargs=dict(rail_kwargs),
+                logging_obj=_LoggingStub(),
+                custom_llm_provider="openai",
+                stream=stream,
+            )
+        finally:
+            acompletion_mock.assert_not_awaited()
+
+
 @pytest.mark.asyncio
-async def test_dispatcher_raises_when_depth_reaches_max_agentic_loops(
-    restore_callbacks,
+@pytest.mark.parametrize("rail_kwargs", _REFUSING_RAILS, ids=["max_agentic_loops", "repeated_fingerprint"])
+async def test_refused_rerun_ends_the_turn_without_the_internal_tool_call(
+    restore_callbacks, rail_kwargs: Dict[str, object]
 ):
-    """depth >= max_agentic_loops -> ValueError mentioning max_agentic_loops,
-    before any follow-up call is attempted."""
-    logger = _GateOnlyLogger(
-        plan=AgenticLoopPlan(run_agentic_loop=True),
-        tool_calls={"tool_calls": [{"id": "call_abc"}]},
-    )
-    litellm.callbacks = [logger]
+    result = await _run_refused_rerun(_tool_call_model_response(), rail_kwargs)
 
-    acompletion_mock = AsyncMock()
-    with patch.object(litellm, "acompletion", acompletion_mock):
-        with pytest.raises(ValueError, match="max_agentic_loops"):
-            await maybe_run_chat_completion_agentic_loop(
-                response=_tool_call_model_response(),
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "hi"}],
-                optional_params={},
-                kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
-                logging_obj=_LoggingStub(),
-                custom_llm_provider="openai",
-                stream=False,
-            )
-
-    acompletion_mock.assert_not_awaited()
+    assert isinstance(result, ModelResponse)
+    assert not result.choices[0].message.tool_calls
+    assert result.choices[0].finish_reason == "stop"
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_raises_on_repeated_tool_call_fingerprint(restore_callbacks):
-    """A tool_calls fingerprint already present in _agentic_loop_fingerprints ->
-    ValueError about the repeated fingerprint (cycle guard), with no follow-up
-    call."""
-    import json
-
-    # The dispatcher fingerprints the whole value the gate returns as its second
-    # tuple element, so the seeded fingerprint must mirror that dict exactly.
-    gate_tool_calls = {"tool_calls": [{"id": "call_abc", "name": "litellm_code_execution"}]}
-    fingerprint = json.dumps(gate_tool_calls, sort_keys=True, default=str)
-
-    logger = _GateOnlyLogger(
-        plan=AgenticLoopPlan(run_agentic_loop=True),
-        tool_calls=gate_tool_calls,
-    )
-    litellm.callbacks = [logger]
-
-    acompletion_mock = AsyncMock()
-    with patch.object(litellm, "acompletion", acompletion_mock):
-        with pytest.raises(ValueError, match="fingerprint"):
-            await maybe_run_chat_completion_agentic_loop(
-                response=_tool_call_model_response(),
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "hi"}],
-                optional_params={},
-                kwargs={
-                    "_agentic_loop_depth": 0,
-                    "max_agentic_loops": 3,
-                    "_agentic_loop_fingerprints": [fingerprint],
-                },
-                logging_obj=_LoggingStub(),
-                custom_llm_provider="openai",
-                stream=False,
+async def test_refused_rerun_keeps_the_clients_own_tool_call(restore_callbacks):
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content="Running it.",
+                    tool_calls=[_tool_call("call_abc", "litellm_code_execution"), _tool_call("call_client", "lookup")],
+                ),
             )
+        ]
+    )
 
-    acompletion_mock.assert_not_awaited()
+    result = await _run_refused_rerun(response, _REFUSING_RAILS[0])
+
+    assert [call.id for call in result.choices[0].message.tool_calls] == ["call_client"]
+    assert result.choices[0].finish_reason == "tool_calls"
+    assert result.choices[0].message.content == "Running it."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response, gate_tool_calls",
+    [(_plain_model_response(), _REFUSED_GATE_TOOL_CALLS), (_tool_call_model_response(), None)],
+    ids=["turn_has_no_tool_calls", "gate_names_no_tool_call"],
+)
+async def test_refused_rerun_returns_a_turn_it_cannot_match_unchanged(
+    restore_callbacks, response: ModelResponse, gate_tool_calls: Optional[Dict[str, object]]
+):
+    result = await _run_refused_rerun(response, _REFUSING_RAILS[0], gate_tool_calls=gate_tool_calls)
+
+    assert result.choices[0].model_dump() == response.choices[0].model_dump()
+
+
+@pytest.mark.asyncio
+async def test_refused_rerun_on_a_live_stream_still_raises(restore_callbacks):
+    with pytest.raises(AgenticLoopSafetyError, match="max_agentic_loops"):
+        await _run_refused_rerun(_tool_call_model_response(), _REFUSING_RAILS[0], stream=True)
 
 
 @pytest.mark.asyncio

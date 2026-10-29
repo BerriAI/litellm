@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
+from litellm.litellm_core_utils.agentic_loop_refusal import finalize_refused_chat_turn
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -22,6 +23,7 @@ from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    AgenticLoopSafetyError,
     converted_stream_requested,
     is_interception_internal_key,
     stashed_stream_options,
@@ -101,9 +103,9 @@ def _check_agentic_loop_safety(
 ) -> str:
     fingerprint: Final = _fingerprint_tools(tool_calls)
     if fingerprint in fingerprints:
-        raise ValueError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
+        raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
     if depth >= max_loops:
-        raise ValueError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
+        raise AgenticLoopSafetyError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
     return fingerprint
 
 
@@ -130,6 +132,26 @@ def _converted_stream_replay(
         logging_obj=logging_obj,
         stream_options=_stashed_stream_options(kwargs),
     )
+
+
+def _end_refused_turn(
+    finalized: ModelResponse,
+    *,
+    kwargs: Mapping[str, object],
+    depth: int,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: object,
+) -> ModelResponse | CustomStreamWrapper:
+    replay: Final = _converted_stream_replay(
+        finalized,
+        kwargs=kwargs,
+        depth=depth,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
+    return finalized if replay is None else replay
 
 
 def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Mapping[str, object]:
@@ -296,13 +318,26 @@ async def maybe_run_chat_completion_agentic_loop(
         if not should_run:
             continue
 
-        fingerprint = _check_agentic_loop_safety(
-            tool_calls=tool_calls,
-            fingerprints=fingerprints,
-            depth=depth,
-            max_loops=max_loops,
-            model=model,
-        )
+        try:
+            fingerprint = _check_agentic_loop_safety(
+                tool_calls=tool_calls,
+                fingerprints=fingerprints,
+                depth=depth,
+                max_loops=max_loops,
+                model=model,
+            )
+        except AgenticLoopSafetyError as e:
+            if stream:
+                raise
+            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [model=%s]: %s", model, str(e))
+            return _end_refused_turn(
+                finalize_refused_chat_turn(response, tool_calls),
+                kwargs=kwargs,
+                depth=depth,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
 
         if not _build_plan_overridden(callback):
             return await callback.async_run_agentic_loop(

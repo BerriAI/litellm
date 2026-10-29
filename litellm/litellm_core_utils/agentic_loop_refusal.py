@@ -1,0 +1,72 @@
+from collections.abc import Iterable
+from itertools import chain
+from typing import Final
+
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import Choices, ModelResponse
+
+
+def _strings(values: Iterable[object]) -> frozenset[str]:
+    return frozenset(value for value in values if isinstance(value, str))
+
+
+def refused_tool_call_identifiers(tool_calls: object) -> tuple[frozenset[str], frozenset[str]]:
+    wrapped: Final = message_field(tool_calls, "tool_calls")
+    calls: Final = parts_of(tool_calls if wrapped is None else wrapped)
+    ids: Final = _strings(
+        chain.from_iterable((message_field(call, "id"), message_field(call, "call_id")) for call in calls)
+    )
+    names: Final = _strings(message_field(call, "name") for call in calls)
+    return ids, names
+
+
+def is_refused_call(call_id: object, name: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> bool:
+    if isinstance(call_id, str) and refused_ids:
+        return call_id in refused_ids
+    return name in refused_names
+
+
+def is_refused_item(
+    item: object, item_type: str, id_field: str, refused_ids: frozenset[str], refused_names: frozenset[str]
+) -> bool:
+    if message_field(item, "type") != item_type:
+        return False
+    return is_refused_call(message_field(item, id_field), message_field(item, "name"), refused_ids, refused_names)
+
+
+def finalize_refused_responses_turn(response: ResponsesAPIResponse, tool_calls: object) -> ResponsesAPIResponse:
+    refused_ids, refused_names = refused_tool_call_identifiers(tool_calls)
+    kept: Final = [
+        item
+        for item in parts_of(message_field(response, "output"))
+        if not is_refused_item(item, "function_call", "call_id", refused_ids, refused_names)
+    ]
+    return response.model_copy(update={"output": kept})
+
+
+def _is_refused_chat_tool_call(call: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> bool:
+    name: Final = message_field(message_field(call, "function"), "name")
+    return is_refused_call(message_field(call, "id"), name, refused_ids, refused_names)
+
+
+def _finalized_choice(choice: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> object:
+    if not isinstance(choice, Choices) or not choice.message.tool_calls:
+        return choice
+    kept: Final = [
+        call for call in choice.message.tool_calls if not _is_refused_chat_tool_call(call, refused_ids, refused_names)
+    ]
+    finish_reason: Final = "stop" if not kept and choice.finish_reason == "tool_calls" else choice.finish_reason
+    return choice.model_copy(
+        update={
+            "message": choice.message.model_copy(update={"tool_calls": kept or None}),
+            "finish_reason": finish_reason,
+        }
+    )
+
+
+def finalize_refused_chat_turn(response: ModelResponse, tool_calls: object) -> ModelResponse:
+    refused_ids, refused_names = refused_tool_call_identifiers(tool_calls)
+    return response.model_copy(
+        update={"choices": [_finalized_choice(choice, refused_ids, refused_names) for choice in response.choices]}
+    )
