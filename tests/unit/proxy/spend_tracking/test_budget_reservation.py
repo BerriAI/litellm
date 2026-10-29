@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Final
@@ -25,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -324,15 +326,67 @@ def test_gemini_output_fields_on_a_chat_body_leave_its_hold_alone(gemini_output_
 
 
 @pytest.mark.parametrize("cap", (0, -1000))
-def test_an_output_cap_of_zero_or_below_holds_the_default_output(cap: int) -> None:
-    uncapped_gemini_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
-    uncapped_chat_hold: Final = _chat_hold(GEMINI_CHAT_BODY)
-    assert uncapped_gemini_hold is not None and uncapped_chat_hold is not None
+def test_a_gemini_output_cap_of_zero_or_below_holds_the_default_output(cap: int) -> None:
+    uncapped_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
+    assert uncapped_hold is not None
     assert (
         _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"maxOutputTokens": cap}})
-        == uncapped_gemini_hold
+        == uncapped_hold
     )
-    assert _chat_hold({**GEMINI_CHAT_BODY, "max_tokens": cap}) == uncapped_chat_hold
+
+
+def test_a_negative_max_tokens_holds_the_default_output() -> None:
+    uncapped_hold: Final = _chat_hold(GEMINI_CHAT_BODY)
+    assert uncapped_hold is not None
+    assert _chat_hold({**GEMINI_CHAT_BODY, "max_tokens": -1000}) == uncapped_hold
+
+
+def test_a_text_completion_with_max_tokens_zero_holds_only_its_prompt() -> None:
+    body: Final = {"model": "gemini-3.8-flash", "prompt": GEMINI_PROMPT * 50, "max_tokens": 0}
+    prompt_cost: Final = estimate_request_input_cost(request_body=body, route="/v1/completions", llm_router=None)
+    assert prompt_cost is not None and prompt_cost > 0
+    assert estimate_request_max_cost(request_body=body, route="/v1/completions", llm_router=None) == prompt_cost
+
+
+GEMINI_LONG_CONTENTS: Final = {"contents": [{"role": "user", "parts": [{"text": GEMINI_PROMPT * 500}]}]}
+
+
+@pytest.mark.parametrize(
+    "stray_fields",
+    (
+        {"prompt": ""},
+        {"messages": [], "n": 5},
+        {"input": "", "max_tokens": 1},
+        {"query": "", "documents": [], "max_completion_tokens": 1},
+        {"inferenceConfig": {"maxTokens": 1}},
+    ),
+)
+def test_fields_of_other_apis_on_a_gemini_route_leave_its_hold_alone(stray_fields: dict[str, object]) -> None:
+    body: Final = {**GEMINI_LONG_CONTENTS, "generationConfig": {"maxOutputTokens": 4000, "candidateCount": 2}}
+    gemini_hold: Final = _gemini_hold(body)
+    assert gemini_hold is not None
+    assert _gemini_hold({**body, **stray_fields}) == gemini_hold
+
+
+@pytest.mark.parametrize("stray_input", ({"prompt": ""}, {"messages": []}, {"input": ""}))
+@pytest.mark.parametrize("model", ("gpt-4", "claude-sonnet-5-5"))
+@pytest.mark.asyncio
+async def test_a_stray_input_field_on_a_gemini_route_never_hides_the_counted_contents(
+    model: str, stray_input: dict[str, object]
+) -> None:
+    async def counted(body: dict[str, object]) -> dict[str, int]:
+        return dict(
+            await count_request_input_tokens(
+                request_body=body,
+                route=f"/v1beta/models/{model}:generateContent",
+                llm_router=None,
+                raw_body=json.dumps(body).encode(),
+            )
+        )
+
+    contents_counts: Final = await counted(GEMINI_LONG_CONTENTS)
+    assert contents_counts[model] > 1000
+    assert await counted({**GEMINI_LONG_CONTENTS, **stray_input}) == contents_counts
 
 
 def _tiered_deployment(input_cost_per_token: float) -> Deployment:

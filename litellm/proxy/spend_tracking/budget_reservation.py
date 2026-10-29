@@ -44,7 +44,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
-    is_gemini_contents_body,
     tokenizer_models,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
@@ -1441,7 +1440,7 @@ def _max_cost_for_cost_info(
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
-    output_multiplier: Final = _get_output_multiplier(request_body=request_body)
+    output_multiplier: Final = _get_output_multiplier(request_body=request_body, route=route)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
@@ -1611,6 +1610,7 @@ async def count_request_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_as.values()))),
+        gemini_route=RouteChecks.is_generate_content_route(route),
     )
     return MappingProxyType(
         {
@@ -1631,7 +1631,9 @@ def _estimate_input_tokens(
     counted: Final = (
         input_tokens
         if input_tokens is not None
-        else count_input_tokens_for_model(request_body=request_body, model=model)
+        else count_input_tokens_for_model(
+            request_body=request_body, model=model, gemini_route=RouteChecks.is_generate_content_route(route)
+        )
     )
     if counted is not None:
         return counted
@@ -1654,7 +1656,7 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
-    requested: Final = _requested_output_tokens(request_body)
+    requested: Final = _requested_output_tokens(request_body, route)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1678,33 +1680,28 @@ def _nested_field(request_body: Mapping[str, object], config_field: str, field: 
 
 
 def _gemini_candidate_counts(request_body: Mapping[str, object]) -> tuple[object, ...]:
-    if not is_gemini_contents_body(request_body):
-        return ()
     return tuple(
         _nested_field(request_body, config_field, field)
         for config_field, field in product(_GEMINI_CONFIG_FIELDS, ("candidateCount", "candidate_count"))
     )
 
 
-def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
-    gemini_output_cap: Final = (
-        _nested_field(request_body, "generationConfig", "maxOutputTokens")
-        if is_gemini_contents_body(request_body)
-        else None
-    )
+def _requested_output_tokens(request_body: Mapping[str, object], route: str) -> int | None:
+    if RouteChecks.is_generate_content_route(route):
+        gemini_cap: Final = _to_int(_nested_field(request_body, "generationConfig", "maxOutputTokens"))
+        return gemini_cap if gemini_cap is not None and gemini_cap > 0 else None
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         _nested_field(request_body, "inferenceConfig", "maxTokens"),
-        gemini_output_cap,
     )
-    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None and tokens > 0), None)
+    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None and tokens >= 0), None)
 
 
-def _get_output_multiplier(request_body: Mapping[str, object]) -> int:
+def _get_output_multiplier(request_body: Mapping[str, object], route: str) -> int:
     candidates: Final = (
-        request_body.get("n"),
-        request_body.get("best_of"),
-        *_gemini_candidate_counts(request_body),
+        _gemini_candidate_counts(request_body)
+        if RouteChecks.is_generate_content_route(route)
+        else (request_body.get("n"), request_body.get("best_of"))
     )
     return max((1, *(count for count in map(_to_int, candidates) if count is not None)))
 

@@ -44,7 +44,6 @@ if TYPE_CHECKING:
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
-_NON_GEMINI_INPUT_FIELDS: Final = ("messages", "prompt", "input", "query", "documents")
 _GEMINI_SYSTEM_INSTRUCTION_FIELDS: Final = ("systemInstruction", "system_instruction")
 _GEMINI_CACHED_CONTENT_FIELDS: Final = ("cachedContent", "cached_content")
 _GEMINI_FUNCTION_RESPONSE_FIELDS: Final = ("functionResponse", "function_response")
@@ -103,6 +102,7 @@ async def count_input_tokens(
     request_body: dict[str, object],
     raw_body: bytes | None,
     models: Sequence[str],
+    gemini_route: bool = False,
 ) -> Mapping[str, int]:
     """Input-token count per model, sharing one native count across models that
     select the same tokenizer."""
@@ -110,13 +110,14 @@ async def count_input_tokens(
         (model, rust_tokenizer(model)) for model in models
     )
     groups: Final[tuple[RustTokenizer | None, ...]] = tuple(dict.fromkeys(tokenizer for _, tokenizer in tokenizers))
-    counted_raw_body: Final = None if holds_compaction_summary(request_body.get("input")) else raw_body
+    counted_raw_body: Final = None if gemini_route or holds_compaction_summary(request_body.get("input")) else raw_body
     group_counts: Final = [
         await _count_group(
             request_body=request_body,
             raw_body=counted_raw_body,
             tokenizer=tokenizer,
             models=tuple(model for model, selected in tokenizers if selected == tokenizer),
+            gemini_route=gemini_route,
         )
         for tokenizer in groups
     ]
@@ -130,14 +131,16 @@ async def _count_group(
     raw_body: bytes | None,
     tokenizer: RustTokenizer | None,
     models: tuple[str, ...],
+    gemini_route: bool,
 ) -> Mapping[str, int]:
     async def python() -> Mapping[str, int]:
         if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
-            return _count_input_tokens_for_models(request_body=request_body, models=models)
+            return _count_input_tokens_for_models(request_body=request_body, models=models, gemini_route=gemini_route)
         return await asyncio.to_thread(
             _count_input_tokens_for_models,
             request_body=request_body,
             models=models,
+            gemini_route=gemini_route,
         )
 
     if tokenizer is None or raw_body is None:
@@ -172,18 +175,30 @@ async def _native_counts(
 def _count_input_tokens_for_models(
     request_body: dict[str, object],
     models: Sequence[str],
+    gemini_route: bool,
 ) -> Mapping[str, int]:
     return MappingProxyType(
         {
             model: tokens
             for model in models
-            if (tokens := count_input_tokens_for_model(request_body=request_body, model=model)) is not None
+            if (
+                tokens := count_input_tokens_for_model(
+                    request_body=request_body, model=model, gemini_route=gemini_route
+                )
+            )
+            is not None
         }
     )
 
 
-def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
+def count_input_tokens_for_model(request_body: dict, model: str, gemini_route: bool = False) -> int | None:
     try:
+        if gemini_route:
+            return (
+                _count_gemini_input_tokens(request_body=request_body, model=model)
+                if "contents" in request_body
+                else None
+            )
         if "messages" in request_body:
             try:
                 return litellm.token_counter(
@@ -194,8 +209,6 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 )
             except ValueError:
                 return _count_text_tokens(model=model, text=request_body.get("messages"))
-        if is_gemini_contents_body(request_body):
-            return _count_gemini_input_tokens(request_body=request_body, model=model)
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
@@ -212,10 +225,6 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
-
-
-def is_gemini_contents_body(request_body: Mapping[str, object]) -> bool:
-    return "contents" in request_body and not any(field in request_body for field in _NON_GEMINI_INPUT_FIELDS)
 
 
 def _count_gemini_input_tokens(request_body: Mapping[str, object], model: str) -> int | None:
