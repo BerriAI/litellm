@@ -78,6 +78,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
+from litellm.proxy.common_utils.registry_read_through import model_router_reconciled_with_db
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, is_team_admin
@@ -907,7 +908,6 @@ async def _raise_if_team_write_leaves_projects_short(
     *,
     prisma_client: PrismaClient,
     general_settings: Mapping[str, object],
-    llm_router: Router | None,
     team_id: str | None,
     public_name: str,
     replaced_id: str | None,
@@ -918,6 +918,7 @@ async def _raise_if_team_write_leaves_projects_short(
     policy: Final = _quota_policy(general_settings, ENFORCE_PROJECT_MODEL_QUOTA_SETTING)
     if policy is None or not exempts_any_route(policy):
         return
+    llm_router: Final = await model_router_reconciled_with_db()
     projects: Final = await ProjectRepository(prisma_client).table.find_many(where={"team_id": team_id})
     listed: Final = frozenset(itertools.chain.from_iterable(project.models for project in projects))
     served: Final = sorted(model for model in listed if team_write_serves(llm_router, team_id, public_name, model))
@@ -954,7 +955,6 @@ async def _raise_if_team_update_leaves_projects_short(
     *,
     prisma_client: PrismaClient,
     general_settings: Mapping[str, object],
-    llm_router: Router | None,
     existing: Deployment,
     written_team_id: str | None,
     written_name: str,
@@ -967,7 +967,6 @@ async def _raise_if_team_update_leaves_projects_short(
     await _raise_if_team_write_leaves_projects_short(
         prisma_client=prisma_client,
         general_settings=general_settings,
-        llm_router=llm_router,
         team_id=written_team_id,
         public_name=written_name,
         replaced_id=existing.model_info.id,
@@ -978,7 +977,6 @@ async def _raise_if_team_update_leaves_projects_short(
     await _raise_if_team_write_leaves_projects_short(
         prisma_client=prisma_client,
         general_settings=general_settings,
-        llm_router=llm_router,
         team_id=existing.model_info.team_id,
         public_name=stored_name,
         replaced_id=existing.model_info.id,
@@ -1646,7 +1644,6 @@ async def patch_model(
         await _raise_if_team_update_leaves_projects_short(
             prisma_client=prisma_client,
             general_settings=general_settings_view(),
-            llm_router=llm_router,
             existing=db_model,
             written_team_id=written_team_id,
             written_name=written_name,
@@ -2774,7 +2771,6 @@ async def delete_model(
         await _raise_if_team_write_leaves_projects_short(
             prisma_client=prisma_client,
             general_settings=general_settings_view(),
-            llm_router=llm_router,
             team_id=model_params.model_info.team_id,
             public_name=model_params.model_info.team_public_model_name or model_params.model_name,
             replaced_id=model_params.model_info.id,
@@ -2942,7 +2938,6 @@ async def add_new_model(
     from litellm.proxy.proxy_server import (
         general_settings,
         general_settings_view,
-        llm_router,
         premium_user,
         prisma_client,
         proxy_config,
@@ -3009,7 +3004,6 @@ async def add_new_model(
         await _raise_if_team_write_leaves_projects_short(
             prisma_client=prisma_client,
             general_settings=general_settings_view(),
-            llm_router=llm_router,
             team_id=model_params.model_info.team_id,
             public_name=model_params.model_name,
             replaced_id=None,
@@ -3221,7 +3215,6 @@ async def update_model(
         await _raise_if_team_update_leaves_projects_short(
             prisma_client=prisma_client,
             general_settings=general_settings_view(),
-            llm_router=llm_router,
             existing=deployment,
             written_team_id=deployment.model_info.team_id,
             written_name=written_name,

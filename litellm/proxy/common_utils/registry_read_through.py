@@ -10,6 +10,9 @@ plus a global resync budget per window bound the DB load from lookups of
 genuinely unknown names. An auto router's tiers are deployment rows of their
 own, so a miss on an auto router reconciles every row instead of just its own,
 or the first routed request on this replica would pick a tier it has not loaded.
+A check that judges a model by the provider it routes to, rather than by whether it
+exists, reconciles the whole router first, since a sibling's edit leaves the name
+loaded here with its old route.
 """
 
 import asyncio
@@ -32,6 +35,7 @@ if TYPE_CHECKING:
         LiteLLM_ProxyModelTableWhereInput,
     )
 
+    from litellm import Router
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.agents import AgentResponse
 
@@ -223,6 +227,17 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
             return False
         global_agent_registry.register_agent(agent_config=AgentResponse.model_validate(row.model_dump()))
         return True
+
+
+async def model_router_reconciled_with_db() -> "Router | None":
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = proxy_server.prisma_client
+    if prisma_client is not None and _db_backed_registries_enabled("models"):
+        await proxy_server.proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
+        )
+    return proxy_server.llm_router
 
 
 def _model_is_loaded(model_name_or_id: str) -> bool:

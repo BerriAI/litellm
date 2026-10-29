@@ -26,6 +26,7 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.registry_read_through import model_router_reconciled_with_db
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids
@@ -36,6 +37,7 @@ from litellm.proxy.management_helpers.model_quota_policy import (
     REQUIRE_BOTH_LIMITS,
     ModelQuotaPolicy,
     RouteOf,
+    exempts_any_route,
     no_route,
     parse_model_quota_setting,
     router_model_routes,
@@ -318,6 +320,10 @@ def _raise_on_project_models_expanding_at_request_time(
             "error": f"models {list(expanding)} expand to multiple models at request time, so a per-model rpm/tpm quota cannot be enforced for them while '{ENFORCE_PROJECT_MODEL_QUOTA_SETTING}' is enabled. List concrete model names instead."
         },
     )
+
+
+async def _router_for_quota_check(policy: ModelQuotaPolicy, llm_router: "Router | None") -> "Router | None":
+    return await model_router_reconciled_with_db() if exempts_any_route(policy) else llm_router
 
 
 def _project_model_quota_policy(general_settings: Mapping[str, object]) -> ModelQuotaPolicy | None:
@@ -607,11 +613,12 @@ async def new_project(
 
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
+            quota_router: Final = await _router_for_quota_check(quota_policy, llm_router)
             _raise_on_missing_project_model_quota(
                 data,
-                _router_access_group_names(llm_router),
+                _router_access_group_names(quota_router),
                 quota_policy,
-                router_model_routes(llm_router, data.team_id),
+                router_model_routes(quota_router, data.team_id),
             )
 
         # Generate project_id if not provided
@@ -845,12 +852,13 @@ async def update_project(
 
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
+            quota_router: Final = await _router_for_quota_check(quota_policy, llm_router)
             _raise_on_missing_project_model_quota_on_update(
                 data,
                 existing_project,
-                _router_access_group_names(llm_router),
+                _router_access_group_names(quota_router),
                 quota_policy,
-                router_model_routes(llm_router, target_team_id),
+                router_model_routes(quota_router, target_team_id),
             )
 
         # Prepare update data

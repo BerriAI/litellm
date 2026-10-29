@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
@@ -2101,6 +2101,53 @@ async def test_new_project_quota_policy_reads_providers_from_router_deployments(
     )
     assert "runway-gen4-turbo" not in str(exc_info.value.message)
     assert "jev-latest" not in str(exc_info.value.message)
+
+
+def _clip_studio_router(route: str) -> "litellm.Router":
+    return litellm.Router(model_list=[{"model_name": "clip-studio", "litellm_params": {"model": route}}])
+
+
+async def _create_clip_studio_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enforced_new_project_mocks(
+        monkeypatch,
+        team_models=["clip-studio"],
+        llm_router=_clip_studio_router("runwayml/gen4_turbo"),
+        quota_setting=_CUSTOMER_QUOTA_POLICY,
+    )
+    await _run_new_project(NewProjectRequest(team_id="test-team", models=["clip-studio"]))
+
+
+async def _add_clip_studio_to_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    _project_update_mocks(monkeypatch, {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("runwayml/gen4_turbo"))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": _CUSTOMER_QUOTA_POLICY}
+    )
+    await _run_project_update(f"project-{uuid.uuid4()}", models=["clip-studio"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "write_project",
+    [_create_clip_studio_project, _add_clip_studio_to_project],
+    ids=["create", "update"],
+)
+async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
+    monkeypatch: pytest.MonkeyPatch, write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]]
+) -> None:
+    route_in_db: Final = _clip_studio_router("vertex_ai/gemini-3.8-flash")
+
+    async def load_models_from_db(prisma_client: object, proxy_logging_obj: object) -> None:
+        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", route_in_db)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "add_deployment", load_models_from_db)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await write_project(monkeypatch)
+
+    assert exc_info.value.code == "400"
+    assert "clip-studio (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
