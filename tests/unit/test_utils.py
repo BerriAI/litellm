@@ -7637,21 +7637,32 @@ async def test_concurrent_calls_that_miss_the_oidc_google_token_cache_share_one_
         metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=held_metadata)
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         calls: Final = [asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa")) for _ in range(24)]
+        loop: Final = asyncio.get_running_loop()
         try:
-            await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(observer, fetch_started.get), timeout=30)
-            await asyncio.sleep(0.5)
+            await asyncio.wait_for(loop.run_in_executor(observer, fetch_started.get), timeout=30)
+            fetch_started_while_held: Final = await loop.run_in_executor(
+                observer, partial(_next_fetch_within, fetch_started, 0.5)
+            )
         finally:
             release.set()
         outcomes: Final = await asyncio.gather(*calls, return_exceptions=True)
         sent: Final = [call.request.headers["Authorization"] for call in chat.calls]
 
-    assert metadata.call_count == 1
-    if metadata.calls.last.response.status_code == 200:
+    assert fetch_started_while_held is None
+    if metadata.calls[0].response.status_code == 200:
+        assert metadata.call_count == 1
         assert outcomes == [None] * 24
         assert sent == [f"Bearer {token}"] * 24
     else:
         assert [getattr(outcome, "status_code", None) for outcome in outcomes] == [503] * 24
         assert sent == []
+
+
+def _next_fetch_within(fetches: queue.SimpleQueue[int], seconds: float) -> int | None:
+    try:
+        return fetches.get(timeout=seconds)
+    except queue.Empty:
+        return None
 
 
 @pytest.mark.asyncio
@@ -7674,6 +7685,46 @@ async def test_a_call_an_oidc_google_api_key_may_not_go_to_is_refused_without_a_
 
     assert "only to that credential's own api_base" in excinfo.value.message
     assert metadata.call_count == 0
+
+
+async def _pass_through_chat_call(call_path: str, reference: str) -> None:
+    pass_through: Final = {"method": "POST", "endpoint": "v1/chat/completions", "json": {"messages": _PING}}
+    if call_path == "sync":
+        litellm.llm_passthrough_route(model=_VLLM_MODEL, litellm_credential_name="vllm-sa", **pass_through)
+        return
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vllm-model",
+                "litellm_params": {"model": _VLLM_MODEL, "api_base": _VLLM_BASE, "api_key": reference},
+            }
+        ],
+        num_retries=0,
+    )
+    await router.allm_passthrough_route(model="vllm-model", **pass_through)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_path", ["sync", "async router"])
+async def test_a_pass_through_call_with_an_oidc_google_api_key_is_refused_without_a_metadata_fetch(
+    monkeypatch: pytest.MonkeyPatch, call_path: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(
+            200, text=_google_id_token(audience, _CLOCK_START)
+        )
+        vllm: Final = upstream.route(host="vllm.example.test").respond(200, json=_VLLM_REPLY)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            await _pass_through_chat_call(call_path, reference)
+
+    assert "pass-through routes do not fetch Google ID tokens" in excinfo.value.message
+    assert metadata.call_count == 0
+    assert vllm.call_count == 0
 
 
 @pytest.mark.parametrize(

@@ -784,6 +784,9 @@ async def aresolve_api_key_secret_reference(
 
 
 _OIDC_TOKEN_FETCH_EXECUTOR: Final = ThreadPoolExecutor(thread_name_prefix="litellm-oidc-token-fetch")
+_PASS_THROUGH_CALL_TYPES: Final = frozenset(
+    {CallTypes.allm_passthrough_route.value, CallTypes.llm_passthrough_route.value}
+)
 _Resolved: Final = TypeVar("_Resolved")
 
 
@@ -836,6 +839,7 @@ def _secret_behind_api_key_reference(
     llm_provider: object,
     upstream: Mapping[str, object],
     resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
+    call_type: str | None = None,
 ) -> str:
     if not reference.may_reach(upstream):
         raise _secret_reference_error(_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model)
@@ -843,6 +847,13 @@ def _secret_behind_api_key_reference(
         raise _secret_reference_error(
             f"api_key is an {oidc_reference_kind(reference)} secret reference, a kind api_key does not support. "
             "Use oidc/file/<absolute path>, oidc/env/<VARIABLE_NAME> or oidc/google/<audience>.",
+            llm_provider=llm_provider,
+            model=model,
+        )
+    if call_type in _PASS_THROUGH_CALL_TYPES and reference.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        raise _secret_reference_error(
+            "api_key oidc/google secret reference could not be resolved: pass-through routes do not fetch Google ID "
+            "tokens. Use a static key, oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
             llm_provider=llm_provider,
             model=model,
         )
@@ -884,18 +895,19 @@ def with_named_credential(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     return {**kwargs, **_named_credential_values(kwargs)}
 
 
-def load_credentials_from_list(kwargs: dict[str, object]) -> None:
+def load_credentials_from_list(kwargs: dict[str, object], call_type: str | None = None) -> None:
     """
     Updates kwargs with the credentials if credential_name in kwarg, then swaps an admin-configured oidc/ api_key
     reference for the secret it points to, read now so a rotated token is used on the next call
     """
-    kwargs.update(_credential_updates(kwargs, _named_credential_values(kwargs)))
+    kwargs.update(_credential_updates(kwargs, _named_credential_values(kwargs), call_type=call_type))
 
 
-async def acredential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+async def acredential_updates(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
     credential_values: Final = _named_credential_values(kwargs)
     return await _resolved_off_the_event_loop(
-        partial(_credential_updates, kwargs, credential_values), _api_key_after_credentials(kwargs, credential_values)
+        partial(_credential_updates, kwargs, credential_values, call_type=call_type),
+        _api_key_after_credentials(kwargs, credential_values),
     )
 
 
@@ -907,6 +919,7 @@ def _credential_updates(
     kwargs: Mapping[str, object],
     credential_values: Mapping[str, object],
     resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
+    call_type: str | None = None,
 ) -> Mapping[str, object]:
     api_key: Final = _api_key_after_credentials(kwargs, credential_values)
     if not isinstance(api_key, AdminApiKeySecretReference):
@@ -914,6 +927,7 @@ def _credential_updates(
     secret: Final = _secret_behind_api_key_reference(
         api_key,
         resolve_oidc=resolve_oidc,
+        call_type=call_type,
         model=kwargs.get("model"),
         llm_provider=kwargs.get("custom_llm_provider"),
         upstream=MappingProxyType(
@@ -1999,7 +2013,7 @@ def client(original_function):
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
 
             ## LOAD CREDENTIALS
-            load_credentials_from_list(kwargs)
+            load_credentials_from_list(kwargs, call_type)
             from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
 
             attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
@@ -2294,7 +2308,7 @@ def client(original_function):
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
-            kwargs.update(await acredential_updates(kwargs))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is the untyped request dict
+            kwargs.update(await acredential_updates(kwargs, call_type))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is the untyped request dict
             from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
 
             await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
