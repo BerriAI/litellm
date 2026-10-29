@@ -33,13 +33,14 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.litellm_pre_call_utils import _apply_resolved_guardrails_to_metadata
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.realtime import RealtimeQueryParams
-from litellm.proxy.litellm_pre_call_utils import _apply_resolved_guardrails_to_metadata
 from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyMatchContext
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+from litellm.types.realtime import RealtimeQueryParams
 
 
 @pytest.fixture
@@ -1094,11 +1095,6 @@ async def _azure_session_created_seen_by_a_beta_client(
     ("session_kwargs", "expected_url"),
     (
         pytest.param(
-            {"realtime_protocol": "GA"},
-            "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=my-realtime-deployment",
-            id="operator-set-ga",
-        ),
-        pytest.param(
             {"query_params": {"intent": "transcription"}},
             "wss://my-endpoint.openai.azure.com/openai/v1/realtime?intent=transcription",
             id="transcription-intent",
@@ -1111,6 +1107,28 @@ async def test_arealtime_azure_beta_client_on_a_ga_session_it_did_not_need_bridg
     monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
 
     assert await _azure_session_created_seen_by_a_beta_client(session_kwargs) == (expected_url, _GA_SESSION_CREATED)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("env_protocol", "session_kwargs"),
+    (
+        pytest.param(None, {"realtime_protocol": "GA"}, id="operator-set-ga"),
+        pytest.param("GA", {}, id="env-set-ga"),
+    ),
+)
+async def test_arealtime_azure_bridges_a_beta_client_to_ga_when_the_operator_pins_ga(
+    monkeypatch: pytest.MonkeyPatch, env_protocol: str | None, session_kwargs: Mapping[str, object]
+) -> None:
+    if env_protocol is None:
+        monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_AZURE_REALTIME_PROTOCOL", env_protocol)
+
+    assert await _azure_session_created_seen_by_a_beta_client(session_kwargs) == (
+        "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=my-realtime-deployment",
+        _GA_SESSION_CREATED_BRIDGED_TO_BETA,
+    )
 
 
 @pytest.mark.asyncio
@@ -2150,6 +2168,63 @@ async def test_translation_websocket_opens_under_a_native_pre_call_guardrail(
 
     assert connect.url == "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
     assert all(TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE not in event for event in websocket.sent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("translation_client_secrets", "translation_calls", "websocket"))
+@pytest.mark.parametrize(
+    ("key_metadata", "blocked"),
+    (
+        pytest.param({"user_api_key_metadata": {"disable_global_guardrails": True}}, False, id="key-disables-global"),
+        pytest.param({}, True, id="no-opt-out"),
+    ),
+)
+async def test_translation_lets_only_an_opted_out_key_past_a_legacy_string_callback_guardrail(
+    route: str,
+    key_metadata: Mapping[str, object],
+    blocked: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    initialize_callbacks_on_proxy(
+        value=["lakera_prompt_injection"], premium_user=False, config_file_path="", litellm_settings={}
+    )
+    if route == "websocket":
+        websocket: Final = _RecordingClientWebSocket()
+        connect: Final = _CapturingConnect()
+        with patch("websockets.connect", connect):
+            await realtime_main._arealtime.__wrapped__(
+                model="openai/gpt-realtime-translate",
+                websocket=websocket,
+                api_key="fake-key",
+                realtime_mode="translation",
+                litellm_logging_obj=_realtime_websocket_logging(),
+                metadata=key_metadata,
+            )
+        if blocked:
+            assert connect.url is None
+            assert websocket.close_code == 1008
+            assert TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE in websocket.sent[0]
+        else:
+            assert connect.url == "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
+            assert all(TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE not in event for event in websocket.sent)
+        return
+    gateway: Final = _GatewayThatRecordsTheUrl()
+    call: Final = _realtime_http_route_call(
+        route,
+        _realtime_http_logging(route),
+        custom_llm_provider="openai",
+        api_base="https://upstream.example",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        metadata=key_metadata,
+    )
+    if blocked:
+        with pytest.raises(litellm.BadRequestError, match=TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE):
+            await call
+        assert gateway.url is None
+    else:
+        await call
+        assert gateway.url is not None
 
 
 @pytest.mark.asyncio

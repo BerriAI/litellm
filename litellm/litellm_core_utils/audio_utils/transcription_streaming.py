@@ -97,6 +97,8 @@ class TranscriptionStreamLogging(Protocol):
         traceback_exception: str,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        *,
+        for_async_request: bool = False,
     ) -> None: ...
 
     async def async_failure_handler(
@@ -222,7 +224,9 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
             self._failed = True
             mapped_exception: Final = self._map_exception(exception)
             end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
-            self._logging_obj.failure_handler(mapped_exception, traceback.format_exc(), self._start_time, end_time)
+            self._logging_obj.failure_handler(
+                mapped_exception, traceback.format_exc(), self._start_time, end_time, for_async_request=True
+            )
             await self._logging_obj.async_failure_handler(
                 mapped_exception,
                 traceback.format_exc(),

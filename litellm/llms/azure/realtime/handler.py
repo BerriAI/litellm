@@ -64,6 +64,10 @@ def azure_realtime_requires_ga(model: str) -> bool:
     return azure_entry is not None and azure_entry.get("realtime_ga_only") == 1
 
 
+def _is_ga_protocol(protocol: str | None) -> bool:
+    return protocol is not None and protocol.upper() in ("GA", "V1")
+
+
 @dataclass(frozen=True, slots=True)
 class AzureRealtimeProtocol:
     name: str
@@ -79,11 +83,19 @@ def azure_realtime_protocol_for_client(
     query_params: RealtimeQueryParams | None,
     websocket: ScopedWebSocket,
 ) -> AzureRealtimeProtocol:
-    if isinstance(configured_protocol, str) and configured_protocol:
-        return AzureRealtimeProtocol(name=configured_protocol)
-    if realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription":
-        return AzureRealtimeProtocol(name="GA")
+    serves_a_ga_only_session: Final = (
+        realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription"
+    )
     client_wants_beta: Final = client_sent_openai_beta_realtime_header(websocket)
+    if isinstance(configured_protocol, str) and configured_protocol:
+        return AzureRealtimeProtocol(
+            name=configured_protocol,
+            bridges_beta_client_to_ga=client_wants_beta
+            and not serves_a_ga_only_session
+            and _is_ga_protocol(configured_protocol),
+        )
+    if serves_a_ga_only_session:
+        return AzureRealtimeProtocol(name="GA")
     if azure_realtime_requires_ga(base_model or model):
         return AzureRealtimeProtocol(name="GA", bridges_beta_client_to_ga=client_wants_beta)
     return AzureRealtimeProtocol(name="beta" if client_wants_beta else "GA")
@@ -147,10 +159,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_base = api_base.replace("https://", "wss://")
 
         # Determine path based on realtime_protocol (case-insensitive)
-        _is_ga: Final = realtime_protocol is not None and realtime_protocol.upper() in (
-            "GA",
-            "V1",
-        )
+        _is_ga: Final = _is_ga_protocol(realtime_protocol)
         intent: Final = (query_params or {}).get("intent")
 
         path: Final = (
@@ -212,7 +221,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        backend_uses_beta_protocol: Final = realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
+        backend_uses_beta_protocol: Final = not _is_ga_protocol(realtime_protocol)
         if api_version is None and backend_uses_beta_protocol:
             raise ValueError("api_version is required for Azure OpenAI calls")
 

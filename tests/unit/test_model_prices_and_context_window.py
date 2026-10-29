@@ -878,6 +878,34 @@ def test_azure_realtime_specialized_models_follow_openai_modes(prices: dict, mod
     assert azure["supported_endpoints"]
 
 
+_DATED_SNAPSHOT: Final = re.compile(r"(?P<alias>.+)-\d{4}-\d{2}-\d{2}")
+
+
+def _azure_realtime_snapshots_with_an_alias(prices: Mapping[str, dict]) -> tuple[tuple[str, str], ...]:
+    dated: Final = (
+        (name, _DATED_SNAPSHOT.fullmatch(name))
+        for name, entry in prices.items()
+        if name.startswith("azure/") and "/v1/realtime" in entry.get("supported_endpoints", ())
+    )
+    return tuple((name, match["alias"]) for name, match in dated if match is not None and match["alias"] in prices)
+
+
+def _realtime_ga_only(entry: dict) -> object:
+    return (entry.get("provider_specific_entry") or {}).get("realtime_ga_only")
+
+
+def test_dated_azure_realtime_models_select_the_same_protocol_as_their_alias(prices: dict):
+    snapshots: Final = _azure_realtime_snapshots_with_an_alias(prices)
+    disagreeing: Final = tuple(
+        (snapshot, alias)
+        for snapshot, alias in snapshots
+        if _realtime_ga_only(prices[snapshot]) != _realtime_ga_only(prices[alias])
+    )
+
+    assert snapshots
+    assert disagreeing == ()
+
+
 def test_model_prices_backup_is_synchronized(prices: dict):
     backup: Final = json.loads(BACKUP_PRICES_PATH.read_text())
 

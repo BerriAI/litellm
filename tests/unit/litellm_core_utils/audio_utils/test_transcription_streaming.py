@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 
 import litellm
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
     litellm_exception_mapper,
     wrap_transcription_stream,
@@ -80,6 +81,8 @@ class _RecordingLogging:
         traceback_exception: str,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        *,
+        for_async_request: bool = False,
     ) -> None:
         return None
 
@@ -174,3 +177,47 @@ async def test_a_stream_the_upstream_drops_mid_transcript_raises_a_litellm_error
     with pytest.raises(litellm.APIConnectionError, match="peer closed connection"):
         async for _ in stream:
             pass
+
+
+class _FailureHookCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[str, ...] = ()
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.failures = (*self.failures, "sync_failure")
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures = (*self.failures, "async_failure")
+
+
+@pytest.mark.asyncio
+async def test_an_async_stream_that_fails_mid_transcript_is_logged_as_one_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _FailureHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=_FirstDeltaThenFails(httpx.ReadError("connection reset")),
+                )
+            )
+        ),
+    )
+    stream: Final = await litellm.atranscription(
+        model="openai/gpt-transcribe", file=("sample.wav", b"audio"), stream=True, client=upstream
+    )
+
+    with pytest.raises(litellm.APIConnectionError):
+        async for _ in stream:
+            pass
+
+    assert counter.failures == ("async_failure",)

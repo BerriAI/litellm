@@ -4143,9 +4143,10 @@ def get_optional_params_transcription(
         passed_params[k] = v
 
     sends_through_openai_sdk: Final = custom_llm_provider in ("openai", "azure")
+    drops_unsupported_params: Final = drop_params is True or litellm.drop_params is True
     transcription_params: Final = (
         OPENAI_TRANSCRIPTION_PARAMS
-        if sends_through_openai_sdk
+        if sends_through_openai_sdk or drops_unsupported_params
         else [param for param in OPENAI_TRANSCRIPTION_PARAMS if param not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS]
     )
     default_params: Final = {param: None for param in (*transcription_params, "prompt", "temperature")}
@@ -4158,9 +4159,7 @@ def get_optional_params_transcription(
         if len(non_default_params.keys()) > 0:
             keys: Final = list(non_default_params.keys())
             for k in keys:
-                if (
-                    drop_params is True or litellm.drop_params is True
-                ) and k not in supported_params:  # drop the unsupported non-default values
+                if drops_unsupported_params and k not in supported_params:
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(

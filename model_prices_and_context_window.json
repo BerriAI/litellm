@@ -6622,6 +6622,9 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 6.4e-05,
         "output_cost_per_token": 1.6e-05,
+        "provider_specific_entry": {
+            "realtime_ga_only": 1
+        },
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -6692,6 +6695,9 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 6.4e-05,
         "output_cost_per_token": 1.6e-05,
+        "provider_specific_entry": {
+            "realtime_ga_only": 1
+        },
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -6841,6 +6847,9 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2.4e-06,
+        "provider_specific_entry": {
+            "realtime_ga_only": 1
+        },
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -6863,7 +6872,6 @@
     "azure/gpt-4o-mini-transcribe": {
         "deprecation_date": "2027-06-15",
         "input_cost_per_audio_token": 3e-06,
-        "input_cost_per_second": 5e-05,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 16000,
@@ -6942,7 +6950,6 @@
     "azure/gpt-4o-transcribe": {
         "deprecation_date": "2026-10-15",
         "input_cost_per_audio_token": 6e-06,
-        "input_cost_per_second": 0.0001,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 16000,

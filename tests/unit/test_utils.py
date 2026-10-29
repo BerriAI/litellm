@@ -10565,6 +10565,30 @@ def test_openai_sdk_transcription_params_pass_through_to_other_providers(custom_
     forwarded: Final = {**params.get("extra_body", {}), **params}
     assert {key: forwarded.get(key) for key in hints} == hints
 
+
+@respx.mock
+def test_drop_params_keeps_openai_sdk_transcription_params_out_of_a_deepgram_request() -> None:
+    route: Final = respx.post(url__startswith="https://api.deepgram.com/v1/listen").mock(
+        return_value=httpx.Response(
+            200,
+            json={"metadata": {"duration": 1.0}, "results": {"channels": [{"alternatives": [{"transcript": "hi"}]}]}},
+        )
+    )
+
+    litellm.transcription(
+        model="deepgram/nova-3",
+        file=("sample.wav", b"audio"),
+        api_key="dg-test",
+        punctuate=True,
+        stream=True,
+        languages=["en"],
+        keywords=["LiteLLM"],
+        drop_params=True,
+    )
+
+    assert dict(route.calls.last.request.url.params) == {"model": "nova-3", "punctuate": "true"}
+
+
 @pytest.mark.parametrize(
     ("model", "optional_params", "expected_response_format"),
     [

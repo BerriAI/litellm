@@ -44,6 +44,35 @@ async def test_short_upload_waits_for_first_translated_audio(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_long_upload_keeps_waiting_for_first_translated_audio_while_still_sending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(translate, "OUTPUT_IDLE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(translate, "INITIAL_RESPONSE_TIMEOUT_SECONDS", 0.05)
+    audio: Final = bytes(480)
+    pending: Final[asyncio.Queue[str]] = asyncio.Queue()
+    sender_finished: Final = asyncio.Event()
+
+    async def speak_after_a_long_pause() -> None:
+        await asyncio.sleep(0.2)
+        await pending.put(json.dumps({"type": "session.output_audio.delta", "delta": base64.b64encode(audio).decode()}))
+        await asyncio.sleep(0.02)
+        sender_finished.set()
+
+    output: Final = tmp_path / "translation.wav"
+    speaker: Final = asyncio.create_task(speak_after_a_long_pause())
+
+    result: Final = await translate.receive_translation(
+        cast(ClientConnection, SimpleNamespace(recv=pending.get)), output, sender_finished
+    )
+    await speaker
+
+    assert result is None
+    with wave.open(str(output), "rb") as rendered:
+        assert rendered.readframes(240) == audio
+
+
+@pytest.mark.asyncio
 async def test_translation_finishes_once_output_idles_after_the_sender_stops(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

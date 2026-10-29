@@ -338,13 +338,24 @@ TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE: Final = "Translation sessions cannot
 def _guardrails_run_for_event_hooks(
     request_data: Mapping[str, object],
     event_hooks: Sequence["GuardrailEventHooks"],
+    callbacks: Sequence[object],
 ) -> bool:
     from litellm.integrations.custom_guardrail import CustomGuardrail
 
     return any(
         isinstance(cb, CustomGuardrail)
         and any(cb.should_run_guardrail(data={**request_data, "stream": True}, event_type=et) for et in event_hooks)
-        for cb in litellm.callbacks
+        for cb in callbacks
+    )
+
+
+def _opted_out_of_always_on_guardrail(callback: object, request_data: Mapping[str, object]) -> bool:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    return (
+        isinstance(callback, CustomGuardrail)
+        and callback.event_hook is None
+        and callback.get_disable_global_guardrail(dict(request_data)) is True
     )
 
 
@@ -366,7 +377,10 @@ def _realtime_runner_guardrail(
 def translation_guardrails_apply(request_data: Mapping[str, object]) -> bool:
     from litellm.types.guardrails import GuardrailEventHooks
 
-    if _guardrails_run_for_event_hooks(request_data, (GuardrailEventHooks.post_call,)):
+    callbacks: Final = tuple(
+        callback for callback in litellm.callbacks if not _opted_out_of_always_on_guardrail(callback, request_data)
+    )
+    if _guardrails_run_for_event_hooks(request_data, (GuardrailEventHooks.post_call,), callbacks):
         return True
     if any(
         isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
@@ -378,17 +392,16 @@ def translation_guardrails_apply(request_data: Mapping[str, object]) -> bool:
             request_data, "post_call"
         ):
             return True
-    return realtime_guardrails_apply(request_data)
+    return realtime_guardrails_apply(request_data, callbacks)
 
 
-def realtime_guardrails_apply(request_data: Mapping[str, object]) -> bool:
+def realtime_guardrails_apply(request_data: Mapping[str, object], callbacks: Sequence[object]) -> bool:
     from litellm.types.guardrails import GuardrailEventHooks
 
     check_data: Final = {**request_data, "stream": True}
     runner_event_hooks: Final = (GuardrailEventHooks.realtime_input_transcription, GuardrailEventHooks.pre_call)
     return any(
-        _realtime_runner_guardrail(callback, check_data, runner_event_hooks) is not None
-        for callback in litellm.callbacks
+        _realtime_runner_guardrail(callback, check_data, runner_event_hooks) is not None for callback in callbacks
     )
 
 
@@ -418,12 +431,14 @@ class RealTimeStreaming:
         self._logging_worker = logging_worker
         self.messages: list[OpenAIRealtimeEvents] = []
         self._backend_sent_frames: bool = False
+        self._backend_sent_non_error_frames: bool = False
         self.input_message: dict = {}
         self.input_messages: list[dict[str, str]] = []
         self.session_tools: list[dict] = []
         self.tool_calls: list[dict] = []
         self._is_translation_session = translation_session
         self._bridges_beta_client_to_ga: Final = bridges_beta_client_to_ga
+        self._remaps_all_beta_fields_to_ga: Final = bridges_beta_client_to_ga or translation_session
         self._drop_params: Final = drop_params
         self._translation_input_seconds = 0.0
         self._translation_input_bytes_per_second = 48000.0
@@ -1333,7 +1348,7 @@ class RealTimeStreaming:
         self,
         event_hooks: Sequence["GuardrailEventHooks"],
     ) -> bool:
-        return _guardrails_run_for_event_hooks(self.request_data, event_hooks)
+        return _guardrails_run_for_event_hooks(self.request_data, event_hooks, litellm.callbacks)
 
     def _has_audio_transcription_guardrails(self) -> bool:
         """Return True when a guardrail is configured for the audio/VAD transcript path.
@@ -1629,6 +1644,7 @@ class RealTimeStreaming:
                     continue
 
             if self.provider_config:
+                self._backend_sent_non_error_frames = True
                 try:
                     await self._handle_provider_config_message(raw_response)
                 except Exception as e:
@@ -1636,6 +1652,8 @@ class RealTimeStreaming:
                     continue
             else:
                 event = self._parse_backend_event(raw_response)
+                if event is None or event.get("type") != "error":
+                    self._backend_sent_non_error_frames = True
                 if event is None:
                     await self.websocket.send_text(raw_response)
                     continue
@@ -1691,7 +1709,7 @@ class RealTimeStreaming:
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
-        return close.code != 1000 and not self._backend_sent_frames
+        return not self._backend_sent_non_error_frames and (close.code != 1000 or self._backend_sent_frames)
 
     async def log_backend_refusal(self, error: Exception) -> None:
         if not self.logging_obj:
@@ -1724,7 +1742,7 @@ class RealTimeStreaming:
     _detect_beta_header = detect_beta_header
 
     @staticmethod
-    def _remap_beta_session_to_ga(session: dict, drop_temperature: bool = False) -> dict:
+    def _remap_beta_session_to_ga(session: dict, all_beta_fields: bool = False, drop_temperature: bool = False) -> dict:
         """
         Convert a beta-style session.update payload to the GA nested schema.
 
@@ -1737,6 +1755,7 @@ class RealTimeStreaming:
         session.output_audio_format     → session.audio.output.format (with type/rate)
         session.turn_detection          → session.audio.input.turn_detection
         session.input_audio_transcription → session.audio.input.transcription
+        Only with all_beta_fields:
         session.input_audio_noise_reduction → session.audio.input.noise_reduction
         session.speed                   → session.audio.output.speed
         session.max_response_output_tokens → session.max_output_tokens
@@ -1792,17 +1811,17 @@ class RealTimeStreaming:
         if "input_audio_transcription" in session:
             inp["transcription"] = session.pop("input_audio_transcription")
 
-        if "input_audio_noise_reduction" in session:
+        if all_beta_fields and "input_audio_noise_reduction" in session:
             inp["noise_reduction"] = session.pop("input_audio_noise_reduction")
 
-        if "speed" in session:
+        if all_beta_fields and "speed" in session:
             out["speed"] = session.pop("speed")
 
-        if "max_response_output_tokens" in session:
+        if all_beta_fields and "max_response_output_tokens" in session:
             max_tokens: Final = session.pop("max_response_output_tokens")
             session.setdefault("max_output_tokens", max_tokens)
 
-        if drop_temperature:
+        if all_beta_fields and drop_temperature:
             session.pop("temperature", None)
 
         if inp:
@@ -2102,7 +2121,11 @@ class RealTimeStreaming:
                     if msg_type == "session.update" and not self._backend_uses_beta_protocol:
                         session = client_event.get("session", {})
                         if isinstance(session, dict):
-                            session = self._remap_beta_session_to_ga(session, drop_temperature=self._drop_params)
+                            session = self._remap_beta_session_to_ga(
+                                session,
+                                all_beta_fields=self._remaps_all_beta_fields_to_ga,
+                                drop_temperature=self._drop_params,
+                            )
                             if self._is_translation_session:
                                 session.pop("type", None)
                             msg_obj["session"] = session
@@ -2110,7 +2133,7 @@ class RealTimeStreaming:
 
                     if (
                         msg_type == "response.create"
-                        and not self._backend_uses_beta_protocol
+                        and self._remaps_all_beta_fields_to_ga
                         and (beta_response := as_str_mapping(client_event.get("response"))) is not None
                     ):
                         msg_obj["response"] = self._remap_beta_response_to_ga(

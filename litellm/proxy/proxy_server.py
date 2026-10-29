@@ -10439,7 +10439,7 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
     return _resolve
 
 
-def _sse_error_frame(client_error: Exception) -> str:
+def _transcription_sse_error_frame(client_error: Exception) -> str:
     status_code: Final = error_status_code(client_error, 500)
     error_returned: Final = json.dumps(
         {
@@ -10698,8 +10698,21 @@ async def async_data_generator(
             return
         if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
             raise client_error
+        error_returned: Final = json.dumps(
+            {
+                "error": sse_error_payload(client_error)[1]
+                if isinstance(client_error, HTTPException)
+                else ProxyException(
+                    message=getattr(client_error, "message", str(client_error)),
+                    type=getattr(client_error, "type", "None"),
+                    param=getattr(client_error, "param", "None"),
+                    code=getattr(client_error, "status_code", 500),
+                ).to_dict()
+            },
+            default=str,
+        )
         stream_completed = True
-        yield _sse_error_frame(client_error)
+        yield f"data: {error_returned}\n\n"
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     finally:
@@ -13585,7 +13598,7 @@ async def audio_transcriptions(
                         original_exception=stream_error,
                         request_data=data,
                     )
-                    yield _sse_error_frame(stream_error if replacement is None else replacement)
+                    yield _transcription_sse_error_frame(stream_error if replacement is None else replacement)
                     yield TRANSCRIPTION_STREAM_DONE_FRAME
                 finally:
                     with anyio.CancelScope(shield=True):

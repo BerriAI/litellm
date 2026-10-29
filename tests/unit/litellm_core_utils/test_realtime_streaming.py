@@ -4103,6 +4103,48 @@ async def test_upstream_close_after_relayed_events_still_logs_the_session_as_suc
     client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
 
 
+def _model_not_found_error_event() -> bytes:
+    return json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "model_not_found",
+                "message": "The model `gpt-realtime-translate-typo` does not exist",
+            },
+        }
+    ).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_code", (1000, 1008))
+async def test_upstream_error_before_any_session_logs_a_failure_not_a_success(close_code: int):
+    upstream_close: Final = ConnectionClosed(Close(close_code, ""), None)
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(), _backend_ws_closing_with(_model_not_found_error_event(), upstream_close)
+    )
+
+    await session.run()
+
+    assert session.logging.logged_failures == (upstream_close,)
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_upstream_error_after_session_created_still_logs_the_session_as_success():
+    session_created: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+    upstream_close: Final = ConnectionClosed(Close(1000, ""), None)
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(session_created, _model_not_found_error_event(), upstream_close),
+    )
+
+    await session.run()
+
+    assert len(session.logging.logged_sessions) == 1
+    assert session.logging.logged_failures == ()
+
+
 @pytest.mark.asyncio
 async def test_upstream_closing_while_a_client_message_is_forwarded_still_reaches_the_client():
     upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
@@ -5110,3 +5152,83 @@ async def test_beta_client_bridged_to_a_ga_backend_sends_ga_session_and_response
         "instructions": "Say hi",
         **temperature,
     }
+
+
+@pytest.mark.asyncio
+async def test_gemini_live_session_update_keeps_the_client_output_token_cap() -> None:
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"temperature": 0.4, "max_response_output_tokens": 77, "modalities": ["text"]},
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-2.0-flash-live-001",
+    )
+
+    await streaming.client_ack_messages()
+
+    (setup_call,) = backend_ws.send.call_args_list
+    assert json.loads(setup_call.args[0])["setup"]["generationConfig"] == {
+        "temperature": 0.4,
+        "maxOutputTokens": 77,
+        "responseModalities": ["TEXT"],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_normalizer",
+    (pytest.param(XAIRealtimeNormalizer(), id="xai"), pytest.param(None, id="openai-ga-client")),
+)
+async def test_unbridged_backend_receives_session_update_and_response_create_as_the_client_sent_them(
+    event_normalizer: XAIRealtimeNormalizer | None,
+) -> None:
+    client_events: Final = (
+        {
+            "type": "session.update",
+            "session": {
+                "type": "realtime",
+                "instructions": "Answer briefly",
+                "temperature": 0.7,
+                "max_response_output_tokens": 300,
+                "speed": 1.1,
+                "input_audio_noise_reduction": {"type": "near_field"},
+            },
+        },
+        {
+            "type": "response.create",
+            "response": {
+                "modalities": ["text", "audio"],
+                "voice": "marin",
+                "output_audio_format": "g711_ulaw",
+                "temperature": 0.7,
+                "max_response_output_tokens": 200,
+            },
+        },
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[*(json.dumps(event) for event in client_events), Exception("connection closed")]
+    )
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, _mock_logging(), event_normalizer=event_normalizer, drop_params=True
+    )
+
+    await streaming.client_ack_messages()
+
+    assert tuple(json.loads(call.args[0]) for call in backend_ws.send.call_args_list) == client_events

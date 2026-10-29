@@ -10,14 +10,17 @@ from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPC
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
+_CALLER_AUTH_HEADERS: Final = frozenset({"authorization", "api-key"})
+
 
 def _azure_resource_base(api_base: str) -> str:
-    return api_base.rstrip("/").removesuffix("/v1").removesuffix("/openai")
+    return api_base.rstrip("/").removesuffix("/openai/v1").removesuffix("/openai")
 
 
 def _azure_realtime_v1_url(api_base: str, endpoint: str) -> str:
     """Azure serves WebRTC only on the GA v1 surface, which rejects any api-version query param."""
-    return f"{_azure_resource_base(api_base)}/openai/v1/realtime/{endpoint}"
+    base: Final = api_base.rstrip("/").removesuffix("/v1").removesuffix("/openai")
+    return f"{base}/openai/v1/realtime/{endpoint}"
 
 
 class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
@@ -33,7 +36,7 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         api_key: str,
         extra_headers: Mapping[str, object] | None,
     ) -> Mapping[str, object] | None:
-        if api_key:
+        if api_key or any(name.lower() in _CALLER_AUTH_HEADERS for name in extra_headers or {}):
             return extra_headers
         azure_ad_token: Final = get_azure_ad_token(litellm_params)
         if azure_ad_token is None:

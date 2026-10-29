@@ -7202,7 +7202,7 @@ def test_transcription_deployment_bills_seconds_only_without_a_declared_token_ra
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"])
-def test_azure_transcription_without_usage_bills_the_measured_audio_like_openai(
+def test_azure_transcription_without_usage_bills_only_tokens_while_openai_bills_the_measured_audio(
     _local_model_cost_map: None, model: str
 ) -> None:
     def cost_of_ten_seconds_without_usage(provider: str) -> float:
@@ -7215,10 +7215,11 @@ def test_azure_transcription_without_usage_bills_the_measured_audio_like_openai(
             call_type="atranscription",
         )
 
-    openai_cost: Final = cost_of_ten_seconds_without_usage("openai")
-
-    assert openai_cost > 0
-    assert cost_of_ten_seconds_without_usage("azure") == pytest.approx(openai_cost)
+    assert cost_of_ten_seconds_without_usage("openai") > 0
+    assert cost_of_ten_seconds_without_usage("azure") == 0.0, (
+        "Azure lists only token prices for this model, https://azure.microsoft.com/en-us/pricing/details/azure-openai/ "
+        "(per the 2026-10-28 review)"
+    )
 
 
 def test_gpt_image_2_azure_cost_tracking():

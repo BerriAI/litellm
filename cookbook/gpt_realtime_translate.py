@@ -180,12 +180,12 @@ async def receive_translation(
                 try:
                     raw_event = await asyncio.wait_for(connection.recv(), timeout=timeout)
                 except TimeoutError:
+                    if not sender_finished.is_set():
+                        continue
                     if not audio_received.is_set():
                         return "The translation stream ended without translated audio"
-                    if sender_finished.is_set():
-                        write_stdout()
-                        return None
-                    continue
+                    write_stdout()
+                    return None
                 event = json.loads(raw_event)
                 event_type = event.get("type")
                 if event_type in AUDIO_EVENT_TYPES:
