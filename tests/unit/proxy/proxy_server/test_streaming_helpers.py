@@ -553,6 +553,22 @@ def test_fast_serialize_simple_model_response_stream_with_usage_returns_none_inv
     assert _fast_serialize_simple_model_response_stream(chunk) is None
 
 
+def test_serialize_streaming_chunk_adds_vllm_prompt_fields_and_keeps_the_rest():
+    plain_chunk: Final = _simple_chunk()
+    vllm_first_chunk: Final = plain_chunk.model_copy(
+        update={"prompt_token_ids": [151644, 872, 198], "prompt_text": "<|im_start|>user\nhi"}
+    )
+
+    plain_payload: Final = json.loads(_serialize_streaming_chunk(plain_chunk))
+    vllm_payload: Final = json.loads(_serialize_streaming_chunk(vllm_first_chunk))
+
+    assert vllm_payload == {
+        **plain_payload,
+        "prompt_token_ids": [151644, 872, 198],
+        "prompt_text": "<|im_start|>user\nhi",
+    }
+
+
 # ---------------------------------------------------------------------------
 # _serialize_streaming_chunk
 # ---------------------------------------------------------------------------

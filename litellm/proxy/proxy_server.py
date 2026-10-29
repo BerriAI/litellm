@@ -87,6 +87,7 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
+    VLLM_STREAM_PROMPT_FIELDS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.bug_report import (
@@ -10093,6 +10094,7 @@ def _fast_serialize_simple_model_response_stream(
         getattr(chunk, "provider_specific_fields", None) is not None
         or getattr(chunk, "system_fingerprint", None) is not None
         or getattr(chunk, "usage", None) is not None
+        or any(getattr(chunk, field, None) is not None for field in VLLM_STREAM_PROMPT_FIELDS)
     ):
         return None
 

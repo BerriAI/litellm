@@ -687,6 +687,7 @@ STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
+VLLM_STREAM_PROMPT_FIELDS: Final = ("prompt_token_ids", "prompt_text")
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400

@@ -1,4 +1,6 @@
 import json
+import time
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +10,8 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 
 
@@ -112,6 +116,48 @@ def test_hosted_vllm_supports_thinking():
         drop_params=False,
     )
     assert optional_params["reasoning_effort"] == "low"
+
+
+def _vllm_chunk(choice: dict[str, object], **top_level: object) -> str:
+    return "data: " + json.dumps(
+        {"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [choice], **top_level}
+    )
+
+
+def test_hosted_vllm_stream_keeps_prompt_fields_on_the_chunk_vllm_sent_them_on():
+    prompt_token_ids: Final = [151644, 872, 198, 151645]
+    prompt_text: Final = "<|im_start|>user\nhi<|im_end|>"
+    sse_lines: Final = (
+        _vllm_chunk(
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            prompt_token_ids=prompt_token_ids,
+            prompt_text=prompt_text,
+        ),
+        _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None, "token_ids": [9707]}),
+        _vllm_chunk({"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}),
+        "data: [DONE]",
+    )
+    logging_obj: Final = Logging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    stream: Final = CustomStreamWrapper(
+        completion_stream=HostedVLLMChatConfig().get_model_response_iterator(
+            streaming_response=iter(sse_lines), sync_stream=True, json_mode=False
+        ),
+        model="m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+    emitted: Final = tuple(chunk.model_dump(include={"prompt_token_ids", "prompt_text"}) for chunk in stream)
+
+    assert emitted == ({"prompt_token_ids": prompt_token_ids, "prompt_text": prompt_text}, {}, {})
 
 
 def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():
