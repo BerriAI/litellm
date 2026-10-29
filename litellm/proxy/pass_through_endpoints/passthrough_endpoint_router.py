@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -121,6 +122,19 @@ class PassthroughEndpointRouter:
             api_key=api_key,
             api_base=deployment_credentials.api_base if deployment_credentials is not None else None,
         )
+
+    def has_credentials(self, custom_llm_provider: str) -> bool:
+        if (
+            self._get_deployment_credentials(
+                custom_llm_provider=custom_llm_provider, region_name=None, include_team_deployments=True
+            )
+            is not None
+        ):
+            return True
+        env_variable_name: Final = self._get_default_env_variable_name_passthrough_endpoint(
+            custom_llm_provider=custom_llm_provider,
+        )
+        return bool(os.environ.get(env_variable_name))
 
     def _get_deployment_credentials(
         self,

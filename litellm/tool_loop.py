@@ -63,6 +63,8 @@ def _assistant_tool_call(tool_call: ChatCompletionMessageToolCall) -> ChatComple
 def _assistant_message(
     message: Message, tool_calls: tuple[ChatCompletionMessageToolCall, ...], replays_provider_specific_fields: bool
 ) -> ChatCompletionAssistantMessage:
+    from litellm.completion_extras.litellm_responses_transformation.history import retained_replay_fields
+
     return cast(  # cast-ok: dict literal with the optional message fields spread in only when set
         "ChatCompletionAssistantMessage",
         {
@@ -78,7 +80,7 @@ def _assistant_message(
                         "provider_specific_fields",
                         getattr(message, "provider_specific_fields", None)
                         if replays_provider_specific_fields
-                        else None,
+                        else retained_replay_fields(getattr(message, "provider_specific_fields", None)),
                     ),
                 )
                 if value is not None
