@@ -12,8 +12,6 @@ REPO_ROOT: Final = Path(__file__).parents[2]
 MAIN_PATH: Final = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PATH: Final = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
-ZAI_API_KEY_ENV_VARS: Final = ("ZAI_API_KEY", "BIGMODEL_API_KEY", "ZHIPUAI_API_KEY")
-LEGACY_API_KEY_ENV_VARS: Final = ("BIGMODEL_API_KEY", "ZHIPUAI_API_KEY")
 NEW_ZAI_MODEL_KEYS: Final = ("zai/GLM-5.3", "zai/GLM-5.3-Flash", "zai/glm-5v-turbo", "zai/GLM-5V-Turbo")
 
 
@@ -31,27 +29,6 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
-
-
-@pytest.mark.parametrize("legacy_env_var", LEGACY_API_KEY_ENV_VARS)
-def test_provider_info_resolves_legacy_api_key(monkeypatch: pytest.MonkeyPatch, legacy_env_var: str) -> None:
-    for env_var in ZAI_API_KEY_ENV_VARS:
-        monkeypatch.delenv(env_var, raising=False)
-    monkeypatch.setenv(legacy_env_var, "legacy-secret")
-
-    api_base, api_key = ZAIChatConfig()._get_openai_compatible_provider_info(api_base=None, api_key=None)
-
-    assert api_key == "legacy-secret"
-    assert api_base == "https://api.z.ai/api/paas/v4"
-
-
-def test_provider_info_prefers_zai_api_key_over_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
-    for env_var in ZAI_API_KEY_ENV_VARS:
-        monkeypatch.setenv(env_var, f"{env_var}-secret")
-
-    _, api_key = ZAIChatConfig()._get_openai_compatible_provider_info(api_base=None, api_key=None)
-
-    assert api_key == "ZAI_API_KEY-secret"
 
 
 def test_supported_openai_params_include_new_params() -> None:

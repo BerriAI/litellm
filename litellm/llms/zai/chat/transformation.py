@@ -17,12 +17,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("ZAI_API_BASE") or ZAI_API_BASE
-        dynamic_api_key: Final = (
-            api_key
-            or get_secret_str("ZAI_API_KEY")
-            or get_secret_str("BIGMODEL_API_KEY")
-            or get_secret_str("ZHIPUAI_API_KEY")
-        )
+        dynamic_api_key: Final = api_key or get_secret_str("ZAI_API_KEY")
         return api_base, dynamic_api_key
 
     def get_openai_compatible_provider_info(
