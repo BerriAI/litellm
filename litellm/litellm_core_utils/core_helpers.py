@@ -8,12 +8,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
@@ -666,9 +667,9 @@ def preserve_upstream_non_openai_attributes(
     _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
 
 
-def _assign_attributes(target: object, values: Iterable[tuple[str, object]]) -> None:
+def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:
     for key, value in values:
-        setattr(target, key, value)
+        set_extra_attribute(target, key, value)
 
 
 def safe_deep_copy(data):

@@ -69,6 +69,7 @@ from litellm.types.workload_identity import (
 )
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from ..litellm_core_utils.hidden_params import set_extra_attribute
 from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
@@ -2101,6 +2102,13 @@ class UnreportedUsage(Usage):
 
 
 class StreamingChoices(OpenAIObject):
+    if TYPE_CHECKING:
+        finish_reason: str | None
+        index: int
+        delta: Delta
+        enhancements: object
+        logprobs: ChoiceLogprobs | None
+
     def __init__(
         self,
         finish_reason=None,
@@ -2114,25 +2122,22 @@ class StreamingChoices(OpenAIObject):
         # https://github.com/BerriAI/litellm/issues/8455
         params.pop("message", None)
         super().__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = None
-        self.index = index
+        set_extra_attribute(self, "finish_reason", map_finish_reason(finish_reason) if finish_reason else None)
+        set_extra_attribute(self, "index", index)
         if delta is not None:
             if isinstance(delta, Delta):
-                self.delta = delta
+                set_extra_attribute(self, "delta", delta)
             elif isinstance(delta, dict):
-                self.delta = Delta(**delta)
+                set_extra_attribute(self, "delta", Delta(**delta))
         else:
-            self.delta = Delta()
+            set_extra_attribute(self, "delta", Delta())
         if enhancements is not None:
-            self.enhancements = enhancements
+            set_extra_attribute(self, "enhancements", enhancements)
 
         if logprobs is not None and isinstance(logprobs, dict):
-            self.logprobs = ChoiceLogprobs(**logprobs)
+            set_extra_attribute(self, "logprobs", ChoiceLogprobs(**logprobs))
         else:
-            self.logprobs = logprobs
+            set_extra_attribute(self, "logprobs", logprobs)
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -2186,7 +2191,8 @@ class ModelResponseBase(OpenAIObject):
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
-        return self._hidden_params
+        private: Final = self.__pydantic_private__
+        return self._hidden_params if private is None else private["_hidden_params"]
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
