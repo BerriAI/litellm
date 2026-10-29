@@ -255,8 +255,8 @@ def _team_not_found_body(team_id: str) -> dict[str, JsonValue]:
     return {
         "error": {
             "message": f"{{'message': 'Team not found, passed team id: {team_id}.'}}",
-            "type": "auth_error",
-            "param": "None",
+            "type": "invalid_request_error",
+            "param": None,
             "code": "404",
         }
     }

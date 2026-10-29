@@ -2,14 +2,17 @@
 ``type`` is a required string and ``param`` is nullable, neither of which the literal
 string ``"None"`` satisfies."""
 
+import sys
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from fastapi import status
+from fastapi import HTTPException, status
 
 from litellm.constants import STRINGIFIED_NONE
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
 
@@ -19,6 +22,19 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
         status.HTTP_403_FORBIDDEN: "permission_error",
         status.HTTP_429_TOO_MANY_REQUESTS: "rate_limit_error",
     }
+)
+
+_AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
+
+_FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
+
+_FAILOVER_REFUSALS: Final = (
+    "is not currently accepting connections",
+    "the database system is starting up",
+    "the database system is shutting down",
+    "the database system is in recovery mode",
+    "the database system is not yet accepting connections",
+    "terminating connection due to administrator command",
 )
 
 
@@ -59,6 +75,82 @@ def openai_error_param(exc: object) -> str | None:
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
     return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+
+
+def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:
+    match exc:
+        case ProxyException():
+            return exc
+        case _ if _is_database_outage(exc):
+            return ProxyException(
+                message=PrismaDBExceptionHandler.database_unavailable_message(exc),
+                type=ProxyErrorTypes.no_db_connection.value,
+                param=None,
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        case HTTPException(status_code=status_code, detail=detail):
+            return _openai_shaped_proxy_exception(exc, str(detail), status_code)
+        case _:
+            return _openai_shaped_proxy_exception(
+                exc, str(exc) or type(exc).__name__, error_status_code(exc, default_status_code)
+            )
+
+
+def _is_database_outage(exc: Exception) -> bool:
+    return any(map(_is_database_outage_link, exception_chain(exc)))
+
+
+def _is_database_outage_link(exc: BaseException) -> bool:
+    match exc:
+        case DBLookupDeadlineExceeded():
+            return True
+        case Exception() if _prisma_is_loaded():
+            return _is_prisma_outage(exc)
+        case _:
+            return False
+
+
+def _prisma_is_loaded() -> bool:
+    return sys.modules.get("prisma") is not None
+
+
+def _is_prisma_outage(exc: Exception) -> bool:
+    if PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc):
+        return True
+    if type(exc).__module__.partition(".")[0] != "prisma":
+        return False
+    return PrismaDBExceptionHandler.is_database_service_unavailable_error(exc) or _is_failover_refusal(exc)
+
+
+def _is_failover_refusal(exc: Exception) -> bool:
+    if PrismaDBExceptionHandler.is_read_only_transaction_error(exc):
+        return True
+    if PrismaDBExceptionHandler.postgres_sqlstate(exc) in _FAILOVER_SQLSTATES:
+        return True
+    message: Final = str(exc).lower()
+    return any(refusal in message for refusal in _FAILOVER_REFUSALS)
+
+
+def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
+    answered_status: Final = int(proxy_exception_status_code(message, str(status_code)))
+    return ProxyException(
+        message=message,
+        type=_catch_all_error_type(exc, answered_status),
+        param=openai_error_param(exc),
+        code=answered_status,
+    )
+
+
+def _catch_all_error_type(exc: Exception, status_code: int) -> str:
+    if _rejects_the_caller(exc, status_code):
+        return ProxyErrorTypes.auth_error.value
+    return openai_error_type(exc, status_code)
+
+
+def _rejects_the_caller(exc: Exception, status_code: int) -> bool:
+    raised_as_http_answer: Final = isinstance(exc, HTTPException)
+    status_from_upstream: Final = error_status_code(exc, 0) == status_code
+    return status_code in _AUTH_FAILURE_STATUS_CODES and (raised_as_http_answer or not status_from_upstream)
 
 
 def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers

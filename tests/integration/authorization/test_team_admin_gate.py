@@ -746,7 +746,7 @@ def test_internal_user_model_creation_prohibition_refuses_team_admin_but_not_pro
                     "error": {
                         "message": "Model creation is disabled for internal users by disable_model_add_for_internal_users.",
                         "type": "auth_error",
-                        "param": "None",
+                        "param": None,
                         "code": "403",
                     }
                 },

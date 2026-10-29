@@ -38,7 +38,7 @@ def _escalation_error(field: str) -> dict[str, JsonValue]:
         "error": {
             "message": f"{{'error': \"Non-admin users cannot modify '{field}' on their own record. Contact your proxy admin.\"}}",
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "403",
         }
     }
@@ -49,7 +49,7 @@ def _role_change_error() -> dict[str, JsonValue]:
         "error": {
             "message": "Only proxy admins can modify user roles.",
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "403",
         }
     }
