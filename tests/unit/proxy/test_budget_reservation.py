@@ -207,7 +207,7 @@ async def test_over_budget_window_counter_tags_clean_entity_id():
             entry={"counter_key": counter.counter_key},
             applied_entries=[],
             reservation_cost=0.5,
-            current_spend=2.0,
+            spend_before_reservation=1.5,
         )
     assert exc_info.value.entity_type == "key"
     assert exc_info.value.entity_id == "test-token"

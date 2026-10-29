@@ -357,6 +357,31 @@ def test_an_n_too_large_to_price_holds_one_choice(count: object) -> None:
     assert _chat_hold({**GEMINI_CHAT_BODY, "n": count}) == one_choice_hold
 
 
+HOLDS_FAR_OVER_A_TINY_BUDGET: Final = (
+    (GEMINI_ROUTE, {"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"candidateCount": 1e300}}),
+    ("/v1/chat/completions", {**GEMINI_CHAT_BODY, "n": 1e300}),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("route", "request_body"), HOLDS_FAR_OVER_A_TINY_BUDGET)
+async def test_a_hold_far_over_the_budget_keeps_the_spend_already_counted(
+    spend_counter_cache: DualCache, route: str, request_body: dict[str, object]
+) -> None:
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    counted_spend: Final = 0.004
+    hold_estimate: Final = estimate_request_max_cost(request_body=request_body, route=route, llm_router=None)
+    assert hold_estimate is not None and 1e20 < hold_estimate < math.inf
+    await spend_counter_cache.async_set_cache(key=counter_key, value=counted_spend)
+
+    reservation: Final = await _reserve_for_tiny_budget_key(route, request_body)
+
+    assert reservation is not None
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.01)
+    await release_unbound_budget_reservation(reservation)
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(counted_spend)
+
+
 def test_a_negative_max_tokens_holds_the_default_output() -> None:
     uncapped_hold: Final = _chat_hold(GEMINI_CHAT_BODY)
     assert uncapped_hold is not None
