@@ -24,6 +24,7 @@ from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -146,6 +147,25 @@ class OpenAIError(BaseLLMException):
             response=self.response,
             body=body,
         )
+
+
+_SDK_READS_ADMIN_KEY_ENV: Final = "admin_api_key" in _OPENAI_INIT_PARAMS
+_MISSING_OPENAI_API_KEY_MESSAGE: Final = (
+    "Missing credentials. Please pass an `api_key` or set the `OPENAI_API_KEY` environment variable."
+)
+
+
+class OpenAISdkKeyParams(TypedDict, total=False):
+    api_key: ReadOnly[str | None]
+    admin_api_key: ReadOnly[str]
+
+
+def openai_sdk_key_params(api_key: str | None) -> OpenAISdkKeyParams:
+    if not _SDK_READS_ADMIN_KEY_ENV:
+        return {"api_key": api_key}
+    if not api_key:
+        raise OpenAIError(status_code=401, message=_MISSING_OPENAI_API_KEY_MESSAGE)
+    return {"api_key": api_key, "admin_api_key": api_key}
 
 
 _DECODED_JSON: Final = TypeAdapter(object)

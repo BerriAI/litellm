@@ -10410,3 +10410,39 @@ async def test_bedrock_strict_tools_limit_rejection_is_not_sent_again_when_no_to
 
     assert error is not None and "Too many strict tools" in str(error)
     assert len(sent) == 1
+
+
+_AZURE_ENV_KEY_RESPONSES: Final = {
+    "embedding": {
+        "object": "list",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+        "model": "text-embedding-3-small",
+        "usage": {"prompt_tokens": 1, "total_tokens": 1},
+    },
+    "transcription": {"text": "Four score and seven years ago"},
+}
+
+
+@pytest.mark.parametrize("call", ["embedding", "transcription"])
+def test_azure_key_from_azure_openai_api_key_env_sends_the_bearer_header(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, call: str
+) -> None:
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "azure-env-key")
+    api_base: Final = f"https://env-key-{call}.openai.azure.com"
+    route: Final = respx_mock.post(url__regex=rf"{api_base}/openai/deployments/.*").respond(
+        200, json=_AZURE_ENV_KEY_RESPONSES[call]
+    )
+    target: Final = {"api_base": api_base, "api_version": "2024-06-01", "max_retries": 0}
+
+    if call == "embedding":
+        litellm.embedding(model="azure/text-embedding-3-small", input=["hello"], **target)
+    else:
+        litellm.transcription(
+            model="azure/whisper-1",
+            file=("gettysburg.wav", (Path(__file__).parents[1] / "gettysburg.wav").read_bytes(), "audio/wav"),
+            **target,
+        )
+
+    sent: Final = route.calls.last.request.headers
+    assert (sent.get("api-key"), sent.get("authorization")) == ("azure-env-key", "Bearer azure-env-key")

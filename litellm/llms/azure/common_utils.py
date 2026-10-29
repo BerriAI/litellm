@@ -22,7 +22,12 @@ from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
+from litellm.llms.openai.common_utils import (
+    BaseOpenAILLM,
+    OpenAIAsyncHTTPClient,
+    OpenAIHTTPClient,
+    openai_sdk_key_params,
+)
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
     single_flight_bearer_token_provider,
@@ -693,10 +698,12 @@ class BaseAzureLLM(BaseOpenAILLM):
                 else v1_token_provider
             )
 
-            v1_params: Final[_AzureV1ClientParams] = {
-                "api_key": v1_api_key,
-                "base_url": f"{ensure_api_route(api_base or '', 'openai/v1')}/",
-            }
+            v1_base_url: Final = f"{ensure_api_route(api_base or '', 'openai/v1')}/"
+            v1_params: Final[_AzureV1ClientParams] = (
+                {"api_key": v1_api_key, "base_url": v1_base_url}
+                if callable(v1_api_key)
+                else {**openai_sdk_key_params(v1_api_key), "base_url": v1_base_url}
+            )
             if "timeout" in azure_client_params:
                 v1_params["timeout"] = azure_client_params["timeout"]
             if "max_retries" in azure_client_params:
@@ -704,7 +711,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             if "http_client" in azure_client_params:
                 v1_params["http_client"] = azure_client_params["http_client"]
 
-            verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_params["base_url"])
+            verbose_logger.debug("Using Azure v1 API with base_url: %s", v1_base_url)
 
             if _is_async is True:
                 openai_client = AsyncOpenAI(**v1_params)

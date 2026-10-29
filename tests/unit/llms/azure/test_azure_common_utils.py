@@ -27,11 +27,12 @@ from litellm.llms.azure.common_utils import (
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
 from litellm.types.utils import CallTypes
+from litellm.utils import get_model_region
 
 
 # Mock the necessary dependencies
@@ -2629,3 +2630,25 @@ async def test_azure_sdk_client_sends_the_auth_headers_sdk_2_sent(
     )
 
     assert json.loads(response.choices[0].message.content or "{}") == expected_headers
+
+
+def _region_only_for_key_and_bearer(request: httpx.Request) -> httpx.Response:
+    if (request.headers.get("api-key"), request.headers.get("authorization")) != ("azure-key", "Bearer azure-key"):
+        return httpx.Response(401, json={"error": {"message": "denied"}})
+    return httpx.Response(
+        200,
+        headers={"x-ms-region": "eastus"},
+        json={"id": "chatcmpl-region", "object": "chat.completion", "created": 0, "model": "gpt", "choices": []},
+    )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://region-lookup.openai.azure.com", "https://gateway.ai.cloudflare.com/v1/account/gateway/azure-openai/res"],
+)
+def test_azure_region_lookup_sends_the_key_and_bearer_headers(monkeypatch: pytest.MonkeyPatch, api_base: str) -> None:
+    session: Final = httpx.Client(transport=httpx.MockTransport(_region_only_for_key_and_bearer))
+    monkeypatch.setattr(litellm, "client_session", session)
+    params: Final = LiteLLM_Params(model="azure/gpt-region", api_key="azure-key", api_base=api_base)
+
+    assert get_model_region(litellm_params=params, mode="chat") == "eastus"

@@ -51,6 +51,7 @@ from .common_utils import (
     process_azure_headers,
     redact_azure_auth_headers,
     select_azure_base_url_or_endpoint,
+    with_one_azure_sdk_credential,
 )
 from .image_generation import (
     AzureFoundryMAIImageGenerationConfig,
@@ -1330,21 +1331,29 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_base += "/"
             api_base += f"{model}"
             client = AzureOpenAI(
-                base_url=api_base,
-                api_version=api_version,
-                api_key=api_key,
-                timeout=timeout,
-                http_client=client_session,
+                **with_one_azure_sdk_credential(
+                    {
+                        "base_url": api_base,
+                        "api_version": api_version,
+                        "api_key": api_key,
+                        "timeout": timeout,
+                        "http_client": client_session,
+                    }
+                )
             )
             model = None
             # cloudflare ai gateway, needs model=None
         else:
             client = AzureOpenAI(
-                api_version=api_version,
-                azure_endpoint=api_base,
-                api_key=api_key,
-                timeout=timeout,
-                http_client=client_session,
+                **with_one_azure_sdk_credential(
+                    {
+                        "api_version": api_version,
+                        "azure_endpoint": api_base,
+                        "api_key": api_key,
+                        "timeout": timeout,
+                        "http_client": client_session,
+                    }
+                )
             )
 
             # only run this check if it's not cloudflare ai gateway
