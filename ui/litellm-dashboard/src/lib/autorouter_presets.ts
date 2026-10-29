@@ -128,6 +128,13 @@ const matchesWildcard = (pattern: string, name: string): boolean => {
   return scanResult >= 0;
 };
 
+const isProviderWide = (pattern: string): boolean => pattern.slice(pattern.indexOf("/") + 1) === "*";
+
+const listsCapturedIds = (pattern: string): boolean => {
+  const partialWord = pattern.slice(0, pattern.indexOf("*")).split("/").at(-1) ?? "";
+  return pattern.includes("/") && !isProviderWide(pattern) && !/[a-z0-9]$/i.test(partialWord);
+};
+
 export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
@@ -147,21 +154,34 @@ export const buildModelAvailability = (
         .map(normalizeUnderlyingModel)
         .map((key) => ({ key, modelGroup: deployment.modelGroup, sourceGroup: deployment.modelGroup })),
     );
-  // Mirrors get_known_models_from_wildcard: a bare "*" model_name expands via its underlying
-  // wildcard (or not at all), and a wildcard without a "/" expands to nothing.
+  // Mirrors get_known_models_from_wildcard: a bare "*" model_name lists provider-prefixed ids over a
+  // provider-wide wildcard and the text its "*" captures over a partial one, which only the router's
+  // substitution ties back to a model. A wildcard without a "/" lists nothing.
   const wildcardPatterns = deployments.flatMap((deployment) =>
-    (deployment.modelGroup === "*" ? deployment.underlyingModels : [deployment.modelGroup])
+    (deployment.modelGroup === "*" ? deployment.underlyingModels.filter(isProviderWide) : [deployment.modelGroup])
       .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/"))
       .map((pattern) => ({ pattern, sourceGroup: deployment.modelGroup })),
   );
-  const wildcardEntries = Array.from(groups)
-    .filter((group) => !group.includes("*") && !deploymentGroups.has(group))
+  const capturePatterns = deployments
+    .filter((deployment) => deployment.modelGroup === "*")
+    .flatMap((deployment) => deployment.underlyingModels.filter(listsCapturedIds));
+  const unlistedGroups = Array.from(groups).filter((group) => !group.includes("*") && !deploymentGroups.has(group));
+  const wildcardEntries = unlistedGroups.flatMap((group) =>
+    wildcardPatterns
+      .filter(({ pattern }) => matchesWildcard(pattern, group))
+      .map(({ sourceGroup }) => ({ key: normalizeUnderlyingModel(group), modelGroup: group, sourceGroup })),
+  );
+  const claimedGroups = new Set(wildcardEntries.map((entry) => entry.modelGroup));
+  const capturedEntries = unlistedGroups
+    .filter((group) => !claimedGroups.has(group))
     .flatMap((group) =>
-      wildcardPatterns
-        .filter(({ pattern }) => matchesWildcard(pattern, group))
-        .map(({ sourceGroup }) => ({ key: normalizeUnderlyingModel(group), modelGroup: group, sourceGroup })),
+      capturePatterns.map((pattern) => ({
+        key: normalizeUnderlyingModel(pattern.replace("*", () => group)),
+        modelGroup: group,
+        sourceGroup: "*",
+      })),
     );
-  const entries = [...literalEntries, ...wildcardEntries];
+  const entries = [...literalEntries, ...wildcardEntries, ...capturedEntries];
   const grouped = new Map<string, Set<string>>();
   const providersByGroup = new Map<string, Set<string>>();
   for (const entry of entries) {

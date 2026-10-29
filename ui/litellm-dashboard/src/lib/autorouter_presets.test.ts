@@ -646,6 +646,47 @@ describe("autorouter_presets", () => {
       expect(availability.underlyingIndex.size).toBe(0);
     });
 
+    it("resolves a model through the id a bare-star catch-all lists over a partial wildcard", () => {
+      const availability = buildModelAvailability(
+        ["claude-haiku-4-5-20251001-v1:0"],
+        [{ modelGroup: "*", underlyingModels: ["bedrock/us.anthropic.*"] }],
+      );
+      const config = simpleTierConfig("claude-haiku-4-5");
+      expect(getMissingModels(config, availability)).toEqual([]);
+      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([
+        "claude-haiku-4-5-20251001-v1:0",
+      ]);
+    });
+
+    it("keys a catch-all's listed id by the model it routes to, not by its own name", () => {
+      const availability = buildModelAvailability(
+        ["opus-5-5"],
+        [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*"] }],
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("opus-5-5");
+    });
+
+    it("leaves a group another wildcard lists to that wildcard instead of the catch-all", () => {
+      const availability = buildModelAvailability(
+        ["a-cloud", "openai/gpt-6-sol", "sonnet-5"],
+        [
+          { modelGroup: "a-cloud", underlyingModels: ["azure/gpt-6-sol"] },
+          { modelGroup: "openai/*", underlyingModels: ["openai/*"] },
+          { modelGroup: "*", underlyingModels: ["anthropic/claude-*"] },
+        ],
+      );
+      expect(resolveAvailableModel("gpt-6-sol", availability)).toBe("openai/gpt-6-sol");
+      expect(resolveAvailableModel("claude-sonnet-5", availability)).toBe("sonnet-5");
+    });
+
+    it.each([
+      ["the text before its star ends mid-word", "anthropic/claude*"],
+      ["it names no provider", "claude-*"],
+    ])("lists nothing for a bare-star catch-all whose partial wildcard %s", (_label, underlying) => {
+      const availability = buildModelAvailability(["opus-5-5"], [{ modelGroup: "*", underlyingModels: [underlying] }]);
+      expect(availability.underlyingIndex.size).toBe(0);
+    });
+
     it("derives no pattern from a slashless wildcard model_name", () => {
       const availability = buildModelAvailability(["gpt-5.4"], [wildcardDeployment("gpt*")]);
       expect(availability.underlyingIndex.size).toBe(0);
