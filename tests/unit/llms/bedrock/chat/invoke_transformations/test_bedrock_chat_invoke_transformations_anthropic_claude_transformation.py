@@ -2046,3 +2046,35 @@ def test_bedrock_invoke_claude_explicit_max_tokens_is_kept(local_model_cost_map)
     )
 
     assert body["max_tokens"] == 123, f"explicit max_tokens must not be overridden, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_honors_a_regional_override(local_model_cost_map, monkeypatch):
+    regional_id: Final = f"us.{BEDROCK_HAIKU_45_BASE_ID}"
+    override: Final = 8192
+    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != override
+    monkeypatch.setitem(litellm.model_cost, regional_id, {**litellm.model_cost[regional_id], "max_output_tokens": override})
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/{regional_id}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == override, f"a deployment's regional max_output_tokens should win, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_reads_an_inference_profile_arns_base_model(local_model_cost_map):
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"base_model": BEDROCK_HAIKU_45_BASE_ID},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"an ARN should take its base_model's cap, got {body['max_tokens']}"

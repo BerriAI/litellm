@@ -243,3 +243,21 @@ async def test_mantle_claude_async_completion_streams_a_wrapped_json_schema_answ
     chunks = tuple([chunk async for chunk in stream])
 
     assert _streamed_answer(chunks) == BARE_STREAMED_ANSWER
+
+
+def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_cost_map):
+    from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+
+    mapped_cap = litellm.get_max_tokens("bedrock_mantle/anthropic.claude-haiku-4-5")
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body = AmazonMantleConfig().transform_request(
+        model="mantle/anthropic.claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"Mantle should send its mapped cap, got {body['max_tokens']}"
