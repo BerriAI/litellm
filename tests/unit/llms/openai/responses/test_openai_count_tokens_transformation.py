@@ -2,7 +2,7 @@ from typing import Final
 
 import pytest
 
-from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.openai.responses.count_tokens.transformation import (

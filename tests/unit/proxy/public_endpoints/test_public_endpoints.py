@@ -363,6 +363,26 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    providers: Final = TestClient(app_instance).get("/public/providers/fields").json()
+
+    zerogpu: Final = next(p for p in providers if p["litellm_provider"] == "zerogpu")
+    fields_by_key: Final = {f["key"]: f for f in zerogpu["credential_fields"]}
+    placeholder: Final = zerogpu["default_model_placeholder"]
+    _, provider, _, api_base = get_llm_provider(model=placeholder)
+
+    assert provider == "zerogpu"
+    assert api_base == fields_by_key["api_base"]["placeholder"]
+    assert litellm.model_cost[placeholder]["litellm_provider"] == "zerogpu"
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
     app_instance = FastAPI()
     app_instance.include_router(router)
@@ -1235,8 +1255,8 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
     expected_listed: bool,
     stored_public: bool | None,
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app: Final = FastAPI()
@@ -1275,7 +1295,7 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
         patch("litellm.public_mcp_servers", [server.server_id] if explicit else []),
         patch("litellm.public_mcp_hub_strict_whitelist", strict),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             manager,
         ),
     ):
@@ -1307,7 +1327,7 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
     with (
         patch("litellm.public_mcp_servers", None),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):
@@ -1345,7 +1365,7 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     with (
         patch("litellm.public_mcp_servers", ["listed"]),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
             mock_manager,
         ),
     ):

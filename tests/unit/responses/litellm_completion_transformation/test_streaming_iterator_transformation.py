@@ -10,6 +10,7 @@ before response.completed, and that every event of a bridged stream carries the 
 spend tracking stores, so a follow-up previous_response_id still finds the conversation.
 """
 
+import itertools
 import json
 from collections.abc import Callable
 from typing import Final
@@ -23,6 +24,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    OutputTextDeltaEvent,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import build_web_search_call
@@ -1288,6 +1290,106 @@ async def test_reasoning_item_closes_before_a_tool_call_from_the_same_chunk_open
     ]
 
 
+def _text_opening_a_tool_call_chunk(content: str, arguments: str = "") -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=content,
+                    tool_calls=[
+                        {
+                            "id": "call_weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": arguments},
+                            "index": 0,
+                        }
+                    ],
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _tool_arguments_chunk(arguments: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[{"type": "function", "function": {"arguments": arguments}, "index": 0}],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_call_opened_in_a_text_chunk_streams_each_argument_delta(sync_mode: bool) -> None:
+    argument_pieces: Final = ('{"', "city", '"', ': "', "Paris", '"', "}")
+    iterator: Final = _build_iterator(
+        [
+            _text_opening_a_tool_call_chunk("</think>"),
+            *(_tool_arguments_chunk(piece) for piece in argument_pieces),
+            _chunk("", finish_reason="tool_calls"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "</think>"
+    assert [
+        event.delta
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ] == list(argument_pieces)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_call_sharing_a_chunk_with_text_opens_after_the_whole_message(sync_mode: bool) -> None:
+    iterator: Final = _build_iterator(
+        [
+            _text_opening_a_tool_call_chunk("Checking ", arguments='{"city": "Paris"}'),
+            _chunk("the "),
+            _chunk("weather now."),
+            _chunk("", finish_reason="tool_calls"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    event_types: Final = [getattr(event, "type", None) for event in events]
+    function_call_added_at: Final = next(
+        position
+        for position, event in enumerate(events)
+        if event_types[position] == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and event.item.type == "function_call"
+    )
+    streamed: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA)
+    ]
+    assert ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA not in event_types[function_call_added_at:]
+    assert [event.sequence_number for event in streamed] == sorted(event.sequence_number for event in streamed)
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Checking the weather now."
+    assert _event_text(events, ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA) == '{"city": "Paris"}'
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_tool_only_stream_puts_the_function_call_at_output_index_zero(sync_mode: bool):
@@ -1558,3 +1660,34 @@ async def test_a_compaction_block_without_its_summary_streams_no_compaction_item
 
     assert [event["item"]["type"] for event in events if "item" in event] == ["message", "message"]
     assert [item["type"] for item in events[-1]["response"]["output"]] == ["message"]
+
+
+def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_bill_as_hidden_response_cost() -> None:
+    from litellm.litellm_core_utils.hidden_params import get_hidden_params
+
+    wrapper: Final = _FakeStreamWrapper([_chunk("Hello"), _chunk(" world", finish_reason="stop")])
+    wrapper.logging_obj.response_cost_calculator.return_value = 0.00032
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,  # pyright: ignore[reportArgumentType]  # the fake stands in for CustomStreamWrapper, as in _build_iterator
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+    relayed: Final = tuple(
+        itertools.takewhile(lambda event: not isinstance(event, OutputTextDeltaEvent), iterator)
+    )
+    assert relayed, "the stream must relay at least one chunk before the client goes away"
+
+    partial: Final = iterator.partial_response_on_disconnect()
+
+    assert partial is not None
+    hidden: Final = get_hidden_params(partial.response)
+    assert hidden is not None and hidden["response_cost"] == 0.00032
+    priced: Final = wrapper.logging_obj.response_cost_calculator.call_args.kwargs["result"]
+    assert priced.id == partial.response.id
+    assert (priced.usage.prompt_tokens, priced.usage.completion_tokens) == (
+        partial.response.usage.input_tokens,
+        partial.response.usage.output_tokens,
+    ), "the bill is priced on the partial's own usage"

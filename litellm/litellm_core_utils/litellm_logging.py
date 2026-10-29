@@ -77,6 +77,8 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
+    native_messages_reported_cost,
+    provider_reported_usage_cost,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
@@ -95,8 +97,13 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     is_unbilled_non_inference_call,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
     guardrail_information_cost,
+    is_str_keyed_dict,
+    native_bedrock_guardrail_information,
+    object_mapping,
+    with_guardrail_entry,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -835,6 +842,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_enqueued: bool = False
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
+        self._stream_failure_claimed: bool = False
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
     def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
@@ -1122,9 +1130,6 @@ class Logging(LiteLLMLoggingBaseClass):
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
-        if is_debugging_on() or self.litellm_request_debug:
-            verbose_logger.debug("self.optional_params: %s", self.optional_params)
-
         self.model_call_details.update(
             {
                 "model": self.model,
@@ -2554,6 +2559,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 },
             )
 
+    def claim_stream_failure_report(self) -> bool:
+        if self._stream_failure_claimed:
+            return False
+        self._stream_failure_claimed = True
+        return True
+
     def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
         """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
         usage: Final = getattr(assembled, "usage", None)
@@ -2722,6 +2733,31 @@ class Logging(LiteLLMLoggingBaseClass):
         if headers is None:
             return
         self.model_call_details["response_headers"] = headers
+
+    def record_native_bedrock_guardrail(self, result: object) -> None:
+        """Bill the guardrail trace a Bedrock response carries when the deployment's ``guardrailConfig`` ran it, by
+        recording it as guardrail information on this call, the same entry the proxy-side Bedrock guardrail writes.
+        A cache hit carries the original response's trace but made no Bedrock call, so it bills nothing."""
+        trace: Final = bedrock_guardrail_trace(result)
+        if trace is None or served_from_cache(result) or self.model_call_details.get("cache_hit") is True:
+            return
+        optional_params: Final = object_mapping(getattr(self, "optional_params", None)) or {}
+        guardrail_config: Final = object_mapping(optional_params.get("guardrailConfig")) or {}
+        identifier: Final = guardrail_config.get("guardrailIdentifier")
+        litellm_params_in: Final = object_mapping(getattr(self, "litellm_params", None)) or {}
+        region: Final = optional_params.get("aws_region_name") or litellm_params_in.get("aws_region_name")
+        entry: Final = native_bedrock_guardrail_information(
+            trace,
+            aws_region_name=region if isinstance(region, str) else None,
+            guardrail_identifier=identifier if isinstance(identifier, str) else None,
+        )
+        litellm_params: Final[object] = self.model_call_details.get("litellm_params")
+        if entry is None or not is_str_keyed_dict(litellm_params):
+            return
+        metadata: Final[object] = litellm_params.get("metadata")
+        bucket: Final = {**metadata} if is_str_keyed_dict(metadata) else {}
+        litellm_params["metadata"] = bucket
+        with_guardrail_entry(bucket, entry)
 
     def _merge_hidden_params_from_response_into_metadata(self, logging_result: object) -> None:
         """
@@ -3442,7 +3478,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
-                            level=LogfireLevel.INFO.value,
+                            level=LogfireLevel.INFO,
                         )
 
                     if callback == "lunary" and lunaryLogger is not None:
@@ -4403,7 +4439,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            level=LogfireLevel.ERROR.value,
+                            level=LogfireLevel.ERROR,
                             print_verbose=print_verbose,
                         )
 
@@ -4756,7 +4792,12 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             ## return unified Usage object
             if isinstance(result.response.usage, ResponseAPIUsage):
-                set_response_cost_in_hidden_params(result.response, result.response.usage.cost)
+                set_response_cost_in_hidden_params(
+                    result.response,
+                    provider_reported_usage_cost(
+                        result.response.usage, self.model_call_details.get("custom_llm_provider")
+                    ),
+                )
                 transformed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
                     result.response.usage
                 )
@@ -4822,8 +4863,11 @@ class Logging(LiteLLMLoggingBaseClass):
         bridge is replaced by the ModelResponse its spend row is built from, anything else is
         priced as is."""
         served: Final[object] = result
-        if self.bridged_model_response is None or not isinstance(result, dict):
-            return result
+        call_type: Final[object] = getattr(self, "call_type", None)
+        if not isinstance(result, dict):
+            return served
+        if self.bridged_model_response is None and call_type != CallTypes.anthropic_messages.value:
+            return served
         return self._anthropic_messages_logged_response(result=served)
 
     def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
@@ -4866,7 +4910,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             return self._translate_responses_api_response_to_model_response(result)
 
-        provider_response_id: Final = _provider_response_id(result)
+        raw_body: Final[object] = result
+        served_body: Final = _LITELLM_PARAMS.validate_python(raw_body) if isinstance(result, dict) else None
+        reported_cost: Final = native_messages_reported_cost(
+            served_body.get("usage") if served_body is not None else None,
+            self.model_call_details.get("custom_llm_provider"),
+        )
+        provider_response_id: Final = _provider_response_id(raw_body)
         bridged: Final = self.bridged_model_response
         if bridged is not None and isinstance(result, dict):
             return bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
@@ -4891,7 +4941,7 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             from litellm.types.llms.anthropic import AnthropicResponse
 
-            pydantic_result: Final = AnthropicResponse.model_validate(result)
+            pydantic_result: Final = AnthropicResponse.model_validate({"stop_sequence": None, **(served_body or {})})
             import httpx
 
             result = litellm.AnthropicConfig().transform_parsed_response(
@@ -4904,6 +4954,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=None,
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
+        set_response_cost_in_hidden_params(result, reported_cost)
         return result
 
     def _translate_responses_api_response_to_model_response(self, result: ResponsesAPIResponse) -> ModelResponse:
@@ -7094,12 +7145,12 @@ class StandardLoggingPayloadSetup:
         request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
             dict[str, str], headers
         )
-
-        header_tags: Final = []
-        for header_name in extra_headers:
-            header_value = request_headers.get(header_name)
-            if header_value:
-                header_tags.append(f"{header_name}: {header_value}")
+        lowercase_request_headers: Final = {str(name).lower(): value for name, value in request_headers.items()}
+        header_tags: Final = [
+            f"{header_name}: {header_value}"
+            for header_name in extra_headers
+            if (header_value := lowercase_request_headers.get(header_name.lower()))
+        ]
 
         return header_tags if header_tags else None
 
@@ -7114,19 +7165,17 @@ class StandardLoggingPayloadSetup:
         litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("litellm_metadata") or {}
         )
-        if metadata.get("tags", []):
-            request_tags = cast(list[str], metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
-        elif litellm_metadata.get("tags", []):
-            request_tags = cast(list[str], litellm_metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
-        else:
-            request_tags = []
+        request_tags: Final = next(
+            (
+                cast(list[str], tags)  # cast-ok: tags are caller-provided
+                for tags in (metadata.get("tags"), litellm_metadata.get("tags"))
+                if isinstance(tags, list) and tags
+            ),
+            (),
+        )
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
         additional_header_tags: Final = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
-        if user_agent_tags is not None:
-            request_tags.extend(user_agent_tags)
-        if additional_header_tags is not None:
-            request_tags.extend(additional_header_tags)
-        return request_tags
+        return [*request_tags, *(user_agent_tags or ()), *(additional_header_tags or ())]
 
     _get_request_tags = get_request_tags
 

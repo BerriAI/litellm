@@ -12,7 +12,7 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -52,6 +52,16 @@ def _resolve_responses_api_version(api_base: str | None, litellm_params: Mapping
     if api_version is not None and _DATED_GA_API_VERSION.fullmatch(api_version):
         return AZURE_DEFAULT_RESPONSES_API_VERSION
     return api_version
+
+
+def _v1_responses_url(api_base: str) -> httpx.URL:
+    parsed_url: Final = httpx.URL(api_base)
+    path: Final = parsed_url.path.rstrip("/")
+    root: Final = next(
+        (path.removesuffix(route) for route in ("/openai/v1/responses", "/openai/responses") if path.endswith(route)),
+        path,
+    )
+    return parsed_url.copy_with(path=f"{root}/openai/v1/responses", query=None)
 
 
 def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -247,19 +257,19 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if api_base is None:
             raise ValueError("api_base is required for Azure WebSocket")
 
-        parsed_url: Final = httpx.URL(api_base)
-        path = parsed_url.path.rstrip("/")
-        # Strip existing /openai/responses path if the api_base already contains it
-        for suffix in ("/openai/v1/responses", "/openai/responses"):
-            if path.endswith(suffix):
-                path = path[: -len(suffix)]
-                break
-        scheme: Final = "wss" if parsed_url.scheme == "https" else "ws"
-        return str(parsed_url.copy_with(scheme=scheme, path=f"{path}/openai/v1/responses", query=None))
+        v1_url: Final = _v1_responses_url(api_base)
+        return str(v1_url.copy_with(scheme="wss" if v1_url.scheme == "https" else "ws"))
 
     def model_in_websocket_url(self) -> bool:
         # Azure sends the model in the response.create body, not the URL
         return False
+
+    def compact_url(self, api_base: str) -> str:
+        params: Final = httpx.URL(api_base).params
+        v1_params: Final = (
+            params if BaseAzureLLM.is_azure_v1_api_version(params.get("api-version")) else params.remove("api-version")
+        )
+        return super().compact_url(str(_v1_responses_url(api_base).copy_with(params=v1_params)))
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
