@@ -1181,7 +1181,7 @@ _ADDITIONAL_TOOLS: Final = {
         pytest.param(
             "grok-4.7",
             [_USER_TURN],
-            ["exec_command", "collaboration__followup_task", "mcp__docs__search"],
+            ["exec_command", "collaboration__followup_task", "mcp__docs____search"],
             id="xai gets the item's tools as top-level functions",
         ),
         pytest.param("oai-luna", [_ADDITIONAL_TOOLS, _USER_TURN], ["exec_command"], id="the openai api keeps the item"),
@@ -1266,6 +1266,142 @@ def test_codex_namespace_tool_called_through_the_chat_bridge_comes_back_with_its
     assert anthropic.called
     (call,) = (item for item in response.json()["output"] if item["type"] == "function_call")
     assert (call["namespace"], call["name"]) == ("mcp__docs__", "search")
+
+
+_CLOCK_NAMESPACE: Final = _namespace("clock", "sleep")
+_CLOCK_TOOLS: Final = {"type": "additional_tools", "role": "developer", "tools": [_CLOCK_NAMESPACE]}
+_FLAT_SLEEP_TOOL: Final = {"type": "function", "name": "clock__sleep", "parameters": {"type": "object"}}
+_FLAT_SLEEP_CALL: Final = {
+    "type": "function_call",
+    "id": "fc_sleep",
+    "call_id": "call_sleep",
+    "name": "clock__sleep",
+    "arguments": '{"seconds":1}',
+    "status": "completed",
+}
+
+
+def test_codex_namespace_tool_reaches_fireworks_as_a_namespace(
+    client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
+) -> None:
+    _account_catalog(respx_mock)
+    provider: Final = _open_weights_provider(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "open-weights", "input": [_CLOCK_TOOLS, _USER_TURN], "stream": False, "store": False},
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    assert json.loads(provider.calls.last.request.content)["tools"] == [_CLOCK_NAMESPACE]
+
+
+def test_xai_namespace_call_round_trips_to_codex_with_its_namespace(
+    client: TestClient, respx_mock: respx.MockRouter, xai_and_openai_router: Router
+) -> None:
+    _account_catalog(respx_mock)
+    xai: Final = respx_mock.post(f"{_XAI_BASE}/responses").respond(
+        json={**_provider_completed(""), "output": [_FLAT_SLEEP_CALL]}
+    )
+    replayed_call: Final = {**_FLAT_SLEEP_CALL, "name": "sleep", "namespace": "clock"}
+    replayed_output: Final = {"type": "function_call_output", "call_id": "call_sleep", "output": "slept"}
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={
+            "model": "grok-4.7",
+            "input": [_CLOCK_TOOLS, _USER_TURN, replayed_call, replayed_output],
+            "stream": False,
+            "store": False,
+        },
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    sent: Final = json.loads(xai.calls.last.request.content)
+    assert sent["tools"] == [_FLAT_SLEEP_TOOL]
+    assert sent["input"][1:] == [_FLAT_SLEEP_CALL, replayed_output]
+    (call,) = (item for item in response.json()["output"] if item["type"] == "function_call")
+    assert (call["name"], call["namespace"], call["call_id"]) == ("sleep", "clock", "call_sleep")
+
+
+def _sse_events(*events: dict[str, object]) -> bytes:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+def _xai_sleep_call_stream() -> bytes:
+    completed: Final = {**_provider_completed(""), "output": [_FLAT_SLEEP_CALL]}
+    return _sse_events(
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {**completed, "status": "in_progress", "output": []},
+        },
+        {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {**_FLAT_SLEEP_CALL, "arguments": "", "status": "in_progress"},
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 2,
+            "item_id": "fc_sleep",
+            "output_index": 0,
+            "delta": '{"seconds":1}',
+        },
+        {"type": "response.output_item.done", "sequence_number": 3, "output_index": 0, "item": _FLAT_SLEEP_CALL},
+        {"type": "response.completed", "sequence_number": 4, "response": completed},
+    )
+
+
+def _data_lines(stream: bytes) -> list[bytes]:
+    return [line.removeprefix(b"data: ") for line in stream.splitlines() if line.startswith(b"data: {")]
+
+
+def test_xai_streamed_namespace_call_reaches_codex_with_its_namespace_and_other_events_unchanged(
+    client: TestClient, respx_mock: respx.MockRouter, xai_and_openai_router: Router
+) -> None:
+    _account_catalog(respx_mock)
+    respx_mock.post(f"{_XAI_BASE}/responses").respond(
+        content=_xai_sleep_call_stream(), headers={"content-type": "text/event-stream"}
+    )
+    native: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "grok-4.7", "input": [_CLOCK_TOOLS, _USER_TURN], "stream": True, "store": False},
+        headers=_ACCOUNT_HEADERS,
+    )
+    v1: Final = client.post(
+        "/v1/responses",
+        json={"model": "grok-4.7", "input": [_USER_TURN], "tools": [_FLAT_SLEEP_TOOL], "stream": True, "store": False},
+        headers={"authorization": f"Bearer {MASTER_KEY}"},
+    )
+    assert native.status_code == v1.status_code == 200
+    native_lines: Final = _data_lines(native.content)
+    v1_lines: Final = _data_lines(v1.content)
+    native_events: Final = [json.loads(line) for line in native_lines]
+    v1_events: Final = [json.loads(line) for line in v1_lines]
+    assert (
+        [event["type"] for event in native_events]
+        == [event["type"] for event in v1_events]
+        == [
+            "response.created",
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.output_item.done",
+            "response.completed",
+        ]
+    )
+    restored: Final = {"name": "sleep", "namespace": "clock"}
+    for native_line, v1_line, native_event, v1_event in zip(native_lines, v1_lines, native_events, v1_events):
+        match v1_event["type"]:
+            case "response.output_item.added" | "response.output_item.done":
+                assert native_event == {**v1_event, "item": {**v1_event["item"], **restored}}
+            case "response.completed":
+                (v1_call,) = v1_event["response"]["output"]
+                assert native_event == {
+                    **v1_event,
+                    "response": {**v1_event["response"], "output": [{**v1_call, **restored}]},
+                }
+            case _:
+                assert native_line == v1_line
 
 
 def test_encrypted_reasoning_stays_only_when_every_deployment_the_router_may_pick_can_decrypt_it(

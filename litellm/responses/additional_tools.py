@@ -3,9 +3,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
+from typing import (
+    Annotated,
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
+)
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -13,8 +18,8 @@ from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInp
 
 ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 _NAMESPACE_TOOL_TYPE: Final = "namespace"
-_QUALIFIED_NAME_SEPARATOR: Final = "__"
-_TOOLS: Final = TypeAdapter(tuple[object, ...])
+_ITEMS: Final = TypeAdapter(tuple[object, ...])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 class _InputItemType(LiteLLMBaseModel):
@@ -23,6 +28,13 @@ class _InputItemType(LiteLLMBaseModel):
 
 class _ToolList(LiteLLMBaseModel):
     tools: tuple[Mapping[str, object], ...] = ()
+
+
+class _NamespacedFunctionCall(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["function_call"]
+    name: str
+    namespace: Annotated[str, Field(min_length=1)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +131,7 @@ def with_additional_tools_hoisted(request: Mapping[str, object]) -> Mapping[str,
         return request
     input_items: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as inference does
     top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
-        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _TOOLS.validate_python(request.get("tools") or ())
+        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _ITEMS.validate_python(request.get("tools") or ())
     )
     hoisted: Final = hoist_additional_tools(input_items, top_level_tools)
     if not hoisted.hoisted:
@@ -127,20 +139,45 @@ def with_additional_tools_hoisted(request: Mapping[str, object]) -> Mapping[str,
     return {**request, "input": hoisted.input, "tools": list(hoisted.tools)}
 
 
-def _qualified_member(namespace: str, member: Mapping[str, object]) -> Mapping[str, object]:
-    prefix: Final = f"{namespace.removesuffix(_QUALIFIED_NAME_SEPARATOR)}{_QUALIFIED_NAME_SEPARATOR}"
-    return {**member, "name": f"{prefix}{member.get('name')}"}
+def _flattened_member(
+    namespace: str, member: Mapping[str, object], flat_names: Mapping[tuple[str, str], str]
+) -> Mapping[str, object]:
+    flat_name: Final = flat_names.get((namespace, str(member.get("name") or "")))
+    return member if flat_name is None else {**member, "name": flat_name}
 
 
-def _members_as_tools(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+def _members_as_tools(
+    tool: Mapping[str, object], flat_names: Mapping[tuple[str, str], str]
+) -> tuple[Mapping[str, object], ...]:
     if tool.get("type") != _NAMESPACE_TOOL_TYPE:
         return (tool,)
     namespace: Final = str(tool.get("name") or "")
-    return tuple(_qualified_member(namespace, member) for member in _tool_list_of(tool))
+    return tuple(_flattened_member(namespace, member, flat_names) for member in _tool_list_of(tool))
 
 
-def with_namespace_members_as_tools(request: Mapping[str, object]) -> Mapping[str, object]:
-    tools: Final = _tool_list_of(request)
-    if not any(tool.get("type") == _NAMESPACE_TOOL_TYPE for tool in tools):
+def _flattened_call(item: object, flat_names: Mapping[tuple[str, str], str]) -> object:
+    try:
+        call: Final = _NamespacedFunctionCall.model_validate(item)
+    except ValidationError:
+        return item
+    flat_name: Final = flat_names.get((call.namespace, call.name))
+    if flat_name is None:
+        return item
+    fields: Final = _JSON_OBJECT.validate_python(item)
+    return {**{key: value for key, value in fields.items() if key != "namespace"}, "name": flat_name}
+
+
+def with_namespaces_flattened(
+    request: Mapping[str, object], namespaced_names: Mapping[str, tuple[str, str]]
+) -> Mapping[str, object]:
+    if not namespaced_names:
         return request
-    return {**request, "tools": list(chain.from_iterable(map(_members_as_tools, tools)))}
+    flat_names: Final = MappingProxyType({namespaced: flat for flat, namespaced in namespaced_names.items()})
+    tools: Final = chain.from_iterable(_members_as_tools(tool, flat_names) for tool in _tool_list_of(request))
+    request_input: Final = request.get("input")
+    replayed: Final = (
+        {"input": [_flattened_call(item, flat_names) for item in _ITEMS.validate_python(request_input)]}
+        if isinstance(request_input, list)
+        else {}
+    )
+    return {**request, "tools": list(tools), **replayed}

@@ -2,14 +2,15 @@ import hashlib
 import hmac
 import json
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.types import Message
 
 import litellm
@@ -39,10 +40,13 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
 from litellm.proxy.response_api_endpoints.endpoints import responses_api
-from litellm.responses.additional_tools import with_additional_tools_hoisted, with_namespace_members_as_tools
+from litellm.responses.additional_tools import with_additional_tools_hoisted, with_namespaces_flattened
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_other_provider_reasoning_item
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import Deployment
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, supports_none_reasoning_effort
@@ -76,6 +80,12 @@ _ACCOUNT_SLUGS_CACHE_PREFIX: Final = "codex_account_slugs:"
 _MODELS_ETAG_CACHE_PREFIX: Final = "codex_models_etag:"
 _MODELS_ETAG_TTL_SECONDS: Final = 300
 _OPENAI_API_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
+_NAMESPACE_TOOL_PROVIDERS: Final = frozenset(
+    {*_OPENAI_API_PROVIDERS, LlmProviders.FIREWORKS_AI.value, LlmProviders.BEDROCK_MANTLE.value}
+)
+_TOOL_DEFINITIONS: Final = TypeAdapter(tuple[dict[str, object], ...])
+_NOTHING_FLATTENED: Final[Mapping[str, tuple[str, str]]] = MappingProxyType({})
+_SSE_DATA_FIELD: Final = "data:"
 _HEADERS: Final = frozenset(
     {
         "authorization",
@@ -93,6 +103,23 @@ _HEADERS: Final = frozenset(
         "x-codex-turn-state",
     }
 )
+
+
+class _FunctionCallName(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    type: Literal["function_call"]
+    name: str
+
+
+class _ResponseOutput(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    output: tuple[object, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _LiteLLMRequest:
+    body: Mapping[str, object]
+    flattened_names: Mapping[str, tuple[str, str]]
 
 
 def _is_chatgpt(deployment: Deployment) -> bool:
@@ -373,37 +400,130 @@ def _is_openai_api(deployment: Deployment) -> bool:
     return resolved is not None and resolved[1] in _OPENAI_API_PROVIDERS
 
 
-def _bridges_to_chat_completions(deployment: Deployment) -> bool:
+def _takes_namespace_tools(deployment: Deployment) -> bool:
     resolved: Final = _model_and_provider(deployment)
+    if resolved is None:
+        return False
+    model, provider = resolved
     return (
-        resolved is not None
-        and ProviderConfigManager.get_provider_responses_api_config(
-            provider=resolved[1], model=resolved[0], api_base=deployment.litellm_params.api_base
+        provider in _NAMESPACE_TOOL_PROVIDERS
+        or ProviderConfigManager.get_provider_responses_api_config(
+            provider=provider, model=model, api_base=deployment.litellm_params.api_base
         )
         is None
     )
 
 
-def _with_tools_the_targets_accept(
-    body: Mapping[str, object], deployments: tuple[Deployment, ...]
-) -> Mapping[str, object]:
+def _flattened_names(body: Mapping[str, object]) -> Mapping[str, tuple[str, str]]:
+    try:
+        tools: Final = _TOOL_DEFINITIONS.validate_python(body.get("tools") or ())
+    except ValidationError:
+        return _NOTHING_FLATTENED
+    names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
+    return MappingProxyType(
+        {flat_name: (namespace, tool) for flat_name, (namespace, tool) in names.items() if flat_name != tool}
+    )
+
+
+def _with_tools_the_targets_accept(body: Mapping[str, object], deployments: tuple[Deployment, ...]) -> _LiteLLMRequest:
     if all(_is_openai_api(deployment) for deployment in deployments):
-        return body
+        return _LiteLLMRequest(body=body, flattened_names=_NOTHING_FLATTENED)
     hoisted: Final = with_additional_tools_hoisted(body)
-    if all(_bridges_to_chat_completions(deployment) for deployment in deployments):
-        return hoisted
-    return with_namespace_members_as_tools(hoisted)
+    if all(_takes_namespace_tools(deployment) for deployment in deployments):
+        return _LiteLLMRequest(body=hoisted, flattened_names=_NOTHING_FLATTENED)
+    flattened_names: Final = _flattened_names(hoisted)
+    return _LiteLLMRequest(body=with_namespaces_flattened(hoisted, flattened_names), flattened_names=flattened_names)
 
 
-def _litellm_body(body: Mapping[str, object], llm_router: "Router | None", team_id: str | None) -> Mapping[str, object]:
+def _litellm_request(body: Mapping[str, object], llm_router: "Router | None", team_id: str | None) -> _LiteLLMRequest:
     wrapped: Final = _with_wrapped_reasoning(_with_provider_default_reasoning(body, llm_router, team_id))
     model: Final = body.get("model")
     if not isinstance(model, str) or llm_router is None:
-        return wrapped
+        return _LiteLLMRequest(body=wrapped, flattened_names=_NOTHING_FLATTENED)
     deployments: Final = _candidate_deployments(model, llm_router, team_id)
     return _with_tools_the_targets_accept(
         _with_reasoning_the_targets_can_decrypt(wrapped, model, llm_router, deployments), deployments
     )
+
+
+def _namespaced(item: object, flattened_names: Mapping[str, tuple[str, str]]) -> tuple[str, str] | None:
+    try:
+        call: Final = _FunctionCallName.model_validate(item)
+    except ValidationError:
+        return None
+    return flattened_names.get(call.name)
+
+
+def _with_namespace(item: object, flattened_names: Mapping[str, tuple[str, str]]) -> object:
+    namespaced: Final = _namespaced(item, flattened_names)
+    if namespaced is None:
+        return item
+    namespace, name = namespaced
+    restored: Final = {"name": name, "namespace": namespace}
+    match item:
+        case BaseModel():
+            return item.model_copy(update=restored)
+        case _:
+            return {**_json_object(item), **restored}
+
+
+def _response_output(response: object) -> tuple[object, ...]:
+    try:
+        return _ResponseOutput.model_validate(response).output
+    except ValidationError:
+        return ()
+
+
+def _output_with_namespaces(
+    response: object, flattened_names: Mapping[str, tuple[str, str]]
+) -> tuple[object, ...] | None:
+    output: Final = _response_output(response)
+    if all(_namespaced(item, flattened_names) is None for item in output):
+        return None
+    return tuple(_with_namespace(item, flattened_names) for item in output)
+
+
+def _event_with_namespaces(
+    event: Mapping[str, object], flattened_names: Mapping[str, tuple[str, str]]
+) -> Mapping[str, object] | None:
+    match event.get("type"):
+        case "response.output_item.added" | "response.output_item.done":
+            item: Final = event.get("item")
+            if _namespaced(item, flattened_names) is None:
+                return None
+            return {**event, "item": _with_namespace(item, flattened_names)}
+        case "response.completed" | "response.incomplete" | "response.failed":
+            response: Final = _json_object(event.get("response"))
+            output: Final = _output_with_namespaces(response, flattened_names)
+            return None if output is None else {**event, "response": {**response, "output": list(output)}}
+        case _:
+            return None
+
+
+def _sse_line_with_namespaces(line: str, flattened_names: Mapping[str, tuple[str, str]]) -> str:
+    if not line.startswith(_SSE_DATA_FIELD):
+        return line
+    try:
+        event: Final = _JSON_OBJECT.validate_json(line.removeprefix(_SSE_DATA_FIELD))
+    except ValidationError:
+        return line
+    restored: Final = _event_with_namespaces(event, flattened_names)
+    return line if restored is None else f"{_SSE_DATA_FIELD} {json.dumps(restored)}"
+
+
+def _frame_with_namespaces(
+    frame: str | bytes | memoryview, flattened_names: Mapping[str, tuple[str, str]]
+) -> str | bytes | memoryview:
+    if not isinstance(frame, str) or not any(flat_name in frame for flat_name in flattened_names):
+        return frame
+    return "\n".join(_sse_line_with_namespaces(line, flattened_names) for line in frame.split("\n"))
+
+
+async def _frames_with_namespaces(
+    frames: AsyncIterable[str | bytes | memoryview], flattened_names: Mapping[str, tuple[str, str]]
+) -> AsyncIterator[str | bytes | memoryview]:
+    async for frame in frames:
+        yield _frame_with_namespaces(frame, flattened_names)
 
 
 def _is_unpersisted_reasoning_reference(item: object) -> bool:
@@ -553,6 +673,33 @@ async def _catalog(
     return _with_etag(upstream, merged if merged is not None else upstream_body, etag)
 
 
+async def _litellm_responses(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    body: Mapping[str, object],
+    llm_router: "Router | None",
+) -> object:
+    litellm_request: Final = _litellm_request(body, llm_router, user_api_key_dict.team_id)
+    served: Final = await responses_api(
+        _as_litellm_responses_request(request, json.dumps(litellm_request.body).encode(), litellm_request.body),
+        fastapi_response,
+        user_api_key_dict.model_copy(update={"request_route": _LITELLM_RESPONSES_PATH}),
+    )
+    flattened_names: Final = litellm_request.flattened_names
+    if not flattened_names:
+        return served
+    match served:
+        case StreamingResponse():
+            served.body_iterator = _frames_with_namespaces(served.body_iterator, flattened_names)
+            return served
+        case ResponsesAPIResponse():
+            output: Final = _output_with_namespaces(served, flattened_names)
+            return served if output is None else served.model_copy(update={"output": list(output)})
+        case _:
+            return served
+
+
 async def _responses(
     request: Request,
     fastapi_response: Response,
@@ -565,12 +712,7 @@ async def _responses(
 
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
     if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, headers, cache):
-        litellm_body: Final = _litellm_body(body, llm_router, user_api_key_dict.team_id)
-        return await responses_api(
-            _as_litellm_responses_request(request, json.dumps(litellm_body).encode(), litellm_body),
-            fastapi_response,
-            user_api_key_dict.model_copy(update={"request_route": _LITELLM_RESPONSES_PATH}),
-        )
+        return await _litellm_responses(request, fastapi_response, user_api_key_dict, body, llm_router)
     chatgpt_body: Final = _chatgpt_body(body, get_client_requested_model(request))
     upstream: Final = await pass_through_request(
         request=request,
