@@ -1285,12 +1285,12 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     verbose_proxy_logger.info("Draining success callbacks before the final spend flush")
     try:
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=GracefulShutdownManager.get_timeout())
-    except TimeoutError:
+    except asyncio.TimeoutError:
         verbose_proxy_logger.warning("Timed out draining success callbacks on shutdown; accounting may be incomplete")
     finally:
         try:
             await asyncio.wait_for(GLOBAL_LOGGING_WORKER.stop(discard_pending=True), timeout=5.0)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             verbose_proxy_logger.warning("Timed out cancelling success callbacks on shutdown")
     await drain_logging_tasks()
     await flush_spend()
