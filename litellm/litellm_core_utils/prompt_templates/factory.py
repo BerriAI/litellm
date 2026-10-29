@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
+    is_anthropic_server_tool_use,
     is_anthropic_tool_search_use,
     message_field,
     parts_of,
@@ -2068,6 +2069,19 @@ def _placed_and_paired(
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
 
 
+def _is_server_tool_result(block: Mapping[str, object]) -> bool:
+    block_type: Final = block.get("type")
+    return isinstance(block_type, str) and block_type.endswith("_tool_result")
+
+
+def _split_unrun_server_tool_uses(
+    groups: Sequence[Sequence[_AnthropicToolInvokeItem]],
+) -> tuple[tuple[Sequence[_AnthropicToolInvokeItem], ...], tuple[_AnthropicToolInvokeItem, ...]]:
+    completed: Final = tuple(group for group in groups if any(_is_server_tool_result(block) for block in group))
+    unrun: Final = tuple(group[0] for group in groups if not any(_is_server_tool_result(block) for block in group))
+    return completed, unrun
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
@@ -2150,6 +2164,15 @@ def convert_to_anthropic_tool_invoke(
             anthropic_tool_invoke.append(server_tool_result)
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
+        elif is_anthropic_server_tool_use(tool_id) and tool_id not in answered_tool_ids:
+            anthropic_tool_invoke.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+            )
         else:
             sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
@@ -3163,6 +3186,9 @@ def anthropic_messages_pt(
                         _current_group.append(item)
                 if _current_group:
                     server_tool_groups.append(_current_group)
+                completed_server_tool_groups, pending_server_tool_uses = _split_unrun_server_tool_uses(
+                    server_tool_groups
+                )
 
                 # Build the text block if content is a non-empty string
                 text_element = None
@@ -3187,14 +3213,14 @@ def anthropic_messages_pt(
                 tb_idx = 0
                 grp_idx = 0
                 num_tb = len(thinking_blocks) if thinking_blocks else 0
-                num_grp = len(server_tool_groups)
+                num_grp = len(completed_server_tool_groups)
 
                 while tb_idx < num_tb or grp_idx < num_grp:
                     if tb_idx < num_tb and grp_idx < num_grp:
                         # Emit thinking block then its tool group
                         assistant_content.append(thinking_blocks[tb_idx])
                         tb_idx += 1
-                        for block in server_tool_groups[grp_idx]:
+                        for block in completed_server_tool_groups[grp_idx]:
                             item_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
                             if item_id and item_id in unique_tool_ids:
                                 continue
@@ -3208,7 +3234,7 @@ def anthropic_messages_pt(
                         tb_idx += 1
                     else:
                         # More tool groups than thinking blocks - emit remaining
-                        for block in server_tool_groups[grp_idx]:
+                        for block in completed_server_tool_groups[grp_idx]:
                             item_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
                             if item_id and item_id in unique_tool_ids:
                                 continue
@@ -3221,8 +3247,8 @@ def anthropic_messages_pt(
                 if text_element is not None:
                     assistant_content.append(text_element)
 
-                # Add regular (non-server) tool calls at the end
-                for item in regular_tool_uses:
+                # Add regular tool calls, then a paused turn's unrun server tool call, at the end
+                for item in (*regular_tool_uses, *pending_server_tool_uses):
                     item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
                     if item_id and item_id in unique_tool_ids:
                         continue
