@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.proxy import common_request_processing, proxy_server
+from litellm.types.router import RouterErrors
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -124,3 +125,32 @@ def test_completion_pipeline_error(client, auth_as, completion_pipeline_raises, 
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert response.headers.get("content-type", "").startswith("application/json")
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_type"),
+    [
+        pytest.param(ValueError("boom"), 500, "internal_server_error", id="unexpected_failure"),
+        pytest.param(
+            ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=gpt-4o and tags=['x']"),
+            401,
+            "authentication_error",
+            id="tag_routing_denial",
+        ),
+    ],
+)
+def test_completion_failure_body_types_the_status_it_answers_with(
+    client, auth_as, monkeypatch, failure, expected_status, expected_type
+):
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
+
+    async def _raise(self, *args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(common_request_processing.ProxyBaseLLMRequestProcessing, "base_process_llm_request", _raise)
+    with auth_as():
+        response = client.post("/v1/completions", json={"model": "gpt-4o", "prompt": "hi"})
+    assert response.status_code == expected_status
+    error = response.json()["error"]
+    assert (error["type"], error["param"], error["code"]) == (expected_type, None, str(expected_status))

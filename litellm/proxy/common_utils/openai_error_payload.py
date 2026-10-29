@@ -131,8 +131,30 @@ def _is_failover_refusal(exc: Exception) -> bool:
     return any(refusal in message for refusal in _FAILOVER_REFUSALS)
 
 
+def answered_status_code(message: str, status_code: int) -> int:
+    return int(proxy_exception_status_code(message, str(status_code)))
+
+
+def route_failure_proxy_exception(
+    exc: Exception,
+    message: str,
+    default_status_code: int,
+    headers: dict[str, str] | None = None,  # mutable-ok: ProxyException.headers
+    openai_code: str | None = None,
+) -> ProxyException:
+    answered_status: Final = answered_status_code(message, error_status_code(exc, default_status_code))
+    return ProxyException(
+        message=message,
+        type=openai_error_type(exc, answered_status),
+        param=openai_error_param(exc),
+        headers=headers,
+        openai_code=openai_code,
+        code=answered_status,
+    )
+
+
 def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
-    answered_status: Final = int(proxy_exception_status_code(message, str(status_code)))
+    answered_status: Final = answered_status_code(message, status_code)
     return ProxyException(
         message=message,
         type=_catch_all_error_type(exc, answered_status),
