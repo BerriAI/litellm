@@ -184,6 +184,7 @@ from litellm.llms.openai_like.model_info import (
     get_openai_compatible_model_info,
 )
 from litellm.responses.bridge_check import keep_registered_mode
+from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -721,6 +722,29 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
+def _search_tool_support(deployment: DeploymentTypedDict) -> bool | None:
+    from litellm.responses.litellm_completion_transformation.tool_search import chat_config_builds_anthropic_request
+
+    configured: Final = _configured_model_info(deployment).get("supports_search_tool")
+    if isinstance(configured, bool):
+        return configured
+    params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(model, str):
+        return None
+    try:
+        resolved_model, resolved_provider = resolve_model_and_provider_for_metadata(
+            model=model, custom_llm_provider=provider if isinstance(provider, str) else None
+        )
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=resolved_model, provider=LlmProviders(resolved_provider)
+        )
+    except (litellm.BadRequestError, ValueError):
+        return None
+    return True if chat_config_builds_anthropic_request(chat_config) else None
 
 
 def _every_deployment_refused(
@@ -4837,7 +4861,7 @@ class Router:
         Handles inserting this as either "metadata" or "litellm_metadata" depending on the metadata_variable_name
         """
         # 1) copy your defaults and pull out metadata
-        defaults: Final = self.default_litellm_params.copy()
+        defaults: Final = dict(without_retrieve_stream_defaults(self.default_litellm_params, kwargs))
         metadata_defaults: Final = defaults.pop("metadata", {}) or {}
 
         # 2) add any non-metadata defaults that aren't already in kwargs
@@ -5078,12 +5102,13 @@ class Router:
                 router_timeout=_router_timeout,
                 router_stream_timeout=_router_stream_timeout,
             )
+            timeout_request: Final = {**kwargs, "stream": True} if requests_streamed_retrieval(kwargs) else kwargs
             kwargs.update(
                 CompletionTimeout.stream_request_kwargs(
-                    passthrough_timeout(kwargs={**kwargs, "stream": False}), passthrough_timeout(kwargs=kwargs)
+                    passthrough_timeout(kwargs={**kwargs, "stream": False}), passthrough_timeout(kwargs=timeout_request)
                 )
-                if splits_stream_timeout and kwargs.get("stream")
-                else {"timeout": passthrough_timeout(kwargs=kwargs)}
+                if splits_stream_timeout and timeout_request.get("stream")
+                else {"timeout": passthrough_timeout(kwargs=timeout_request)}
             )
         elif splits_stream_timeout:
             request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
@@ -6417,7 +6442,7 @@ class Router:
             generic_function_name: Final[str] = getattr(original_generic_function, "__name__", "")
 
             response_kwargs: Final = {
-                **data,
+                **without_retrieve_stream_defaults(data, kwargs),
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,
@@ -12233,6 +12258,15 @@ class Router:
             _configured_model_info(deployment).get("service_tiers")
             for deployment in self._routable_deployments(model_name, team_id)
         )
+
+    def get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
+        """
+        Whether each deployment a request from team_id to model_name can route
+        to (see _routable_deployments) answers Codex's client `tool_search`:
+        its model_info.supports_search_tool when that is a bool, else True when
+        its route builds an Anthropic Messages request, else None (unknown).
+        """
+        return tuple(_search_tool_support(deployment) for deployment in self._routable_deployments(model_name, team_id))
 
     def get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
         """

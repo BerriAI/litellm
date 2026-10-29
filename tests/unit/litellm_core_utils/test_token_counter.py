@@ -700,6 +700,7 @@ def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
         _anthropic_tool(_WEATHER_FUNCTION),
         {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
         {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "custom": {"eager_input_streaming": True}},
         _anthropic_tool(_WEB_SEARCH_FUNCTION),
     ],
 )
