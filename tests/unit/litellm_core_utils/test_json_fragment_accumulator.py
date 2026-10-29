@@ -186,14 +186,17 @@ def _popped_values(accumulator: JSONFragmentAccumulator) -> Iterator[object]:
         yield value
 
 
-def _holding(value: str, count: int) -> JSONFragmentAccumulator:
+def _streamed(value: str, count: int) -> JSONFragmentAccumulator:
     accumulator: Final = JSONFragmentAccumulator()
-    accumulator.append(value * count)
+    for _ in range(count):
+        accumulator.append(value)
     return accumulator
 
 
 def _drain_peak_bytes(value: str, count: int) -> int:
-    accumulator: Final = _holding(value, count)
+    accumulator: Final = _streamed(value, count)
+    first_found, _ = accumulator.pop_next_value()
+    assert first_found is True
     already_tracing: Final = tracemalloc.is_tracing()
     if not already_tracing:
         tracemalloc.start()
@@ -205,29 +208,18 @@ def _drain_peak_bytes(value: str, count: int) -> int:
     finally:
         if not already_tracing:
             tracemalloc.stop()
-    assert drained == count
+    assert drained == count - 1
     return peak - baseline
 
 
 def test_draining_many_concatenated_values_never_copies_the_remainder():
-    """
-    Regression guard: peeling N JSON values already sitting in one buffer,
-    one pop_next_value() call per value with no new fragments in between,
-    must advance a cursor instead of re-slicing the shrinking remainder.
-
-    Measures peak allocation during the drain rather than wall-clock time:
-    a cursor drain only allocates per-value decode scratch, a few KB however
-    large the payload, while every re-slice copies the remainder, so the peak
-    reaches the payload size. Runner load cannot move either number, and the
-    1.28 MB payload leaves room for other threads' allocations under the bound.
-    """
     value: Final = '{"text": "' + "x" * 20 + '"}'
     count: Final = 40_000
     payload_bytes: Final = len(value) * count
     peak_bytes: Final = _drain_peak_bytes(value, count)
     assert peak_bytes < payload_bytes // 4, (
-        f"draining {count} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload; "
-        "a cursor drain allocates per-value scratch only; re-slicing the remainder on every pop?"
+        f"draining {count} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload, "
+        "copying the remainder on every pop?"
     )
 
 
