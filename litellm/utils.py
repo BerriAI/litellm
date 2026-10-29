@@ -5059,7 +5059,9 @@ def get_optional_params(
             supported_params: List[str] - supported params from the litellm config
         """
         verbose_logger.info("\nLiteLLM completion() model= %s; provider = %s", model, custom_llm_provider)
-        verbose_logger.debug("\nLiteLLM: Non-Default params passed to completion() %s", non_default_params)
+        verbose_logger.debug(
+            "\nLiteLLM: Non-Default params passed to completion() %s", _debug_params_repr(non_default_params)
+        )
         unsupported_params: Final = {}
         for k in non_default_params:
             if k not in supported_params:
@@ -5600,7 +5602,9 @@ def get_optional_params(
         additional_drop_params=additional_drop_params,
     )
     if _print_verbose_is_active():
-        print_verbose(f"Final returned optional params: {redact_credentials_in_payload(optional_params)}")
+        print_verbose(
+            f"Final returned optional params: {_debug_params_repr(redact_credentials_in_payload(optional_params))}"
+        )
     optional_params = apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
@@ -8543,6 +8547,10 @@ def _debug_arg_repr(value: object) -> str:
     if isinstance(value, Sized):
         return f"<{type(value).__name__} len={len(value)}>"
     return f"<{type(value).__name__}>"
+
+
+def _debug_params_repr(params: Mapping[str, object]) -> str:
+    return "{" + ", ".join(f"{key!r}: {_debug_arg_repr(value)}" for key, value in params.items()) + "}"
 
 
 def print_args_passed_to_litellm(original_function, args, kwargs):

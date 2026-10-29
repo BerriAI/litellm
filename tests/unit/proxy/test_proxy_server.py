@@ -3863,6 +3863,7 @@ async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
 
 _DEBUG_LOG_SENTINEL: Final = "sentinel-request-body-7f3a"
 _LONG_PROMPT: Final = f"{_DEBUG_LOG_SENTINEL} " + "Keep edits minimal and explain them briefly. " * 20
+_TOOL_PARAMETERS: Final = {"type": "object", "properties": {"cmd": {"type": "string"}}}
 
 
 class _MessageCollector(logging.Handler):
@@ -3880,7 +3881,16 @@ class _MessageCollector(logging.Handler):
         (
             "/v1/chat/completions",
             "/chat/completions",
-            {"model": "test_openai_models", "messages": [{"role": "user", "content": _LONG_PROMPT}]},
+            {
+                "model": "test_openai_models",
+                "messages": [{"role": "user", "content": _LONG_PROMPT}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS},
+                    }
+                ],
+            },
             {
                 "id": "chatcmpl-1",
                 "object": "chat.completion",
@@ -3893,7 +3903,14 @@ class _MessageCollector(logging.Handler):
         (
             "/v1/responses",
             "/responses",
-            {"model": "test_openai_models", "instructions": _LONG_PROMPT, "input": "hi"},
+            {
+                "model": "test_openai_models",
+                "instructions": _LONG_PROMPT,
+                "input": "hi",
+                "tools": [
+                    {"type": "function", "name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS}
+                ],
+            },
             {
                 "id": "resp_1",
                 "object": "response",
