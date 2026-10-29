@@ -827,7 +827,6 @@ class ModelResponseIterator:
             return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
         self.content_blocks.append(content_block)
         if "partial_json" in content_block["delta"]:
-            # Only emit tool calls if we're in a client tool_use block, server_tool_use runs on Anthropic's side
             # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
             # See: https://github.com/BerriAI/litellm/issues/17254
             if self.current_content_block_type == "tool_use":

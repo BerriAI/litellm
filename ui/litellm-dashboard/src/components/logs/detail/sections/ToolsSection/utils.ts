@@ -42,6 +42,24 @@ function extractToolsFromRequest(log: LogEntry): ToolDefinition[] {
   return [];
 }
 
+interface ChatMessageToolCallFields {
+  tool_calls?: unknown;
+  provider_specific_fields?: { server_tool_calls?: unknown } | null;
+}
+
+function toolCallList(value: unknown): ToolCall[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function extractChatMessageToolCalls(message: ChatMessageToolCallFields | undefined): ToolCall[] | null {
+  const serverToolCalls = message?.provider_specific_fields?.server_tool_calls;
+  const clientToolCalls = message?.tool_calls;
+  if (!Array.isArray(serverToolCalls) && !Array.isArray(clientToolCalls)) {
+    return null;
+  }
+  return [...toolCallList(serverToolCalls), ...toolCallList(clientToolCalls)];
+}
+
 /**
  * Extract tool calls from response data
  */
@@ -53,10 +71,9 @@ function extractToolCallsFromResponse(log: LogEntry): ToolCall[] {
   // OpenAI format: response.choices[0].message.tool_calls
   const choices = responseData.choices;
   if (Array.isArray(choices) && choices.length > 0) {
-    const firstChoice = choices[0];
-    const message = firstChoice.message;
-    if (message && Array.isArray(message.tool_calls)) {
-      return message.tool_calls;
+    const chatToolCalls = extractChatMessageToolCalls(choices[0].message);
+    if (chatToolCalls) {
+      return chatToolCalls;
     }
   }
 

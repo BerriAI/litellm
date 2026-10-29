@@ -21,6 +21,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -29,6 +30,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     replayed_tool_search_tool_names,
 )
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -50,7 +52,12 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_items,
     unappliable_request_rewrite,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     coerce_stream_holdback_value,
 )
@@ -436,9 +443,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
             )
+        server_tool_call_tasks: Final = tuple(_server_tool_call_tasks(response.choices))
+        tool_calls_with_server_calls: Final = [
+            *tool_calls_to_check,
+            *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+        ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or tool_calls_with_server_calls:
             # Use the real request_data if provided (proxy path), otherwise
             # create a standalone dict (SDK / direct-call path).
             if request_data is None:
@@ -452,8 +464,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check
+            if tool_calls_with_server_calls:
+                inputs["tool_calls"] = tool_calls_with_server_calls
             # Include model information from the response if available
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
@@ -469,8 +481,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
             guardrailed_tool_calls: Final[list[dict[str, object]]] = (
                 cast(list[dict[str, object]], returned_tool_calls)
-                if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
-                else tool_calls_to_check
+                if isinstance(returned_tool_calls, list)
+                and len(returned_tool_calls) == len(tool_calls_with_server_calls)
+                else tool_calls_with_server_calls
             )
 
             # Step 3: Map guardrail responses back to original response structure
@@ -487,6 +500,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     response=response,
                     tool_calls=guardrailed_tool_calls,
                     task_mappings=tool_call_task_mappings,
+                )
+                self._apply_guardrail_responses_to_output_server_tool_calls(
+                    response=response,
+                    guardrailed_tool_calls=guardrailed_tool_calls[len(tool_calls_to_check) :],
+                    task_mappings=tuple(mapping for mapping, _ in server_tool_call_tasks),
                 )
 
         verbose_proxy_logger.debug("OpenAI Chat Completions: Processed output response: %s", response)
@@ -680,6 +698,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_response=model_response,
             pre_guardrail_tool_calls=pre_guardrail_tool_calls,
             guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+        )
+        self._write_ended_stream_server_tool_call_rewrites(
+            responses_so_far=responses_so_far,
+            guardrailed_response=model_response,
         )
 
     @staticmethod
@@ -939,6 +961,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if choice.message.tool_calls and isinstance(choice.message.tool_calls, list):
                         if len(choice.message.tool_calls) > 0:
                             return True
+                    if anthropic_server_tool_call_params(choice.message):
+                        return True
         elif isinstance(response, ModelResponseStream):
             for streaming_choice in response.choices:
                 if isinstance(streaming_choice, litellm.StreamingChoices):
@@ -949,6 +973,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if streaming_choice.delta.tool_calls and isinstance(streaming_choice.delta.tool_calls, list):
                         if len(streaming_choice.delta.tool_calls) > 0:
                             return True
+                    if anthropic_server_tool_call_params(streaming_choice.delta):
+                        return True
         return False
 
     def _extract_output_text_images_and_tool_calls(
@@ -1100,6 +1126,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 existing_tool_call.function.name = func_dict["name"]
 
     @staticmethod
+    def _apply_guardrail_responses_to_output_server_tool_calls(
+        response: "ModelResponse",
+        guardrailed_tool_calls: Sequence[object],
+        task_mappings: Sequence[tuple[int, int]],
+    ) -> None:
+        guardrailed_by_task: Final = MappingProxyType(dict(zip(task_mappings, guardrailed_tool_calls)))
+        for choice_idx, choice in enumerate(response.choices):
+            server_tool_calls = anthropic_server_tool_call_params(choice.message)
+            rewritten = tuple(
+                _rewritten_server_tool_call(server_tool_call, guardrailed_by_task.get((choice_idx, server_idx)))
+                for server_idx, server_tool_call in enumerate(server_tool_calls)
+            )
+            if rewritten != server_tool_calls:
+                choice.message.provider_specific_fields = {
+                    **(choice.message.provider_specific_fields or {}),
+                    "server_tool_calls": list(rewritten),
+                }
+
+    @staticmethod
     def _string_choice_contents(response: "ModelResponse") -> tuple[str | None, ...]:
         return tuple(
             choice.message.content if isinstance(choice.message.content, str) else None for choice in response.choices
@@ -1210,6 +1255,32 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             head.function.arguments = arguments
             for fragment in tail:
                 fragment.function.arguments = ""
+
+    @staticmethod
+    def _write_ended_stream_server_tool_call_rewrites(
+        responses_so_far: Sequence["ModelResponseStream"],
+        guardrailed_response: "ModelResponse",
+    ) -> None:
+        guardrailed_by_id: Final = MappingProxyType(
+            {
+                (guardrailed_response.choices[choice_position].index, server_tool_call["id"]): server_tool_call
+                for (choice_position, _), server_tool_call in _server_tool_call_tasks(guardrailed_response.choices)
+            }
+        )
+        if not guardrailed_by_id:
+            return
+        for response in responses_so_far:
+            for choice in response.choices:
+                streamed = anthropic_server_tool_call_params(choice.delta)
+                rewritten = tuple(
+                    guardrailed_by_id.get((choice.index, server_tool_call["id"]), server_tool_call)
+                    for server_tool_call in streamed
+                )
+                if rewritten != streamed:
+                    choice.delta.provider_specific_fields = {
+                        **(choice.delta.provider_specific_fields or {}),
+                        "server_tool_calls": list(rewritten),
+                    }
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,
@@ -1400,7 +1471,42 @@ def _stream_chunk_choices(item: object) -> Sequence[object]:
 def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
     function_call: Final = stream_item_field(delta, "function_call")
     legacy: Final = () if function_call is None else (function_call,)
-    return stream_item_items(delta, "tool_calls") + legacy
+    return anthropic_server_tool_call_params(delta) + stream_item_items(delta, "tool_calls") + legacy
+
+
+def _server_tool_call_tasks(
+    choices: Sequence[object],
+) -> Iterator[tuple[tuple[int, int], ChatCompletionAssistantToolCall]]:
+    for choice_idx, choice in enumerate(choices):
+        if not isinstance(choice, Choices):
+            continue
+        for server_idx, server_tool_call in enumerate(anthropic_server_tool_call_params(choice.message)):
+            yield (choice_idx, server_idx), server_tool_call
+
+
+def _server_tool_call_input(server_tool_call: ChatCompletionAssistantToolCall) -> dict[str, object]:
+    return {
+        "id": server_tool_call["id"],
+        "type": server_tool_call["type"],
+        "function": dict(server_tool_call["function"]),
+    }
+
+
+_TOOL_CALL_FUNCTION_ADAPTER: Final = TypeAdapter(ChatCompletionToolCallFunctionChunk)
+
+
+def _rewritten_server_tool_call(
+    server_tool_call: ChatCompletionAssistantToolCall, guardrailed: object
+) -> ChatCompletionAssistantToolCall:
+    try:
+        function: Final = _TOOL_CALL_FUNCTION_ADAPTER.validate_python(stream_item_field(guardrailed, "function"))
+    except ValidationError:
+        return server_tool_call
+    return ChatCompletionAssistantToolCall(
+        id=server_tool_call["id"],
+        type=server_tool_call["type"],
+        function={**server_tool_call["function"], **function},
+    )
 
 
 def _released_choices(responses_so_far: Sequence[object]) -> Iterator[object]:

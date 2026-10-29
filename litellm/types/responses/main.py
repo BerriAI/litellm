@@ -92,6 +92,9 @@ def _is_tool_result_error(content: object, tool_name: str) -> bool:
             return False
 
 
+WEB_SEARCH_CALL_ID_PREFIX: Final = "ws_"
+
+
 def build_web_search_call(
     tool_id: str,
     tool_input: object,
@@ -101,11 +104,16 @@ def build_web_search_call(
 ) -> ResponseFunctionWebSearch:
     content: Final = _result_content(result)
     return ResponseFunctionWebSearch(
-        id=f"ws_{tool_id}",
+        id=f"{WEB_SEARCH_CALL_ID_PREFIX}{tool_id}",
         type="web_search_call",
         status=status or ("failed" if _is_tool_result_error(content, tool_name) else "completed"),
         action=_web_fetch_action(tool_input) if tool_name == "web_fetch" else _web_search_action(tool_input, content),
     )
+
+
+def web_search_call_tool_id(call_id: str) -> str | None:
+    tool_id: Final = call_id.removeprefix(WEB_SEARCH_CALL_ID_PREFIX)
+    return None if tool_id == call_id else tool_id
 
 
 class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):

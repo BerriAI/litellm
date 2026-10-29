@@ -31,6 +31,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.response_function_web_search import ActionOpenPage, ActionSearch
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -56,7 +57,12 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls, supports_anthropic_cache_control
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    anthropic_server_tool_calls,
+    supports_anthropic_cache_control,
+    validated_object_mapping,
+)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
@@ -66,11 +72,12 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     StoredTurns,
 )
-from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
+from litellm.types.llms.anthropic import ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionAudioObject,
     ChatCompletionCachedContent,
     ChatCompletionFileObject,
@@ -114,6 +121,7 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
+    web_search_call_tool_id,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -871,6 +879,29 @@ def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, obj
     if not isinstance(metadata, dict):
         return MappingProxyType({})
     return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
+
+
+def _pending_claude_server_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
+    tool_id: Final = web_search_call_tool_id(search.id)
+    if search.status != "in_progress" or tool_id is None:
+        return None
+    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
+    match search.action:
+        case ActionSearch(query=str() as query):
+            return _server_tool_call(tool_id, "web_search", json.dumps({"query": query}))
+        case ActionOpenPage(url=str() as url):
+            return _server_tool_call(tool_id, "web_fetch", json.dumps({"url": url}))
+        case _:
+            return None
+
+
+def _server_tool_call(tool_id: str, name: str, arguments: str) -> ChatCompletionAssistantToolCall:
+    return ChatCompletionAssistantToolCall(
+        id=tool_id,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments),
+    )
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -1778,10 +1809,22 @@ class LiteLLMCompletionResponsesConfig:
         message_cache_control: Final = (
             None if isinstance(content, list) else new_cache_control or previous_cache_control
         )
+        new_server_tool_calls: Final = anthropic_server_tool_call_params(new_message)
+        server_tool_call_fields: Final = (
+            {
+                "provider_specific_fields": {
+                    **(validated_object_mapping(last_message.get("provider_specific_fields")) or {}),
+                    "server_tool_calls": [*anthropic_server_tool_call_params(last_message), *new_server_tool_calls],
+                }
+            }
+            if new_server_tool_calls
+            else {}
+        )
         merged: Final = {
             **{key: value for key, value in last_message.items() if key != "cache_control"},
             "content": content,
             **({} if message_cache_control is None else {"cache_control": message_cache_control}),
+            **server_tool_call_fields,
         }
         return cast(  # cast-ok: preserves the assistant fields and content blocks
             ChatCompletionAssistantMessage, merged
@@ -2223,10 +2266,15 @@ class LiteLLMCompletionResponsesConfig:
                         content="Hosted web search: " + replay.model_dump_json(exclude_none=True),
                     )
                 ]
+            hosted_search_text: Final = "Hosted web search: " + search.model_dump_json(exclude_none=True)
+            pending_server_tool_call: Final = _pending_claude_server_tool_call(search)
+            if pending_server_tool_call is None:
+                return [GenericChatCompletionMessage(role="assistant", content=hosted_search_text)]
             return [
-                GenericChatCompletionMessage(
+                ChatCompletionResponseMessage(
                     role="assistant",
-                    content="Hosted web search: " + search.model_dump_json(exclude_none=True),
+                    content=hosted_search_text,
+                    provider_specific_fields={"server_tool_calls": [pending_server_tool_call]},
                 )
             ]
         if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):

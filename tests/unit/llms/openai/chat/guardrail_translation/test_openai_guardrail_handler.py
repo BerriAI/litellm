@@ -144,6 +144,42 @@ class MockMisalignedToolCallGuardrail(CustomGuardrail):
         )
 
 
+def _server_tool_call(call_id: str, name: str, arguments: Mapping[str, object]) -> dict[str, object]:
+    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
+
+
+def _tool_call_ids_names_and_arguments(tool_calls) -> list[tuple[str, str, str]]:
+    return [
+        (tool_call["id"], tool_call["function"]["name"], tool_call["function"]["arguments"])
+        for tool_call in tool_calls
+    ]
+
+
+class QueryRedactingGuardrail(CustomGuardrail):
+    """Returns copied tool calls with any ``query`` argument redacted, leaving other calls as they came."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        def redacted(tool_call):
+            arguments = json.loads(tool_call["function"]["arguments"])
+            if "query" not in arguments:
+                return tool_call
+            return {
+                **tool_call,
+                "function": {**tool_call["function"], "arguments": json.dumps({**arguments, "query": "[REDACTED]"})},
+            }
+
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=[redacted(tool_call) for tool_call in inputs.get("tool_calls", [])],
+        )
+
+
 class TestOpenAIChatCompletionsHandlerToolsInput:
     """Test input processing with tools (function definitions)"""
 
@@ -906,6 +942,92 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert tool_calls[0].function.arguments == first_args
         assert tool_calls[1].function.arguments == second_args
 
+    @pytest.mark.asyncio
+    async def test_output_guardrail_sees_a_response_that_only_carries_server_tool_calls(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = TestOpenAIChatCompletionsHandlerStreamingOutput._recording_guardrail()
+        response = ModelResponse(
+            model="claude-sonnet-4-5",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        provider_specific_fields={
+                            "server_tool_calls": [_server_tool_call("srvtoolu_01Search", "web_search", {"query": "x"})]
+                        },
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert _tool_call_ids_names_and_arguments(guardrail.seen_inputs[-1]["tool_calls"]) == [
+            ("srvtoolu_01Search", "web_search", '{"query": "x"}')
+        ]
+
+    @pytest.mark.asyncio
+    async def test_output_guardrail_rewrite_of_a_server_tool_call_lands_in_server_tool_calls_only(self):
+        handler = OpenAIChatCompletionsHandler()
+        weather_args = json.dumps({"city": "Paris", "query": "forecast"})
+        response = ModelResponse(
+            model="claude-sonnet-4-5",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content="Looking it up",
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(name="get_weather", arguments=json.dumps({"city": "Paris"})),
+                            )
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                _server_tool_call("srvtoolu_01Search", "web_search", {"query": "jane@example.com"})
+                            ]
+                        },
+                    ),
+                ),
+                Choices(
+                    finish_reason="tool_calls",
+                    index=1,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_2",
+                                type="function",
+                                function=Function(name="get_weather", arguments=weather_args),
+                            )
+                        ],
+                    ),
+                ),
+            ],
+        )
+
+        await handler.process_output_response(response, QueryRedactingGuardrail(guardrail_name="redact"))
+
+        first, second = response.choices
+        assert _tool_call_ids_names_and_arguments(first.message.provider_specific_fields["server_tool_calls"]) == [
+            ("srvtoolu_01Search", "web_search", '{"query": "[REDACTED]"}')
+        ]
+        assert [(call.id, call.function.arguments) for call in first.message.tool_calls] == [
+            ("call_1", '{"city": "Paris"}')
+        ]
+        assert [(call.id, call.function.arguments) for call in second.message.tool_calls] == [
+            ("call_2", '{"city": "Paris", "query": "[REDACTED]"}')
+        ]
+        assert not (second.message.provider_specific_fields or {}).get("server_tool_calls")
+
 
 class MockPassThroughGuardrail(CustomGuardrail):
     """Mock guardrail that passes through without blocking - for testing streaming fallback behavior"""
@@ -1461,6 +1583,61 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert result is chunks
         assert chunks[0].choices[0].delta.content == "hello [MASKED]"
         assert chunks[1].choices[0].delta.content in (None, "")
+
+    @staticmethod
+    def _ended_server_tool_call_stream_chunks() -> list:
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        def chunk(delta: Delta, finish_reason: Optional[str] = None) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="claude-sonnet-4-5",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+            )
+
+        search = {**_server_tool_call("srvtoolu_01Search", "web_search", {"query": "jane@example.com"}), "index": 0}
+        return [
+            chunk(Delta(content="Searching")),
+            chunk(Delta(content=None, provider_specific_fields={"server_tool_calls": [search]})),
+            chunk(Delta(content=None), finish_reason="stop"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_guardrail_sees_streamed_server_tool_calls(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._recording_guardrail()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=self._ended_server_tool_call_stream_chunks(),
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert _tool_call_ids_names_and_arguments(guardrail.seen_inputs[-1]["tool_calls"]) == [
+            ("srvtoolu_01Search", "web_search", '{"query": "jane@example.com"}')
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_server_tool_call_arguments_back_into_chunks(self):
+        handler = OpenAIChatCompletionsHandler()
+        chunks = self._ended_server_tool_call_stream_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=QueryRedactingGuardrail(guardrail_name="redact"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        delta = chunks[1].choices[0].delta
+        assert _tool_call_ids_names_and_arguments(delta.provider_specific_fields["server_tool_calls"]) == [
+            ("srvtoolu_01Search", "web_search", '{"query": "[REDACTED]"}')
+        ]
+        assert delta.tool_calls is None
+        assert chunks[0].choices[0].delta.content == "Searching"
 
 
 class TestUndecoratedGuardrailIsRecorded:
@@ -2322,6 +2499,29 @@ class TestStreamingScanKey:
         assert open_key.tool_calls == ()
         assert len(ended_key.tool_calls) == 1 and "run_shell" in ended_key.tool_calls[0]
         assert ended_key.tool_calls_in_flight is False
+
+    def test_server_tool_calls_hold_the_window_and_enter_the_key_once_the_stream_has_ended(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        server_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        provider_specific_fields={
+                            "server_tool_calls": [_server_tool_call("srvtoolu_01Search", "web_search", {"query": "x"})]
+                        },
+                    ),
+                )
+            ]
+        )
+        open_key = handler.get_streaming_scan_key([self._chunk("hi"), server_chunk])
+        ended_key = handler.get_streaming_scan_key([self._chunk("hi"), server_chunk, self._chunk(None, "stop")])
+        assert open_key.tool_calls_in_flight is True
+        assert len(ended_key.tool_calls) == 1 and "web_search" in ended_key.tool_calls[0]
+        assert ended_key != open_key
 
     def test_text_after_the_first_choice_finishes_still_changes_the_key(self):
         handler = OpenAIChatCompletionsHandler()

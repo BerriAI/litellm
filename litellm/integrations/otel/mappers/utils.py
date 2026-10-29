@@ -12,6 +12,8 @@ from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
 from litellm.integrations.otel.model.payloads import LLMCallSpanData, ToolDefinition
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,12 +143,13 @@ def output_messages(data: LLMCallSpanData) -> list:
 
 
 def message_tool_calls(message: object) -> tuple[MessageToolCall, ...]:
+    tool_call_values: Final = (
+        *anthropic_server_tool_call_params(message),
+        *parts_of(message_field(message, "tool_calls")),
+    )
     if not isinstance(message, dict):
         return ()
-    tool_calls: Final = message.get("tool_calls")
-    if not isinstance(tool_calls, (list, tuple)) or not tool_calls:
-        return ()
-    return tuple(tool_call for value in tool_calls if (tool_call := _message_tool_call(value)) is not None)
+    return tuple(tool_call for value in tool_call_values if (tool_call := _message_tool_call(value)) is not None)
 
 
 def _message_tool_call(value: object) -> MessageToolCall | None:

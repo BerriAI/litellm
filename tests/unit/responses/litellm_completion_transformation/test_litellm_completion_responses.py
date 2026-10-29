@@ -5217,6 +5217,75 @@ class TestHostedWebSearchReplay:
         assert history == original
 
     @pytest.mark.parametrize(
+        "leading_text", ((), ({"type": "text", "text": "Let me look that up."},)), ids=("alone", "after_text")
+    )
+    @pytest.mark.parametrize(
+        ("server_tool_use", "expected_input"),
+        (
+            (
+                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+                {"url": _FETCHED_URL},
+            ),
+            (
+                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+                {"query": "python"},
+            ),
+        ),
+        ids=("web_fetch", "web_search"),
+    )
+    def test_pending_claude_web_call_replays_to_anthropic_as_its_own_server_tool_use(
+        self,
+        leading_text: tuple[Mapping[str, object], ...],
+        server_tool_use: Mapping[str, object],
+        expected_input: Mapping[str, object],
+    ) -> None:
+        response: Final = _anthropic_turn_on_responses((*leading_text, server_tool_use, _WEATHER_TOOL_USE))
+        history: Final = [
+            {"role": "user", "content": "Use the web and check the weather in Paris."},
+            *(item.model_dump(exclude_none=True) for item in response.output),
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "Paris is sunny."},
+        ]
+
+        anthropic_turns: Final = anthropic_messages_pt(
+            messages=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=history, responses_api_request={}
+            ),
+            model="claude-sonnet-5-5",
+            llm_provider="anthropic",
+        )
+
+        assert [turn["role"] for turn in anthropic_turns] == ["user", "assistant", "user"]
+        assert [block for block in anthropic_turns[1]["content"] if block["type"] != "text"] == [
+            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": server_tool_use["name"], "input": expected_input},
+            {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+        ]
+        assert [(block["type"], block["tool_use_id"]) for block in anthropic_turns[2]["content"]] == [
+            ("tool_result", "toolu_01Weather")
+        ]
+
+    @pytest.mark.parametrize(
+        ("call_id", "status"),
+        (("ws_srvtoolu_01Fetch", "completed"), ("ws_68a1b2c3d4", "in_progress"), ("srvtoolu_01Fetch", "in_progress")),
+        ids=("completed-claude-call", "pending-non-claude-call", "pending-unprefixed-id"),
+    )
+    def test_web_call_that_is_not_a_pending_claude_call_replays_as_text_only(
+        self, call_id: str, status: Literal["completed", "in_progress"]
+    ) -> None:
+        search: Final = ResponseFunctionWebSearch(
+            id=call_id, type="web_search_call", status=status, action=ActionOpenPage(type="open_page", url=_FETCHED_URL)
+        )
+
+        messages: Final = (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                input_item=search.model_dump(exclude_none=True)
+            )
+        )
+
+        assert messages == [
+            {"role": "assistant", "content": "Hosted web search: " + search.model_dump_json(exclude_none=True)}
+        ]
+
+    @pytest.mark.parametrize(
         "action",
         (
             ActionSearch(
