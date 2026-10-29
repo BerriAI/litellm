@@ -4546,16 +4546,23 @@ def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: b
 
 @pytest.mark.parametrize(
     "tools",
-    [None, "lookup_record", [], [{"name": "a"}], [{"name": "a", "strict": True}, "b"]],
-    ids=["absent", "not_a_list", "empty", "no_strict_key", "malformed_tool"],
+    [
+        None,
+        "lookup_record",
+        [],
+        [{"name": "a"}],
+        [{"name": "a", "strict": False}],
+        [{"name": "a", "strict": True}, "b"],
+    ],
+    ids=["absent", "not_a_list", "empty", "no_strict_key", "strict_false_only", "malformed_tool"],
 )
-def test_tools_without_strict_is_none_unless_every_tool_is_an_object_and_one_carries_strict(tools: object) -> None:
+def test_tools_without_strict_is_none_unless_every_tool_is_an_object_and_one_is_strict(tools: object) -> None:
     assert tools_without_strict(tools) is None
 
 
-def test_tools_without_strict_drops_only_the_strict_key_and_counts_the_tools_that_carried_it() -> None:
+def test_tools_without_strict_drops_only_the_strict_key_and_counts_the_strict_tools() -> None:
     tools: Final = [{"name": "a", "strict": True}, {"name": "b"}, {"name": "c", "strict": False}]
 
     assert tools_without_strict(tools) == ToolsWithoutStrict(
-        tools=({"name": "a"}, {"name": "b"}, {"name": "c"}), dropped_count=2
+        tools=({"name": "a"}, {"name": "b"}, {"name": "c"}), dropped_count=1
     )

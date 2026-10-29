@@ -4311,8 +4311,9 @@ async def test_bedrock_messages_body_rebuilt_without_native_output_still_drops_t
         (False, _STRICT_TOOLS, _STRICT_TOOLS_REJECTIONS[0]),
         (True, _STRICT_TOOLS, {"message": "messages.0.content: Field required"}),
         (True, (_LOOKUP_TOOL,), _STRICT_TOOLS_REJECTIONS[0]),
+        (True, ({**_LOOKUP_TOOL, "strict": False},), _STRICT_TOOLS_REJECTIONS[1]),
     ],
-    ids=["drop_params_unset", "drop_params_off", "other_400", "no_strict_tool"],
+    ids=["drop_params_unset", "drop_params_off", "other_400", "no_strict_tool", "strict_false_only"],
 )
 async def test_bedrock_messages_400_reaches_the_caller_unless_drop_params_can_drop_the_rejected_strict(
     drop_params: bool | None, tools: Sequence[Mapping[str, object]], rejection: Mapping[str, object]

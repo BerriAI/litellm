@@ -1788,7 +1788,7 @@ def tools_without_strict(tools: object) -> ToolsWithoutStrict | None:
         validated: Final = _CLAUDE_TOOLS_ADAPTER.validate_python(tools)
     except ValidationError:
         return None
-    dropped_count: Final = sum("strict" in tool for tool in validated)
+    dropped_count: Final = sum(tool.get("strict") is True for tool in validated)
     if dropped_count == 0:
         return None
     return ToolsWithoutStrict(
@@ -1799,8 +1799,8 @@ def tools_without_strict(tools: object) -> ToolsWithoutStrict | None:
 
 def warn_claude_strict_tools_dropped(dropped_count: int) -> None:
     litellm.verbose_logger.warning(
-        "Claude rejected the strict tool schemas, so litellm dropped `strict` from %d tools and sent the request "
-        "again because drop_params is set.",
+        "Claude rejected the request's strict schemas, so litellm dropped `strict` from %d tools and sent the "
+        "request again because drop_params is set.",
         dropped_count,
     )
 

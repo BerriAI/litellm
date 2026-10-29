@@ -197,7 +197,12 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (
             messages_detectors.strict_tools_retry,
             {"drop_params": True, "tools": [{**STRICT_TOOL, "strict": False}]},
-            True,
+            False,
+        ),
+        (
+            messages_detectors.strict_tools_retry,
+            {"additional_drop_params": ["metadata.user_id"], "tools": [STRICT_TOOL]},
+            False,
         ),
         (messages_detectors.strict_tools_retry, {"tools": [STRICT_TOOL]}, False),
         (messages_detectors.strict_tools_retry, {"drop_params": False, "tools": [STRICT_TOOL]}, False),
