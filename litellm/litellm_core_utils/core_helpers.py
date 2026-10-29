@@ -1027,17 +1027,10 @@ def _carries_litellm_bill(response: object) -> bool:
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
-    """The charge an OpenAI-compatible upstream reports in a chat completion's ``usage.cost``. Skipped once the stream
-    builder stamped litellm's own bill onto the response (its ``usage.cost`` then holds that bill), and for Responses
-    API objects, whose terminal ``usage.cost`` litellm also rewrites and whose upstream figure is billed through
-    ``set_response_cost_in_hidden_params``."""
-    from litellm.types.utils import ModelResponse
-
-    if (
-        custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS
-        or not isinstance(response, ModelResponse)
-        or _carries_litellm_bill(response)
-    ):
+    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, skipped once litellm stamped its own bill
+    onto the response, because the stream builder and the Responses terminal event then rewrite ``usage.cost`` to
+    that bill."""
+    if custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS or _carries_litellm_bill(response):
         return None
     cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None

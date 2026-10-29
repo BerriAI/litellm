@@ -1870,6 +1870,7 @@ def stamp_responses_usage_cost(
         return
     if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
         setattr(usage_obj, "cost", float(bill))
+        response_obj.hidden_params = {**response_obj.hidden_params, "response_cost": float(bill)}
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:

@@ -816,7 +816,7 @@ def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> N
     assert billed_usage_cost(chat, "openai") == 0.037
     assert billed_usage_cost(chat, "openrouter") == 0.037
     assert billed_usage_cost(chat, "xai") is None
-    assert billed_usage_cost(SimpleNamespace(usage=usage), "openai") is None
+    assert billed_usage_cost(SimpleNamespace(usage=usage), "openai") == 0.037
     stamped = ModelResponse(usage=usage)
     stamped._hidden_params["response_cost"] = 0.037
     assert billed_usage_cost(stamped, "openai") is None
