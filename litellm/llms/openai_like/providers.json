@@ -292,5 +292,12 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "llmman": {
+    "base_url": "http://127.0.0.1:17434/v1",
+    "api_key_env": "LLMMAN_API_KEY",
+    "api_base_env": "LLMMAN_API_BASE",
+    "default_api_key": "fake-api-key",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
