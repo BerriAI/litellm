@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.108.0"
+version = "1.109.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.16"
@@ -85,7 +85,7 @@ proxy = [
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.111",
-    "litellm-enterprise==0.1.79",
+    "litellm-enterprise==0.1.80",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -296,7 +296,7 @@ ci = [
     "anthropic==0.84.0",
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
-    "pylint==4.0.5",
+    "pylint==4.0.9",
     "langchain-openai==1.1.14",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",
@@ -360,11 +360,13 @@ cache-keys = [
 ]
 constraint-dependencies = [
     "tornado>=6.5.8",
+    "tornado>=6.6; python_version >= '3.11'",
     "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
     "soupsieve>=2.8.4",
     "httplib2>=0.32.0",
     "setuptools>=84.1.0",
+    "dnspython>=2.9.0; python_version >= '3.11'",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
@@ -388,7 +390,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.108.0"
+version = "1.109.0"
 version_files = [
     "pyproject.toml:^version",
 ]
@@ -401,7 +403,7 @@ markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
     "no_parallel: mark test to run sequentially (not in parallel) - typically for memory measurement tests",
-    "requires_rust_extension: public Python contract requiring an enabled, compiled Rust extension",
+    "requires_rust_extension: public Python contract tests that run against the release-built wheel",
 ]
 filterwarnings = [
     # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)

@@ -342,7 +342,7 @@ async def get_agents(request: Request):
     response_model=list[MCPPublicServer],
 )
 async def get_mcp_servers():
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
