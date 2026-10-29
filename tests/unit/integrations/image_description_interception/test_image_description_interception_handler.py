@@ -25,9 +25,7 @@ class _RecordingDescriber:
         self.results = results
         self.requests: list[tuple[str, Sequence[Mapping[str, object]]]] = []
 
-    async def __call__(
-        self, model: str, messages: Sequence[Mapping[str, object]], timeout: float
-    ) -> DescriptionResult:
+    async def __call__(self, model: str, messages: Sequence[Mapping[str, object]], timeout: float) -> DescriptionResult:
         self.requests.append((model, messages))
         await asyncio.sleep(0)
         return self.results[min(len(self.requests), len(self.results)) - 1]
@@ -145,7 +143,9 @@ async def test_concurrent_requests_with_the_same_image_share_one_description_cal
 
 @pytest.mark.asyncio
 async def test_failed_description_becomes_a_placeholder_and_is_retried_next_turn():
-    describer: Final = _RecordingDescriber([DescriptionFailed("vision-describer call failed (Timeout)"), Described("ok")])
+    describer: Final = _RecordingDescriber(
+        [DescriptionFailed("vision-describer call failed (Timeout)"), Described("ok")]
+    )
     logger: Final = _logger(describer)
 
     failed: Final = await logger.async_pre_call_deployment_hook(
@@ -197,7 +197,9 @@ async def test_description_call_routed_to_a_text_only_deployment_does_not_recurs
             )
             return DescriptionFailed("vision-describer call failed (BadRequestError)")
 
-    logger: Final = ImageDescriptionInterceptionLogger(image_model="vision-describer", describer=_MisconfiguredDescriber())
+    logger: Final = ImageDescriptionInterceptionLogger(
+        image_model="vision-describer", describer=_MisconfiguredDescriber()
+    )
 
     result: Final = await logger.async_pre_call_deployment_hook(
         _request([_image_turn("hi")], TEXT_ONLY), CallTypes.acompletion

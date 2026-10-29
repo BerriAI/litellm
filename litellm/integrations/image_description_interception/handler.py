@@ -13,7 +13,8 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Final, Protocol
+from itertools import chain
+from typing import Final, Protocol, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.caching.dual_cache import DualCache
@@ -64,7 +65,7 @@ class DescriptionFailed:
     reason: str
 
 
-DescriptionResult = Described | DescriptionFailed
+DescriptionResult: TypeAlias = Described | DescriptionFailed
 
 
 class ImageDescriber(Protocol):
@@ -160,7 +161,7 @@ def _image_parts_of(message_index: int, message: Mapping[str, object]) -> tuple[
 
 
 def _image_parts(messages: Sequence[Mapping[str, object]]) -> tuple[_ImagePart, ...]:
-    return tuple(part for index, message in enumerate(messages) for part in _image_parts_of(index, message))
+    return tuple(chain.from_iterable(_image_parts_of(index, message) for index, message in enumerate(messages)))
 
 
 def _with_text_parts(
@@ -203,7 +204,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         cache: DualCache | None = None,
         prompt: str = DEFAULT_IMAGE_DESCRIPTION_PROMPT,
         timeout: float = DEFAULT_IMAGE_DESCRIPTION_TIMEOUT_SECONDS,
-    ):
+    ) -> None:
         super().__init__()
         self.image_model = image_model
         self.describer = describer
@@ -211,7 +212,9 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         self.prompt = prompt
         self.timeout = timeout
         self._prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
-        self._in_flight: dict[str, asyncio.Task[DescriptionResult]] = {}
+        self._in_flight: dict[
+            str, asyncio.Task[DescriptionResult]
+        ] = {}  # mutable-ok: shares one pending description between concurrent requests
 
     @staticmethod
     def initialize_from_proxy_config(
@@ -243,8 +246,10 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         )
 
     async def async_pre_call_deployment_hook(
-        self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict[str, object] | None:
+        self,
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_pre_call_deployment_hook contract
+        call_type: CallTypes | None,
+    ) -> dict[str, object] | None:  # mutable-ok: CustomLogger.async_pre_call_deployment_hook contract
         if call_type not in _CHAT_CALL_TYPES or _describing_image.get():
             return None
         messages: Final = _chat_messages(kwargs.get("messages"))
