@@ -4,6 +4,8 @@ from typing import Final, Literal
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.exceptions import BadRequestError
+
 ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "litellm_proxy"})
 
 CHAT_ALLOWED_TOOLS_LAYOUT: Final = (
@@ -39,6 +41,27 @@ _NAMED_TOOL: Final = TypeAdapter(_NamedTool)
 
 def is_allowed_tools_tool_choice(tool_choice: Mapping[str, object] | str | None) -> bool:
     return isinstance(tool_choice, Mapping) and tool_choice.get("type") == "allowed_tools"
+
+
+def raise_if_allowed_tools_tool_choice_unsupported(
+    tool_choice: Mapping[str, object] | str | None,
+    custom_llm_provider: str,
+    model: str,
+) -> None:
+    """Providers outside the set would silently send the request with no tool restriction at all, so the call stops
+    here with a 400. ``drop_params`` is deliberately not consulted: dropping a restriction widens what the model may call."""
+    if not is_allowed_tools_tool_choice(tool_choice) or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
+        return
+    raise BadRequestError(
+        message=(
+            "tool_choice type 'allowed_tools' is only supported for "
+            f"{', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, got custom_llm_provider={custom_llm_provider}. "
+            "drop_params does not drop it, since that would let the model call tools the request excluded. "
+            "Send only the allowed tools in `tools` with tool_choice='auto' or 'required' instead."
+        ),
+        model=model,
+        llm_provider=custom_llm_provider,
+    )
 
 
 def parse_chat_allowed_tools_tool_choice(tool_choice: Mapping[str, object]) -> ChatAllowedToolsToolChoice | None:
