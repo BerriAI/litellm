@@ -2,7 +2,8 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
@@ -44,6 +45,8 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    message_field,
+    parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -171,6 +174,44 @@ _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
 NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
 NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
+
+
+def _is_present_non_string(value: object) -> bool:
+    return value is not None and not isinstance(value, str)
+
+
+def _non_string_tool_call_ids(index: int, tool_calls: object) -> Iterator[tuple[str, object]]:
+    ids: Final = ((position, message_field(tool_call, "id")) for position, tool_call in enumerate(parts_of(tool_calls)))
+    return (
+        (f"messages[{index}].tool_calls[{position}].id", tool_call_id)
+        for position, tool_call_id in ids
+        if _is_present_non_string(tool_call_id)
+    )
+
+
+def _non_string_message_fields(index: int, message: object) -> Iterator[tuple[str, object]]:
+    role: Final = message_field(message, "role")
+    if _is_present_non_string(role):
+        yield f"messages[{index}].role", role
+    tool_call_id: Final = message_field(message, "tool_call_id")
+    if role in ("tool", "function") and _is_present_non_string(tool_call_id):
+        yield f"messages[{index}].tool_call_id", tool_call_id
+    if role == "assistant":
+        yield from _non_string_tool_call_ids(index, message_field(message, "tool_calls"))
+
+
+def non_string_message_field_error(messages: Sequence[object]) -> AnthropicError | None:
+    malformed_field: Final = next(
+        chain.from_iterable(_non_string_message_fields(index, message) for index, message in enumerate(messages)),
+        None,
+    )
+    if malformed_field is None:
+        return None
+    field_path, field_value = malformed_field
+    return AnthropicError(
+        status_code=400,
+        message=f"Invalid type for '{field_path}': expected a string, got {type(field_value).__name__}",
+    )
 
 
 def _tool_type(tool: object) -> str | None:
@@ -2342,12 +2383,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
-        conversation: Final = place_mid_conversation_system(
-            later_messages,
-            supports_mid_conversation_system=supports_mid_conversation_system(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ),
-        )
+        try:
+            conversation: Final = place_mid_conversation_system(
+                later_messages,
+                supports_mid_conversation_system=supports_mid_conversation_system(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                ),
+            )
+        except TypeError as error:
+            field_error: Final = non_string_message_field_error(messages)
+            if field_error is None:
+                raise
+            raise field_error from error
         # Format rest of message according to anthropic guidelines
         try:
             anthropic_messages = anthropic_messages_pt(
@@ -2357,7 +2404,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=drop_params,
             )
         except Exception as e:
-            raise AnthropicError(
+            raise non_string_message_field_error(messages) or AnthropicError(
                 status_code=400,
                 message=f"{e}\nReceived Messages={messages}",
             )  # don't use verbose_logger.exception, if exception is raised
