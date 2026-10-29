@@ -14,14 +14,14 @@ from fastapi import HTTPException
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
-    JWTLiteLLMRoleMap,
     JWTIssuerConfig,
-    LiteLLMRoutes,
+    JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
     Member,
     ProxyErrorTypes,
@@ -8637,3 +8637,107 @@ async def test_decode_trusted_assertion_runs_the_configured_custom_validate_on_t
     else:
         assert isinstance(verified, AssertionRejection)
         assert "custom_validate" in verified.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id_upsert", "expected_created"), [(True, ["team1", "team3"]), (False, [])])
+async def test_sync_user_role_and_teams_creates_the_claimed_array_teams_only_when_team_id_upsert_is_on(
+    team_id_upsert: bool, expected_created: list[str]
+) -> None:
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="my_id_teams", sync_user_role_and_teams=True, team_id_upsert=team_id_upsert
+        ),
+    )
+    token = {"my_id_teams": ["team3", "team1", "team2"]}
+    user = LiteLLM_UserTable(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER.value, teams=["team2"])
+    created: list[str] = []  # mutable-ok: records the teams the proxy would create
+
+    async def create_team(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
+        created.append(team_id)
+        return LiteLLM_TeamTable(team_id=team_id)
+
+    with (
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", create_team),
+        patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", new_callable=AsyncMock
+        ) as membership,
+    ):
+        await JWTAuthManager.sync_user_role_and_teams(
+            jwt_handler, token, user, AsyncMock(), user_api_key_cache=AsyncMock()
+        )
+
+    assert created == expected_created
+    assert sorted(membership.call_args.kwargs["teams_ids_to_add_user_to"]) == ["team1", "team3"]
+
+
+@pytest.mark.asyncio
+async def test_sync_user_role_and_teams_still_joins_the_team_when_a_concurrent_request_created_it_first() -> None:
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="my_id_teams", sync_user_role_and_teams=True, team_id_upsert=True
+        ),
+    )
+    user = LiteLLM_UserTable(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER.value, teams=[])
+
+    async def lost_the_create_race(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
+        raise HTTPException(status_code=404, detail={"error": f"Team id = {team_id} already exists"})
+
+    with (
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", lost_the_create_race),
+        patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", new_callable=AsyncMock
+        ) as membership,
+    ):
+        await JWTAuthManager.sync_user_role_and_teams(
+            jwt_handler, {"my_id_teams": ["team1"]}, user, AsyncMock(), user_api_key_cache=AsyncMock()
+        )
+
+    assert membership.call_args.kwargs["teams_ids_to_add_user_to"] == ["team1"]
+    assert user.teams == ["team1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id_upsert", "expected_team_id"), [(True, "team-1"), (False, None)])
+async def test_find_team_with_model_access_creates_the_claimed_team_only_when_team_id_upsert_is_on(
+    monkeypatch: pytest.MonkeyPatch, team_id_upsert: bool, expected_team_id: str | None
+) -> None:
+    import sys
+    import types
+
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    async def team_table_with_upsert(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
+        if not kwargs.get("team_id_upsert"):
+            raise HTTPException(status_code=404, detail={"error": f"Team doesn't exist in db. Team={team_id}"})
+        return LiteLLM_TeamTable(team_id=team_id)
+
+    monkeypatch.setattr("litellm.proxy.auth.handle_jwt.get_team_object", team_table_with_upsert)
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_upsert=team_id_upsert)
+    user_api_key_cache = DualCache()
+
+    team_id, _ = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-1"},
+        requested_model=None,
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+        team_id_upsert=team_id_upsert,
+    )
+
+    assert team_id == expected_team_id

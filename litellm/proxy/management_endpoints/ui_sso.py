@@ -1263,17 +1263,18 @@ def generic_response_convertor(
         team_ids = jwt_handler.get_all_jwt_team_ids(token)
         all_teams.extend(team_ids)
     team_id_jwt_field: Final = jwt_handler.litellm_jwtauth.team_id_jwt_field
-    upsert_candidate: Final[object] = (
+    team_id_upsert: Final = bool(jwt_handler.litellm_jwtauth.team_id_upsert)
+    scalar_team_id: Final[object] = (
         get_nested_value(data=token, key_path=team_id_jwt_field)
-        if jwt_handler.litellm_jwtauth.team_id_upsert and team_id_jwt_field is not None
+        if team_id_upsert and team_id_jwt_field is not None
         else None
     )
-    team_id_to_upsert: Final = (
-        upsert_candidate if isinstance(upsert_candidate, str) and upsert_candidate.strip() else None
+    team_ids_with_scalar: Final = (
+        all_teams if not isinstance(scalar_team_id, str) or scalar_team_id in all_teams else [*all_teams, scalar_team_id]
     )
-    team_ids_with_upsert: Final = (
-        all_teams if team_id_to_upsert is None or team_id_to_upsert in all_teams else [*all_teams, team_id_to_upsert]
-    )
+    team_ids_to_join: Final = [
+        team_id for team_id in team_ids_with_scalar if not (isinstance(team_id, str) and not team_id.strip())
+    ]
 
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
@@ -1341,8 +1342,8 @@ def generic_response_convertor(
         first_name=get_nested_value(response, generic_user_first_name_attribute_name),
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
-        team_ids=team_ids_with_upsert,
-        team_id_to_upsert=team_id_to_upsert,
+        team_ids=team_ids_to_join,
+        team_id_upsert=team_id_upsert,
         user_role=user_role,
         extra_fields=extra_fields,
     )
@@ -1880,17 +1881,17 @@ async def _upsert_sso_team(team_id: str, prisma_client: PrismaClient, user_api_k
 async def add_missing_team_member(
     user_info: NewUserResponse | LiteLLM_UserTable,
     sso_teams: list[str],
-    team_id_to_upsert: str | None = None,
     upsert_team: Callable[[str], Awaitable[object]] | None = None,
 ) -> None:
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
+    - Create each missing team first when ``upsert_team`` is given (``team_id_upsert``)
     - Add missing user to missing teams
     """
     missing_teams: Final = sorted(set(sso_teams) - set(user_info.teams or ()))
     results: Final = await asyncio.gather(
         *(
-            create_team_member_add_task(team_id, user_info, upsert_team if team_id == team_id_to_upsert else None)
+            create_team_member_add_task(team_id, user_info, upsert_team)
             for team_id in missing_teams
         )
     )
@@ -3651,11 +3652,13 @@ class SSOAuthenticationHandler:
             verbose_proxy_logger.debug("User not found in LiteLLM DB, skipping team member addition")
             return
         sso_teams: Final = result.team_ids if isinstance(result, CustomOpenID) else []
+        upsert_teams: Final = isinstance(result, CustomOpenID) and result.team_id_upsert
         await add_missing_team_member(
             user_info=user_info,
             sso_teams=sso_teams,
-            team_id_to_upsert=result.team_id_to_upsert if isinstance(result, CustomOpenID) else None,
-            upsert_team=partial(_upsert_sso_team, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache),
+            upsert_team=partial(_upsert_sso_team, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache)
+            if upsert_teams
+            else None,
         )
 
     @staticmethod

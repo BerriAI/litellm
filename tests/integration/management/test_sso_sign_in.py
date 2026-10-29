@@ -235,7 +235,7 @@ def test_sso_sign_in_upserts_the_team_id_jwt_field_team_only_when_team_id_upsert
         assert (len(teams), user) == (int(expect_member), [{"teams": [team_id] if expect_member else []}])
 
 
-def test_sso_sign_in_with_db_team_mappings_creates_the_team_id_jwt_field_team_and_only_joins_groups(
+def test_sso_sign_in_with_db_team_mappings_creates_the_team_id_jwt_field_team_and_the_group_teams(
     tmp_path: Path,
 ) -> None:
     subject: Final = f"sso-mapped-user-{uuid.uuid4().hex[:12]}"
@@ -257,4 +257,7 @@ def test_sso_sign_in_with_db_team_mappings_creates_the_team_id_jwt_field_team_an
             'SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id IN (%s, %s)', (team_id, group_team_id)
         )
         user: Final = gateway.rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
-        assert (teams, user) == ([{"team_id": team_id}], [{"teams": [team_id]}])
+        assert (sorted(row["team_id"] for row in teams), user) == (
+            sorted([team_id, group_team_id]),
+            [{"teams": sorted([team_id, group_team_id])}],
+        )

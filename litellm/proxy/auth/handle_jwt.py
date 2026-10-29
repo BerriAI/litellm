@@ -14,7 +14,7 @@ import hashlib
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, NoReturn, Protocol, TypeVar, cast
 
@@ -1762,8 +1762,9 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
+        team_id_upsert: bool | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
-        """Find first team with access to the requested model"""
+        """Find first team with access to the requested model, creating claimed teams when ``team_id_upsert`` is set"""
         from litellm.proxy.proxy_server import llm_router
 
         denied_pass_through_team: LiteLLM_TeamTable | None = None
@@ -1789,6 +1790,7 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=team_id_upsert,
                 )
 
                 if team_object is not None:
@@ -2213,6 +2215,8 @@ class JWTAuthManager:
                 patch_team_membership,
             )
 
+            if jwt_handler.litellm_jwtauth.team_id_upsert and user_api_key_cache is not None:
+                await JWTAuthManager._upsert_claimed_teams(teams_to_add, prisma_client, user_api_key_cache)
             await patch_team_membership(
                 user_id=user_object.user_id,
                 teams_ids_to_add_user_to=list(teams_to_add),
@@ -2227,6 +2231,23 @@ class JWTAuthManager:
                     ttl=get_management_object_ttl(user_api_key_cache),
                 )
         return
+
+    @staticmethod
+    async def _upsert_claimed_teams(
+        team_ids: Iterable[str], prisma_client: PrismaClient, user_api_key_cache: UserApiKeyCache
+    ) -> None:
+        """Create the teams the user is about to join. A concurrent request may win the create, so the join still runs."""
+        for team_id in sorted(team_ids):
+            try:
+                await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                    team_id_upsert=True,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug("JWT auth could not create team %s, trying to join it anyway: %s", team_id, e)
 
     @staticmethod
     async def _attach_team_from_header_for_admin(
@@ -2813,6 +2834,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=team_id_upsert,
             )
 
         # The RBAC role-claim path (rbac_role == TEAM) sets team_id without

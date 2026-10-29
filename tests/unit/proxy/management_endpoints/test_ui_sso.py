@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -6683,8 +6683,7 @@ class TestAddMissingTeamMember:
             mock_add_member.assert_called_once_with(
                 user_info=new_user_info,
                 sso_teams=["entra-group-1", "entra-group-2"],
-                team_id_to_upsert=None,
-                upsert_team=ANY,
+                upsert_team=None,
             )
 
     @pytest.mark.asyncio
@@ -10967,48 +10966,55 @@ def _upsert_jwt_handler(**jwtauth: object) -> JWTHandler:
 @pytest.mark.parametrize(
     ("jwtauth", "userinfo", "expected_team_ids", "expected_upsert"),
     [
-        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "finance"}, ["finance"], "finance"),
-        ({"team_id_jwt_field": "dept", "team_id_upsert": False}, {"dept": "finance"}, ["finance"], None),
-        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {}, [], None),
-        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ""}, [], None),
-        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "  "}, ["  "], None),
-        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ["a", "b"]}, ["a", "b"], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "finance"}, ["finance"], True),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": False}, {"dept": "finance"}, ["finance"], False),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {}, [], True),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ""}, [], True),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "  "}, [], True),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ["a", "b"]}, ["a", "b"], True),
         (
             {"team_id_jwt_field": "dept", "team_id_upsert": True, "team_id_default": "everyone"},
             {},
             [],
-            None,
+            True,
         ),
         (
             {"team_ids_jwt_field": "groups", "team_id_upsert": True},
             {"groups": ["g1", "g2"]},
             ["g1", "g2"],
-            None,
+            True,
+        ),
+        (
+            {"team_ids_jwt_field": "groups", "team_id_upsert": False},
+            {"groups": ["g1", "g2"]},
+            ["g1", "g2"],
+            False,
         ),
         (
             {"team_ids_jwt_field": "groups", "team_id_jwt_field": "dept", "team_id_upsert": True},
             {"groups": ["g1"], "dept": "finance"},
             ["g1", "finance"],
-            "finance",
+            True,
         ),
     ],
     ids=[
         "upsert-on",
         "upsert-off",
         "claim-missing",
-        "blank-claim-not-upserted",
-        "whitespace-claim-not-upserted",
-        "list-valued-claim-join-only",
-        "default-team-not-upserted",
-        "plural-claim-join-only",
+        "blank-claim-dropped",
+        "whitespace-claim-dropped",
+        "list-valued-claim",
+        "default-team-not-joined",
+        "plural-claim-upsert-on",
+        "plural-claim-upsert-off",
         "mixed",
     ],
 )
-def test_generic_sso_login_upserts_only_the_team_id_jwt_field_claim(
+def test_generic_sso_login_marks_every_claimed_team_for_upsert_only_when_team_id_upsert_is_on(
     jwtauth: dict[str, object],
     userinfo: dict[str, object],
     expected_team_ids: list[str],
-    expected_upsert: str | None,
+    expected_upsert: bool,
 ) -> None:
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
@@ -11017,10 +11023,10 @@ def test_generic_sso_login_upserts_only_the_team_id_jwt_field_claim(
         jwt_handler=_upsert_jwt_handler(**jwtauth),
     )
 
-    assert (result.team_ids, result.team_id_to_upsert) == (expected_team_ids, expected_upsert)
+    assert (result.team_ids, result.team_id_upsert) == (expected_team_ids, expected_upsert)
 
 
-def test_generic_sso_login_upserts_the_team_id_jwt_field_team_when_db_team_mappings_are_set() -> None:
+def test_generic_sso_login_keeps_the_team_id_jwt_field_team_when_db_team_mappings_are_set() -> None:
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
     result: Final = generic_response_convertor(
@@ -11029,7 +11035,7 @@ def test_generic_sso_login_upserts_the_team_id_jwt_field_team_when_db_team_mappi
         team_mappings=TeamMappings(team_ids_jwt_field="groups"),
     )
 
-    assert (result.team_ids, result.team_id_to_upsert) == (["g1", "finance"], "finance")
+    assert (result.team_ids, result.team_id_upsert) == (["g1", "finance"], True)
 
 
 def _recording_team_calls(events: list[tuple[str, str]]) -> tuple[AsyncMock, Callable[[str], Awaitable[object]]]:
@@ -11044,21 +11050,35 @@ def _recording_team_calls(events: list[tuple[str, str]]) -> tuple[AsyncMock, Cal
 
 
 @pytest.mark.asyncio
-async def test_sso_login_creates_only_the_upsert_team_and_does_so_before_joining_it() -> None:
+async def test_sso_login_creates_every_missing_team_before_joining_it() -> None:
     from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
     events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
     member_add, upsert_team = _recording_team_calls(events)
-    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
+    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=["g0"])
 
     with patch("litellm.proxy.management_endpoints.ui_sso.team_member_add", member_add):
-        await add_missing_team_member(user, ["g1", "finance", "g2"], team_id_to_upsert="finance", upsert_team=upsert_team)
+        await add_missing_team_member(user, ["g0", "g1", "finance", "g2"], upsert_team=upsert_team)
 
     creates: Final = [team_id for kind, team_id in events if kind == "create"]
     joins: Final = [team_id for kind, team_id in events if kind == "join"]
-    assert creates == ["finance"]
+    assert sorted(creates) == ["finance", "g1", "g2"]
     assert sorted(joins) == ["finance", "g1", "g2"]
-    assert events.index(("create", "finance")) < events.index(("join", "finance"))
+    assert all(events.index(("create", team_id)) < events.index(("join", team_id)) for team_id in creates)
+
+
+@pytest.mark.asyncio
+async def test_sso_login_creates_no_team_when_team_id_upsert_is_off() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
+    member_add, _ = _recording_team_calls(events)
+    user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
+
+    with patch("litellm.proxy.management_endpoints.ui_sso.team_member_add", member_add):
+        await add_missing_team_member(user, ["g1", "finance"])
+
+    assert events == [("join", "finance"), ("join", "g1")]
 
 
 @pytest.mark.asyncio
@@ -11076,7 +11096,7 @@ async def test_sso_login_still_joins_the_team_when_a_concurrent_login_created_it
     user: Final = NewUserResponse(user_id="alice", key="sk-x", teams=None)
 
     with patch("litellm.proxy.management_endpoints.ui_sso.team_member_add", member_add):
-        await add_missing_team_member(user, ["finance"], team_id_to_upsert="finance", upsert_team=lost_the_create_race)
+        await add_missing_team_member(user, ["finance"], upsert_team=lost_the_create_race)
 
     assert joined == ["finance"]
 
@@ -11127,7 +11147,7 @@ async def test_sso_login_warns_when_creating_the_team_fails_instead_of_calling_i
             AsyncMock(side_effect=TeamNotFoundError(team_id="finance")),
         ),
     ):
-        await add_missing_team_member(user, ["finance"], team_id_to_upsert="finance", upsert_team=failed_create)
+        await add_missing_team_member(user, ["finance"], upsert_team=failed_create)
 
     warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1 and "finance" in warnings[0] and str(create_error.detail) in warnings[0]
