@@ -6,6 +6,7 @@ import anthropicLogo from "../../public/assets/logos/anthropic.svg";
 import assemblyaiSmallLogo from "../../public/assets/logos/assemblyai_small.png";
 import basetenLogo from "../../public/assets/logos/baseten.svg";
 import bedrockLogo from "../../public/assets/logos/bedrock.svg";
+import bigmodelLogo from "../../public/assets/logos/bigmodel.png";
 import cerebrasLogo from "../../public/assets/logos/cerebras.svg";
 import cloudflareLogo from "../../public/assets/logos/cloudflare.svg";
 import cohereLogo from "../../public/assets/logos/cohere.svg";
@@ -14,6 +15,7 @@ import cursorLogo from "../../public/assets/logos/cursor.svg";
 import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
+import opencodeLogo from "../../public/assets/moyai/logos/opencode.svg";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
 import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
@@ -130,6 +132,7 @@ export enum Providers {
   HYPERBOLIC = "Hyperbolic",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
+  OPENCODE_GO = "OpenCode Go",
   LAMBDA_AI = "Lambda Ai",
   Laya = "Laya",
   LEMONADE = "Lemonade",
@@ -176,6 +179,7 @@ export enum Providers {
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   StrandsDecider = "Strands Decider",
+  StreamLake = "StreamLake",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   Tencent = "Tencent",
   TogetherAI = "TogetherAI",
@@ -183,6 +187,7 @@ export enum Providers {
   Triton = "Triton",
   Trustedrouter = "Trustedrouter",
   TypeSafe = "TypeSafe",
+  Nace = "Nace",
   V0 = "V0",
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
@@ -196,6 +201,8 @@ export enum Providers {
   xAI = "xAI",
   XINFERENCE = "Xinference",
   ZAI = "Z.AI (Zhipu AI)",
+  BIGMODEL = "BigModel (Zhipu AI)",
+  ZeroGPU = "ZeroGPU",
 }
 
 export const provider_map: Record<string, string> = {
@@ -256,6 +263,7 @@ export const provider_map: Record<string, string> = {
   HYPERBOLIC: "hyperbolic",
   Infinity: "infinity",
   JinaAI: "jina_ai",
+  OPENCODE_GO: "opencode_go",
   LAMBDA_AI: "lambda_ai",
   Laya: "laya",
   LEMONADE: "lemonade",
@@ -303,6 +311,7 @@ export const provider_map: Record<string, string> = {
   Snowflake: "snowflake",
   Soniox: "soniox",
   StrandsDecider: "strands_decider",
+  StreamLake: "streamlake",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   Tencent: "tencent",
   TogetherAI: "together_ai",
@@ -310,6 +319,7 @@ export const provider_map: Record<string, string> = {
   Triton: "triton",
   Trustedrouter: "trustedrouter",
   TypeSafe: "typesafe",
+  Nace: "nace",
   V0: "v0",
   VERCEL_AI_GATEWAY: "vercel_ai_gateway",
   Vertex_AI: "vertex_ai",
@@ -323,6 +333,8 @@ export const provider_map: Record<string, string> = {
   xAI: "xai",
   XINFERENCE: "xinference",
   ZAI: "zai",
+  BIGMODEL: "bigmodel",
+  ZeroGPU: "zerogpu",
 };
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
@@ -331,6 +343,7 @@ export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
 
 export const providerLogoMap: Partial<Record<Providers, string>> = {
+  [Providers.BIGMODEL]: bigmodelLogo.src,
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
   [Providers.AI21_CHAT]: ai21Logo.src,
@@ -375,6 +388,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.HYPERBOLIC]: hyperbolicLogo.src,
   [Providers.Infinity]: infinityLogo.src,
   [Providers.JinaAI]: jinaLogo.src,
+  [Providers.OPENCODE_GO]: opencodeLogo.src,
   [Providers.LAMBDA_AI]: lambdaLogo.src,
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
@@ -489,11 +503,15 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
   [Providers.TypeSafe]: "typesafe/jev-latest",
+  [Providers.Nace]: "nace/drex-latest",
+  [Providers.StreamLake]: "streamlake/<model-or-endpoint>",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
   [Providers.Voyage]: "voyage/",
   [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
   [Providers.ZAI]: "zai/glm-4.5",
+  [Providers.BIGMODEL]: "bigmodel/glm-5.3",
+  [Providers.ZeroGPU]: "zerogpu/gpt-oss-120b",
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {

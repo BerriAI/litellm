@@ -117,7 +117,7 @@ class MCPServer(LiteLLMBaseModel):
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.
-    env_vars: list[dict[str, Any]] | None = None
+    env_vars: list[dict[str, object]] | None = None
     # OAuth-specific fields
     authorization_server_metadata: Mapping[str, object] | None = Field(default=None, exclude=True)
     client_id: str | None = None
@@ -182,6 +182,7 @@ class MCPServer(LiteLLMBaseModel):
     # posts the ID-JAG assertion to id_jag_resource_token_endpoint.
     id_jag_resource_token_endpoint: str | None = None
     id_jag_resource: str | None = None
+    id_jag_subject_source: str | None = None
     id_jag_resource_client_id: str | None = Field(
         default=None,
         description="OAuth client identifier used at the ID-JAG resource authorization server.",
@@ -203,9 +204,11 @@ class MCPServer(LiteLLMBaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Legacy opt-in to upstream-delegated authentication for ``oauth2``
-    # servers. LiteLLM admission still applies; use ``oauth_delegate`` for the
-    # supported client-forwarded OAuth flow.
+    # Deprecated opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. A bare ``Authorization`` that is not a LiteLLM credential is the
+    # upstream token and is forwarded; see
+    # ``MCPRequestHandler._admit_legacy_delegate_bearer``. New servers should use
+    # ``true_passthrough`` or ``oauth_delegate``.
     #
     # Honored only for ``auth_type == oauth2``; ignored for any other
     # ``auth_type``. OAuth pass-through for non-oauth2 servers
@@ -239,7 +242,7 @@ class MCPServer(LiteLLMBaseModel):
     # token_validation: key-value pairs that must match fields in the OAuth token
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
-    token_validation: dict[str, Any] | None = None
+    token_validation: dict[str, object] | None = None
     oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     # Optional TTL override (seconds) for the Redis per-user token cache, capped
     # at the token's expires_in minus the expiry buffer so a cached entry never

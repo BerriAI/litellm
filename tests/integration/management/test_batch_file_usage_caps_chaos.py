@@ -46,7 +46,7 @@ from integration.management._batch_file_caps import (
 )
 from pydantic import JsonValue
 
-pytestmark = pytest.mark.timeout(600)
+pytestmark: Final = [pytest.mark.timeout(600), pytest.mark.shares_worker_state]
 
 WORKERS: Final = 2
 UPLOAD_CAP: Final = 5

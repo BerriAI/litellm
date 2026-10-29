@@ -21,6 +21,8 @@ from integration.translation.responses.bases.azure_ai import (
 from integration.translation.responses.bases.openai_responses import GPT_5_6_SOL_TEST_CASE, GPT_6_1_SOL_TEST_CASE
 from integration.translation.runner import assert_translation
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 GPT_6_1_SOL_TWO_MESSAGES_BEFORE_TOOLS_TEST_CASE: Final = two_messages_before_tools(GPT_6_1_SOL_TEST_CASE)
 AZURE_CLAUDE_SONNET_5_5_CROSS_MODEL_TEST_CASE: Final = replace(
     AZURE_CLAUDE_SONNET_5_5_TEST_CASE,

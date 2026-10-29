@@ -70,7 +70,7 @@ async def test_o1_handle_system_role(model):
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -83,7 +83,7 @@ async def test_o1_handle_system_role(model):
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         print("request_body: ", request_body)
 
@@ -141,7 +141,7 @@ async def test_o1_max_completion_tokens(model: str):
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -154,7 +154,7 @@ async def test_o1_max_completion_tokens(model: str):
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         print("request_body: ", request_body)
 
@@ -181,3 +181,20 @@ def test_litellm_responses():
     print("response: ", response)
 
     assert isinstance(response.usage.completion_tokens_details, CompletionTokensDetails)
+
+
+def test_translate_developer_role_keeps_developer_messages_untouched() -> None:
+    messages: Final = [
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+    assert (
+        OpenAIOSeriesConfig().translate_developer_role_to_system_role(
+            messages=messages,
+            model="my-reasoning-deployment",
+            custom_llm_provider="openai",
+            api_base=None,
+            model_info=None,
+        )
+        == messages
+    )

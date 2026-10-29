@@ -1007,12 +1007,12 @@ async def test_bulk_delete_writes_deleted_audit_log_for_deleted_keys(mocker):
 
     captured: Final[list] = []
 
-    async def _capture(request_data):
-        captured.append(request_data)
+    async def _capture(rows):
+        captured.extend(rows)
 
     mocker.patch("litellm.store_audit_logs", True)
     mocker.patch(
-        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
         new=_capture,
     )
     await _delete(prisma, ["u1"])
@@ -1041,12 +1041,12 @@ async def test_bulk_member_delete_writes_deleted_audit_log_for_removed_team_keys
 
     captured: Final[list] = []
 
-    async def _capture(request_data):
-        captured.append(request_data)
+    async def _capture(rows):
+        captured.extend(rows)
 
     mocker.patch("litellm.store_audit_logs", True)
     mocker.patch(
-        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
         new=_capture,
     )
     await _remove(prisma, "t1", [{"user_id": "u1"}])
@@ -1076,7 +1076,7 @@ async def test_bulk_delete_skips_the_key_audit_log_when_the_tx_rolls_back(mocker
 
     mocker.patch("litellm.store_audit_logs", True)
     mock_audit_write = mocker.patch(
-        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
         new=mocker.AsyncMock(),
     )
     results = await _delete(prisma, ["u1", "u2"], cache=cache)

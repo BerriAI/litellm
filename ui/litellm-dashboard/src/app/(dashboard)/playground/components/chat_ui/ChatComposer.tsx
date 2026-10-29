@@ -51,6 +51,14 @@ export function ChatComposer({
     }
   };
 
+  const handleToolbarClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const control = (event.target as HTMLElement).closest(
+      "button, input, select, textarea, a[href], [contenteditable='true'], [tabindex]",
+    );
+    if (event.defaultPrevented || (control && event.currentTarget.contains(control))) return;
+    event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-slot=input-group-control]")?.focus();
+  };
+
   return (
     <div className={cn("relative flex w-full flex-col gap-3", className)}>
       {showSuggestions && suggestions.length > 0 && (
@@ -99,12 +107,7 @@ export function ChatComposer({
           <InputGroupAddon
             align="block-end"
             className="justify-between gap-2 px-3 pb-3 pt-1"
-            onClick={(event) => {
-              if ((event.target as HTMLElement).closest("button")) {
-                return;
-              }
-              event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-slot=input-group-control]")?.focus();
-            }}
+            onClick={handleToolbarClick}
           >
             <div className="flex min-w-0 items-center gap-1">{tools}</div>
 
