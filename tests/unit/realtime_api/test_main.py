@@ -504,13 +504,16 @@ _OPENAI_SESSION_CREATED_EVENT: Final = (
 )
 
 
-def _register_as_realtime_deployment(model: str) -> None:
+def _register_as_realtime_deployment(model: str, *supported_endpoints: str) -> None:
     litellm.Router(
         model_list=[
             {
                 "model_name": "realtime-deployment",
                 "litellm_params": {"model": f"openai/{model}", "api_key": "sk-real"},
-                "model_info": {"mode": "realtime"},
+                "model_info": {
+                    "mode": "realtime",
+                    **({"supported_endpoints": list(supported_endpoints)} if supported_endpoints else {}),
+                },
             }
         ]
     )
@@ -783,6 +786,18 @@ async def test_openai_health_check_is_healthy_for_a_model_served_outside_realtim
 
 
 @pytest.mark.asyncio
+async def test_openai_health_check_is_healthy_for_a_live_deployment_that_lists_the_live_sessions_endpoint(
+    local_model_cost_map,
+):
+    _register_as_realtime_deployment("gpt-live-1", "/v1/live/sessions")
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_LIVE_MODEL_ON_REALTIME_EVENT))
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(
+            model="gpt-live-1", custom_llm_provider="openai", api_key="sk-real"
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "first_event", "expected_exception", "expected_message"),
     [
@@ -815,7 +830,7 @@ async def test_openai_health_check_is_unhealthy_for_a_model_name_every_session_w
     ("deployment_api_base", "global_api_base"),
     [("https://realtime-gateway.example/v1", None), (None, "https://realtime-gateway.example/v1")],
 )
-async def test_openai_health_check_through_a_compatible_gateway_trusts_the_handshake(
+async def test_openai_health_check_through_a_compatible_gateway_is_healthy_when_it_sends_no_first_event(
     monkeypatch: pytest.MonkeyPatch, deployment_api_base: str | None, global_api_base: str | None
 ):
     monkeypatch.setattr(litellm, "api_base", global_api_base)
@@ -823,9 +838,35 @@ async def test_openai_health_check_through_a_compatible_gateway_trusts_the_hands
     with patch("websockets.connect", connect):
         assert await asyncio.wait_for(
             realtime_main.realtime_health_check(
-                model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real", api_base=deployment_api_base
+                model="gpt-realtime",
+                custom_llm_provider="openai",
+                api_key="sk-real",
+                api_base=deployment_api_base,
+                gateway_first_event_wait_seconds=0.01,
             ),
             timeout=5,
+        )
+    assert connect.url == "wss://realtime-gateway.example/v1/realtime?model=gpt-realtime"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection", "expected_exception"),
+    [
+        (_ScriptedConnection(_OPENAI_INVALID_API_KEY_EVENT), litellm.AuthenticationError),
+        (_ConnectionClosedBeforeAnyEvent(), ConnectionClosedError),
+    ],
+)
+async def test_openai_health_check_through_a_compatible_gateway_is_unhealthy_when_it_rejects_the_session(
+    connection: _ServerEvents, expected_exception: type[Exception]
+):
+    connect: Final = _CapturingConnect(connection)
+    with patch("websockets.connect", connect), pytest.raises(expected_exception):
+        await realtime_main.realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            api_key="sk-wrong",
+            api_base="https://realtime-gateway.example/v1",
         )
     assert connect.url == "wss://realtime-gateway.example/v1/realtime?model=gpt-realtime"
 

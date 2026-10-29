@@ -49,7 +49,11 @@ from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_co
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..llms.openai.common_utils import is_openai_backed_api_base
 from ..llms.openai.live.handler import OpenAILiveSessions
-from ..llms.openai.realtime.handler import OpenAIRealtime, confirm_session_started
+from ..llms.openai.realtime.handler import (
+    OpenAIRealtime,
+    confirm_gateway_session_started,
+    confirm_session_started,
+)
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
@@ -746,7 +750,8 @@ def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) 
     return "/v1/realtime/transcription_sessions" in (model_info.get("supported_endpoints") or ())
 
 
-_REALTIME_SERVED_ENDPOINTS: Final = ("/v1/realtime", "/v1/audio/transcriptions")
+_REALTIME_SERVED_ENDPOINTS: Final = ("/v1/realtime", "/v1/audio/transcriptions", "/v1/live")
+_GATEWAY_FIRST_EVENT_WAIT_SECONDS: Final = 3.0
 
 
 def _cost_map_lists_outside_realtime(model: str) -> bool:
@@ -802,6 +807,7 @@ async def realtime_health_check(
     api_version: str | None = None,
     realtime_protocol: str | None = None,
     model_params: Mapping[str, object] | None = None,
+    gateway_first_event_wait_seconds: float = _GATEWAY_FIRST_EVENT_WAIT_SECONDS,
 ) -> bool:
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -819,7 +825,9 @@ async def realtime_health_check(
     Returns:
         bool - True once the connection is open, and on OpenAI's own hosts once the first server event is not an
             error, since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
-            the failure in its first server event. An `invalid_model` error also counts as healthy unless litellm's
+            the failure in its first server event. Behind any other OpenAI api_base the first event is read for
+            `gateway_first_event_wait_seconds` only, and a gateway that stays silent that long counts as healthy.
+            An `invalid_model` error also counts as healthy unless litellm's
             cost map lists only endpoints realtime never serves for the model: OpenAI checks the key first, and Live
             and transcription models are served through other endpoints. The listed `mode` is not read, since a
             deployment's own `mode: realtime` replaces it when the router registers the deployment
@@ -920,8 +928,16 @@ async def realtime_health_check(
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=realtime_ssl_for_url(url),
     ) as connection:
-        if custom_llm_provider != "openai" or not is_openai_backed_api_base(url):
+        if custom_llm_provider != "openai":
             return True
+        if not is_openai_backed_api_base(url):
+            return await confirm_gateway_session_started(
+                connection,
+                model,
+                sent_credentials=bool(auth_headers),
+                model_listed_outside_realtime=_cost_map_lists_outside_realtime(model),
+                first_event_wait_seconds=gateway_first_event_wait_seconds,
+            )
         return await confirm_session_started(
             connection,
             model,

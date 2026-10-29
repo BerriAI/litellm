@@ -4,6 +4,7 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
+import asyncio
 import ssl
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
@@ -47,10 +48,10 @@ def first_event_error(first_event: str | bytes) -> "RealtimeError | None":
     return RealtimeErrorEvent.model_validate(event).error
 
 
-async def confirm_session_started(
-    connection: "ClientConnection", model: str, sent_credentials: bool, model_listed_outside_realtime: bool
+def _confirm_first_event(
+    first_event: str | bytes, model: str, sent_credentials: bool, model_listed_outside_realtime: bool
 ) -> Literal[True]:
-    error: Final = first_event_error(await connection.recv())
+    error: Final = first_event_error(first_event)
     if error is None or (
         error.code == _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL and not model_listed_outside_realtime
     ):
@@ -58,6 +59,26 @@ async def confirm_session_started(
     if error.code == _CREDENTIALS_REJECTED or not sent_credentials:
         raise AuthenticationError(message=error.message, llm_provider="openai", model=model)
     raise map_stream_error_to_exception(error, model=model, custom_llm_provider="openai")
+
+
+async def confirm_session_started(
+    connection: "ClientConnection", model: str, sent_credentials: bool, model_listed_outside_realtime: bool
+) -> Literal[True]:
+    return _confirm_first_event(await connection.recv(), model, sent_credentials, model_listed_outside_realtime)
+
+
+async def confirm_gateway_session_started(
+    connection: "ClientConnection",
+    model: str,
+    sent_credentials: bool,
+    model_listed_outside_realtime: bool,
+    first_event_wait_seconds: float,
+) -> Literal[True]:
+    try:
+        first_event: Final = await asyncio.wait_for(connection.recv(), first_event_wait_seconds)
+    except asyncio.TimeoutError:
+        return True
+    return _confirm_first_event(first_event, model, sent_credentials, model_listed_outside_realtime)
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
