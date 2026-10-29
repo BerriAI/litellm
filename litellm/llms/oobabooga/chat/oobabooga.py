@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
@@ -74,7 +75,7 @@ def completion(
         stream=optional_params["stream"] if "stream" in optional_params else False,
     )
     if "stream" in optional_params and optional_params["stream"] is True:
-        return response.iter_lines()
+        return iter_sse_lines(response.iter_text())
     else:
         return oobabooga_config.transform_response(
             model=model,
