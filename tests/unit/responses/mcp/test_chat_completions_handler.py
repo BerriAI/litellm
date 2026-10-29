@@ -17,6 +17,8 @@ import pytest
 import respx
 from httpx import Response
 from mcp.types import Tool as MCPTool
+from starlette.responses import StreamingResponse
+from starlette.types import Message
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -2172,6 +2174,28 @@ async def test_stream_auto_execute_whose_follow_up_cannot_be_assembled_ends_with
     assert usage.cost == pytest.approx(recorder.logged[0]["response_cost"])
 
 
+def _assert_one_row_bills_round_one_and_the_partial_answer(recorder: _ChatRoundRecorder) -> None:
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    assert row["id"] == _CHAT_ROUND_ONE["id"]
+    partial_prompt, partial_completion = (row["prompt_tokens"] - 71, row["completion_tokens"] - 19)
+    assert partial_prompt > 0 and partial_completion > 0
+    partial_answer: Final = litellm.completion_cost(
+        completion_response=ModelResponse(
+            model="gpt-5.6",
+            usage=Usage(
+                prompt_tokens=partial_prompt,
+                completion_tokens=partial_completion,
+                total_tokens=partial_prompt + partial_completion,
+            ),
+        ),
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+    )
+    assert row["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE) + partial_answer - _FIXED_MARGIN)
+    assert recorder.failed == ()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deferred_for_a_post_call_guardrail", [False, True])
 async def test_stream_auto_execute_hung_up_during_the_follow_up_bills_round_one_and_the_partial_answer_on_one_row(
@@ -2196,25 +2220,97 @@ async def test_stream_auto_execute_hung_up_during_the_follow_up_bills_round_one_
         )
     await recorder.settled(logged=1)
 
-    assert len(recorder.logged) == 1
-    row: Final = recorder.logged[0]
-    assert row["id"] == _CHAT_ROUND_ONE["id"]
-    partial_prompt, partial_completion = (row["prompt_tokens"] - 71, row["completion_tokens"] - 19)
-    assert partial_prompt > 0 and partial_completion > 0
-    partial_answer: Final = litellm.completion_cost(
-        completion_response=ModelResponse(
-            model="gpt-5.6",
-            usage=Usage(
-                prompt_tokens=partial_prompt,
-                completion_tokens=partial_completion,
-                total_tokens=partial_prompt + partial_completion,
-            ),
+    _assert_one_row_bills_round_one_and_the_partial_answer(recorder)
+
+
+class _StallsOnceTheAnswerStarts(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _sse(_chat_stream_events(_CHAT_ROUND_TWO)[:1])
+        await asyncio.Event().wait()
+
+
+def _streams_content(body: object, content: str) -> bool:
+    lines: Final = body.decode().splitlines() if isinstance(body, bytes) else ()
+    events: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: {"))
+    return any(event["choices"] and event["choices"][0]["delta"].get("content") == content for event in events)
+
+
+async def _serve_until_the_client_hangs_up_after(response: StreamingResponse, content: str) -> None:
+    read: Final = asyncio.Event()
+
+    async def receive() -> Message:
+        await read.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.body" and _streams_content(message.get("body"), content):
+            read.set()
+
+    uvicorn_scope: Final = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "headers": []}
+    await response(uvicorn_scope, receive, send)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_for_a_post_call_guardrail", [False, True])
+async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_answer_when_the_client_hangs_up(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, deferred_for_a_post_call_guardrail: bool
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_chat_rounds(
+        respx_mock,
+        monkeypatch,
+        (
+            _streamed(_CHAT_ROUND_ONE),
+            Response(200, stream=_StallsOnceTheAnswerStarts(), headers={"content-type": "text/event-stream"}),
         ),
-        model="gpt-5.6",
-        custom_llm_provider="openai",
     )
-    assert row["response_cost"] == pytest.approx(_chat_round_cost(_CHAT_ROUND_ONE) + partial_answer - _FIXED_MARGIN)
-    assert recorder.failed == ()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mcp-chat-rounds",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-mcp-chat-rounds",
+                    "api_base": "https://mcp-chat-rounds.example.com/v1",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    recorder: Final = _ChatRoundRecorder()
+    logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-routed-hang-up", stream=True)
+
+    with _echo_tool_served():
+        stream: Final = await router.acompletion(
+            model="mcp-chat-rounds",
+            messages=[{"role": "user", "content": "Call echo with PING"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            litellm_logging_obj=logging_obj,
+        )
+        if deferred_for_a_post_call_guardrail:
+            ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+                response=stream, route_type="acompletion", user_api_key_dict=MagicMock(), logging_obj=logging_obj
+            )
+        served: Final = await create_response(
+            proxy_server.async_data_generator(
+                response=stream,
+                user_api_key_dict=UserAPIKeyAuth(),
+                request_data={"litellm_logging_obj": logging_obj, "model": "mcp-chat-rounds", "metadata": {}},
+            ),
+            "text/event-stream",
+            {},
+        )
+        assert isinstance(served, StreamingResponse)
+        await _serve_until_the_client_hangs_up_after(served, "PING")
+    await recorder.settled(logged=1)
+
+    _assert_one_row_bills_round_one_and_the_partial_answer(recorder)
 
 
 async def _read_through_the_usage_chunk(

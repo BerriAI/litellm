@@ -1,5 +1,6 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
+import asyncio
 import logging
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
@@ -383,6 +384,9 @@ async def acompletion_with_mcp(
                         if usage_chunk is None:
                             raise
                         return usage_chunk
+                    except asyncio.CancelledError:
+                        self.bill_in_flight_round_on_disconnect()
+                        raise
                     except Exception:
                         round_billing.fail()
                         raise
@@ -616,8 +620,6 @@ async def acompletion_with_mcp(
             def __iter__(self):
                 # For synchronous iteration, create a sync wrapper
                 if self._sync_iterator is None:
-                    import asyncio
-
                     try:
                         self._sync_loop = asyncio.get_event_loop()
                     except RuntimeError:
