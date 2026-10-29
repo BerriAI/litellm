@@ -606,7 +606,7 @@ def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot
     """A provider adapter that does not know allowed_tools would send no restriction at all, so the call stops with
     a 400 before any request leaves, and drop_params does not quietly widen what the model may call."""
     with pytest.raises(
-        litellm.BadRequestError, match="allowed_tools.*only supported for azure, litellm_proxy, openai"
+        litellm.BadRequestError, match=r"allowed_tools.*only supported for azure, litellm_proxy, openai"
     ) as exc:
         litellm.completion(
             model=model,
