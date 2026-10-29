@@ -116,6 +116,7 @@ from .long_decode import (
     StreamResume,
     SyncStreamResume,
     answer_bytes,
+    checkpoint_token,
     client_continuation_token,
     collect_hops_async,
     collect_hops_sync,
@@ -123,12 +124,15 @@ from .long_decode import (
     hop_request,
     hops_original_response,
     initial_prompt_tokens_of,
+    is_dropped_stream,
+    log_dropped_stream,
     log_failed_hop,
     merge_hops,
     next_hop_token,
     output_tokens_of,
     parse_body,
     per_hop,
+    resumes_a_dropped_stream,
     sum_usage_metadata,
     url_for,
     with_initial_prompt_tokens,
@@ -3884,6 +3888,8 @@ class ModelResponseIterator:
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
         self._resume = resume
+        self._resumable: Final = resume is not None and resumes_a_dropped_stream(resume.request_body)
+        self._checkpoint: str | None = None
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
@@ -4100,6 +4106,7 @@ class ModelResponseIterator:
 
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
+            self._keep_checkpoint(processed_chunk)
 
             model_response.hidden_params["is_finished"] = False
             return model_response
@@ -4117,7 +4124,7 @@ class ModelResponseIterator:
 
     def _with_answer_offset(self, chunk: GenerateContentResponseBody) -> GenerateContentResponseBody:
         candidates: Final = chunk.get("candidates")
-        if self._output_cap is None or not candidates:
+        if not self._resumable or not candidates:
             return chunk
         self._hop_answer_bytes += answer_bytes(candidates[0])
         if not self._answer_offset:
@@ -4143,6 +4150,11 @@ class ModelResponseIterator:
             choice.delta.provider_specific_fields = {
                 key: value for key, value in delta_fields.items() if key != "continuation_token"
             } or None
+
+    def _keep_checkpoint(self, processed_chunk: GenerateContentResponseBody) -> None:
+        self._checkpoint = checkpoint_token(processed_chunk) if self._resumable else None
+        if self._checkpoint is not None:
+            self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
 
     def _start_hop(self, response: httpx.Response, token: str) -> None:
         if self._initial_prompt_tokens is None:
@@ -4208,6 +4220,9 @@ class ModelResponseIterator:
         self.streaming_response = iter_sse_lines(hop_response.iter_text())
         self.response_iterator = self.streaming_response
         return None
+
+    def _checkpoint_to_resume_from(self, error: Exception) -> str | None:
+        return self._checkpoint if is_dropped_stream(error) else None
 
     # Sync iterator
     def __iter__(self):
@@ -4278,13 +4293,18 @@ class ModelResponseIterator:
             raise
 
     def __next__(self) -> Optional["ModelResponseStream"]:
-        try:
-            return self._next_chunk()
-        except HOP_FAILURES as e:
-            if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
-            self.close()
-            return unanswered_end
+        while True:
+            try:
+                return self._next_chunk()
+            except HOP_FAILURES as e:
+                if (unanswered_end := self._end_of_unanswered_hop(e)) is not None:
+                    self.close()
+                    return unanswered_end
+                if (checkpoint := self._checkpoint_to_resume_from(e)) is None:
+                    raise
+                log_dropped_stream(e)
+                if (truncated_end := self._open_next_hop_sync(checkpoint)) is not None:
+                    return truncated_end
 
     def _next_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
@@ -4319,13 +4339,18 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self) -> Optional["ModelResponseStream"]:
-        try:
-            return await self._anext_chunk()
-        except HOP_FAILURES as e:
-            if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
-            await self.aclose()
-            return unanswered_end
+        while True:
+            try:
+                return await self._anext_chunk()
+            except HOP_FAILURES as e:
+                if (unanswered_end := self._end_of_unanswered_hop(e)) is not None:
+                    await self.aclose()
+                    return unanswered_end
+                if (checkpoint := self._checkpoint_to_resume_from(e)) is None:
+                    raise
+                log_dropped_stream(e)
+                if (truncated_end := await self._open_next_hop_async(checkpoint)) is not None:
+                    return truncated_end
 
     async def _anext_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
