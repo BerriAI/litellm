@@ -18332,6 +18332,7 @@
                 {
                   "enum": [
                     "block",
+                    "mask",
                     "monitor",
                     "inject_system_message"
                   ],
@@ -18342,7 +18343,7 @@
                 }
               ],
               "default": "block",
-              "description": "Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+              "description": "Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only detections and allow, block anything else), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
               "title": "On Flagged"
             },
             "on_flagged_action": {
