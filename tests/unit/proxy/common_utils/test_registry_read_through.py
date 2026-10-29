@@ -973,11 +973,17 @@ async def test_resync_model_deployments_by_ids_installs_the_row_a_concurrent_rel
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("credentials_on_this_worker", "expect_credential_reload"),
-    [((), True), (("another-openai",), True), (("shared-openai",), False)],
+    ("stored_credential_name", "credentials_on_this_worker", "expect_credential_reload"),
+    [
+        ("shared-openai", (), True),
+        ("shared-openai", ("another-openai",), True),
+        ("shared-openai", ("shared-openai",), False),
+        (None, (), False),
+    ],
 )
 async def test_resync_model_deployments_by_ids_reloads_credentials_only_for_one_this_worker_lacks(
     monkeypatch: pytest.MonkeyPatch,
+    stored_credential_name: str | None,
     credentials_on_this_worker: tuple[str, ...],
     expect_credential_reload: bool,
 ) -> None:
@@ -991,10 +997,12 @@ async def test_resync_model_deployments_by_ids_reloads_credentials_only_for_one_
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-by-ids-credentials")
     row: Final = MagicMock()
-    row.litellm_params = {
-        "model": encrypt_value_helper("openai/backup-model"),
-        "litellm_credential_name": encrypt_value_helper("shared-openai"),
-    }
+    stored_params: Final[dict[str, str]] = {"model": encrypt_value_helper("openai/backup-model")}
+    row.litellm_params = (
+        stored_params
+        if stored_credential_name is None
+        else stored_params | {"litellm_credential_name": encrypt_value_helper(stored_credential_name)}
+    )
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[row])
     router: Final = MagicMock()
