@@ -1544,4 +1544,5 @@ class UnifiedLLMGuardrails(CustomLogger):
         except Exception:
             if pending_scan is not None:
                 pending_scan.cancel()
+                await asyncio.wait((pending_scan,))
             raise

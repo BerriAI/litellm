@@ -2983,8 +2983,8 @@ class _BackgroundScanGuardrail(_MarkerBlockingScanGuardrail):
         input_type: Literal["request", "response"],
         **kwargs: object,
     ) -> GenericGuardrailAPIInputs:
-        await self.released.wait()
         try:
+            await self.released.wait()
             recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
         finally:
             self.scanned.set()
@@ -3084,10 +3084,12 @@ class TestStreamingBackgroundScan:
         async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("a")
             yield _stream_chunk("b")
+            await anyio.wait_all_tasks_blocked()
             raise RuntimeError("upstream dropped")
 
-        with pytest.raises(RuntimeError, match="upstream dropped"):
+        with anyio.fail_after(5), pytest.raises(RuntimeError, match="upstream dropped"):
             _ = [item async for item in self._hook(guardrail, upstream())]
+        assert guardrail.scanned.is_set(), "the scan was still running when the upstream error surfaced"
         guardrail.released.set()
         await anyio.wait_all_tasks_blocked()
 
