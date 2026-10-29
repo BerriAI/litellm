@@ -2331,6 +2331,20 @@ def test_register_model_price_is_used_for_completion_cost() -> None:
     assert cost == pytest.approx(0.02)
 
 
+@pytest.mark.parametrize("flat_first", (True, False))
+def test_latest_exa_price_registration_replaces_the_previous_price_kind(
+    local_model_cost_map: None, flat_first: bool
+) -> None:
+    flat: Final = {"input_cost_per_query": 0.321}
+    tiered: Final = {"tiered_pricing": [{"input_cost_per_query": 0.456, "max_results_range": [0, 100]}]}
+    for price in (flat, tiered) if flat_first else (tiered, flat):
+        litellm.register_model({"exa_ai/search": price}, persist_across_reloads=False)
+
+    assert litellm.completion_cost(
+        model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search"
+    ) == pytest.approx(0.456 if flat_first else 0.321)
+
+
 @respx.mock
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
 def test_completion_registers_test_owned_model_prices() -> None:
