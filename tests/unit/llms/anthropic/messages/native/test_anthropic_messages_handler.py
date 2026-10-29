@@ -82,6 +82,54 @@ async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
         assert "stop_sequences" not in body
 
 
+CONTAINER_RESPONSE: Final = {
+    "id": "resp_container",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_openai_messages_container_answers_400_unless_drop_params_drops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        "model": "openai/gpt-5.5",
+        "max_tokens": 80,
+        "messages": [{"role": "user", "content": "hi"}],
+        "container": {"id": "container_abc"},
+        "api_key": "test-api-key",
+    }
+    with respx.mock as upstream:
+        bridge: Final = upstream.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=CONTAINER_RESPONSE)
+        )
+        with pytest.raises(litellm.BadRequestError) as rejected:
+            await litellm.anthropic.messages.acreate(**request)
+        assert rejected.value.status_code == 400
+        assert "no equivalent for container" in rejected.value.message
+        assert not bridge.called
+
+        await litellm.anthropic.messages.acreate(**request, drop_params=True)
+        assert "container" not in json.loads(bridge.calls.last.request.content)
+
+
 @pytest.mark.parametrize("stop_sequences", [None, []], ids=["no-stops", "empty-stops"])
 def test_anthropic_messages_handler(stop_sequences):
     """

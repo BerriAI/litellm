@@ -713,6 +713,7 @@ def anthropic_messages_handler(
                 ),
                 top_k=top_k,
                 top_p=top_p,
+                container=container,
                 _is_async=is_async,
                 api_key=api_key,
                 api_base=api_base,

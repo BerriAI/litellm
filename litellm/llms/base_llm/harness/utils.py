@@ -7,18 +7,12 @@ import json
 import os
 import typing
 from collections.abc import Iterator, Mapping, Sequence
-from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-
 if typing.TYPE_CHECKING:
     from litellm.harness.context import SessionContext
-
-# A decoded JSON document: what json.loads / model_json_schema() produce.
-JSONValue: TypeAlias = "dict[str, JSONValue] | list[JSONValue] | str | int | float | bool | None"
 
 SKILL_MANIFEST: Final = "SKILL.md"
 _JSON_DECODER: Final = json.JSONDecoder()
@@ -84,35 +78,6 @@ def turn_prompt(ctx: SessionContext, prompt: str) -> str:
     if ctx.output is None:
         return prompt
     return f"{prompt}\n\n{structured_output_instruction(ctx.output.model_json_schema())}"
-
-
-def strict_json_schema(schema: JSONValue, depth: int = 0) -> JSONValue:
-    """Make a JSON schema acceptable to OpenAI strict structured outputs.
-
-    Every object gets `additionalProperties: false` and all of its properties required,
-    recursively. Keywords strict mode rejects next to $ref are dropped. Nesting deeper than
-    DEFAULT_MAX_RECURSE_DEPTH raises instead of recursing further.
-    """
-    if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        raise ValueError(f"output schema is nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
-    if isinstance(schema, list):
-        return [strict_json_schema(entry, depth + 1) for entry in schema]  # mutable-ok: JSON document output
-    if not isinstance(schema, dict):
-        return schema
-    entries: Final = ((key, strict_json_schema(value, depth + 1)) for key, value in schema.items())
-    result = dict(entries)  # mutable-ok: JSON document; "default" is popped below
-    if "$ref" in result:
-        return {"$ref": result["$ref"]}  # mutable-ok: JSONValue output is a plain JSON document
-    result.pop("default", None)
-    properties = result.get("properties")
-    if result.get("type") == "object" or isinstance(properties, dict):
-        props = properties if isinstance(properties, dict) else {}  # mutable-ok: JSONValue object member
-        required: Final[list[JSONValue]] = list(props)  # mutable-ok: JSON array in the output schema
-        strict: Final[Mapping[str, JSONValue]] = MappingProxyType(
-            {"properties": props, "required": required, "additionalProperties": False}
-        )
-        result = {**result, **strict}  # mutable-ok: JSON document output
-    return result
 
 
 def decode_json_line(line: bytes | str) -> Mapping[str, object] | None:

@@ -403,6 +403,9 @@ OTHER_HOST: Final = {"custom_llm_provider": "openai", "api_base": "https://gatew
 EPHEMERAL: Final = {"type": "ephemeral"}
 
 
+LOOKUP_SCHEMA: Final = {"type": "object", "properties": {}}
+
+
 def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> dict[str, object]:
     mark: Final = {} if cache_control is None else {"cache_control": cache_control}
     return {
@@ -411,9 +414,18 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
         "messages": [
             {"role": "user", "content": [{"type": "text", "text": "look", **mark}, {"type": "text", "text": "now"}]}
         ],
+        "tools": [{"name": "lookup", "input_schema": LOOKUP_SCHEMA, **mark}],
     }
 
 
+@pytest.mark.parametrize(
+    ("cache_control", "breakpoint"),
+    [
+        pytest.param({**EPHEMERAL, "ttl": "1h"}, {"mode": "explicit", "ttl": "12h"}, id="1h-asks-for-12h"),
+        pytest.param({**EPHEMERAL, "ttl": "5m"}, {"mode": "explicit"}, id="5m-keeps-the-request-ttl"),
+        pytest.param(EPHEMERAL, {"mode": "explicit"}, id="no-ttl-keeps-the-request-ttl"),
+    ],
+)
 @pytest.mark.parametrize(
     "extra_kwargs",
     [
@@ -422,12 +434,12 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
     ],
 )
 def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_the_same_block(
-    extra_kwargs: dict[str, object],
+    extra_kwargs: dict[str, object], cache_control: dict[str, str], breakpoint: dict[str, str]
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
         extra_kwargs=extra_kwargs,
-        **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
+        **_request_with_client_cache_marks(cache_control),
     )
 
     assert "instructions" not in responses_kwargs
@@ -437,17 +449,26 @@ def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_th
             "role": "developer",
             "content": [
                 {"type": "input_text", "text": "Be concise."},
-                {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": breakpoint},
             ],
         },
         {
             "type": "message",
             "role": "user",
             "content": [
-                {"type": "input_text", "text": "look", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "input_text", "text": "look", "prompt_cache_breakpoint": breakpoint},
                 {"type": "input_text", "text": "now"},
             ],
         },
+    ]
+    assert responses_kwargs["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "strict": False,
+            "parameters": LOOKUP_SCHEMA,
+            "prompt_cache_breakpoint": breakpoint,
+        }
     ]
 
 
@@ -499,17 +520,20 @@ RAW_BREAKPOINT: Final = {"mode": "explicit"}
 
 RAW_LOG_OUTPUT: Final = [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": RAW_BREAKPOINT}]
 RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoint": RAW_BREAKPOINT}
+LOOKUP_FUNCTION: Final = {"type": "function", "name": "lookup", "strict": False, "parameters": LOOKUP_SCHEMA}
+RAW_LOOKUP_FUNCTION: Final = {**LOOKUP_FUNCTION, "prompt_cache_breakpoint": RAW_BREAKPOINT}
 
 
 @pytest.mark.parametrize(
-    ("model", "extra_kwargs", "log_output", "question"),
+    ("model", "extra_kwargs", "log_output", "question", "tool"),
     [
-        pytest.param("openai/gpt-5.5", OPENAI_API, RAW_LOG_OUTPUT, RAW_QUESTION, id="sent-as-is"),
+        pytest.param("openai/gpt-5.5", OPENAI_API, RAW_LOG_OUTPUT, RAW_QUESTION, RAW_LOOKUP_FUNCTION, id="sent-as-is"),
         pytest.param(
             "openai/gpt-5.5",
             {**OPENAI_API, "drop_params": True},
             "build ok",
             {"type": "input_text", "text": "q"},
+            LOOKUP_FUNCTION,
             id="dropped-under-drop-params",
         ),
         pytest.param(
@@ -517,6 +541,7 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
             {**OTHER_HOST, "drop_params": True},
             RAW_LOG_OUTPUT,
             RAW_QUESTION,
+            RAW_LOOKUP_FUNCTION,
             id="kept-under-drop-params-for-a-model-that-takes-them",
         ),
         pytest.param(
@@ -524,16 +549,18 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
             {**OTHER_HOST, "drop_params": True, "base_model": "gpt-5.6"},
             RAW_LOG_OUTPUT,
             RAW_QUESTION,
+            RAW_LOOKUP_FUNCTION,
             id="kept-under-drop-params-for-a-base-model-that-takes-them",
         ),
     ],
 )
 def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drops_them_for_a_model_that_takes_none(
-    model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
+    model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object], tool: object
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model=model,
         extra_kwargs=extra_kwargs,
+        tools=[{"name": "lookup", "input_schema": LOOKUP_SCHEMA, "prompt_cache_breakpoint": RAW_BREAKPOINT}],
         max_tokens=1024,
         messages=[
             {
@@ -554,6 +581,7 @@ def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drop
         {"type": "function_call_output", "call_id": "toolu_log", "output": log_output},
         {"type": "message", "role": "user", "content": [question]},
     ]
+    assert responses_kwargs["tools"] == [tool]
 
 
 @pytest.mark.parametrize(
@@ -739,3 +767,165 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+DOCS_SERVER: Final = {"type": "url", "name": "docs", "url": "https://mcp.example.com/sse"}
+
+
+@pytest.mark.parametrize(
+    ("speed", "extra_kwargs", "service_tier"),
+    [
+        pytest.param("fast", OPENAI_API, "priority", id="fast"),
+        pytest.param("fast", {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier-wins-over-fast"),
+        pytest.param(None, {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier"),
+    ],
+)
+def test_speed_fast_asks_for_the_priority_tier_unless_a_service_tier_is_forwarded(
+    speed: str | None, extra_kwargs: dict[str, object], service_tier: str
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6", max_tokens=1024, messages=MESSAGES, speed=speed, extra_kwargs=extra_kwargs
+    )
+    assert responses_kwargs["service_tier"] == service_tier
+
+
+def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=MESSAGES,
+        speed="fast",
+        mcp_servers=[DOCS_SERVER],
+        container={"id": "container_abc"},
+        extra_kwargs={**OPENAI_API, "drop_params": True},
+    )
+    assert {"speed", "mcp_servers", "container"}.isdisjoint(responses_kwargs)
+    assert responses_kwargs["tools"] == [
+        {
+            "type": "mcp",
+            "server_label": "docs",
+            "server_url": "https://mcp.example.com/sse",
+            "require_approval": "never",
+        }
+    ]
+
+
+def test_container_answers_400_without_drop_params() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            max_tokens=1024,
+            messages=MESSAGES,
+            container={"id": "container_abc"},
+            extra_kwargs=OPENAI_API,
+        )
+
+    assert rejected.value.status_code == 400
+    assert "no equivalent for container" in rejected.value.message
+
+
+WIRE_RESPONSE: Final = {
+    "id": "resp_fields",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.6",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "{}", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": False,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+}
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "wire_fields"),
+    [
+        pytest.param(
+            {
+                "tools": [
+                    dict(BASH_TOOL),
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 2,
+                        "allowed_domains": ["docs.python.org"],
+                    },
+                ],
+                "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+                "speed": "fast",
+                "output_format": {"type": "json_schema", "schema": {"type": "object", "properties": {}}},
+            },
+            {
+                "parallel_tool_calls": False,
+                "service_tier": "priority",
+                "max_tool_calls": 2,
+                "web_search": {"type": "web_search", "filters": {"allowed_domains": ["docs.python.org"]}},
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "structured_output",
+                        "schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+                        "strict": True,
+                    }
+                },
+            },
+            id="parallel-speed-web-search-structured-output",
+        ),
+        pytest.param(
+            {
+                "mcp_servers": [{**DOCS_SERVER, "authorization_token": "tok"}],
+                "tools": [
+                    {
+                        "type": "mcp_toolset",
+                        "mcp_server_name": "docs",
+                        "default_config": {"enabled": False},
+                        "configs": {"search": {"enabled": True}},
+                    }
+                ],
+            },
+            {
+                "mcp": {
+                    "type": "mcp",
+                    "server_label": "docs",
+                    "server_url": "https://mcp.example.com/sse",
+                    "require_approval": "never",
+                    "authorization": "tok",
+                    "allowed_tools": ["search"],
+                }
+            },
+            id="mcp-server",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_messages_fields_reach_the_openai_responses_request_body(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+    wire_fields: dict[str, object],
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fields-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=WIRE_RESPONSE
+    )
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024, messages=MESSAGES, model="openai/gpt-5.6", custom_llm_provider="openai", **request_fields
+    )
+
+    body: Final = json.loads(upstream.calls.last.request.content)
+    tools_by_type: Final = {tool["type"]: tool for tool in body.get("tools", [])}
+    sent: Final = {**body, **tools_by_type}
+    assert {key: sent.get(key) for key in wire_fields} == wire_fields
+    assert {"speed", "mcp_servers", "output_format"}.isdisjoint(body)

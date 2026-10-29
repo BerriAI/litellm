@@ -2073,13 +2073,24 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
+def prompt_cache_breakpoint_for(cache_control: object) -> PromptCacheBreakpoint:
+    """OpenAI's breakpoint for an Anthropic ``cache_control`` mark. A 1h mark asks for at least an hour, and 12h is
+    the only OpenAI TTL that long. A 5m or unset TTL inherits the request's TTL, 30m by default."""
+    match cache_control:
+        case {"ttl": "1h"}:
+            return PromptCacheBreakpoint(mode="explicit", ttl="12h")
+        case _:
+            return PromptCacheBreakpoint(mode="explicit")
+
+
 def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
-    if block.get("cache_control") is None:
+    cache_control: Final = block.get("cache_control")
+    if cache_control is None:
         return block
     unmarked: Final = {key: value for key, value in block.items() if key != "cache_control"}
     return cast(  # cast-ok: same block shape as the input with the marker key renamed
-        _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
+        _MarkedT, with_prompt_cache_breakpoint(unmarked, prompt_cache_breakpoint_for(cache_control))
     )
 
 

@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
+    prompt_cache_breakpoint_for,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -186,7 +187,7 @@ def _with_prompt_cache_breakpoints_under(item: Mapping[str, object], key: str) -
         if item_mark is None:
             return item
         text_part: Final[Mapping[str, object]] = {"type": "input_text", "text": value}
-        return {**unmarked_item, key: [with_prompt_cache_breakpoint(text_part, PromptCacheBreakpoint(mode="explicit"))]}
+        return {**unmarked_item, key: [with_prompt_cache_breakpoint(text_part, prompt_cache_breakpoint_for(item_mark))]}
     try:
         parts: Final = _CONTENT_PARTS.validate_python(value)
     except ValidationError:
@@ -212,7 +213,7 @@ def _with_breakpoint_on_last_reading_part(
     if not reading_indexes:
         return parts
     last: Final = reading_indexes[-1]
-    marked_last: Final = with_prompt_cache_breakpoint(parts[last], PromptCacheBreakpoint(mode="explicit"))
+    marked_last: Final = with_prompt_cache_breakpoint(parts[last], prompt_cache_breakpoint_for(item_mark))
     return (*parts[:last], marked_last, *parts[last + 1 :])
 
 

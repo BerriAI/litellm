@@ -16,6 +16,7 @@ from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
@@ -194,6 +195,48 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
         return _JSON_OBJECT.validate_python(value)
     except ValidationError:
         return None
+
+
+_SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "$defs", "definitions", "patternProperties"})
+_SCHEMA_DATA_KEYWORDS: Final = frozenset({"enum", "const", "examples"})
+
+
+def _strict_keyword_value(keyword: str, value: JsonValue, depth: int) -> JsonValue:
+    if keyword in _SCHEMA_DATA_KEYWORDS:
+        return value
+    if keyword in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+        return {name: strict_json_schema(subschema, depth) for name, subschema in value.items()}
+    return strict_json_schema(value, depth)
+
+
+def strict_json_schema(schema: JsonValue, depth: int = 0) -> JsonValue:
+    """The schema as OpenAI strict structured outputs accept it: every object closed with
+    `additionalProperties: false` and all of its properties required, `default` removed, and only `$ref` kept on a
+    reference. Output that matches the result also matches the original. Raises ValueError past
+    DEFAULT_MAX_RECURSE_DEPTH."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"output schema is nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
+    if isinstance(schema, list):
+        return [strict_json_schema(entry, depth + 1) for entry in schema]
+    if not isinstance(schema, dict):
+        return schema
+    if "$ref" in schema:
+        return {"$ref": schema["$ref"]}
+    walked: Final = {
+        keyword: _strict_keyword_value(keyword, value, depth + 1)
+        for keyword, value in schema.items()
+        if keyword != "default"
+    }
+    properties: Final = walked.get("properties")
+    if walked.get("type") != "object" and not isinstance(properties, dict):
+        return walked
+    closed_properties: Final = properties if isinstance(properties, dict) else dict[str, JsonValue]()
+    return {
+        **walked,
+        "properties": closed_properties,
+        "required": list(closed_properties),
+        "additionalProperties": False,
+    }
 
 
 def _names(value: object) -> frozenset[str]:

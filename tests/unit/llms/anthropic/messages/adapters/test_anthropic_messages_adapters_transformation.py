@@ -3869,6 +3869,29 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert schema["additionalProperties"] is False
         assert sorted(schema["required"]) == ["age", "email", "name"]
 
+    def test_keywords_strict_mode_rejects_are_dropped_and_property_names_kept(self):
+        output_format = {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "default": {"type": "string", "default": "x"},
+                    "extra": {"type": "object"},
+                },
+            },
+        }
+        result = self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert result is not None
+        assert result["json_schema"]["schema"] == {
+            "type": "object",
+            "properties": {
+                "default": {"type": "string"},
+                "extra": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            },
+            "required": ["default", "extra"],
+            "additionalProperties": False,
+        }
+
     def test_invalid_output_format_returns_none(self):
         assert (
             self.adapter.translate_anthropic_output_format_to_openai("invalid") is None

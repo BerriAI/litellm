@@ -7,9 +7,13 @@ path used for OpenAI and Azure models.
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from itertools import groupby
-from typing import Any, Final, cast
+from dataclasses import dataclass
+from itertools import chain, groupby
+from typing import Any, Final, TypeAlias, cast
 
+from pydantic import TypeAdapter, ValidationError
+
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -30,10 +34,15 @@ from litellm.llms.anthropic.messages.utils import (
     json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
+from litellm.llms.base_llm.base_utils import as_json_object, strict_json_schema
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicFinishReason,
+    AnthropicMcpServerTool,
+    AnthropicMcpServerToolConfiguration,
+    AnthropicMcpToolConfig,
+    AnthropicMcpToolset,
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
     AnthropicResponseContentBlockRedactedThinking,
@@ -53,6 +62,231 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_MCP_TOOLSET_TYPE: Final = "mcp_toolset"
+_MCP_TOOLSET: Final = TypeAdapter(AnthropicMcpToolset)
+_WEB_SEARCH_FILTER_KEYS: Final = ("allowed_domains", "blocked_domains")
+_STRUCTURED_OUTPUT_NAME: Final = "structured_output"
+_OBJECT_MAP: Final = TypeAdapter(Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _Translation:
+    fields: Mapping[str, object]
+    unsupported: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _ResponsesTools:
+    tools: tuple[Mapping[str, object], ...] = ()
+    unsupported: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _AllTools:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _OnlyTools:
+    names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NoEquivalent:
+    field: str
+
+
+_McpAccess: TypeAlias = _AllTools | _OnlyTools | _NoEquivalent
+
+
+def _present_fields(source: Mapping[str, object], keys: Iterable[str]) -> Mapping[str, object]:
+    return {key: source[key] for key in keys if source.get(key) is not None}
+
+
+def _is_web_search_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type", "")
+    return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool.get("name") == "web_search"
+
+
+def _web_search_tool(tool: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: Responses tool payload
+    """Domain filters only exist on Responses' ``web_search``, so a filtered search moves off ``web_search_preview``."""
+    filters: Final = _present_fields(tool, _WEB_SEARCH_FILTER_KEYS)
+    location: Final = _present_fields(tool, ("user_location",))
+    if filters:
+        return {"type": "web_search", "filters": filters, **location}
+    return {"type": "web_search_preview", **location}
+
+
+def _allowed_callers_unsupported(tool: Mapping[str, object]) -> tuple[str, ...]:
+    callers: Final = tool.get("allowed_callers")
+    if callers is None or callers == ["direct"]:
+        return ()
+    return (f"allowed_callers on tool {tool.get('name')!r}",)
+
+
+def _max_tool_calls(
+    tools: Sequence[Mapping[str, object]], responses_tools: Sequence[Mapping[str, object]]
+) -> _Translation:
+    """Responses caps every built-in tool call together, so ``max_uses`` maps only when web search is the one."""
+    capped: Final = tuple(tool for tool in tools if _is_web_search_tool(tool) and tool.get("max_uses") is not None)
+    if not capped:
+        return _Translation(fields={})
+    built_in: Final = tuple(tool for tool in responses_tools if tool.get("type") != "function")
+    if len(built_in) == 1:
+        return _Translation(fields={"max_tool_calls": capped[0].get("max_uses")})
+    return _Translation(
+        fields={},
+        unsupported=tuple(f"max_uses on tool {tool.get('name')!r} next to another built-in tool" for tool in capped),
+    )
+
+
+def _configuration_access(configuration: AnthropicMcpServerToolConfiguration | None) -> _McpAccess:
+    if configuration is None:
+        return _AllTools()
+    if configuration.get("enabled") is False:
+        return _OnlyTools(())
+    allowed_tools: Final = configuration.get("allowed_tools")
+    return _AllTools() if allowed_tools is None else _OnlyTools(tuple(allowed_tools))
+
+
+def _toolset_access(toolset: AnthropicMcpToolset) -> _McpAccess:
+    default_config: Final[AnthropicMcpToolConfig] = toolset.get("default_config", {})
+    configs: Final[Mapping[str, AnthropicMcpToolConfig]] = toolset.get("configs", {})
+    if not default_config.get("enabled", True):
+        return _OnlyTools(tuple(name for name, config in configs.items() if config.get("enabled") is True))
+    disabled: Final = tuple(name for name, config in configs.items() if config.get("enabled") is False)
+    if not disabled:
+        return _AllTools()
+    return _NoEquivalent(
+        f"mcp_toolset {toolset['mcp_server_name']!r} disabling {', '.join(disabled)} while its other tools stay enabled"
+    )
+
+
+def _toolset_defer_loading_unsupported(toolset: AnthropicMcpToolset) -> tuple[str, ...]:
+    default_config: Final[AnthropicMcpToolConfig] = toolset.get("default_config", {})
+    configs: Final[Mapping[str, AnthropicMcpToolConfig]] = toolset.get("configs", {})
+    deferred: Final = default_config.get("defer_loading") is True or any(
+        config.get("defer_loading") is True for config in configs.values()
+    )
+    return (f"defer_loading on mcp_toolset {toolset['mcp_server_name']!r}",) if deferred else ()
+
+
+def _mcp_tool(server: AnthropicMcpServerTool) -> Mapping[str, object]:
+    """Anthropic's MCP connector calls tools without asking, so the Responses tool must never wait for an approval."""
+    connection: Final[Mapping[str, object]] = {
+        "type": "mcp",
+        "server_label": server.get("name"),
+        "server_url": server.get("url"),
+        "require_approval": "never",
+    }
+    authorization: Final = server.get("authorization_token")
+    return connection if authorization is None else {**connection, "authorization": authorization}
+
+
+def _mcp_server_tools(
+    server: AnthropicMcpServerTool, access: _McpAccess, unsupported: tuple[str, ...]
+) -> _ResponsesTools:
+    match access:
+        case _AllTools():
+            return _ResponsesTools(tools=(_mcp_tool(server),), unsupported=unsupported)
+        case _OnlyTools(names=()):
+            return _ResponsesTools(unsupported=unsupported)
+        case _OnlyTools(names=names):
+            return _ResponsesTools(
+                tools=({**_mcp_tool(server), "allowed_tools": list(names)},), unsupported=unsupported
+            )
+        case _NoEquivalent(field=field):
+            return _ResponsesTools(unsupported=(*unsupported, field))
+
+
+def _mcp_server_translation(server: AnthropicMcpServerTool, tools: Sequence[Mapping[str, object]]) -> _ResponsesTools:
+    """One Responses ``mcp`` tool per server, its access read from the server's ``mcp_toolset`` entry in ``tools``,
+    else from the deprecated ``tool_configuration``."""
+    name: Final = server.get("name")
+    toolset: Final = next(
+        (tool for tool in tools if tool.get("type") == _MCP_TOOLSET_TYPE and tool.get("mcp_server_name") == name),
+        None,
+    )
+    if toolset is None:
+        return _mcp_server_tools(server, _configuration_access(server.get("tool_configuration")), ())
+    try:
+        parsed: Final = _MCP_TOOLSET.validate_python(toolset)
+    except ValidationError:
+        return _mcp_server_tools(server, _NoEquivalent(f"the malformed mcp_toolset for {name!r}"), ())
+    return _mcp_server_tools(server, _toolset_access(parsed), _toolset_defer_loading_unsupported(parsed))
+
+
+def _parallel_tool_calls(tool_choice: Mapping[str, object] | None) -> _Translation:
+    if (
+        tool_choice is None
+        or tool_choice.get("type") == "none"
+        or tool_choice.get("disable_parallel_tool_use") is not True
+    ):
+        return _Translation(fields={})
+    return _Translation(fields={"parallel_tool_calls": False})
+
+
+def _service_tier(speed: object) -> _Translation:
+    match speed:
+        case None | "standard":
+            return _Translation(fields={})
+        case "fast":
+            return _Translation(fields={"service_tier": "priority"})
+        case _:
+            return _Translation(fields={}, unsupported=(f"speed {speed!r}",))
+
+
+def _container(container: object) -> _Translation:
+    return _Translation(fields={}, unsupported=() if container is None else ("container",))
+
+
+def _object_map(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAP.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _requested_output_format(request: Mapping[str, object]) -> Mapping[str, object] | None:
+    output_format: Final = _object_map(request.get("output_format"))
+    if output_format is not None:
+        return output_format
+    output_config: Final = _object_map(request.get("output_config"))
+    return None if output_config is None else _object_map(output_config.get("format"))
+
+
+def _text_format(output_format: Mapping[str, object] | None) -> _Translation:
+    """A json_schema format goes up strict, as Anthropic structured outputs guarantee the schema. Making every
+    property required keeps strict output valid against the caller's schema, and an explicit ``strict: false`` or a
+    schema that is not JSON goes up as is."""
+    if output_format is None or output_format.get("type") != "json_schema":
+        return _Translation(fields={})
+    schema: Final = output_format.get("schema")
+    if not schema:
+        return _Translation(fields={})
+    strict_schema: Final = None if output_format.get("strict") is False else as_json_object(schema)
+    if strict_schema is None:
+        loose: Final = {"type": "json_schema", "name": _STRUCTURED_OUTPUT_NAME, "schema": schema, "strict": False}
+        return _Translation(fields={"text": {"format": loose}})
+    strict: Final = {
+        "type": "json_schema",
+        "name": _STRUCTURED_OUTPUT_NAME,
+        "schema": strict_json_schema(dict(strict_schema)),
+        "strict": True,
+    }
+    return _Translation(fields={"text": {"format": strict}})
+
+
+def _unsupported_params_error(model: str, unsupported: Sequence[str]) -> litellm.UnsupportedParamsError:
+    pronoun: Final = "it" if len(unsupported) == 1 else "them"
+    return litellm.UnsupportedParamsError(
+        message=(
+            f"{model} is served through the OpenAI Responses API, which has no equivalent for "
+            f"{'; '.join(unsupported)}. To drop {pronoun}, set `litellm.drop_params=True`, or `drop_params: true` "
+            "under `litellm_settings` on the proxy"
+        ),
+        model=model,
+    )
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -466,11 +700,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _translate_tool_to_responses_api(tool_dict: Mapping[str, object]) -> dict[str, object]:
-        tool_type: Final = tool_dict.get("type", "")
+        if _is_web_search_tool(tool_dict):
+            return _web_search_tool(tool_dict)
         tool_name: Final = tool_dict.get("name", "")
-        # web_search tool
-        if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
-            return {"type": "web_search_preview"}
         # Responses turns strict mode on when `strict` is omitted, silently rewriting
         # `required` to every property. Anthropic tools are non-strict unless asked.
         func_tool: Final[dict[str, object]] = {
@@ -482,14 +714,34 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             func_tool["description"] = tool_dict["description"]
         if "input_schema" in tool_dict:
             func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
-        return func_tool
+        return with_prompt_cache_breakpoint(func_tool, tool_dict.get("prompt_cache_breakpoint"))
 
     def translate_tools_to_responses_api(
         self,
         tools: list[AllAnthropicToolsValues],
     ) -> list[dict[str, object]]:
-        """Convert Anthropic tool definitions to Responses API function tools."""
-        return [self._translate_tool_to_responses_api(tool) for tool in tools]
+        """Convert Anthropic tool definitions to Responses API tools. An ``mcp_toolset`` entry configures its MCP
+        server's tool, so it never becomes a tool of its own."""
+        return [self._translate_tool_to_responses_api(tool) for tool in tools if tool.get("type") != _MCP_TOOLSET_TYPE]
+
+    def _translate_tools(self, anthropic_request: AnthropicMessagesRequest) -> _Translation:
+        tools: Final = cast(list[AllAnthropicToolsValues], anthropic_request.get("tools") or [])
+        mcp_servers: Final = tuple(
+            _mcp_server_translation(server, tools) for server in anthropic_request.get("mcp_servers") or ()
+        )
+        responses_tools: Final = (
+            *self.translate_tools_to_responses_api(tools),
+            *chain.from_iterable(server.tools for server in mcp_servers),
+        )
+        max_tool_calls: Final = _max_tool_calls(tools, responses_tools)
+        return _Translation(
+            fields={**({"tools": list(responses_tools)} if responses_tools else {}), **max_tool_calls.fields},
+            unsupported=(
+                *chain.from_iterable(_allowed_callers_unsupported(tool) for tool in tools),
+                *chain.from_iterable(server.unsupported for server in mcp_servers),
+                *max_tool_calls.unsupported,
+            ),
+        )
 
     @staticmethod
     def translate_tool_choice_to_responses_api(
@@ -653,19 +905,24 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if "top_p" in anthropic_request:
             responses_kwargs["top_p"] = anthropic_request["top_p"]
 
-        # tools
-        tools: Final = anthropic_request.get("tools")
-        if tools:
-            responses_kwargs["tools"] = self.translate_tools_to_responses_api(
-                cast(list[AllAnthropicToolsValues], tools)
-            )
-
-        # tool_choice
         tool_choice: Final = anthropic_request.get("tool_choice")
         if tool_choice:
             responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
                 cast(AnthropicMessagesToolChoice, tool_choice)
             )
+
+        request: Final[Mapping[str, object]] = anthropic_request
+        translations: Final = (
+            self._translate_tools(anthropic_request),
+            _parallel_tool_calls(_object_map(tool_choice)),
+            _service_tier(request.get("speed")),
+            _container(request.get("container")),
+            _text_format(_requested_output_format(request)),
+        )
+        unsupported: Final = tuple(chain.from_iterable(translation.unsupported for translation in translations))
+        if unsupported and not drop_params:
+            raise _unsupported_params_error(model, unsupported)
+        responses_kwargs.update(chain.from_iterable(translation.fields.items() for translation in translations))
 
         # thinking -> reasoning
         thinking: Final = anthropic_request.get("thinking")
@@ -679,25 +936,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
-
-        # output_format / output_config.format -> text format
-        # output_format: {"type": "json_schema", "schema": {...}}
-        # output_config: {"format": {"type": "json_schema", "schema": {...}}}
-        output_format: object = anthropic_request.get("output_format")
-        output_config = anthropic_request.get("output_config")
-        if not isinstance(output_format, dict) and isinstance(output_config, dict):
-            output_format = output_config.get("format")
-        if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
-            schema: Final = output_format.get("schema")
-            if schema:
-                responses_kwargs["text"] = {
-                    "format": {
-                        "type": "json_schema",
-                        "name": "structured_output",
-                        "schema": schema,
-                        "strict": output_format.get("strict", False),
-                    }
-                }
 
         # context_management: Anthropic dict -> OpenAI array
         context_management: Final = anthropic_request.get("context_management")

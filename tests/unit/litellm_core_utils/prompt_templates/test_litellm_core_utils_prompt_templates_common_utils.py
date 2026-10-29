@@ -2328,13 +2328,23 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
-def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
-    marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+@pytest.mark.parametrize(
+    ("cache_control", "breakpoint"),
+    [
+        pytest.param({"type": "ephemeral", "ttl": "1h"}, {"mode": "explicit", "ttl": "12h"}, id="1h-asks-for-12h"),
+        pytest.param({"type": "ephemeral", "ttl": "5m"}, {"mode": "explicit"}, id="5m-keeps-the-request-ttl"),
+        pytest.param({"type": "ephemeral"}, {"mode": "explicit"}, id="no-ttl-keeps-the-request-ttl"),
+    ],
+)
+def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block(
+    cache_control: dict[str, str], breakpoint: dict[str, str]
+) -> None:
+    marked: Final = {"type": "text", "text": "rules", "cache_control": cache_control}
 
     assert cache_control_as_prompt_cache_breakpoint(marked) == {
         "type": "text",
         "text": "rules",
-        "prompt_cache_breakpoint": {"mode": "explicit"},
+        "prompt_cache_breakpoint": breakpoint,
     }
 
 

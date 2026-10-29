@@ -2867,6 +2867,14 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         )
 
     @pytest.mark.parametrize(
+        ("cache_control", "breakpoint"),
+        [
+            pytest.param({**_EPHEMERAL, "ttl": "1h"}, {**_EXPLICIT_BREAKPOINT, "ttl": "12h"}, id="1h-asks-for-12h"),
+            pytest.param({**_EPHEMERAL, "ttl": "5m"}, _EXPLICIT_BREAKPOINT, id="5m-keeps-the-request-ttl"),
+            pytest.param(_EPHEMERAL, _EXPLICIT_BREAKPOINT, id="no-ttl-keeps-the-request-ttl"),
+        ],
+    )
+    @pytest.mark.parametrize(
         ("litellm_params", "extra_params"),
         [
             pytest.param(_OPENAI_API, {}, id="api.openai.com"),
@@ -2878,29 +2886,33 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         ],
     )
     def test_marks_reach_gpt_5_6_as_explicit_breakpoints_on_the_same_blocks(
-        self, litellm_params: GenericLiteLLMParams, extra_params: dict[str, object]
+        self,
+        litellm_params: GenericLiteLLMParams,
+        extra_params: dict[str, object],
+        cache_control: dict[str, str],
+        breakpoint: dict[str, str],
     ) -> None:
-        result = self._transform("gpt-5.6", litellm_params, {**_EPHEMERAL, "ttl": "1h"}, extra_params)
+        result = self._transform("gpt-5.6", litellm_params, cache_control, extra_params)
 
         assert result["input"] == [
             {
                 "role": "developer",
                 "content": [
                     {"type": "input_text", "text": "Be concise."},
-                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": breakpoint},
                 ],
             },
             {
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": breakpoint}],
             },
             {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking"}]},
             {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
             {
                 "type": "function_call_output",
                 "call_id": "call_1",
-                "output": [{"type": "input_text", "text": "found", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+                "output": [{"type": "input_text", "text": "found", "prompt_cache_breakpoint": breakpoint}],
             },
             {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
             {
@@ -2908,7 +2920,7 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
                 "call_id": "call_2",
                 "output": [
                     {"type": "input_text", "text": "first"},
-                    {"type": "input_text", "text": "last", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "input_text", "text": "last", "prompt_cache_breakpoint": breakpoint},
                 ],
             },
         ]

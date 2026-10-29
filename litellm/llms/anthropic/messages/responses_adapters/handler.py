@@ -21,6 +21,7 @@ from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
+    AnthropicMcpServerTool,
     AnthropicMessagesRequest,
     AnthropicOutputConfig,
     AnthropicOutputSchema,
@@ -137,6 +138,9 @@ def _build_responses_kwargs(
     top_k: int | None = None,
     top_p: float | None = None,
     output_format: AnthropicOutputSchema | None = None,
+    speed: str | None = None,
+    mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+    container: Mapping[str, object] | None = None,
     extra_kwargs: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """
@@ -179,11 +183,19 @@ def _build_responses_kwargs(
     if tool_choice:
         request_data["tool_choice"] = tool_choice
     if tools:
-        request_data["tools"] = tools
+        request_data["tools"] = (
+            ([dict(tool) for tool in _rewritten_blocks(tools, block_rewrite)] or tools) if block_rewrite else tools
+        )
     if top_p is not None:
         request_data["top_p"] = top_p
     if output_format:
         request_data["output_format"] = output_format
+    if speed is not None:
+        request_data["speed"] = speed
+    if mcp_servers:
+        request_data["mcp_servers"] = list(mcp_servers)
+    if container is not None:
+        request_data["container"] = dict(container)
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(
@@ -240,6 +252,10 @@ def _build_responses_kwargs(
     if explicit_prompt_cache_key is not None:
         responses_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
 
+    explicit_service_tier: Final = forwarded_kwargs.get("service_tier")
+    if explicit_service_tier is not None:
+        responses_kwargs["service_tier"] = explicit_service_tier
+
     deployment_include: Final = forwarded_kwargs.get("include")
     bridge_include: Final = responses_kwargs.get("include")
     if isinstance(deployment_include, list) and isinstance(bridge_include, list):
@@ -276,6 +292,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
+        speed: str | None = None,
+        mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+        container: Mapping[str, object] | None = None,
         **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
         responses_kwargs: Final = _build_responses_kwargs(
@@ -295,6 +314,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
+            speed=speed,
+            mcp_servers=mcp_servers,
+            container=container,
             extra_kwargs=kwargs,
         )
 
@@ -335,6 +357,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
+        speed: str | None = None,
+        mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+        container: Mapping[str, object] | None = None,
         _is_async: bool = False,
         **kwargs: object,
     ) -> (
@@ -360,6 +385,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                speed=speed,
+                mcp_servers=mcp_servers,
+                container=container,
                 **kwargs,
             )
 
@@ -381,6 +409,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
+            speed=speed,
+            mcp_servers=mcp_servers,
+            container=container,
             extra_kwargs=kwargs,
         )
 

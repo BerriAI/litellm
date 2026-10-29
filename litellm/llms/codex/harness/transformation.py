@@ -32,6 +32,7 @@ from litellm.harness.types import (
     ToolResult,
 )
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.llms.base_llm.base_utils import strict_json_schema
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
     HarnessSessionSetup,
@@ -40,7 +41,7 @@ from litellm.llms.base_llm.harness.transformation import (
     HarnessTurnResponse,
     event_list,
 )
-from litellm.llms.base_llm.harness.utils import stderr_tail_text, strict_json_schema
+from litellm.llms.base_llm.harness.utils import stderr_tail_text
 
 if TYPE_CHECKING:
     from litellm.harness.context import SessionContext
