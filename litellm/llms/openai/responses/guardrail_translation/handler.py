@@ -36,7 +36,7 @@ from collections.abc import Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, Union, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -47,6 +47,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -220,6 +221,18 @@ class ResponsesStreamChunk(TypedDict, total=False):
     item_id: ReadOnly[str]
     output_index: ReadOnly[int]
     content_index: ReadOnly[int]
+
+
+@runtime_checkable
+class _TextPart(Protocol):
+    text: str
+
+
+def _set_content_part_text(item: object, index: int, text: str) -> None:
+    parts: Final = tuple(attribute_items(item, "content"))
+    part: Final = parts[index] if index < len(parts) else None
+    if isinstance(part, _TextPart):
+        part.text = text
 
 
 _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
@@ -1694,10 +1707,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                         if isinstance(content_item, OutputText):
                             content_item.text = guardrail_response
                             # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
-                                if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
+                            _set_content_part_text(output_item, content_idx, guardrail_response)
                 except Exception:
                     pass
             elif isinstance(output_item, dict):
