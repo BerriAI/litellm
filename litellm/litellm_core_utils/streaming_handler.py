@@ -980,9 +980,17 @@ class CustomStreamWrapper:
         model_response: ModelResponseStream,
         response_obj: Mapping[str, object],
     ) -> bool:
+        from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+            delta_content_as_str,
+        )
+
+        # Providers may stream delta.content as a list of content parts; fold it to
+        # text here too, otherwise every chunk after the first is judged empty and
+        # dropped (only the first survives, via the role clause below).
+        content_str: Final = delta_content_as_str(completion_obj.get("content"))
         if (
             "content" in completion_obj
-            and (isinstance(completion_obj["content"], str) and len(completion_obj["content"]) > 0)
+            and len(content_str) > 0
             or (
                 "tool_calls" in completion_obj
                 and completion_obj["tool_calls"] is not None
@@ -2559,9 +2567,20 @@ class CustomStreamWrapper:
     def _accumulate_streamed_delta(self, delta: object) -> None:
         # Shared by the sync, async, and non-aiohttp iteration sites so answer
         # text and the disqualifying-content latch stay in step across all three.
+        from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+            delta_content_as_str,
+        )
+
         get: Final = getattr(delta, "get", None)
-        content: Final = get("content") if callable(get) else None
-        self.response_uptil_now += content if isinstance(content, str) else ""
+        content: Final = get("content") if callable(get) else getattr(delta, "content", None)
+        if isinstance(content, str):
+            self.response_uptil_now += content
+        else:
+            # Providers that stream delta.content as a list of content parts must
+            # still accumulate as plain text. delta_content_as_str folds those
+            # parts and yields "" for anything that is not a content list, which is
+            # exactly what a non-text delta contributed before.
+            self.response_uptil_now += delta_content_as_str(content)
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
 

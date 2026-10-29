@@ -8248,3 +8248,66 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+def _chunk_with_list_content(text: str, chunk_id: str, created: int) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=chunk_id,
+        object="chat.completion.chunk",
+        created=created,
+        model="gpt-5.6",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=[{"type": "text", "text": text}]),
+                finish_reason=None,
+            )
+        ],
+    )
+
+def test_streaming_delta_content_list_accumulates_as_str():
+    """A provider streaming delta.content as a content-part list must still accumulate as text."""
+    chunks: Final = [
+        _chunk_with_list_content("hello ", "chunk1", 1741037890),
+        _chunk_with_list_content("world", "chunk2", 1741037891),
+    ]
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model="gpt-5.6",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+
+    for _ in response:
+        pass
+
+    assert response.response_uptil_now == "hello world"
+
+def test_streaming_accumulates_content_part_with_null_text():
+    """A content part carrying a null value must not abort the accumulated stream."""
+    chunk: Final = ModelResponseStream(
+        id="chunk-null",
+        object="chat.completion.chunk",
+        created=1741037892,
+        model="gpt-5.6",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=[{"type": "text", "text": None}]),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter([chunk]),
+        model="gpt-5.6",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+
+    for _ in response:
+        pass
+
+    assert response.response_uptil_now == ""
