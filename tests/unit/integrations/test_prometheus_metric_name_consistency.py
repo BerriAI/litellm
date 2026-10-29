@@ -60,6 +60,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
     assert SpendLogCleanupMetrics.rows_remaining is not None
     assert SpendLogCleanupMetrics.batch_failures is not None
     assert SpendLogCleanupMetrics.runs is not None
+    assert SpendLogCleanupMetrics.storage_bytes is not None
     in_flight: Final = InFlightRequestsMiddleware._get_gauge()
     assert in_flight is not None
     services: Final = PrometheusServicesLogger()
@@ -72,6 +73,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
         SpendLogCleanupMetrics.rows_remaining,
         SpendLogCleanupMetrics.batch_failures,
         SpendLogCleanupMetrics.runs,
+        SpendLogCleanupMetrics.storage_bytes,
         in_flight,
         services.redis_breaker_state,
         services.redis_breaker_transitions,
