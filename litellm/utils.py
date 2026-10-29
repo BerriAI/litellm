@@ -2659,7 +2659,9 @@ def uses_anthropic_tokenizer(model: str) -> bool:
 HuggingFaceTokenizerKind = Literal["cohere", "anthropic", "deepseek", "llama2", "llama3"]
 
 _DEEPSEEK_TOKENIZER_MODEL: Final = re.compile(
-    r"deepseek[-_.](?:chat[-_.])?v[34]|(?:^|/)deepseek-(?:chat|reasoner|flash)(?::free)?$", re.IGNORECASE
+    r"deepseek[-_.](?:chat[-_.])?v[34]|(?:^|/)deepseek-(?:chat|reasoner|flash)(?::free)?$"
+    r"|deepseek[-_.]r1(?:-0528)?(?:-(?:turbo|basic|maas|671b|v1:0)|:(?:671b|free)|/community)?$",
+    re.IGNORECASE,
 )
 
 _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading.Lock]] = MappingProxyType(

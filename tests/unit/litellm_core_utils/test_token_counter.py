@@ -1176,9 +1176,20 @@ def _deepseek_token_count(text: str) -> int:
         "deepseek/deepseek-reasoner",
         "openrouter/deepseek/deepseek-chat-v3-0324",
         "openrouter/deepseek/deepseek-chat:free",
+        "azure_ai/DeepSeek-R1-0528",
+        "azure_ai/deepseek-r1",
+        "deepseek/deepseek-r1",
+        "deepinfra/deepseek-ai/DeepSeek-R1-0528-Turbo",
+        "bedrock/us.deepseek.r1-v1:0",
+        "openrouter/deepseek/deepseek-r1-0528:free",
+        "vertex_ai/deepseek-ai/deepseek-r1-0528-maas",
+        "fireworks_ai/accounts/fireworks/models/deepseek-r1-basic",
+        "novita/deepseek/deepseek-r1/community",
+        "lambda_ai/deepseek-r1-671b",
+        "ollama/deepseek-r1:671b",
     ],
 )
-def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_tokenizer(model: str):
+def test_token_counter_counts_deepseek_v3_v4_and_r1_with_the_packaged_deepseek_tokenizer(model: str):
     expected: Final = _deepseek_token_count(_CODE_SAMPLE)
 
     assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_CODE_SAMPLE))
@@ -1187,7 +1198,17 @@ def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_toke
 
 @pytest.mark.parametrize(
     "model",
-    ["together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
+    [
+        "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "fireworks_ai/accounts/fireworks/models/deepseek-v2p5",
+        "novita/deepseek/deepseek-r1-0528-qwen3-8b",
+        "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528-distill-qwen3-8b",
+        "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+        "llamagate/deepseek-r1-8b",
+        "llamagate/deepseek-r1-7b-qwen",
+        "ollama/deepseek-r1:8b",
+        "cloudflare/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    ],
 )
 def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
     assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
