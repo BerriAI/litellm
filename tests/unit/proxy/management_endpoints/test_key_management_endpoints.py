@@ -21454,6 +21454,61 @@ async def test_project_assignment_write_matches_null_models_column():
 
 
 @pytest.mark.asyncio
+async def test_project_assignment_write_rejects_when_max_budget_changed():
+    stored: Final = {
+        "token": _hash_token_if_needed("sk-assign"),
+        "project_id": None,
+        "team_id": "team-lit-5823",
+        "models": ["model-orbit"],
+        "max_budget": 50.0,
+        "object_permission_id": None,
+    }
+    database: Final = _project_assignment_prisma(stored_row=stored)
+    existing: Final = LiteLLM_VerificationToken(
+        token=stored["token"], project_id=None, team_id="team-lit-5823",
+        models=["model-orbit"], max_budget=100.0,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_key_row_assigning_project(
+            prisma_client=database,
+            key="sk-assign",
+            non_default_values={"project_id": "project-orbit"},
+            existing_key_row=existing,
+        )
+
+    assert exc.value.status_code == 400
+    assert "concurrently" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_write_rejects_when_object_permission_changed():
+    stored: Final = {
+        "token": _hash_token_if_needed("sk-assign"),
+        "project_id": None,
+        "team_id": "team-lit-5823",
+        "models": ["model-orbit"],
+        "max_budget": None,
+        "object_permission_id": "perm-new",
+    }
+    database: Final = _project_assignment_prisma(stored_row=stored)
+    existing: Final = LiteLLM_VerificationToken(
+        token=stored["token"], project_id=None, team_id="team-lit-5823", models=["model-orbit"]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_key_row_assigning_project(
+            prisma_client=database,
+            key="sk-assign",
+            non_default_values={"project_id": "project-orbit"},
+            existing_key_row=existing,
+        )
+
+    assert exc.value.status_code == 400
+    assert "concurrently" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_key_creator_cannot_detach_project_without_admin_access():
     existing: Final = LiteLLM_VerificationToken(
         token="project-detach-token", project_id="project-orbit", user_id="user-orbit", created_by="user-orbit",
@@ -21468,6 +21523,41 @@ async def test_key_creator_cannot_detach_project_without_admin_access():
         )
     assert exc.value.status_code == 403
     assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_caller_gets_403_not_project_lookup_result():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823",
+        user_id="user-orbit", created_by="user-orbit",
+    )
+    database: Final = _project_assignment_prisma()
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id="project-missing"), existing,
+            UserAPIKeyAuth(user_id="user-other", user_role=LitellmUserRoles.INTERNAL_USER),
+            None, False, database, UserApiKeyCache(),
+        )
+    assert exc.value.status_code == 403
+    assert "Project not found" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_caller_gets_403_not_project_team_leak():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823",
+        user_id="user-orbit", created_by="user-orbit",
+    )
+    cache: Final = await _cache_with_project("project-orbit", [], team_id="team-other")
+    database: Final = _project_assignment_prisma()
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing,
+            UserAPIKeyAuth(user_id="user-other", user_role=LitellmUserRoles.INTERNAL_USER),
+            None, False, database, cache,
+        )
+    assert exc.value.status_code == 403
+    assert "belongs to team" not in str(exc.value.detail)
 
 
 _OWNED_PROJECT: Final = "proj-owned-1"

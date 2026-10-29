@@ -3750,12 +3750,6 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
-    await _validate_project_assignment(
-        data=data,
-        existing_key_row=existing_key_row,
-        prisma_client=checked_prisma_client,
-        user_api_key_cache=user_api_key_cache,
-    )
     is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
 
     acting_as_team_admin: Final = await _acting_as_team_admin_for_key_update(
@@ -3887,6 +3881,12 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
         )
+    await _validate_project_assignment(
+        data=data,
+        existing_key_row=existing_key_row,
+        prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
     check_denied_passthrough_routes_caller_permission(
         data,
         user_api_key_dict,
