@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable, Mapping
 from functools import reduce
 from typing import Final
+from unittest.mock import Mock
 from urllib.parse import parse_qsl, quote
 
 import httpx
@@ -159,6 +160,31 @@ def test_lists_through_the_configured_control_plane_endpoint_only(api_key: str |
         )
         == EXPECTED_MODELS
     )
+
+
+def test_configured_endpoint_without_the_list_routes_falls_back_to_the_regional_host() -> None:
+    regional_only: Final = Mock(wraps=_control_plane())
+
+    assert (
+        _bedrock(regional_only).discover_models(_deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}"))
+        == EXPECTED_MODELS
+    )
+    hosts: Final = tuple(call.args[0].url.host for call in regional_only.call_args_list)
+    assert hosts[0] == VPC_ENDPOINT_HOST
+    assert set(hosts) == {VPC_ENDPOINT_HOST, REGIONAL_HOST}
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
+def test_configured_endpoint_failure_other_than_404_never_reaches_the_regional_host(status: int) -> None:
+    regional: Final = _control_plane()
+
+    def endpoint_refuses(request: httpx.Request) -> httpx.Response:
+        if request.url.host == VPC_ENDPOINT_HOST:
+            return httpx.Response(status, json={"message": "refused by the endpoint"})
+        return regional(request)
+
+    with pytest.raises(BedrockError, match=rf"{re.escape(VPC_ENDPOINT_HOST)} in {REGION}.*{status}"):
+        _bedrock(endpoint_refuses).discover_models(_deployment(control_plane_endpoint=f"https://{VPC_ENDPOINT_HOST}"))
 
 
 def test_bearer_token_api_key_replaces_sigv4() -> None:

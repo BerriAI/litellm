@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Mapping
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import Final, TypeAlias
 from urllib.parse import quote, urlencode
@@ -53,6 +54,10 @@ class BedrockModelLister(BaseAWSLLM):
         self._control_plane_base_url: Final = bedrock_control_plane_base_url(
             deployment.get("aws_bedrock_control_plane_endpoint"), self._aws_region_name
         )
+        regional_base_url: Final = bedrock_control_plane_base_url(None, self._aws_region_name)
+        self._regional_fallback_base_url: Final = (
+            None if self._control_plane_base_url == regional_base_url else regional_base_url
+        )
         api_key: Final = deployment.get("api_key")
         self._bearer_token: Final = bedrock_bearer_token(api_key if isinstance(api_key, str) else None)
         self._client: Final = client
@@ -93,8 +98,18 @@ class BedrockModelLister(BaseAWSLLM):
         )
 
     def _get_json(self, path: str, query: QueryPairs) -> object:
-        url: Final = f"{self._control_plane_base_url}{path}?{urlencode(query, quote_via=quote)}"
-        response: Final = self._client.get(url=url, headers=self._auth_headers(url), timeout=LIST_MODELS_TIMEOUT)
+        path_and_query: Final = f"{path}?{urlencode(query, quote_via=quote)}"
+        url: Final = f"{self._control_plane_base_url}{path_and_query}"
+        response: Final = self._get(url)
+        if response.status_code == HTTPStatus.NOT_FOUND and self._regional_fallback_base_url is not None:
+            fallback_url: Final = f"{self._regional_fallback_base_url}{path_and_query}"
+            return self._decoded(fallback_url, self._get(fallback_url))
+        return self._decoded(url, response)
+
+    def _get(self, url: str) -> httpx.Response:
+        return self._client.get(url=url, headers=self._auth_headers(url), timeout=LIST_MODELS_TIMEOUT)
+
+    def _decoded(self, url: str, response: httpx.Response) -> object:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError:
