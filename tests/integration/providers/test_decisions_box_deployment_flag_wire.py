@@ -354,6 +354,36 @@ async def test_a_router_deployment_flagged_false_refuses_boxes_even_when_its_bac
         ] * 2
 
 
+def _catalog_box_member() -> _Member:
+    backend: Final = next(
+        key
+        for key in tuple(litellm.model_cost)
+        if key.startswith("typesafe/") and litellm.supports_box_questions(model=key)
+    )
+    return _Member(
+        "typesafe",
+        backend,
+        "/v1/systemone",
+        backend.removeprefix("typesafe/"),
+        headers=MappingProxyType({_IMAGES_HEADER: "true"}),
+    )
+
+
+@pytest.mark.parametrize("sibling_flag", (False, "true"), ids=("false", "string"))
+def test_a_later_same_model_deployment_flag_never_takes_catalog_box_questions_from_an_unflagged_one(
+    gateway: Gateway, sibling_flag: JsonValue
+) -> None:
+    member: Final = _catalog_box_member()
+    with wire_server(member.reply) as wire, gateway.scenario() as scenario:
+        unflagged: Final = member.deployment(scenario, wire.url, None)
+        member.deployment(scenario, wire.url, {"supports_box_questions": sibling_flag})
+        answered: Final = _decide(gateway, unflagged)
+        assert answered.status_code == 200, answered.text
+        assert answered.json()["answers"] == _expected_answers(_QUESTIONS), answered.text
+        (call,) = wire.drain()
+        assert _JSON_OBJECT.validate_json(call.body) == member.upstream_body(_QUESTIONS)
+
+
 @pytest.mark.parametrize(
     "value", ("true", 1, [True], "", "x" * 5000, None), ids=("string", "int", "list", "empty", "5kb", "null")
 )

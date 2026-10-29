@@ -614,6 +614,47 @@ def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
         _restore_model_cost_entries(model_keys)
 
 
+
+@pytest.mark.parametrize(
+    ("catalog_flag", "sibling_flag", "shared_flag"),
+    ((True, False, True), (True, "true", True), (None, True, True)),
+    ids=("false-keeps-catalog-true", "string-keeps-catalog-true", "true-reaches-shared"),
+)
+def test_a_sibling_box_questions_flag_reaches_the_shared_key_only_as_true(
+    catalog_flag: bool | None, sibling_flag: bool | str, shared_flag: bool
+) -> None:
+    backend_model: Final = "perplexity/box-isolation-check"
+    catalog_row: Final = {
+        "litellm_provider": "perplexity",
+        "mode": "evaluation",
+        **({} if catalog_flag is None else {"supports_box_questions": catalog_flag}),
+    }
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in ("unflagged-id", "sibling-id", backend_model)
+    }
+    litellm.model_cost[backend_model] = catalog_row
+    _invalidate_model_cost_lowercase_map()
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "box-isolation",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": "unflagged-id"},
+                },
+                {
+                    "model_name": "box-isolation",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": "sibling-id", "supports_box_questions": sibling_flag},
+                },
+            ],
+        )
+
+        assert litellm.supports_box_questions(model=backend_model) is shared_flag
+        assert litellm.model_cost["sibling-id"]["supports_box_questions"] == sibling_flag
+    finally:
+        _restore_model_cost_entries(model_keys)
+
 def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
     """A deployment's ``token_count_model`` and ``token_count_framing`` must not land on
     the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
