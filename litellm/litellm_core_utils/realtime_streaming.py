@@ -32,6 +32,14 @@ from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
+from .realtime_guardrails import (
+    RealtimeToolOutput,
+    RealtimeUserText,
+    guardrail_violation_error_event,
+    guardrail_voice_prompt_events,
+    realtime_guarded_item,
+    realtime_guardrail_block,
+)
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
@@ -276,7 +284,7 @@ class RealTimeStreaming:
         self.current_delta_type: ALL_DELTA_TYPES | None = None
         self.session_configuration_request: str | None = None
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict = request_data or {}
+        self.request_data: Mapping[str, object] = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -981,116 +989,37 @@ class RealTimeStreaming:
         transcript completion uses ``realtime_input_transcription`` only;
         typed user messages and tool outputs use ``pre_call``.
         """
-        from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
-        if event_hooks is None:
-            event_hooks = [GuardrailEventHooks.realtime_input_transcription]
-        _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
-        _already_run: Final[set] = set()
+        block: Final = await realtime_guardrail_block(
+            transcript,
+            event_hooks if event_hooks is not None else (GuardrailEventHooks.realtime_input_transcription,),
+            self.request_data,
+            self.user_api_key_dict,
+            litellm.callbacks,
+        )
+        if block is None:
+            return False
+        if pre_block_backend_message is not None:
+            await self._send_to_backend(pre_block_backend_message)
+        if not self._is_transcription_session:
+            await self._withdraw_blocked_turn(item_id)
+        await self.websocket.send_text(guardrail_violation_error_event(block.message))
+        if not self._is_transcription_session:
+            for voice_prompt_event in guardrail_voice_prompt_events(block.message):
+                await self._send_to_backend(voice_prompt_event)
 
-        for callback in litellm.callbacks:
-            if not isinstance(callback, CustomGuardrail):
-                continue
-            if callback.use_native_lifecycle_hooks:
-                continue
-            if id(callback) in _already_run:
-                continue
-            if not any(callback.should_run_guardrail(data=_check_data, event_type=et) for et in _realtime_event_types):
-                continue
-            _already_run.add(id(callback))
-            try:
-                await callback.apply_guardrail(
-                    inputs={"texts": [transcript], "images": []},
-                    request_data={"user_api_key_dict": self.user_api_key_dict},
-                    input_type="request",
-                )
-            except Exception as e:
-                # Re-raise unexpected errors (no status_code/detail = programming bug, not a block).
-                # HTTPException and guardrail-raised exceptions have a status_code or detail attr.
-                is_guardrail_block = hasattr(e, "status_code") or isinstance(e, ValueError)
-                if not is_guardrail_block:
-                    verbose_logger.exception(
-                        "[realtime guardrail] unexpected error in apply_guardrail: %s",
-                        e,
-                    )
-                    raise
-                # Extract the human-readable error from the detail dict (HTTPException)
-                # or fall back to str(e) for plain ValueError.
-                detail: object | None = getattr(e, "detail", None)
-                if isinstance(detail, dict):
-                    safe_msg = detail.get("error") or str(e)
-                elif detail is not None:
-                    safe_msg = str(detail)
-                else:
-                    safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+        self._violation_count += 1
+        if block.ends_session(self._violation_count):
+            verbose_logger.warning("[realtime guardrail] ending session after violation %d", self._violation_count)
+            await self.backend_ws.close()
 
-                # Use realtime_violation_message if configured; fall back to guardrail error text.
-                error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
-
-                # Deliver any caller-supplied backend message FIRST so that
-                # protocol contracts requiring a specific ordering (e.g.
-                # Gemini Live's mandatory ``toolResponse`` after a
-                # ``toolCall``) are honored before the guardrail's own
-                # clientContent / cancel messages are sent.
-                if pre_block_backend_message is not None:
-                    await self._send_to_backend(pre_block_backend_message)
-                if not self._is_transcription_session:
-                    await self._withdraw_blocked_turn(item_id)
-                # Send the policy violation hint (shows as small gray status text in UI).
-                await self.websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "error": {
-                                "type": "guardrail_violation",
-                                "message": error_msg,
-                                "code": "content_policy_violation",
-                            },
-                        }
-                    )
-                )
-                if not self._is_transcription_session:
-                    # Ask the LLM to voice the exact guardrail message so the
-                    # user hears it as audio in voice sessions (not just text).
-                    guardrail_prompt = (
-                        f"Say exactly the following message to the user, word for word, "
-                        f"do not add anything else: {error_msg}"
-                    )
-                    await self._send_to_backend(
-                        json.dumps(
-                            {
-                                "type": "conversation.item.create",
-                                "item": {
-                                    "type": "message",
-                                    "role": "user",
-                                    "content": [{"type": "input_text", "text": guardrail_prompt}],
-                                },
-                            }
-                        )
-                    )
-                    await self._send_to_backend(json.dumps({"type": "response.create"}))
-
-                self._violation_count += 1
-                end_session_after: int | None = getattr(callback, "end_session_after_n_fails", None)
-                should_end = getattr(callback, "on_violation", None) == "end_session" or (
-                    end_session_after is not None and self._violation_count >= end_session_after
-                )
-                if should_end:
-                    verbose_logger.warning(
-                        "[realtime guardrail] ending session after violation %d",
-                        self._violation_count,
-                    )
-                    await self.backend_ws.close()
-
-                verbose_logger.warning(
-                    "[realtime guardrail] BLOCKED transcript (violation %d): %r",
-                    self._violation_count,
-                    transcript[:80],
-                )
-                return True
-        return False
+        verbose_logger.warning(
+            "[realtime guardrail] BLOCKED transcript (violation %d): %r",
+            self._violation_count,
+            transcript[:80],
+        )
+        return True
 
     async def _handle_provider_config_message(self, raw_response: str) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
@@ -1496,86 +1425,22 @@ class RealTimeStreaming:
                     client_event = msg_obj
                     msg_type = client_event.get("type")
 
-                    if msg_type == "conversation.item.create":
-                        # Check user text messages for prompt injection
-                        item = client_event.get("item", {})
-                        # Check function_call_output first so a client cannot
-                        # bypass the tool-result guardrail by also setting
-                        # role="user" on a function_call_output item.
-                        if item.get("type") == "function_call_output":
-                            # Tool results are client-controlled and fed to the
-                            # model; check them with the same guardrail used for
-                            # user text so an attacker cannot smuggle blocked
-                            # content into a function_call_output.
-                            output: object = item.get("output", "")
-                            output_text = output if isinstance(output, str) else json.dumps(output)
-                            if output_text:
-                                # Build the sanitized function_call_output up
-                                # front so we can hand it to the guardrail
-                                # runner as the pre-block message. Providers
-                                # that pair every toolCall with a toolResponse
-                                # (e.g. Gemini/Vertex Live) require the
-                                # toolResponse to arrive BEFORE any other
-                                # client message — otherwise the guardrail's
-                                # own clientContent would violate the
-                                # pending-tool-call protocol contract and the
-                                # backend could close the connection before
-                                # the sanitized response ever lands. Dropping
-                                # the blocked item outright would similarly
-                                # leave such providers waiting indefinitely.
-                                # The sanitized payload carries no blocked
-                                # content — only a generic policy marker.
-                                sanitized_msg = json.dumps(
-                                    {
-                                        **msg_obj,
-                                        "item": {
-                                            **item,
-                                            "output": json.dumps(
-                                                {
-                                                    "error": "Tool output blocked by content policy",
-                                                }
-                                            ),
-                                        },
-                                    }
-                                )
-                                blocked = await self.run_realtime_guardrails(
-                                    output_text,
-                                    pre_block_backend_message=sanitized_msg,
-                                    event_hooks=[GuardrailEventHooks.pre_call],
-                                )
-                                if blocked:
-                                    # ``_pending_guardrail_message`` is
-                                    # intentionally NOT set here. That flag
-                                    # exists to swallow the reflexive
-                                    # ``response.create`` an OpenAI client
-                                    # sends immediately after a user text
-                                    # message. In a tool-calling flow the
-                                    # client may not send a ``response.create``
-                                    # at all (e.g. Gemini SDKs auto-respond),
-                                    # so leaving the flag set would
-                                    # incorrectly drop an unrelated
-                                    # ``response.create`` from a later
-                                    # interaction turn.
-                                    continue
-                        elif item.get("role") == "user":
-                            content_list: Sequence[object] = item.get("content", [])
-                            texts = [
-                                c.get("text", "")
-                                for c in content_list
-                                if isinstance(c, dict) and c.get("type") == "input_text"
-                            ]
-                            combined_text = " ".join(texts)
-                            if combined_text:
-                                blocked = await self.run_realtime_guardrails(
-                                    combined_text,
-                                    event_hooks=[GuardrailEventHooks.pre_call],
-                                )
-                                if blocked:
-                                    # Store the guardrail reason so the next response.create
-                                    # (sent automatically by the client) is rewritten to
-                                    # include it as response instructions.
-                                    self._pending_guardrail_message = combined_text
-                                    continue  # don't forward the original blocked message
+                    match realtime_guarded_item(client_event):
+                        case RealtimeToolOutput(text=tool_output, sanitized_event=sanitized_event):
+                            if await self.run_realtime_guardrails(
+                                tool_output,
+                                pre_block_backend_message=sanitized_event,
+                                event_hooks=[GuardrailEventHooks.pre_call],
+                            ):
+                                continue
+                        case RealtimeUserText(text=user_text):
+                            if await self.run_realtime_guardrails(
+                                user_text, event_hooks=[GuardrailEventHooks.pre_call]
+                            ):
+                                self._pending_guardrail_message = user_text
+                                continue
+                        case None:
+                            pass
 
                     if msg_type == "response.create" and self._pending_guardrail_message:
                         # The guardrail already sent the synthetic AI bubble — drop this

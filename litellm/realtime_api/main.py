@@ -655,6 +655,8 @@ async def _arealtime(
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
             drop_params=drop_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "xai":
         api_base = (
