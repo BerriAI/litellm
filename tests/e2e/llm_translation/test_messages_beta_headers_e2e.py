@@ -61,7 +61,7 @@ class TestAnthropicBetaHeaders:
         [
             pytest.param(_ANTHROPIC_MODEL, "anthropic", [_CODE_EXECUTION], id="anthropic"),
             pytest.param(_VERTEX_MODEL, "vertex_ai", [], id="vertex-ai"),
-            pytest.param(_AZURE_AI_MODEL, "azure_ai", [_CODE_EXECUTION], id="azure-ai"),
+            pytest.param(_AZURE_AI_MODEL, "azure_ai", [], id="azure-ai"),
             pytest.param(f"bedrock/invoke/{_BEDROCK_MODEL_ID}", "bedrock", [], id="bedrock-invoke"),
             pytest.param(f"bedrock/converse/{_BEDROCK_MODEL_ID}", "bedrock_converse", [], id="bedrock-converse"),
         ],
