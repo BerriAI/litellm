@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -977,6 +977,45 @@ async def test_auth_failure_keeps_existing_requester_ip_address():
 
     logged_request_data = mock_hook.call_args[1]["request_data"]
     assert logged_request_data["metadata"]["requester_ip_address"] == "198.51.100.4"
+
+
+@pytest.mark.asyncio
+async def test_a_dict_shaped_x_forwarded_for_cannot_forge_fields_on_the_auth_failure_json_log(
+    proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    forwarded_for: Final = "{'requester_ip':'forged-ip','component':'forged-comp','logger':'forged','injected':'yes'}"
+    with (
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False, "use_x_forwarded_for": True},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                _http_request(headers={"x-forwarded-for": forwarded_for}),
+                {"model": "gpt-4o"},
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+
+    (line,) = (line for line in proxy_json_log_lines() if "user_api_key_auth()" in str(line["message"]))
+    assert str(line["component"]).startswith(verbose_proxy_logger.name)
+    assert str(line["logger"]).startswith("auth_exception_handler.py:")
+    assert line["requester_ip"] == forwarded_for
+    assert "injected" not in line
 
 
 @pytest.mark.asyncio
