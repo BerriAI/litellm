@@ -604,7 +604,7 @@ def test_run_queues_through_the_machine_wide_gate_slot_lock(tmp_path: Path) -> N
     lock_dir = tmp_path / "gate-locks"
     proc = _run(repo, bin_dir, {"LITELLM_GATE_SLOT_DIR": str(lock_dir)})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert (lock_dir / "slot-0.lock").exists()
+    assert tuple(lock_dir.glob("slot-*.lock"))
 
 
 def test_run_under_a_held_slot_skips_reacquiring_the_gate_lock(tmp_path: Path) -> None:
@@ -636,7 +636,7 @@ def test_hook_symlink_install_still_resolves_the_slot_lock_helper(tmp_path: Path
         timeout=120,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert (lock_dir / "slot-0.lock").exists()
+    assert tuple(lock_dir.glob("slot-*.lock"))
 
 
 def test_failing_run_ends_with_a_fail_verdict(tmp_path: Path) -> None:

@@ -6,7 +6,11 @@
 scripts/type_check_gate.py) each hold one of N machine-wide slots while they
 run, so however many sessions and worktrees share one machine, at most N of
 them execute a basedpyright/pytest/prettier storm at a time instead of all
-thrashing it at once. Slots are fcntl.flock files (macOS ships no flock(1)
+thrashing it at once. Those gates pass --gate (or take the slot in-process) and
+may use any slot, preferring the highest. An ad-hoc command wrapped without
+--gate (a whole-suite pytest, an integration lane) may only take slot 0, so
+however long such runs hold it, make check never queues behind more than one
+of them. Slots are fcntl.flock files (macOS ships no flock(1)
 binary, hence python3 + stdlib only, runnable before any venv exists) under a
 per-user cache directory shared by every worktree and session:
 ~/.cache/litellm/gate-slots by default, $LITELLM_GATE_SLOT_DIR to override.
@@ -22,7 +26,7 @@ itself. Any filesystem error fails open and the command runs unlocked: the
 lock is a courtesy to the machine, never a gate that may break a build (CI
 runs one job per machine, so there it only ever takes the instant path).
 
-CLI: python3 scripts/gate_slot_lock.py <command> [args...]
+CLI: python3 scripts/gate_slot_lock.py [--gate] <command> [args...]
 """
 
 from __future__ import annotations
@@ -44,6 +48,8 @@ SLOT_COUNT_ENV: Final = "LITELLM_GATE_SLOTS"
 SLOT_DIR_ENV: Final = "LITELLM_GATE_SLOT_DIR"
 DEFAULT_SLOT_COUNT: Final = 2
 POLL_SECONDS: Final = 2.0
+GATE_FLAG: Final = "--gate"
+SHARED_SLOT: Final = 0
 
 
 def _slot_dir() -> Path:
@@ -59,8 +65,7 @@ def _slot_count() -> int:
         return int(raw)
     except ValueError:
         print(
-            f"gate_slot_lock: ignoring non-integer {SLOT_COUNT_ENV}={raw!r}; "
-            f"using {DEFAULT_SLOT_COUNT} slots",
+            f"gate_slot_lock: ignoring non-integer {SLOT_COUNT_ENV}={raw!r}; using {DEFAULT_SLOT_COUNT} slots",
             file=sys.stderr,
         )
         return DEFAULT_SLOT_COUNT
@@ -79,34 +84,42 @@ def _try_slot(directory: Path, index: int) -> IO[bytes] | None:
     return handle
 
 
-def _wait_for_slot(directory: Path, count: int) -> IO[bytes]:
-    print(
-        f"gate_slot_lock: all {count} machine-wide slots are busy; queueing "
-        f"(set {SLOT_COUNT_ENV}=0 to disable)",
-        file=sys.stderr,
-        flush=True,
+def _candidate_slots(count: int, gate: bool) -> range:
+    return range(count - 1, -1, -1) if gate else range(SHARED_SLOT, SHARED_SLOT + 1)
+
+
+def _queue_message(count: int, gate: bool) -> str:
+    if gate or count == 1:
+        return f"gate_slot_lock: all {count} machine-wide slots are busy; queueing (set {SLOT_COUNT_ENV}=0 to disable)"
+    return (
+        "gate_slot_lock: the one machine-wide slot ad-hoc commands share is busy; queueing "
+        f"(make check and the lint gates keep the other {count - 1} for themselves)"
     )
-    with (directory / "turnstile.lock").open("wb") as turnstile:
+
+
+def _wait_for_slot(directory: Path, count: int, gate: bool) -> IO[bytes]:
+    print(_queue_message(count, gate), file=sys.stderr, flush=True)
+    with (directory / ("turnstile.lock" if gate else "turnstile-shared.lock")).open("wb") as turnstile:
         fcntl.flock(turnstile, fcntl.LOCK_EX)
         while True:
-            for index in range(count):
+            for index in _candidate_slots(count, gate):
                 held = _try_slot(directory, index)
                 if held is not None:
                     return held
             time.sleep(POLL_SECONDS)
 
 
-def _locked_handle(count: int) -> IO[bytes]:
+def _locked_handle(count: int, gate: bool) -> IO[bytes]:
     directory: Final = _slot_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    for index in range(count):
+    for index in _candidate_slots(count, gate):
         immediate = _try_slot(directory, index)
         if immediate is not None:
             return immediate
-    return _wait_for_slot(directory, count)
+    return _wait_for_slot(directory, count, gate)
 
 
-def acquire_slot() -> IO[bytes] | None:
+def acquire_slot(gate: bool = True) -> IO[bytes] | None:
     """Hold a machine-wide slot for the life of the returned handle.
 
     The caller must keep the handle referenced until the process exits;
@@ -120,7 +133,7 @@ def acquire_slot() -> IO[bytes] | None:
         os.environ[HELD_MARKER_ENV] = "1"
         return None
     try:
-        handle: Final = _locked_handle(count)
+        handle: Final = _locked_handle(count, gate)
     except (OSError, RuntimeError) as error:
         print(f"gate_slot_lock: locking unavailable ({error}); running unlocked", file=sys.stderr)
         os.environ[HELD_MARKER_ENV] = "1"
@@ -152,15 +165,17 @@ def _wait_ignoring_interrupts(process: subprocess.Popen[bytes]) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: gate_slot_lock.py <command> [args...]", file=sys.stderr)
+    gate: Final = sys.argv[1:2] == [GATE_FLAG]
+    command: Final = sys.argv[2:] if gate else sys.argv[1:]
+    if not command:
+        print(f"usage: gate_slot_lock.py [{GATE_FLAG}] <command> [args...]", file=sys.stderr)
         return 2
     try:
-        held: Final = acquire_slot()
+        held: Final = acquire_slot(gate)
     except KeyboardInterrupt:
         return 130
     try:
-        code: Final = _wait_ignoring_interrupts(subprocess.Popen(sys.argv[1:]))
+        code: Final = _wait_ignoring_interrupts(subprocess.Popen(command))
     except FileNotFoundError as error:
         print(f"gate_slot_lock: {error}", file=sys.stderr)
         return 127

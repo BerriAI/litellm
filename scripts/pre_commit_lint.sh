@@ -37,7 +37,7 @@ set -eu
 # script spawns (make lint, the lint gates) skips its own acquisition.
 script_dir=$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")
 if [ -z "${LITELLM_GATE_SLOT_HELD:-}" ]; then
-    exec python3 "$script_dir/gate_slot_lock.py" "$0" "$@"
+    exec python3 "$script_dir/gate_slot_lock.py" --gate "$0" "$@"
 fi
 
 if [ -z "${PRE_COMMIT_LINT_INNER:-}" ]; then

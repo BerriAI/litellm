@@ -53,8 +53,8 @@ def _env(lock_dir: Path, slots: str) -> dict[str, str]:
     }
 
 
-def _wrapped(payload: Sequence[str]) -> list[str]:
-    return [sys.executable, str(HELPER), sys.executable, "-c", *payload]
+def _wrapped(payload: Sequence[str], gate: bool = False) -> list[str]:
+    return [sys.executable, str(HELPER), *(["--gate"] if gate else []), sys.executable, "-c", *payload]
 
 
 def _wait_until(predicate: Callable[[], bool], timeout_seconds: float) -> bool:
@@ -85,12 +85,12 @@ def test_six_contenders_never_exceed_two_slots_and_all_complete(tmp_path: Path) 
     env = _env(lock_dir, "2")
     procs = [
         subprocess.Popen(
-            _wrapped([RECORD_INTERVAL, str(events_file)]),
+            _wrapped([RECORD_INTERVAL, str(events_file)], gate=index % 2 == 0),
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        for _ in range(6)
+        for index in range(6)
     ]
     try:
         assert [proc.wait(timeout=60) for proc in procs] == [0] * 6
@@ -117,10 +117,59 @@ def test_two_slots_admit_two_holders_at_once(tmp_path: Path) -> None:
     first_started = tmp_path / "first.started"
     second_started = tmp_path / "second.started"
     env = _env(lock_dir, "2")
-    first = subprocess.Popen(_wrapped([START_THEN_WAIT_FOR, str(first_started), str(second_started)]), env=env)
-    second = subprocess.Popen(_wrapped([START_THEN_WAIT_FOR, str(second_started), str(first_started)]), env=env)
+    first = subprocess.Popen(
+        _wrapped([START_THEN_WAIT_FOR, str(first_started), str(second_started)], gate=True), env=env
+    )
+    second = subprocess.Popen(
+        _wrapped([START_THEN_WAIT_FOR, str(second_started), str(first_started)], gate=True), env=env
+    )
     assert first.wait(timeout=30) == 0
     assert second.wait(timeout=30) == 0
+
+
+def test_an_ad_hoc_run_on_the_shared_slot_queues_the_next_ad_hoc_run_but_never_a_gate(tmp_path: Path) -> None:
+    lock_dir = tmp_path / "locks"
+    holder_started = tmp_path / "holder.started"
+    release = tmp_path / "release"
+    gate_done = tmp_path / "gate.done"
+    ad_hoc_done = tmp_path / "ad_hoc.done"
+    env = _env(lock_dir, "2")
+    holder = subprocess.Popen(_wrapped([START_THEN_WAIT_FOR, str(holder_started), str(release)]), env=env)
+    try:
+        assert _wait_until(holder_started.exists, 10)
+        assert subprocess.run(_wrapped([TOUCH_TARGET, str(gate_done)], gate=True), env=env, timeout=30).returncode == 0
+        assert gate_done.exists()
+        contender = subprocess.Popen(_wrapped([TOUCH_TARGET, str(ad_hoc_done)]), env=env, stderr=subprocess.PIPE)
+        try:
+            time.sleep(1.5)
+            assert not ad_hoc_done.exists()
+            release.touch()
+            assert contender.wait(timeout=30) == 0
+            assert contender.stderr is not None
+            assert b"the one machine-wide slot ad-hoc commands share is busy; queueing" in contender.stderr.read()
+        finally:
+            release.touch()
+            _reap(contender)
+    finally:
+        release.touch()
+        _reap(holder)
+
+
+def test_a_gate_leaves_the_shared_slot_free_for_an_ad_hoc_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lock_dir = tmp_path / "locks"
+    done = tmp_path / "done"
+    monkeypatch.setenv("LITELLM_GATE_SLOT_HELD", "")
+    monkeypatch.setenv("LITELLM_GATE_SLOT_DIR", str(lock_dir))
+    monkeypatch.setenv("LITELLM_GATE_SLOTS", "2")
+    handle = gate_slot_lock.acquire_slot(gate=True)
+    assert handle is not None
+    try:
+        ad_hoc = subprocess.run(
+            _wrapped([TOUCH_TARGET, str(done)]), env=_env(lock_dir, "2"), timeout=30, capture_output=True
+        )
+        assert ad_hoc.returncode == 0 and done.exists() and b"queueing" not in ad_hoc.stderr
+    finally:
+        handle.close()
 
 
 def test_contender_beyond_capacity_queues_until_the_slot_frees(tmp_path: Path) -> None:
@@ -198,6 +247,7 @@ def test_missing_command_exits_127_and_no_command_exits_2(tmp_path: Path) -> Non
     assert missing.returncode == 127
     bare = subprocess.run([sys.executable, str(HELPER)], env=env, capture_output=True)
     assert bare.returncode == 2
+    assert subprocess.run([sys.executable, "-I", str(HELPER), "--gate"], env=env, capture_output=True).returncode == 2
 
 
 def test_wrapped_command_killed_by_signal_maps_to_128_plus_signal(tmp_path: Path) -> None:
@@ -324,8 +374,12 @@ def test_direct_make_lint_takes_a_slot_before_any_setup(tmp_path: Path) -> None:
     )
     (tmp_path / "Makefile").write_text((ROOT / "Makefile").read_text())
     command = [
-        "make", "-o", "lint-checks", "lint", "MAKE=make -o lint-checks",
-        f"GATE_SLOT_LOCK={shlex.join([sys.executable, str(HELPER)])}",
+        "make",
+        "-o",
+        "lint-checks",
+        "lint",
+        "MAKE=make -o lint-checks",
+        f"GATE_SLOT_LOCK={shlex.join([sys.executable, str(HELPER), '--gate'])}",
         f"UV={shlex.join([sys.executable, str(probe), 'setup'])}",
         f"UV_RUN={shlex.join([sys.executable, str(probe), 'setup'])}",
         f"RESOLVE_BASE={shlex.join([sys.executable, str(probe), 'base'])}",
@@ -333,7 +387,10 @@ def test_direct_make_lint_takes_a_slot_before_any_setup(tmp_path: Path) -> None:
     with (lock_dir / "slot-0.lock").open("wb") as held, stderr_file.open("wb") as stderr:
         fcntl.flock(held, fcntl.LOCK_EX)
         process = subprocess.Popen(
-            command, cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=stderr,
+            command,
+            cwd=tmp_path,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr,
             env={**_env(lock_dir, "1"), "EVENTS_FILE": str(events_file)},
         )
         try:

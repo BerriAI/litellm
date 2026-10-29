@@ -67,7 +67,7 @@ RESOLVE_BASE = python3 scripts/default_branch.py --base "$(BASE_REF)"
 
 # Machine-wide slot queue for the heavy targets below; python3 + stdlib only, so
 # it runs before any venv exists. See scripts/gate_slot_lock.py.
-GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
+GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py --gate
 
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
