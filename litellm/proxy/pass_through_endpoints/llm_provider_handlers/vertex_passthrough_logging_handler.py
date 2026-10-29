@@ -1075,8 +1075,7 @@ class VertexPassthroughLoggingHandler:
             # Try to find the model in the router by the extracted model name
             extracted_model_name = VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(model_name)
 
-            # Use the existing get_model_ids method from router
-            model_ids: Final = llm_router.get_model_ids(model_name=extracted_model_name)
+            model_ids: Final = llm_router.registry().names(extracted_model_name, kind="ids")
             if model_ids and len(model_ids) > 0:
                 # Use the first model ID found
                 actual_model_id = model_ids[0]

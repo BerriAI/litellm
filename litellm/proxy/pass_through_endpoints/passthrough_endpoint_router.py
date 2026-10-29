@@ -114,7 +114,7 @@ class PassthroughEndpointRouter:
         llm_router: Final = self.llm_router_getter()
         if llm_router is None:
             return None
-        deployments: Final = llm_router.get_model_list() or ()
+        deployments: Final = llm_router.registry().deployments() or ()
         return next(
             (
                 api_key
@@ -182,7 +182,7 @@ class PassthroughEndpointRouter:
             return None
         resolved: Final = tuple(
             (deployment, credentials)
-            for deployment in (llm_router.get_model_list() or ())
+            for deployment in (llm_router.registry().deployments() or ())
             if (credentials := self._resolve_vertex_deployment_credentials(deployment["litellm_params"])) is not None
         )
         matched: Final = next(

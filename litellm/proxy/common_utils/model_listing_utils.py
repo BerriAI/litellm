@@ -48,8 +48,9 @@ def configured_display_names(
     """
     if llm_router is None:
         return MappingProxyType({})
+    registry: Final = llm_router.registry()
     resolved: Final = (
-        (response_id, llm_router.get_configured_display_name(lookup_id)) for response_id, lookup_id in entries
+        (response_id, registry.group(lookup_id, field="display_name")) for response_id, lookup_id in entries
     )
     return MappingProxyType(
         {response_id: display_name for response_id, display_name in resolved if display_name is not None}
@@ -149,10 +150,11 @@ class ClaudeCodeRoutingNames:
             return True
         if self.llm_router is None:
             return False
+        registry: Final = self.llm_router.registry()
         return (
-            name in self.llm_router.model_group_alias
-            or self.llm_router.has_model_id(name)
-            or bool(self.llm_router.get_candidate_model_ids_for_route(name, self.team_id))
+            name in registry.aliases()  # pyright: ignore[reportUnknownMemberType]  # registry().aliases() is the untyped model_group_alias dict
+            or registry.has_deployment(name)
+            or bool(registry.names(name, kind="route_candidates", team_id=self.team_id))
         )
 
 
@@ -194,10 +196,11 @@ class DeployedModelGroups:
             return False
         if self.callback_kept is not None and name not in self.callback_kept:
             return False
-        group: Final = self.llm_router.routable_model_group(name)
+        registry: Final = self.llm_router.registry()
+        group: Final = registry.resolve(name)
         return group not in self.hidden and any(
-            self.llm_router.deployment_usable_by_team(deployment, self.team_id)
-            for deployment in self.llm_router.get_all_deployments(model_name=group)
+            registry.includes(deployment, team_id=self.team_id)
+            for deployment in registry.deployments(group, source="all")
         )
 
 
@@ -423,7 +426,7 @@ class TeamModelNameTranslator:
         """
         if llm_router is None or not TeamModelNameTranslator._is_enabled(general_settings):
             return {}
-        router_model_list: Final = llm_router.get_model_list()
+        router_model_list: Final = llm_router.registry().deployments()
         if not isinstance(router_model_list, list):
             return {}
         return dict(

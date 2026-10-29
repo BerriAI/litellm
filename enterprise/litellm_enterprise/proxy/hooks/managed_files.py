@@ -245,7 +245,7 @@ def _provider_file_retrieve_credentials(
     if llm_router is None or model_id is None:
         return None
     try:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id)
+        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
     except Exception as error:
         verbose_logger.warning(
             "Failed to retrieve credentials for provider file "
@@ -2650,7 +2650,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             k: v for k, v in data.items() if k not in ("model", "file_id", "_litellm_internal_model_credentials")
         }
         for model_id, model_file_id in specific_model_file_id_mapping.items():
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+            credentials = llm_router.registry().credentials(model_id, form="with_provider")
             delete_data = {
                 **filtered_data,
                 **(
@@ -2694,7 +2694,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     # against the deployment's configured bucket, which they only
                     # trust from this immutable server-side snapshot, never from
                     # request params.
-                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+                    credentials = llm_router.registry().credentials(model_id, form="with_provider")
                     if credentials is not None:
                         data["_litellm_internal_model_credentials"] = cast(Dict, MappingProxyType(dict(credentials)))
                     else:

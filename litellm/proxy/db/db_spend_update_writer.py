@@ -135,7 +135,7 @@ def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Rout
         return False
     model_id: Final = payload.get("model_id")
     deployment: Final = (
-        llm_router.get_deployment(model_id=model_id) if llm_router is not None and isinstance(model_id, str) else None
+        llm_router.registry().deployment(model_id) if llm_router is not None and isinstance(model_id, str) else None
     )
     if deployment is None:
         return True
@@ -518,8 +518,12 @@ def get_llm_router():
         return None
 
 
+class _DeploymentRegistry(Protocol):
+    def deployment_dict(self, id: str) -> Mapping[str, object] | None: ...
+
+
 class _DeploymentLookup(Protocol):
-    def get_model_info(self, id: str) -> Mapping[str, object] | None: ...
+    def registry(self) -> _DeploymentRegistry: ...
 
 
 def _served_model_access_groups(
@@ -533,7 +537,7 @@ def _served_model_access_groups(
     """
     if router is None or not served_model_id:
         return None
-    deployment: Final = router.get_model_info(id=served_model_id)
+    deployment: Final = router.registry().deployment_dict(served_model_id)
     if deployment is None:
         return None
     model_info: Final = deployment.get("model_info")

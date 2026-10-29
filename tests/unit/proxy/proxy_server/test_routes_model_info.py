@@ -28,7 +28,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
-from .conftest import normalize  # type: ignore[import-not-found]
+from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
 
 @pytest.mark.parametrize(
@@ -172,7 +172,7 @@ async def test_upstream_limits_reach_model_info_routes(
 
 @pytest.fixture
 def empty_router(monkeypatch):
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = []
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", [])
@@ -306,7 +306,7 @@ def configured_router(monkeypatch):
             "model_info": {"id": "abc", "db_model": False},
         }
     )
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment = MagicMock(return_value=deployment)
     router.get_model_names = MagicMock(return_value=["gpt-4"])
     router.get_model_access_groups = MagicMock(return_value={})
@@ -422,7 +422,7 @@ def test_v2_model_info_reports_pricing_overrides_to_the_admin_ui(client, auth_as
             "model_info": {"id": "dep-synced", "db_model": True},
         },
     ]
-    router: Final = MagicMock()
+    router: Final = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     router.get_discovered_model_info = MagicMock(return_value={})
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -552,7 +552,7 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
         "model_name": "*",
         "litellm_params": {"model": "openai/*"},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_access_groups = MagicMock(return_value={})
     router.get_model_names = MagicMock(return_value=["*"])
     router.get_model_list = MagicMock(return_value=[deployment])
@@ -606,7 +606,7 @@ def byok_team_router(monkeypatch):
         },
     }
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [byok_deployment]
     router.get_model_list_from_model_alias = MagicMock(return_value=[])
     router.get_model_names = MagicMock(return_value=[])
@@ -872,7 +872,7 @@ def model_group_info_router(monkeypatch):
     from litellm.types.proxy.management_endpoints.model_management_endpoints import ModelGroupInfoProxy
 
     model_names = ["gpt-4", "claude-3"]
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = model_names
     router.get_model_access_groups.return_value = {}
     router.get_model_list.return_value = []
@@ -1026,7 +1026,7 @@ def mixed_auto_router_router(monkeypatch):
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
@@ -1122,7 +1122,7 @@ def routing_status_router(monkeypatch):
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
@@ -1231,7 +1231,7 @@ def test_v2_model_info_search_matches_litellm_model_name(client, auth_as, monkey
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
@@ -1323,7 +1323,7 @@ def access_group_router(monkeypatch):
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)

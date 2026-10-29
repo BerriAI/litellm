@@ -378,7 +378,7 @@ async def test_test_model_connection_loads_config_from_router():
         },
         "model_info": {},
     }
-    mock_router.get_model_list.return_value = [mock_deployment]
+    mock_router.registry.return_value.deployments.return_value = [mock_deployment]
 
     # Mock ModelManagementAuthChecks - patch at the source module since it's imported inside the function
     mock_can_user_make_model_call = AsyncMock()
@@ -447,8 +447,8 @@ async def test_test_model_connection_loads_config_from_router():
             user_api_key_dict=mock_user_api_key_dict,
         )
 
-        # Verify router.get_model_list was called with the model name
-        mock_router.get_model_list.assert_called_once_with(model_name="gpt-4o")
+        # Verify the registry was asked for the model name's deployments
+        mock_router.registry.return_value.deployments.assert_called_once_with("gpt-4o")
 
         # Verify that run_with_timeout was called (which wraps ahealth_check)
         assert mock_run_with_timeout.called
@@ -519,9 +519,9 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
     }
 
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [deployment_a, deployment_b]
+    mock_router.registry.return_value.deployments.return_value = [deployment_a, deployment_b]
 
-    # Backend uses get_deployment(model_id=...) for O(1) lookup by id.
+    # Backend uses registry().deployment(id) for O(1) lookup by id.
     def _get_deployment_by_id(model_id):
         if model_id == "deployment-A-id":
             return Deployment(
@@ -537,7 +537,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
             )
         return None
 
-    mock_router.get_deployment.side_effect = _get_deployment_by_id
+    mock_router.registry.return_value.deployment.side_effect = _get_deployment_by_id
 
     mock_can_user_make_model_call = AsyncMock()
 
@@ -649,7 +649,7 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
     }
 
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [deployment_a, deployment_b]
+    mock_router.registry.return_value.deployments.return_value = [deployment_a, deployment_b]
 
     mock_can_user_make_model_call = AsyncMock()
     mock_health_check_result = {"status": "healthy"}
@@ -714,7 +714,7 @@ def _test_connection_probe(
         return {"status": "healthy"}
 
     router: Final = MagicMock()
-    router.get_deployment.side_effect = lambda model_id: (
+    router.registry.return_value.deployment.side_effect = lambda model_id: (
         Deployment(
             model_name=str(deployment["model_name"]),
             litellm_params=LiteLLM_Params(**deployment["litellm_params"]),  # pyright: ignore[reportArgumentType]  # test fixture dict
@@ -1055,7 +1055,7 @@ async def test_test_model_connection_uses_loaded_deployment_team_id():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = other_team_deployment
+    mock_router.registry.return_value.deployment.return_value = other_team_deployment
 
     async def fake_find_unique(*, where):
         team_id = where["team_id"]
@@ -1164,7 +1164,7 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
     }
 
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [other_team_deployment_dict]
+    mock_router.registry.return_value.deployments.return_value = [other_team_deployment_dict]
 
     async def fake_find_unique(*, where):
         return SimpleNamespace(
@@ -1241,7 +1241,7 @@ async def _probe_federated_deployment_as_team_admin(litellm_params):
     from litellm.proxy._types import LiteLLM_TeamTable
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = _federated_deployment()
+    mock_router.registry.return_value.deployment.return_value = _federated_deployment()
 
     async def fake_find_unique(*, where):
         if where["team_id"] != FEDERATED_DEPLOYMENT_TEAM_ID:
@@ -1412,7 +1412,7 @@ async def test_test_model_connection_authorized_team_admin_passes_real_auth():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = owned_deployment
+    mock_router.registry.return_value.deployment.return_value = owned_deployment
 
     async def fake_find_unique(*, where):
         if where["team_id"] == owner_team_id:
@@ -4770,8 +4770,8 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         router = MagicMock()
-        router.get_model_list.return_value = [deployment]
-        router.get_deployment.return_value = deployment_by_id
+        router.registry.return_value.deployments.return_value = [deployment]
+        router.registry.return_value.deployment.return_value = deployment_by_id
 
         with (
             patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
@@ -4832,8 +4832,8 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
         client: Final = TestClient(app)
         router: Final = MagicMock()
-        router.get_model_list.return_value = [deployment]
-        router.get_deployment.return_value = None
+        router.registry.return_value.deployments.return_value = [deployment]
+        router.registry.return_value.deployment.return_value = None
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -4889,7 +4889,7 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         router: Final = MagicMock()
-        router.get_model_list.return_value = [deployment]
+        router.registry.return_value.deployments.return_value = [deployment]
         ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
 
         with (
@@ -4948,7 +4948,7 @@ class TestTestConnectionUsesTheNamedCredential:
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         router: Final = MagicMock()
-        router.get_deployment.return_value = deployment
+        router.registry.return_value.deployment.return_value = deployment
         ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
 
         with (
@@ -5062,7 +5062,7 @@ class TestNoRedisWarning:
 
     @staticmethod
     def _router(redis_cache):
-        return SimpleNamespace(cache=SimpleNamespace(redis_cache=redis_cache))
+        return SimpleNamespace(health=lambda: SimpleNamespace(store=SimpleNamespace(redis_cache=redis_cache)))
 
     @staticmethod
     def _prisma_with_workers(live_workers=None, error=None):

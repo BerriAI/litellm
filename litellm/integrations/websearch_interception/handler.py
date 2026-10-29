@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
+    from litellm.router import Router
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
@@ -132,7 +133,7 @@ class _SearchToolLitellmParams(TypedDict, total=False):
 
 
 class _SearchToolConfig(TypedDict, total=False):
-    search_tool_name: str
+    search_tool_name: ReadOnly[str]
     litellm_params: ReadOnly[_SearchToolLitellmParams | None]
 
 
@@ -1768,10 +1769,13 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         return None
 
-    def _select_search_tool_from_router(self, llm_router: object) -> "_SearchToolConfig | None":
-        if llm_router is None or not hasattr(llm_router, "search_tools"):
+    def _select_search_tool_from_router(self, llm_router: "Router | None") -> "_SearchToolConfig | None":
+        if llm_router is None:
             return None
-        search_tools: Final = tuple(getattr(llm_router, "search_tools", None) or ())
+        settings: Final = llm_router.settings()
+        if not settings.is_set("search_tools"):
+            return None
+        search_tools: Final = tuple(settings.search_tools or ())
         return self._select_search_tool_from_list(search_tools=search_tools, source="router")
 
     def _select_search_tool_from_list(

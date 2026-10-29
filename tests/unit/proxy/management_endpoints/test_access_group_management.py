@@ -348,7 +348,7 @@ async def test_create_access_group_surfaces_dropped_models():
     mock_user = UserAPIKeyAuth(user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     wiped_router = MagicMock()
-    wiped_router.get_model_ids.side_effect = [["deploy-A"], []]
+    wiped_router.registry.return_value.names.side_effect = [["deploy-A"], []]
     with (
         patch("litellm.proxy.proxy_server.llm_router", wiped_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -389,7 +389,7 @@ async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_r
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     concurrently_wiped_router = MagicMock()
-    concurrently_wiped_router.get_model_ids.side_effect = [["deploy-A"], []]
+    concurrently_wiped_router.registry.return_value.names.side_effect = [["deploy-A"], []]
     with (
         patch("litellm.proxy.proxy_server.llm_router", concurrently_wiped_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -408,7 +408,8 @@ async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_r
         )
 
     assert response.models_updated == 1
-    assert concurrently_wiped_router.get_model_ids.call_count == 1
+    assert concurrently_wiped_router.registry.return_value.names.call_count == 1
+    concurrently_wiped_router.registry.return_value.names.assert_called_once_with(kind="ids")
 
 
 @pytest.mark.asyncio
@@ -461,7 +462,7 @@ async def test_delete_access_group_ignores_models_that_were_already_dead():
     )
 
     never_served_router = MagicMock()
-    never_served_router.get_model_ids.return_value = []
+    never_served_router.registry.return_value.names.return_value = []
     with (
         patch("litellm.proxy.proxy_server.llm_router", never_served_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
@@ -769,7 +770,7 @@ def _proxy_with_stubbed_reload(prisma):
     Both collaborators it reaches for there are module globals it imports itself, so a fake can only
     get in by patching them; auth_cache and prisma are the ones with a real seam."""
     never_served_router = MagicMock()
-    never_served_router.get_model_ids.return_value = []
+    never_served_router.registry.return_value.names.return_value = []
     with (
         _proxy(prisma),
         patch(  # test-quality-ok: live_model_ids_snapshot() reads the llm_router global; the endpoint takes no router

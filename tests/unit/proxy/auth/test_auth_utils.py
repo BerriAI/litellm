@@ -875,7 +875,7 @@ class TestGetKeyModelTpmLimit:
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "model1",
                 "litellm_params": {"default_api_key_tpm_limit": "not-a-number"},
@@ -1122,7 +1122,7 @@ def _cache_prediction_auth_app(
             request_data=request_data,
             route=request.url.path,
             request=request,
-            llm_model_list=router.get_model_list(),
+            llm_model_list=router.registry().deployments(),
             llm_router=router,
         )
         return token
@@ -1138,7 +1138,7 @@ def _cache_prediction_auth_app(
     monkeypatch.setattr(proxy_server, "user_custom_auth", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "llm_router", router)
-    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.registry().deployments())
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     logging = ProxyLogging(user_api_key_cache=DualCache())
@@ -2062,7 +2062,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         model_id="veo-3.1-generate-001",
     )
     llm_router = MagicMock()
-    llm_router.resolve_model_name_from_model_id.return_value = "gcp/google/veo-3.1-generate-001"
+    llm_router.registry.return_value.resolve.return_value = "gcp/google/veo-3.1-generate-001"
 
     assert (
         get_model_from_request(
@@ -2072,7 +2072,7 @@ def test_get_model_from_request_resolves_character_id_model_with_router():
         )
         == "gcp/google/veo-3.1-generate-001"
     )
-    llm_router.resolve_model_name_from_model_id.assert_called_once_with("veo-3.1-generate-001")
+    llm_router.registry.return_value.resolve.assert_called_once_with("veo-3.1-generate-001", kind="from_id")
 
 
 def test_get_model_from_request_only_runs_media_decoders_for_matching_fields():
@@ -2624,7 +2624,7 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
 
 def _make_deployment_dict(model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None) -> dict:
-    """Helper to build a minimal deployment dict as returned by router.get_model_list."""
+    """Helper to build a minimal deployment dict as returned by router.registry().deployments()."""
     litellm_params: dict = {"model": model_name}
     if tpm is not None:
         litellm_params["default_api_key_tpm_limit"] = tpm
@@ -2643,7 +2643,7 @@ class TestDeploymentDefaultRpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 200}
@@ -2655,7 +2655,7 @@ class TestDeploymentDefaultRpmLimit:
             metadata={"model_rpm_limit": {"model1": 10}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 10}
@@ -2664,7 +2664,7 @@ class TestDeploymentDefaultRpmLimit:
         """Returns None when neither the key nor the deployment has any rpm limit."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1")  # no rpm default
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -2675,7 +2675,7 @@ class TestDeploymentDefaultRpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", rpm=200)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", rpm=200)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict)
         assert result is None
@@ -2691,7 +2691,7 @@ class TestDeploymentDefaultRpmLimit:
         """When multiple deployments share a model name, the minimum rpm limit is used."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1", rpm=200),
             _make_deployment_dict("model1", rpm=50),
             _make_deployment_dict("model1", rpm=150),
@@ -2704,7 +2704,7 @@ class TestDeploymentDefaultRpmLimit:
         """Deployments missing the field are skipped; min is taken over those that have it."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1"),  # no rpm default
             _make_deployment_dict("model1", rpm=75),
         ]
@@ -2716,7 +2716,7 @@ class TestDeploymentDefaultRpmLimit:
         """Deployments with non-integer-parseable limit values are skipped without raising."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "model1",
                 "litellm_params": {"default_api_key_rpm_limit": "not-a-number"},
@@ -2736,7 +2736,7 @@ class TestDeploymentDefaultTpmLimit:
         """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 100}
@@ -2748,7 +2748,7 @@ class TestDeploymentDefaultTpmLimit:
             metadata={"model_tpm_limit": {"model1": 20}},
         )
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 20}
@@ -2757,7 +2757,7 @@ class TestDeploymentDefaultTpmLimit:
         """Returns None when neither the key nor the deployment has any tpm limit."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1")  # no tpm default
         ]
         with patch(_ROUTER_PATCH, mock_router):
@@ -2768,7 +2768,7 @@ class TestDeploymentDefaultTpmLimit:
         """No model_name means deployment fallback is skipped."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [_make_deployment_dict("model1", tpm=100)]
+        mock_router.registry.return_value.deployments.return_value = [_make_deployment_dict("model1", tpm=100)]
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_tpm_limit(user_api_key_dict)
         assert result is None
@@ -2784,7 +2784,7 @@ class TestDeploymentDefaultTpmLimit:
         """When multiple deployments share a model name, the minimum tpm limit is used."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1", tpm=1000),
             _make_deployment_dict("model1", tpm=300),
             _make_deployment_dict("model1", tpm=700),
@@ -2797,7 +2797,7 @@ class TestDeploymentDefaultTpmLimit:
         """Deployments missing the field are skipped; min is taken over those that have it."""
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             _make_deployment_dict("model1"),  # no tpm default
             _make_deployment_dict("model1", tpm=400),
         ]

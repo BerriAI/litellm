@@ -21,6 +21,7 @@ from litellm.proxy._types import (
 # Now we can safely import app
 from litellm.proxy.proxy_server import app
 from litellm.types.search import SearchToolInfoResponse
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 client = TestClient(app)
 
@@ -1573,7 +1574,7 @@ async def test_list_and_info_show_the_loaded_tool_when_db_params_do_not_decrypt(
             "api_base": "https://api.perplexity.ai",
         },
     }
-    fake_router = MagicMock()
+    fake_router = route_entry_points_to_stubs(MagicMock())
     fake_router.search_tools = [loaded_tool]
 
     with (

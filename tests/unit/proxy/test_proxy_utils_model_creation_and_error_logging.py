@@ -29,6 +29,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 from litellm.proxy.utils import get_custom_url, join_paths
 
 
@@ -1446,7 +1448,7 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
 
 
 def test_create_model_info_response_does_not_call_router_group_info():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = None
 
     response = create_model_info_response(
@@ -1461,7 +1463,7 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
 
 def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("my-custom-deployment",), max_input_tokens=32000, max_output_tokens=8000
     )
@@ -1520,7 +1522,7 @@ def test_create_model_info_response_uses_deployment_mode_for_auto_router():
 
 
 def test_create_model_info_response_deployment_limits_override_cost_map():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("gpt-4o",), max_input_tokens=200000, max_output_tokens=None
     )
@@ -1544,7 +1546,7 @@ def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
     }
 
     for keys in (("small-model", "large-model"), ("large-model", "small-model")):
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_listing_info.return_value = DeploymentModelListingInfo(
             cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
         )
@@ -1568,7 +1570,7 @@ def test_create_model_info_response_resolves_alias_once_per_listing():
         seen.append(model)
         return _fake_model_info(max_input_tokens=128000)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("model-a", "model-b"), max_input_tokens=None, max_output_tokens=None
     )

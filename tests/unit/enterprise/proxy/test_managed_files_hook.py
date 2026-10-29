@@ -222,7 +222,7 @@ async def test_should_pass_credentials_to_afile_retrieve():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
 
@@ -1096,7 +1096,7 @@ async def test_should_not_double_wrap_already_unified_output_file_id():
         "custom_llm_provider": "openai",
     }
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value=mock_credentials
     )
     mock_afile_retrieve = AsyncMock(return_value=_make_file_object(provider_file_id))
@@ -1177,7 +1177,7 @@ async def test_afile_content_passes_trusted_model_credentials_to_router():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "custom_llm_provider": "bedrock",
             "s3_bucket_name": "my-bucket",
@@ -1286,7 +1286,7 @@ async def test_afile_delete_returns_managed_id_for_stored_provider_output():
     stored_file = _make_file_object(provider_file_id)
     managed_files, table = _managed_files_with_deletion_row(unified_file_id, provider_file_id, stored_file)
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(return_value=FileDeleted(id=provider_file_id, object="file", deleted=True)),
     )
     response = await managed_files.afile_delete(
@@ -1380,7 +1380,7 @@ async def test_afile_content_error_reports_unified_id_not_provider_uri():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value=None)
+    mock_router.registry.return_value.credentials = MagicMock(return_value=None)
     mock_router.afile_content = AsyncMock(side_effect=Exception("deployment failed"))
 
     with pytest.raises(Exception, match='LiteLLM Managed File object with') as exc_info:
@@ -1687,7 +1687,7 @@ async def test_hook_mint_prefers_input_file_target_model_names():
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1717,7 +1717,7 @@ async def test_hook_mint_falls_back_to_response_input_file_id_target_models():
     }
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(return_value={})
+    mock_router.registry.return_value.credentials = MagicMock(return_value={})
 
     with (
         patch("litellm.afile_retrieve", AsyncMock(return_value=_make_file_object())),
@@ -1936,7 +1936,7 @@ async def test_afile_delete_passes_trusted_model_credentials_to_router():
     managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
 
     mock_router = MagicMock()
-    mock_router.get_deployment_credentials_with_provider = MagicMock(
+    mock_router.registry.return_value.credentials = MagicMock(
         return_value={
             "custom_llm_provider": "bedrock",
             "s3_bucket_name": "my-bucket",
@@ -2046,7 +2046,7 @@ async def test_afile_delete_storage_backed_row_deletes_stored_content_not_provid
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_delete=AsyncMock(),
     )
 
@@ -2090,7 +2090,7 @@ async def test_afile_content_storage_backed_row_returns_stored_bytes_not_provide
         ),
     )
     router = MagicMock(
-        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        **{"registry.return_value.credentials.return_value": None},
         afile_content=AsyncMock(),
     )
 

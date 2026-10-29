@@ -187,14 +187,16 @@ def deployment_route(litellm_params: Mapping[str, object], team_model: bool) -> 
 
 def _named_deployments(llm_router: "Router", model: str, team_id: str | None) -> tuple[Mapping[str, object], ...]:
     return (
-        *llm_router.get_all_deployments(model_name=model, team_id=team_id),
-        *llm_router.get_model_list_from_routing_groups(model_name=model),
+        *llm_router.registry().deployments(model, source="all", team_id=team_id),
+        *llm_router.registry().deployments(model, source="routing_groups"),
     )
 
 
 def _routed_deployments(llm_router: "Router", model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
-    target: Final = llm_router.routable_model_group(model)
-    return _named_deployments(llm_router, target, team_id) or llm_router.wildcard_route_deployments(target, team_id)
+    target: Final = llm_router.registry().resolve(model)
+    return _named_deployments(llm_router, target, team_id) or llm_router.registry().deployments(
+        target, source="wildcard", team_id=team_id
+    )
 
 
 def _is_team_deployment(deployment: Mapping[str, object]) -> bool:
@@ -231,7 +233,7 @@ def _deployment_id(deployment: Mapping[str, object]) -> object:
 
 
 def _routable_name(llm_router: "Router | None", model: str) -> str:
-    return model if llm_router is None else llm_router.routable_model_group(model)
+    return model if llm_router is None else llm_router.registry().resolve(model)
 
 
 def _patterns_tried_before(patterns: Sequence[str], regex: str) -> Sequence[str]:
@@ -245,7 +247,7 @@ def _team_pattern_serves(llm_router: "Router", team_id: str, pattern: str, model
     regex: Final = _ROUTER_PATTERNS.pattern_to_regex(pattern)
     if re.match(regex, model) is None or _named_deployments(llm_router, model, team_id):
         return False
-    team_router: Final = llm_router.team_pattern_routers.get(team_id)
+    team_router: Final = llm_router.registry().patterns(team=True).get(team_id)
     patterns: Final = () if team_router is None else tuple(team_router.patterns)
     return not any(re.match(rival, model) is not None for rival in _patterns_tried_before(patterns, regex))
 
@@ -285,7 +287,9 @@ def team_route_after_write(
     written_params: Mapping[str, object] | None,
     model: str,
 ) -> ModelRoute | None:
-    deployments: Final = () if llm_router is None else llm_router.get_all_deployments(public_name, team_id=team_id)
+    deployments: Final = (
+        () if llm_router is None else llm_router.registry().deployments(public_name, source="all", team_id=team_id)
+    )
     kept: Final = tuple(
         deployment.get("litellm_params")
         for deployment in deployments

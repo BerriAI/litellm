@@ -201,7 +201,7 @@ def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
 
 def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
     return frozenset(
-        _deployment_model_name(row["litellm_params"]) for row in llm_router.get_model_list(model_name=model_group) or ()
+        _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
 
 
@@ -1300,7 +1300,7 @@ async def handle_bedrock_count_tokens(
         litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
         resolved_model = model  # Default fallback
 
-        deployments: Final = llm_router.get_model_list(model_name=model) if llm_router else None
+        deployments: Final = llm_router.registry().deployments(model) if llm_router else None
         deployment: Final = deployments[0] if deployments else None
         if deployment is not None:
             model_litellm_params: Final = deployment.get("litellm_params", {})
@@ -1987,7 +1987,7 @@ async def transcribe_sdk_proxy_route(
     )
 
 
-def _resolve_vertex_model_from_router(
+async def _resolve_vertex_model_from_router(
     model_id: str,
     llm_router: litellm.Router | None,
     encoded_endpoint: str,
@@ -2015,7 +2015,7 @@ def _resolve_vertex_model_from_router(
         return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
     try:
-        deployment: Final = llm_router.get_available_deployment_for_pass_through(model=model_id)
+        deployment: Final = await llm_router.select(model_id, kind="pass_through")
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
@@ -2336,7 +2336,9 @@ async def relay_nvidia_nim_request(
     request_body: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
-    model_group: Final = nvidia_nim_model_group_in_path(endpoint, llm_router.get_model_list()) if llm_router else None
+    model_group: Final = (
+        nvidia_nim_model_group_in_path(endpoint, llm_router.registry().deployments()) if llm_router else None
+    )
     if llm_router is None or model_group is None:
         rejection: Final[RelayRejection] = {
             "error": "no NVIDIA NIM model group in the path; call /nvidia_nim/{model_group}/v1/infer with a model "
@@ -3038,7 +3040,7 @@ async def _base_vertex_proxy_route(
                 vertex_project,
                 vertex_location,
                 deployment_model_info,
-            ) = _resolve_vertex_model_from_router(
+            ) = await _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
                 encoded_endpoint=encoded_endpoint,
@@ -3942,7 +3944,7 @@ def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None
     upstream: Final = next(
         (
             deployment["litellm_params"].get("model")
-            for deployment in (llm_router.get_model_list() or ())
+            for deployment in (llm_router.registry().deployments() or ())
             if deployment.get("model_name") in candidates
         ),
         None,

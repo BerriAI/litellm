@@ -140,6 +140,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
 )
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
 from litellm.router import Router
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
@@ -575,7 +576,7 @@ def model_deployments_support_stream_options(
     if not isinstance(model, str):
         return False
     deployment_models: Final = (
-        llm_router.resolved_litellm_models(model, team_id=team_id) if llm_router is not None else ()
+        llm_router.registry().names(model, kind="litellm_models", team_id=team_id) if llm_router is not None else ()
     )
     candidate_models: Final = deployment_models if deployment_models else (model,)
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
@@ -705,21 +706,28 @@ def _is_auto_router(params: Mapping[str, object]) -> bool:
 
 
 def _named_deployments(llm_router: Router, model: str, team_id: str | None) -> tuple[Mapping[str, object], ...]:
-    by_id: Final = None if model in llm_router.model_names else llm_router.get_deployment(model_id=model)
+    registry: Final = llm_router.registry()
+    group_names: Final = registry.names(kind="group_set")
+    by_id: Final = None if model in group_names else registry.deployment(model)
     if by_id is not None:
         return (_REQUEST_FIELDS.validate_python(by_id.litellm_params.model_dump(exclude_none=True)),)
-    group: Final = llm_router.get_model_from_alias(model=model) or model
-    if group not in llm_router.model_names or llm_router.get_model_list_from_routing_groups(model_name=group):
+    group: Final = registry.resolve(model, kind="alias") or model
+    if group not in group_names or registry.deployments(group, source="routing_groups"):
         return ()
     deployments: Final = tuple(
         _REQUEST_FIELDS.validate_python(deployment["litellm_params"])
-        for deployment in llm_router.get_all_deployments(model_name=group, team_id=team_id)
+        for deployment in registry.deployments(group, source="all", team_id=team_id)
     )
     return () if any(_is_auto_router(params) for params in deployments) else deployments
 
 
 def _router_defaults(llm_router: Router | None) -> Mapping[str, object]:
-    configured: Final[object] = getattr(llm_router, "default_litellm_params", None)
+    router_settings: Final = llm_router.settings() if llm_router is not None else None
+    configured: Final[object] = (
+        router_settings.default_litellm_params
+        if router_settings is not None and router_settings.is_set("default_litellm_params")
+        else None
+    )
     if configured is None:
         return {}
     return {name: value for name, value in _REQUEST_FIELDS.validate_python(configured).items() if value is not None}
@@ -860,7 +868,7 @@ async def _resolve_per_request_model_group_alias(
         return None
     await can_key_call_resolved_model(
         model=target,
-        llm_model_list=llm_router.model_list,
+        llm_model_list=llm_router.registry().all(),
         valid_token=user_api_key_dict,
         llm_router=llm_router,
     )
@@ -1356,7 +1364,7 @@ def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Rout
         return None
     requested_model: Final = request_data.get("model")
     deployments: Final = (
-        llm_router.get_model_list(model_name=requested_model) or ()
+        llm_router.registry().deployments(model_name=requested_model) or ()
         if llm_router is not None and isinstance(requested_model, str)
         else ()
     )
@@ -1994,7 +2002,7 @@ async def _team_member_within_fallback_model_budget(
         if is_model_cost_zero(model=served_model, llm_router=llm_router):
             return True
         budget_models: Final = (
-            tuple(dict.fromkeys((model, served_model, llm_router.routable_model_group(served_model))))
+            tuple(dict.fromkeys((model, served_model, llm_router.registry().resolve(served_model))))
             if llm_router is not None
             else tuple(dict.fromkeys((model, served_model)))
         )
@@ -2567,7 +2575,7 @@ class ProxyBaseLLMRequestProcessing:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
-            llm_router.arm_routing_read_prefetch(prefetch_model, self.data)
+            RoutingContext(llm_router).arm_read_prefetch(prefetch_model, self.data)
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -2603,7 +2611,9 @@ class ProxyBaseLLMRequestProcessing:
             and isinstance(aliased_model, str)
             and self.data.get("model") == aliased_model
         ):
-            self.data["model"] = llm_router.resolve_served_model_name(aliased_model, self.served_model)
+            self.data["model"] = llm_router.registry().resolve(
+                aliased_model, kind="served", served_model=self.served_model
+            )
 
         return self.data, logging_obj
 
@@ -2753,7 +2763,7 @@ class ProxyBaseLLMRequestProcessing:
     def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
         key_router_settings: Final = user_api_key_dict.router_settings
         key_fallbacks: Final = key_router_settings.get("fallbacks") if isinstance(key_router_settings, dict) else None
-        fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.fallbacks
+        fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.settings().fallbacks
         return fallbacks if isinstance(fallbacks, list) and fallbacks else None
 
     @staticmethod
@@ -3072,7 +3082,7 @@ class ProxyBaseLLMRequestProcessing:
 
             # Post Call Processing
             if llm_router is not None:
-                self.data["deployment"] = llm_router.get_deployment(model_id=model_id)
+                self.data["deployment"] = llm_router.registry().deployment(model_id)
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
                     litellm_call_id=self.data.get("litellm_call_id", ""),

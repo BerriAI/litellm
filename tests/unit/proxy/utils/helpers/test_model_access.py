@@ -23,8 +23,8 @@ def normalize(value):
 
 def _router_with_models(model_names):
     router = MagicMock()
-    router.get_model_names.return_value = model_names
-    router.get_model_access_groups.return_value = {}
+    router.registry.return_value.names.return_value = model_names
+    router.registry.return_value.access_groups.return_value = {}
     return router
 
 
@@ -621,7 +621,7 @@ async def test_agent_key_listing_is_empty_when_its_groups_grant_no_model():
 @pytest.mark.asyncio
 async def test_agent_ceiling_expands_a_model_access_group_name_for_listing():
     router = _router_with_models(["model-a", "model-b"])
-    router.get_model_access_groups.return_value = {"fast-models": ["model-b"]}
+    router.registry.return_value.access_groups.return_value = {"fast-models": ["model-b"]}
     result = await get_available_models_for_user(
         user_api_key_dict=_agent_key(["model-a", "model-b"]),
         llm_router=router,

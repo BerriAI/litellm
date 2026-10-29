@@ -230,12 +230,12 @@ async def get_deployments_by_model(model: str, llm_router: "Router") -> list["De
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
     # Check if model id
-    deployment: Final = llm_router.get_deployment(model_id=model)
+    deployment: Final = llm_router.registry().deployment(model)
     if deployment is not None:
         return [deployment]
 
     # Check if model name
-    deployments: Final = llm_router.get_model_list(model_name=model)
+    deployments: Final = llm_router.registry().deployments(model)
     if deployments is None:
         return []
     return [

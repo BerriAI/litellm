@@ -58,7 +58,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 from tests._support.clock_loops import AutojumpClockLoop
 
-from .conftest import normalize
+from .conftest import normalize, route_entry_points_to_stubs
 
 
 def _user_auth() -> UserAPIKeyAuth:
@@ -1586,7 +1586,7 @@ def test_resolve_keepalive_seconds_client_value_ignored_without_override_permiss
     deployment.litellm_params.keepalive_seconds = 15.0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1605,7 +1605,7 @@ def test_resolve_keepalive_seconds_request_value_wins_when_override_allowed(monk
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1624,7 +1624,7 @@ def test_resolve_keepalive_seconds_explicit_zero_disables_when_override_allowed(
     deployment.litellm_params.keepalive_seconds = 20.0
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1643,7 +1643,7 @@ def test_resolve_keepalive_seconds_clamps_below_minimum(monkeypatch):
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1662,7 +1662,7 @@ def test_resolve_keepalive_seconds_clamps_above_maximum(monkeypatch):
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1681,7 +1681,7 @@ def test_resolve_keepalive_seconds_non_numeric_returns_zero(monkeypatch):
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1712,7 +1712,7 @@ def test_resolve_keepalive_seconds_deployment_disable_cannot_be_overridden_by_re
     deployment.litellm_params.keepalive_seconds = 0
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1761,7 +1761,7 @@ def test_resolve_keepalive_seconds_deployment_zero_beats_global_default(monkeypa
     deployment.litellm_params.keepalive_seconds = 0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1783,7 +1783,7 @@ def test_resolve_keepalive_seconds_deployment_value_beats_global_default(monkeyp
     deployment.litellm_params.keepalive_seconds = 30.0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1803,7 +1803,7 @@ def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
     deployment.litellm_params.keepalive_seconds = 45.0
     deployment.litellm_params.allow_client_keepalive_override = True
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1825,7 +1825,7 @@ def test_keepalive_from_deployment_config_stale_model_id_does_not_fall_through(m
     unambiguous on its own."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1844,7 +1844,7 @@ def test_keepalive_from_deployment_config_stale_model_id_does_not_fall_through(m
 def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1857,7 +1857,7 @@ def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
 
     result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
     assert result == ps._DeploymentKeepaliveConfig(keepalive_seconds=20.0, allow_client_override=False)
-    router.get_model_list.assert_called_once_with(model_name="slow-model")
+    router.registry.return_value.deployments.assert_called_once_with(model_name="slow-model")
 
 
 def test_keepalive_from_deployment_config_fallback_by_name_agreeing_deployments(monkeypatch):
@@ -1865,7 +1865,7 @@ def test_keepalive_from_deployment_config_fallback_by_name_agreeing_deployments(
     is unambiguous, so the shared value is used even without a model_id."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0, "allow_client_keepalive_override": True}},
@@ -1887,7 +1887,7 @@ def test_keepalive_from_deployment_config_fallback_by_name_conflicting_deploymen
     apply the wrong deployment's interval (or override an explicit disable)."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1911,7 +1911,7 @@ def test_keepalive_from_deployment_config_fallback_by_name_configured_plus_unset
     configured values."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"keepalive_seconds": 20.0}},
@@ -1942,7 +1942,7 @@ def test_make_keepalive_resolver_caches_by_model_id(monkeypatch):
     deployment.litellm_params.keepalive_seconds = 5.0
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
     monkeypatch.setattr(ps, "llm_router", router)
 
@@ -1971,7 +1971,7 @@ def test_make_keepalive_resolver_reresolves_on_model_id_change(monkeypatch):
     after.litellm_params.keepalive_seconds = 30.0
     after.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.side_effect = lambda model_id: {"deploy-a": before, "deploy-b": after}[model_id]
     monkeypatch.setattr(ps, "llm_router", router)
 
@@ -1993,7 +1993,7 @@ def test_make_keepalive_resolver_missing_model_id_never_cached(monkeypatch):
     re-resolve fresh rather than reuse a stale guess."""
     from unittest.mock import MagicMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [{"litellm_params": {"keepalive_seconds": 12.0}}]
     monkeypatch.setattr(ps, "llm_router", router)
@@ -2025,7 +2025,7 @@ def test_make_keepalive_resolver_expires_cache_after_ttl(monkeypatch):
     after.litellm_params.keepalive_seconds = 0
     after.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = before
     monkeypatch.setattr(ps, "llm_router", router)
 
@@ -2080,7 +2080,7 @@ async def test_async_data_generator_emits_ping_heartbeat(monkeypatch):
     _patch_logging_flags(monkeypatch)
     monkeypatch.setattr(ps, "_KEEPALIVE_MIN_SECONDS", 0.05)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [{"litellm_params": {"allow_client_keepalive_override": True}}]
     monkeypatch.setattr(ps, "llm_router", router)
@@ -2175,7 +2175,7 @@ async def test_async_data_generator_resolves_deployment_once_per_steady_stream(m
     deployment.litellm_params.keepalive_seconds = None
     deployment.litellm_params.allow_client_keepalive_override = False
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
     router.get_model_list.return_value = [{"litellm_params": {}}]
     monkeypatch.setattr(ps, "llm_router", router)
@@ -2221,7 +2221,7 @@ class _SlowAssistantsStream(_FakeAssistantsStream):
 async def _run_thread_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = []
     if fails_with is None:
         router.arun_thread = AsyncMock(return_value=_SlowAssistantsStream([_simple_chunk(content="hi")], delay))
@@ -2320,7 +2320,7 @@ async def _queue_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
     _patch_logging_flags(monkeypatch)
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = []
     router.split_request_priority.return_value = (0, {})
 

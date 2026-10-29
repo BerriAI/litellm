@@ -536,7 +536,7 @@ def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
         * dies with the router itself — no risk of CPython reusing the
           previous router's ``id()`` and serving its cached entries.
     """
-    cache: Final = getattr(llm_router, "_zero_cost_cache", None)
+    cache: Final = llm_router.registry().zero_cost()
     return cache if isinstance(cache, dict) else None
 
 
@@ -544,7 +544,7 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None)
     """
     Check if a model has zero cost (no configured pricing).
 
-    Uses the router's get_model_group_info method to get pricing information.
+    Uses the router registry's group info to get pricing information.
 
     Args:
         model: The model name or list of model names
@@ -569,8 +569,8 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None)
                     return False
                 continue
         try:
-            # Use router's get_model_group_info method directly for better reliability
-            model_group_info = llm_router.get_model_group_info(model_group=model_name, include_hidden=True)
+            # Use the router registry's group info directly for better reliability
+            model_group_info = llm_router.registry().group(model_name, include_hidden=True)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
@@ -677,15 +677,16 @@ def _deployments_served_for(model: str, llm_router: "Router") -> Sequence[Deploy
     group count, or the wildcard route serving the group when none carries its name, the same
     fallback ``get_model_list()`` takes.
     """
-    routed_group: Final = llm_router.routable_model_group(model)
-    if llm_router.routable_model_group(routed_group) == routed_group:
-        return llm_router.get_model_list(model_name=routed_group) or ()
-    named: Final = llm_router.get_model_list_from_model_alias(model_name=model)
+    registry: Final = llm_router.registry()
+    routed_group: Final = registry.resolve(model)
+    if registry.resolve(routed_group) == routed_group:
+        return registry.deployments(routed_group) or ()
+    named: Final = registry.deployments(model, source="alias")
     if named:
         return named
     return tuple(
         DeploymentTypedDict(**deployment)
-        for deployment in llm_router.pattern_router.get_deployments_by_pattern(model=routed_group)
+        for deployment in registry.patterns().get_deployments_by_pattern(model=routed_group)
     )
 
 
@@ -776,7 +777,8 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
     tiered_pricing or a positive price on any billed metric (tokens, characters, seconds, pages,
     images, queries, ...), so models billed by a non-token metric are not treated as unpriced.
     """
-    for deployment in llm_router.get_model_list(model_name=model) or ():
+    registry: Final = llm_router.registry()
+    for deployment in registry.deployments(model) or ():
         litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
         if _entry_declares_price(litellm_params):
             return True
@@ -785,9 +787,7 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
         if model_id is None:
             continue
 
-        model_info = llm_router.get_deployment_model_info(
-            model_id=model_id, model_name=litellm_params.get("model") or ""
-        )
+        model_info = registry.deployment_model_info(model_id, litellm_params.get("model") or "")
         if model_info is not None and _entry_has_priced_metric(model_info):
             return True
 
@@ -798,13 +798,13 @@ def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> b
     if not model or llm_router is None:
         return False
 
-    if llm_router.get_model_group_info(model_group=model) is None:
+    if llm_router.registry().group(model) is None:
         return False
 
     if _model_group_has_pricing(model=model, llm_router=llm_router):
         return False
 
-    return not _is_cost_explicitly_configured(llm_router.get_model_list(model_name=model) or ())
+    return not _is_cost_explicitly_configured(llm_router.registry().deployments(model) or ())
 
 
 def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
@@ -2785,7 +2785,7 @@ def model_in_access_group(model: str, team_models: list[str] | None, llm_router:
 
     access_groups: dict[str, list[str]] = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model)
+        access_groups = llm_router.registry().access_groups(model_name=model)
 
     if len(access_groups) > 0:  # check if token contains any model access groups
         for idx, m in enumerate(
@@ -4829,7 +4829,7 @@ def _resolve_all_team_model_sentinel_for_auth_check(
 ) -> list[str]:
     if SpecialModelNames.all_team_models.value not in models or team_id is None or llm_router is None:
         return models
-    proxy_models: Final = llm_router.get_model_names()
+    proxy_models: Final = llm_router.registry().names()
     non_sentinel_models: Final = [model for model in models if model != SpecialModelNames.all_team_models.value]
     if not proxy_models:
         return non_sentinel_models or models
@@ -4849,7 +4849,7 @@ def check_model_access_helper(
     access_groups: dict[str, list[str]] = defaultdict(list)
 
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model, team_id=team_id)
+        access_groups = llm_router.registry().access_groups(model_name=model, team_id=team_id)
 
     models = _resolve_all_team_model_sentinel_for_auth_check(
         models=models,
@@ -4895,7 +4895,7 @@ def _owning_team_names_for_team_deployment(
 ) -> tuple[str, ...]:
     if llm_router is None or team_id is None or not model.startswith(f"model_name_{team_id}_"):
         return ()
-    deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+    deployment: Final = llm_router.registry().deployments(model, source="first_in_group")
     public_name: Final = (
         deployment.model_info.team_public_model_name
         if deployment is not None and deployment.model_info.team_id == team_id
@@ -4954,8 +4954,8 @@ def _can_object_call_model(
         litellm.model_alias_map[model]
         if model in litellm.model_alias_map
         else (
-            llm_router.get_model_from_alias(model)
-            if llm_router is not None and model in llm_router.model_group_alias
+            llm_router.registry().resolve(model, kind="alias")
+            if llm_router is not None and model in llm_router.registry().aliases()
             else None
         )
     )
@@ -5042,7 +5042,7 @@ def _live_team_alias_target(
     deleted_team_deployment: Final = (
         llm_router is not None
         and target.startswith(f"model_name_{team_id}_")
-        and target not in llm_router.model_name_to_deployment_indices
+        and target not in llm_router.registry().index("model_name")
     )
     return model if deleted_team_deployment else target
 
@@ -5234,7 +5234,7 @@ def _model_access_groups_serving_model(
     return frozenset(
         group
         for requested_model in requested
-        for group in llm_router.get_model_access_groups(model_name=requested_model, team_id=team_id)
+        for group in llm_router.registry().access_groups(model_name=requested_model, team_id=team_id)
     )
 
 

@@ -9,6 +9,8 @@ from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional,
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import anthropic
 import httpx
 import pytest
@@ -1114,7 +1116,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_add_litellm_data_to_request,
         )
 
-        fake_llm_router = MagicMock()
+        fake_llm_router = route_entry_points_to_stubs(MagicMock())
         fake_llm_router.deployments_for_request.return_value = [
             {
                 "model_name": "smart-router",
@@ -1196,7 +1198,7 @@ class TestProxyBaseLLMRequestProcessing:
         }
         mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=mock_router_settings)
 
-        mock_llm_router = MagicMock()
+        mock_llm_router = route_entry_points_to_stubs(MagicMock())
 
         mock_prisma_client = MagicMock()
         monkeypatch.setattr(
@@ -7678,7 +7680,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             logging_obj = MagicMock()
             return processor.data, logging_obj
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7769,7 +7771,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 headers={"retry-after": "30"},
             )
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = None
 
         with patch.object(
@@ -7808,7 +7810,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 headers={"retry-after": "30"},
             )
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
 
         with patch.object(
@@ -7851,7 +7853,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 )
             return processor.data, MagicMock()
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         user_api_key_dict = MagicMock()
@@ -7898,7 +7900,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 headers={"retry-after": "30"},
             )
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7942,7 +7944,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 )
             raise ValueError("unexpected auth failure on fallback")
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -8051,7 +8053,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
             return processor.data, MagicMock()
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.fallbacks = [{primary_model: [fallback_model]}]
 
         with patch.object(
@@ -10887,7 +10889,7 @@ async def test_base_process_llm_request_honours_a_deployment_hard_disable(
     if deployment_keepalive is not None:
         params["keepalive_seconds"] = deployment_keepalive
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_list = MagicMock(return_value=[{"model_name": "m", "litellm_params": params}])
 
     async def slow_inner(self, **kwargs):
@@ -11854,7 +11856,7 @@ class TestBackgroundResponseRetrievalGovernance:
     def _router(self) -> MagicMock:
         from litellm.types.router import Deployment, LiteLLM_Params
 
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_deployment.side_effect = lambda model_id: (
             Deployment(
                 model_name=self.GOVERNED_MODEL_GROUP,

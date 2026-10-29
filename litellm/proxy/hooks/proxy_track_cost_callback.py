@@ -224,7 +224,7 @@ DeploymentLookup: TypeAlias = Callable[[str], Deployment | None]
 
 def _proxy_deployment(model_id: str) -> Deployment | None:
     router: Final = get_llm_router()
-    return None if router is None else router.get_deployment(model_id=model_id)
+    return None if router is None else router.registry().deployment(model_id)
 
 
 def _billed_failed_attempts(request_data: Mapping[str, object]) -> tuple[BilledFailedAttempt, ...]:
