@@ -554,6 +554,58 @@ class TestContentFilterGuardrail:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("later_pattern", "text", "expected"),
+        [
+            (
+                ContentFilterPattern(
+                    pattern_type="regex", pattern=r"\b\d{4}\b", name="group4", action=ContentFilterAction.MASK
+                ),
+                "card 4111 1111 1111 1111 and 4111 1111 1111 1112 end",
+                "card [CREDIT_CARD_REDACTED] and [GROUP4_REDACTED] [GROUP4_REDACTED] [GROUP4_REDACTED] [GROUP4_REDACTED] end",
+            ),
+            (
+                ContentFilterPattern(
+                    pattern_type="regex", pattern=r"\b\d{4}[\s-]?\d{4}\b", name="acct8", action=ContentFilterAction.MASK
+                ),
+                "order 4398 2296 8107 4767 4479 3291",
+                "order [ACCT8_REDACTED] [ACCT8_REDACTED] [ACCT8_REDACTED]",
+            ),
+        ],
+    )
+    async def test_later_patterns_mask_a_number_put_back_after_failing_the_checksum(
+        self, later_pattern: ContentFilterPattern, text: str, expected: str
+    ):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-mask-then-later-pattern",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK),
+                later_pattern,
+            ],
+        )
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [text]}, request_data={}, input_type="request"
+        )
+        assert guardrailed_inputs.get("texts") == [expected]
+
+    @pytest.mark.asyncio
+    async def test_later_blocking_pattern_blocks_a_number_put_back_after_failing_the_checksum(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-mask-then-later-block",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK),
+                ContentFilterPattern(
+                    pattern_type="regex", pattern=r"\b\d{4}\b", name="group4", action=ContentFilterAction.BLOCK
+                ),
+            ],
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["order 4111 1111 1111 1112"]}, request_data={}, input_type="request"
+            )
+        assert exc_info.value.detail["pattern"] == "group4"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         ("pattern_name", "checksum_valid", "checksum_invalid"),
         [
             ("visa", "4111 1111 1111 1111", "4111 1111 1111 1112"),
@@ -604,6 +656,18 @@ class TestContentFilterGuardrail:
                 ),
                 ("send it to DE07841266521904580", "435 thanks"),
                 "904580",
+            ),
+            (
+                (
+                    ContentFilterPattern(
+                        pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+                    ),
+                    ContentFilterPattern(
+                        pattern_type="regex", pattern=r"\b\d{4}\b", name="group4", action=ContentFilterAction.MASK
+                    ),
+                ),
+                ("card 4111 1111 11", "11 1112", " end"),
+                "1112",
             ),
         ],
     )
@@ -1271,9 +1335,12 @@ class TestContentFilterGuardrail:
                 text: str,
                 detections: list[ContentFilterDetection] | None = None,
                 check_candidate: CandidateCheck = run_validator,
+                unsettled_tail: int = 0,
             ) -> str:
                 scanned_lengths.append(len(text))
-                return super()._filter_single_text(text, detections=detections, check_candidate=check_candidate)
+                return super()._filter_single_text(
+                    text, detections=detections, check_candidate=check_candidate, unsettled_tail=unsettled_tail
+                )
 
         guardrail: Final = RecordingGuardrail(
             guardrail_name="test-streaming-bounded-scan",
@@ -1314,9 +1381,12 @@ class TestContentFilterGuardrail:
                 text: str,
                 detections: list[ContentFilterDetection] | None = None,
                 check_candidate: CandidateCheck = run_validator,
+                unsettled_tail: int = 0,
             ) -> str:
                 scanned_lengths.append(len(text))
-                return super()._filter_single_text(text, detections=detections, check_candidate=check_candidate)
+                return super()._filter_single_text(
+                    text, detections=detections, check_candidate=check_candidate, unsettled_tail=unsettled_tail
+                )
 
         guardrail: Final = RecordingGuardrail(
             guardrail_name="test-streaming-refused-cut-backoff",
