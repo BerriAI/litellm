@@ -29,6 +29,8 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
 )
+from litellm.proxy.auth.auth_utils import is_invalid_virtual_key_error
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
@@ -401,7 +403,9 @@ class _ProxyDBLogger(CustomLogger):
 
         request_route: Final = user_api_key_dict.request_route
         if (
-            ProxyDBLogger._should_track_errors_in_db() is False
+            isinstance(original_exception, KeyNotFoundError)
+            or is_invalid_virtual_key_error(original_exception)
+            or ProxyDBLogger._should_track_errors_in_db() is False
             or ProxyDBLogger._skips_pre_routing_rejections()
             and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
             or request_route is not None
