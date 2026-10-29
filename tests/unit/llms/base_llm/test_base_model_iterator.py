@@ -428,6 +428,17 @@ def test_done_marker_ends_the_stream(line: str) -> None:
     ]
 
 
+@pytest.mark.parametrize("choices", ["abort", 1, [None], [{"finish_reason": "stop"}, "abort"]])
+def test_chunk_with_unreadable_choices_reaches_the_provider_parser(choices: object) -> None:
+    line: Final = "data: " + json.dumps({"choices": choices})
+
+    chunks: Final = list(BaseModelResponseIterator(streaming_response=iter((line,)), sync_stream=True))
+
+    assert chunks == [
+        GenericStreamingChunk(text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None)
+    ]
+
+
 def test_error_frame_mentioning_done_raises_instead_of_ending_the_stream() -> None:
     line: Final = 'data: {"error": {"message": "prompt too long [DONE]", "code": 400}}'
 

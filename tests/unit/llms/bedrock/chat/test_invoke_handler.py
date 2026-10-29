@@ -966,6 +966,31 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     _assert_moonshot_stream_content([chunk async for chunk in stream])
 
 
+def test_moonshot_invoke_stream_raises_when_upstream_aborts(_aws_test_credentials: None) -> None:
+    raw_stream: Final = b"".join(
+        _bedrock_event_stream_frame(chunk)
+        for chunk in (
+            _openai_stream_chunk({"role": "assistant", "content": "Partial answer"}),
+            _openai_stream_chunk({}, "abort"),
+        )
+    )
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=raw_stream)))
+    )
+
+    stream: Final = litellm.completion(
+        model="bedrock/invoke/moonshot.kimi-k2-thinking",
+        messages=[{"role": "user", "content": "weather as json"}],
+        stream=True,
+        client=client,
+    )
+
+    assert isinstance(stream, CustomStreamWrapper)
+    with pytest.raises(MidStreamFallbackError, match="abort") as excinfo:
+        _chunks: Final = list(stream)
+    assert excinfo.value.generated_content == "Partial answer"
+
+
 def _truncated_frame() -> bytes:
     return _bedrock_event_stream_frame(_openai_stream_chunk({"role": "assistant"}))[:-8]
 

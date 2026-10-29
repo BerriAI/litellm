@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai.types import Completion
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
 import litellm
@@ -30,6 +31,9 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.azure_ai.chat.transformation import AzureAIChatCompletionResponseIterator
+from litellm.llms.databricks.chat.transformation import DatabricksChatResponseIterator
+from litellm.llms.databricks.streaming_utils import ModelResponseIterator as OpenAILikeModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
 from litellm.types.utils import (
@@ -1482,8 +1486,45 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
     assert getattr(excinfo.value, "status_code", None) == 400
 
 
+_RAW_SSE_ITERATORS: Final = MappingProxyType(
+    {
+        "http_handler": ("hosted_vllm", OpenAIChatCompletionStreamingHandler),
+        "azure_ai": ("azure_ai", AzureAIChatCompletionResponseIterator),
+        "databricks": ("databricks", DatabricksChatResponseIterator),
+        "openai_like": ("vertex_ai", OpenAILikeModelResponseIterator),
+    }
+)
+
+
+def _chat_stream_wrapper(
+    transport: str, raw_response: httpx.Response, client: OpenAI | AsyncOpenAI, logging_obj: Logging
+) -> CustomStreamWrapper:
+    if transport == "sdk":
+        return CustomStreamWrapper(
+            completion_stream=(
+                AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+                if isinstance(client, AsyncOpenAI)
+                else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            ),
+            model="test-model",
+            logging_obj=logging_obj,
+            custom_llm_provider="openai",
+        )
+    provider, iterator = _RAW_SSE_ITERATORS[transport]
+    async_stream: Final = isinstance(client, AsyncOpenAI)
+    return CustomStreamWrapper(
+        completion_stream=iterator(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        ),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider=provider,
+    )
+
+
 @pytest.mark.parametrize("async_stream", [False, True])
-@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("transport", ["sdk", *_RAW_SSE_ITERATORS])
 @pytest.mark.parametrize("prefix", ["", "Partial answer"])
 @pytest.mark.parametrize("abort_index", [0, 1])
 @pytest.mark.parametrize("abort_content", ["", "unfinished"])
@@ -1525,24 +1566,7 @@ async def test_aborted_stream_raises_instead_of_finishing_successfully(
         request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
     )
     client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
-    stream: Final = (
-        (
-            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
-            if isinstance(client, AsyncOpenAI)
-            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
-        )
-        if transport == "sdk"
-        else OpenAIChatCompletionStreamingHandler(
-            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
-            sync_stream=not async_stream,
-        )
-    )
-    response: Final = CustomStreamWrapper(
-        completion_stream=stream,
-        model="test-model",
-        logging_obj=logging_obj,
-        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
-    )
+    response: Final = _chat_stream_wrapper(transport, raw_response, client, logging_obj)
 
     try:
         with pytest.raises(MidStreamFallbackError, match="abort") as excinfo:
@@ -1559,7 +1583,7 @@ async def test_aborted_stream_raises_instead_of_finishing_successfully(
 
 
 @pytest.mark.parametrize("async_stream", [False, True])
-@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler", "azure_ai", "openai_like"])
 async def test_stream_with_null_choices_chunk_finishes_normally(
     async_stream: bool, transport: str, logging_obj: Logging
 ) -> None:
@@ -1592,24 +1616,7 @@ async def test_stream_with_null_choices_chunk_finishes_normally(
         request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
     )
     client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
-    stream: Final = (
-        (
-            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
-            if isinstance(client, AsyncOpenAI)
-            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
-        )
-        if transport == "sdk"
-        else OpenAIChatCompletionStreamingHandler(
-            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
-            sync_stream=not async_stream,
-        )
-    )
-    response: Final = CustomStreamWrapper(
-        completion_stream=stream,
-        model="test-model",
-        logging_obj=logging_obj,
-        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
-    )
+    response: Final = _chat_stream_wrapper(transport, raw_response, client, logging_obj)
 
     try:
         chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
@@ -1621,6 +1628,80 @@ async def test_stream_with_null_choices_chunk_finishes_normally(
 
     streamed_choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
     assert "".join(choice.delta.content or "" for choice in streamed_choices) == "hi"
+    assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
+
+
+def _text_completion_stream_wrapper(
+    final_finish_reason: str, client: OpenAI | AsyncOpenAI, logging_obj: Logging
+) -> CustomStreamWrapper:
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "cmpl-test",
+                    "object": "text_completion",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": [{"index": 0, "text": text, "logprobs": None, "finish_reason": finish_reason}],
+                }
+            )
+            + "\n\n"
+            for text, finish_reason in (("Partial answer", None), ("", final_finish_reason))
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/completions"),
+    )
+    return CustomStreamWrapper(
+        completion_stream=(
+            AsyncStream(cast_to=Completion, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=Completion, response=raw_response, client=client)
+        ),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="text-completion-openai",
+    )
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+async def test_aborted_text_completion_stream_raises(async_stream: bool, logging_obj: Logging) -> None:
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    response: Final = _text_completion_stream_wrapper("abort", client, logging_obj)
+
+    try:
+        with pytest.raises(MidStreamFallbackError, match="abort") as excinfo:
+            _chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+
+        assert excinfo.value.generated_content == "Partial answer"
+        assert getattr(excinfo.value.original_exception, "status_code", None) == 500
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+async def test_stopped_text_completion_stream_finishes_normally(async_stream: bool, logging_obj: Logging) -> None:
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    response: Final = _text_completion_stream_wrapper("stop", client, logging_obj)
+
+    try:
+        chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    streamed_choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
+    assert "".join(choice.delta.content or "" for choice in streamed_choices) == "Partial answer"
     assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
 
 
