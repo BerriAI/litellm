@@ -566,6 +566,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "mongodb",
         "nano-gpt",
         "neosantara",
+        "opensearch",
         "parasail",
         "pinstripes",
         "poe",
