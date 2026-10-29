@@ -69,6 +69,7 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.classifier_logging import (
     classifier_audit_fields,
     classifier_input_snapshot,
@@ -140,6 +141,7 @@ from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
 from litellm.types.extraction import ExtractionResponse
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
@@ -613,6 +615,10 @@ def _timestamp_seconds(moment: object) -> float | None:
     return None
 
 
+def _runs_on_logging_only(guardrail: CustomGuardrail, data: Mapping[str, object]) -> bool:
+    return guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.logging_only) is True
+
+
 def same_attempt_marker(first: object, second: object) -> bool:
     return first is second or first == second
 
@@ -641,6 +647,7 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
+    _failure_log_masked: bool = False
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -2592,6 +2599,7 @@ class Logging(LiteLLMLoggingBaseClass):
         sync_sdk: Final = self.is_sync_litellm_request(litellm_params)
         passthrough: Final = self.call_type == CallTypes.pass_through.value
         if sync_sdk and not prefer_async_handlers and not passthrough:
+            await self.async_mask_failure_log_request()
             self.failure_handler(exception, traceback_exception)
             return
 
@@ -3372,28 +3380,20 @@ class Logging(LiteLLMLoggingBaseClass):
             hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
             for callback in hook_callbacks:
                 if isinstance(callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    if (
-                        callback.should_run_guardrail(
-                            data=call_details,
-                            event_type=GuardrailEventHooks.logging_only,
-                        )
-                        is not True
-                    ):
+                    if not _runs_on_logging_only(callback, call_details):
                         continue
 
                     self.shadow_eval_request_snapshot = None
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
                         kwargs=call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self._logging_hook_call_type,
                     )
                 elif isinstance(callback, CustomLogger):
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
                         kwargs=call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self._logging_hook_call_type,
                     )
                 if not for_async_request:
                     self.model_call_details = call_details
@@ -3968,22 +3968,14 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in hook_callbacks:
             try:
                 if isinstance(callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    if (
-                        callback.should_run_guardrail(
-                            data=self.model_call_details,
-                            event_type=GuardrailEventHooks.logging_only,
-                        )
-                        is not True
-                    ):
+                    if not _runs_on_logging_only(callback, self.model_call_details):
                         continue
 
                     self.shadow_eval_request_snapshot = None
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self._logging_hook_call_type,
                     )
                 elif isinstance(callback, CustomLogger):
                     result = redact_message_input_output_from_custom_logger(
@@ -3992,7 +3984,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details, result = await callback.async_logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
-                        call_type=self.call_type,
+                        call_type=self._logging_hook_call_type,
                     )
             except Exception:  # noqa: BLE001  # one failing hook must not skip later callbacks (slot release)
                 verbose_logger.error(
@@ -4169,6 +4161,66 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
+    @property
+    def _logging_hook_call_type(self) -> str:
+        return cast(str, self.call_type)  # cast-ok: Logging.__init__ takes call_type untyped and callers pass names
+
+    def _async_failure_callbacks(self) -> Sequence[str | Callable[..., object] | CustomLogger]:
+        return self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+            global_callbacks=litellm._async_failure_callback,
+        )
+
+    def _failure_log_maskers(self) -> tuple[CustomGuardrail, ...]:
+        callbacks: Final = (
+            *self.get_combined_callback_list(self.dynamic_failure_callbacks, litellm.failure_callback),
+            *self._async_failure_callbacks(),
+        )
+        return tuple(
+            callback
+            for callback in dict.fromkeys(callbacks)
+            if isinstance(callback, CustomGuardrail) and callback.masks_logged_request
+        )
+
+    def _failure_log_hook_kwargs(self) -> dict[str, object]:  # mutable-ok: logging hooks mask a plain dict in place
+        return {**self.model_call_details, "messages": copy.deepcopy(self.model_call_details.get("messages"))}
+
+    def _report_failure_log_mask_error(self, guardrail: CustomGuardrail) -> None:
+        verbose_logger.error(
+            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred masking the failure log with %s %s",
+            guardrail.guardrail_name,
+            traceback.format_exc(),
+        )
+        self._handle_callback_failure(callback=guardrail)
+
+    async def async_mask_failure_log_request(self) -> None:
+        if self._failure_log_masked:
+            return
+        self._failure_log_masked = True
+        for guardrail in self._failure_log_maskers():
+            try:
+                if not _runs_on_logging_only(guardrail, self.model_call_details):
+                    continue
+                self.model_call_details, _ = await guardrail.async_logging_hook(
+                    kwargs=self._failure_log_hook_kwargs(), result=None, call_type=self._logging_hook_call_type
+                )
+            except Exception:  # noqa: BLE001  # a failing mask must not stop failure logging
+                self._report_failure_log_mask_error(guardrail)
+
+    def mask_failure_log_request(self) -> None:
+        if self._failure_log_masked or is_event_loop_running():
+            return
+        self._failure_log_masked = True
+        for guardrail in self._failure_log_maskers():
+            try:
+                if not _runs_on_logging_only(guardrail, self.model_call_details):
+                    continue
+                self.model_call_details, _ = guardrail.logging_hook(
+                    kwargs=self._failure_log_hook_kwargs(), result=None, call_type=self._logging_hook_call_type
+                )
+            except Exception:  # noqa: BLE001  # a failing mask must not stop failure logging
+                self._report_failure_log_mask_error(guardrail)
+
     def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
         if start_time is None:
             start_time = self.start_time
@@ -4291,6 +4343,7 @@ class Logging(LiteLLMLoggingBaseClass):
         is_sync_request: Final = self.is_sync_litellm_request(litellm_params)
 
         try:
+            self.mask_failure_log_request()
             start_time, end_time = self._failure_handler_helper_fn(
                 exception=exception,
                 traceback_exception=traceback_exception,
@@ -4489,6 +4542,8 @@ class Logging(LiteLLMLoggingBaseClass):
         await self.special_failure_handlers(exception=exception)
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
             return
+        self.mark_logging_complete(event_type="async_failure")
+        await self.async_mask_failure_log_request()
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,
@@ -4497,14 +4552,10 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         if self._on_failure_payload_built is not None:
             self._on_failure_payload_built()
-        callbacks: Final = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-            global_callbacks=litellm._async_failure_callback,
-        )
+        callbacks: Final = self._async_failure_callbacks()
 
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 
-        self.mark_logging_complete(event_type="async_failure")
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})

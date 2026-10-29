@@ -2428,6 +2428,7 @@ def client(original_function):
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
                 unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
+                await logging_obj.async_mask_failure_log_request()
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time, for_async_request=True

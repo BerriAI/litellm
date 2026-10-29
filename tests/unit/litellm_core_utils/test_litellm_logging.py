@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
-from typing import Final, Literal
+from typing import ClassVar, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -38,6 +38,7 @@ from litellm.constants import (
     SENTRY_PII_DENYLIST,
 )
 from litellm.cost_calculator import ocr_batch_cost
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -57,6 +58,7 @@ from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -8334,6 +8336,182 @@ async def test_streaming_success_callbacks_survive_guardrail_logging_hook_failur
     skipping.async_logging_hook.assert_not_awaited()
     raising.async_logging_hook.assert_awaited_once()
     releasing.async_log_success_event.assert_awaited_once()
+
+
+_RAW_PROMPT: Final = "My name is John Smith"
+_RAW_LOG: Final = [{"role": "user", "content": _RAW_PROMPT}]
+_MASKED_LOG: Final = [{"role": "user", "content": "My name is <PERSON>"}]
+
+
+class _NameMaskingGuardrail(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
+
+    def __init__(self, event_hook: GuardrailEventHooks = GuardrailEventHooks.logging_only) -> None:
+        super().__init__(guardrail_name="name-masker", event_hook=event_hook)
+        self.scans = 0
+
+    def _mask(self, kwargs: dict) -> dict:
+        self.scans += 1
+        for message in kwargs["messages"]:
+            message["content"] = message["content"].replace("John Smith", "<PERSON>")
+        return kwargs
+
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        return self._mask(kwargs), result
+
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        await asyncio.sleep(0)
+        return self._mask(kwargs), result
+
+
+class _UnflaggedNameMaskingGuardrail(_NameMaskingGuardrail):
+    masks_logged_request: ClassVar[bool] = False
+
+
+class _RaisingMaskingGuardrail(_NameMaskingGuardrail):
+    def _mask(self, kwargs: dict) -> dict:
+        raise RuntimeError("masking failed")
+
+
+class _FailureLogRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[tuple[list[dict], list[dict]]] = []
+
+    def _record(self, kwargs: dict) -> None:
+        self.logged.append(
+            (copy.deepcopy(kwargs["messages"]), copy.deepcopy(kwargs["standard_logging_object"]["messages"]))
+        )
+
+    def log_failure_event(self, kwargs: dict, response_obj: object, start_time: object, end_time: object) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+
+def _register_failure_logging(
+    monkeypatch: pytest.MonkeyPatch, guardrail: CustomGuardrail
+) -> tuple[_FailureLogRecorder, list[list[dict]]]:
+    recorder: Final = _FailureLogRecorder()
+    sync_logged: Final[list[list[dict]]] = []
+
+    def record_sync_failure(kwargs: dict, completion_response: object, start_time: object, end_time: object) -> None:
+        sync_logged.append(copy.deepcopy(kwargs["messages"]))
+
+    for name in ("input_callback", "success_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "callbacks", [guardrail, recorder])
+    monkeypatch.setattr(litellm, "failure_callback", [record_sync_failure])
+    return recorder, sync_logged
+
+
+async def _fail_chat_call(call: Literal["completion", "acompletion"], messages: list[dict]) -> None:
+    error: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini")
+    request: Final = (
+        litellm.acompletion(model="gpt-4o-mini", messages=messages, mock_response=error)
+        if call == "acompletion"
+        else asyncio.to_thread(litellm.completion, model="gpt-4o-mini", messages=messages, mock_response=error)
+    )
+    with pytest.raises(litellm.AuthenticationError):
+        await request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+async def test_failure_log_carries_the_prompt_a_logging_only_guardrail_masked(
+    monkeypatch: pytest.MonkeyPatch, call: Literal["completion", "acompletion"]
+) -> None:
+    guardrail: Final = _NameMaskingGuardrail()
+    recorder, sync_logged = _register_failure_logging(monkeypatch, guardrail)
+    messages: Final = copy.deepcopy(_RAW_LOG)
+
+    await _fail_chat_call(call, messages)
+
+    assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
+    assert sync_logged == [_MASKED_LOG]
+    assert messages == _RAW_LOG
+    assert guardrail.scans == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_guardrail",
+    [_UnflaggedNameMaskingGuardrail, lambda: _NameMaskingGuardrail(event_hook=GuardrailEventHooks.pre_call)],
+    ids=["logging_only_without_masking_opt_in", "masking_opt_in_in_pre_call_mode"],
+)
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+async def test_failure_log_keeps_the_prompt_when_no_logging_only_guardrail_masks_it(
+    monkeypatch: pytest.MonkeyPatch,
+    make_guardrail: Callable[[], _NameMaskingGuardrail],
+    call: Literal["completion", "acompletion"],
+) -> None:
+    guardrail: Final = make_guardrail()
+    recorder, sync_logged = _register_failure_logging(monkeypatch, guardrail)
+
+    await _fail_chat_call(call, copy.deepcopy(_RAW_LOG))
+
+    assert recorder.logged == [(_RAW_LOG, _RAW_LOG)]
+    assert sync_logged == [_RAW_LOG]
+    assert guardrail.scans == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["completion", "acompletion"])
+async def test_failure_is_still_logged_when_the_masking_guardrail_raises(
+    monkeypatch: pytest.MonkeyPatch, call: Literal["completion", "acompletion"]
+) -> None:
+    recorder, sync_logged = _register_failure_logging(monkeypatch, _RaisingMaskingGuardrail())
+
+    await _fail_chat_call(call, copy.deepcopy(_RAW_LOG))
+
+    assert len(recorder.logged) == 1
+    assert len(sync_logged) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+async def test_concurrent_failure_notifications_log_one_masked_failure() -> None:
+    recorder: Final = _FailureLogRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=copy.deepcopy(_RAW_LOG),
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="concurrent-masked-failure",
+        function_id="concurrent-masked-failure",
+        dynamic_async_failure_callbacks=[_NameMaskingGuardrail(), recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"acompletion": True, "metadata": {}}, optional_params={})
+    error: Final = litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini")
+
+    await asyncio.gather(*(logging_obj.async_failure_handler(error, "tb") for _ in range(3)))
+
+    assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+async def test_sync_sdk_failure_dispatched_from_async_code_logs_the_masked_prompt() -> None:
+    recorder: Final = _FailureLogRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=copy.deepcopy(_RAW_LOG),
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="sync-sdk-masked-failure",
+        function_id="sync-sdk-masked-failure",
+        dynamic_failure_callbacks=[_NameMaskingGuardrail(), recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+
+    await logging_obj.dispatch_failure_handlers(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
+
+    assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
 
 
 def _async_request_logging_obj(call_id: str, callbacks: list[CustomLogger], stream: bool = False) -> LitellmLogging:

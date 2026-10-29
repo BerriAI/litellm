@@ -26,6 +26,7 @@ import litellm
 from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
@@ -4423,6 +4424,46 @@ async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_use
     assert json.dumps(later[: len(earlier)], sort_keys=True) == json.dumps(earlier, sort_keys=True)
     assert earlier[1]["content"] == "My name is <PERSON> and my colleague is <PERSON>."
     assert later[3]["content"] == "Now compare against <PERSON> too."
+
+
+class _FailureLogRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[tuple[list[dict], list[dict]]] = []
+
+    async def async_log_failure_event(
+        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.append(
+            (copy.deepcopy(kwargs["messages"]), copy.deepcopy(kwargs["standard_logging_object"]["messages"]))
+        )
+
+
+async def test_logging_only_presidio_masks_the_prompt_in_the_failure_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed call is logged with the prompt a logging_only Presidio guardrail masked, the same as a
+    successful one. The analyzer and anonymizer are the in-process fake handed over through api_base."""
+    recorder: Final = _FailureLogRecorder()
+    for name in ("input_callback", "success_callback", "failure_callback", "_async_success_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail: Final = OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+            logging_only=True,
+        )
+        monkeypatch.setattr(litellm, "callbacks", [guardrail, recorder])
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "My name is John Smith"}],
+                mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+            )
+        await guardrail._close_http_session()
+
+    masked: Final = [{"role": "user", "content": "My name is <PERSON>"}]
+    assert recorder.logged == [(masked, masked)]
 
 
 @pytest.mark.asyncio

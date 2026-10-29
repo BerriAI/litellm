@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import accumulate, count, pairwise
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -238,6 +238,7 @@ def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponse
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
 
