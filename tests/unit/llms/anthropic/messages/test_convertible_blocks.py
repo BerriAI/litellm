@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
@@ -9,6 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.messages.convertible_blocks import (
     malformed_tool_result_text_error,
+    restore_client_tool_results,
     unconvertible_anthropic_blocks,
     unconvertible_blocks_error,
 )
@@ -210,3 +211,53 @@ def test_a_non_string_tool_result_text_is_named_with_or_without_a_tool_use_id(
     tool_result: Mapping[str, object], error: str
 ) -> None:
     assert malformed_tool_result_text_error([{"role": "user", "content": [tool_result]}]) == error
+
+
+_SEARCH_RESULT: Final = {"type": "search_result", "source": "https://example.com", "title": "t", "content": []}
+
+
+def _tool_result_turn(content: object) -> list[object]:
+    return [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": content}]}]
+
+
+def _carries_every_part(part: object) -> object:
+    return part
+
+
+@pytest.mark.parametrize(
+    ("scan_part", "rewritten_content", "restored_content"),
+    (
+        (
+            LiteLLMAnthropicMessagesAdapter().tool_result_part,
+            "masked",
+            [_SEARCH_RESULT, {"type": "text", "text": "masked"}],
+        ),
+        (
+            _carries_every_part,
+            [{**_SEARCH_RESULT, "title": "rewritten"}, {"type": "text", "text": "masked"}],
+            [{**_SEARCH_RESULT, "title": "rewritten"}, {"type": "text", "text": "masked"}],
+        ),
+    ),
+    ids=["scan-leaves-the-search-result-out", "scan-carries-every-part"],
+)
+def test_a_tool_result_part_comes_back_from_the_client_only_when_the_scan_never_carried_it(
+    scan_part: Callable[[object], object], rewritten_content: object, restored_content: list[object]
+) -> None:
+    original: Final = _tool_result_turn([_SEARCH_RESULT, {"type": "text", "text": "secret"}])
+
+    restored: Final = restore_client_tool_results(_tool_result_turn(rewritten_content), original, scan_part)
+
+    assert restored == _tool_result_turn(restored_content)
+
+
+def test_a_part_the_guardrail_adds_follows_the_parts_it_was_shown() -> None:
+    original: Final = _tool_result_turn([{"type": "text", "text": "secret"}, _SEARCH_RESULT])
+    rewritten: Final = _tool_result_turn([{"type": "text", "text": "masked"}, {"type": "text", "text": "note"}])
+
+    restored: Final = restore_client_tool_results(
+        rewritten, original, LiteLLMAnthropicMessagesAdapter().tool_result_part
+    )
+
+    assert restored == _tool_result_turn(
+        [{"type": "text", "text": "masked"}, _SEARCH_RESULT, {"type": "text", "text": "note"}]
+    )

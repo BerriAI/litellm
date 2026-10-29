@@ -1,8 +1,7 @@
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from functools import partial
-from itertools import chain, groupby
+from itertools import chain, groupby, islice
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -119,28 +118,21 @@ def _list_items(value: object) -> tuple[object, ...]:
     return _OBJECTS.validate_python(value) if isinstance(value, list) else ()
 
 
-@dataclass(frozen=True, slots=True)
-class _KeptPart:
-    block: object
-    scanned_text: str
-
-
-_KeptParts: TypeAlias = Mapping[int, _KeptPart]
-_NO_KEPT_PARTS: Final[_KeptParts] = MappingProxyType({})
+_ScanPart: TypeAlias = Callable[[object], object]
 
 
 def _scannable_text(text: object) -> str:
     return json.dumps(text, default=str, ensure_ascii=False)
 
 
-def _non_str_text(block: object) -> _KeptPart | None:
+def _is_non_string_text(block: object) -> bool:
     match as_str_mapping(block):
         case {"type": "text", "text": str()}:
-            return None
-        case {"type": "text", "text": text}:
-            return _KeptPart(block=block, scanned_text=_scannable_text(text))
+            return False
+        case {"type": "text", "text": _}:
+            return True
         case _:
-            return None
+            return False
 
 
 def tool_result_text_part(block: object) -> str | None:
@@ -180,7 +172,7 @@ def _non_string_text_errors(label: str, content: object) -> Iterator[str]:
     return (
         f"{label} content.{index}.text: Input should be a valid string"
         for index, text_block in enumerate(_list_items(content))
-        if _non_str_text(text_block) is not None
+        if _is_non_string_text(text_block)
     )
 
 
@@ -245,20 +237,6 @@ def scannable_tool_result_request(request: object) -> object:
             return {**request_fields}
 
 
-def _non_string_text_parts(content: object) -> _KeptParts:
-    return MappingProxyType(
-        {index: part for index, block in enumerate(_list_items(content)) if (part := _non_str_text(block)) is not None}
-    )
-
-
-def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _KeptParts], ...]:
-    match as_str_mapping(block):
-        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result:
-            return ((sanitize_anthropic_tool_use_id(tool_use_id), _non_string_text_parts(tool_result.get("content"))),)
-        case _:
-            return ()
-
-
 def _content_blocks(content: object) -> tuple[object, ...]:
     match content:
         case str() if content:
@@ -267,58 +245,98 @@ def _content_blocks(content: object) -> tuple[object, ...]:
             return _list_items(content)
 
 
-def _restored_part(block: object, kept: _KeptPart | None) -> object:
-    return kept.block if kept is not None and tool_result_text_part(block) == kept.scanned_text else block
+def _rewritten_part(original: object, rewritten: object) -> object:
+    match (as_str_mapping(original), as_str_mapping(rewritten)):
+        case ({"type": "text"} as text_block, {"type": "text", "text": str(text)}):
+            unchanged: Final = text == tool_result_text_part(_scannable_part(original))
+            return original if unchanged else {**text_block, "text": text}
+        case ({"type": str(block_type), "source": source}, {"source": rewritten_source}) if (
+            block_type in _SOURCED_BLOCK_TYPES and source == rewritten_source
+        ):
+            return original
+        case _:
+            return rewritten
 
 
-def _with_kept_parts(block: object, tool_result: Mapping[str, object], parts: _KeptParts) -> object:
-    if not parts:
-        return block
-    blocks: Final = _content_blocks(tool_result.get("content"))
-    return {**tool_result, "content": [_restored_part(part, parts.get(index)) for index, part in enumerate(blocks)]}
+def _merged_part(original: object, rewritten: Iterator[object], scan_part: _ScanPart) -> tuple[object, ...]:
+    if scan_part(_scannable_part(original)) is None:
+        return (original,)
+    return tuple(_rewritten_part(original, part) for part in islice(rewritten, 1))
 
 
-def _entry_tool_use_id(entry: tuple[str, _KeptParts]) -> str:
+def _merged_content(original: object, rewritten: object, scan_part: _ScanPart) -> object:
+    original_parts: Final = _list_items(original)
+    if not isinstance(original, list):
+        return rewritten
+    remaining: Final = iter(_content_blocks(rewritten))
+    merged: Final = tuple(chain.from_iterable(_merged_part(part, remaining, scan_part) for part in original_parts))
+    return [*merged, *remaining]
+
+
+def _restored_tool_result(
+    rewritten: Mapping[str, object], original: Mapping[str, object], scan_part: _ScanPart
+) -> Mapping[str, object]:
+    return {
+        **original,
+        **rewritten,
+        "content": _merged_content(original.get("content"), rewritten.get("content"), scan_part),
+    }
+
+
+_ToolResultEntry: TypeAlias = tuple[str, Mapping[str, object]]
+
+
+def _tool_result_entry(block: object) -> tuple[_ToolResultEntry, ...]:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result:
+            return ((sanitize_anthropic_tool_use_id(tool_use_id), tool_result),)
+        case _:
+            return ()
+
+
+def _entry_tool_use_id(entry: _ToolResultEntry) -> str:
     return entry[0]
 
 
-def _entry_kept_parts(entry: tuple[str, _KeptParts]) -> _KeptParts:
+def _entry_tool_result(entry: _ToolResultEntry) -> Mapping[str, object]:
     return entry[1]
 
 
-def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
+def _restored_block(
+    block: object, originals: Mapping[str, Iterator[Mapping[str, object]]], scan_part: _ScanPart
+) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
-            sanitize_anthropic_tool_use_id(tool_use_id) in kept
+            sanitize_anthropic_tool_use_id(tool_use_id) in originals
         ):
-            return _with_kept_parts(
-                block, tool_result, next(kept[sanitize_anthropic_tool_use_id(tool_use_id)], _NO_KEPT_PARTS)
-            )
+            original: Final = next(originals[sanitize_anthropic_tool_use_id(tool_use_id)], tool_result)
+            return _restored_tool_result(tool_result, original, scan_part)
         case _:
             return block
 
 
-def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
+def restore_client_tool_results(
+    rewritten: Sequence[object], original: object, scan_part: _ScanPart
+) -> Sequence[object]:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
-    by_id: Final = tuple(
-        sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=_entry_tool_use_id)
-    )
-    if not any(parts for _, parts in by_id):
+    entries: Final = tuple(sorted(chain.from_iterable(map(_tool_result_entry, blocks)), key=_entry_tool_use_id))
+    if not entries:
         return rewritten
-    kept_in_order: Final = MappingProxyType(
+    originals_in_order: Final = MappingProxyType(
         {
-            tool_use_id: iter(tuple(map(_entry_kept_parts, group)))
-            for tool_use_id, group in groupby(by_id, key=_entry_tool_use_id)
+            tool_use_id: iter(tuple(map(_entry_tool_result, group)))
+            for tool_use_id, group in groupby(entries, key=_entry_tool_use_id)
         }
     )
-    return [_with_user_blocks(message, partial(_restored_block, kept=kept_in_order)) for message in rewritten]
+    restore: Final = partial(_restored_block, originals=originals_in_order, scan_part=scan_part)
+    return [_with_user_blocks(message, restore) for message in rewritten]
 
 
 def _without_non_string_text(block: object) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "content": list()} as tool_result:
             parts: Final = _list_items(tool_result.get("content"))
-            return {**tool_result, "content": [part for part in parts if _non_str_text(part) is None]}
+            return {**tool_result, "content": [part for part in parts if not _is_non_string_text(part)]}
         case _:
             return block
 
