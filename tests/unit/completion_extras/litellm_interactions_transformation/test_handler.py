@@ -1,20 +1,36 @@
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Final
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.completion_extras.litellm_interactions_transformation import (
     InteractionsToCompletionBridgeHandler,
 )
+from litellm.exceptions import (
+    APIConnectionError,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    RateLimitError,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteractionsConfig
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import CallTypes, Choices, ModelResponse
+
+
+_OBJ_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _logged_original_response(log_obj: Logging) -> str:
+    details: Final = _OBJ_MAP.validate_python(log_obj.model_call_details)  # pyright: ignore[reportAny]  # Logging.model_call_details is untyped dict[str, Any]
+    return str(details.get("original_response", ""))
 
 
 def _logging_stub(model: str, *, stream: bool = False) -> Logging:
@@ -140,14 +156,15 @@ async def test_streaming_error_reads_unconsumed_response_body_into_provider_exce
 
     async_client: Final = AsyncHTTPHandler()
     async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(failing_stream_transport))
+    log_obj: Final = _logging_stub("gemini-3-flash-preview", stream=True)
 
     bridge: Final = InteractionsToCompletionBridgeHandler()
-    with pytest.raises(BaseLLMException) as exc_info:
+    with pytest.raises(RateLimitError) as exc_info:
         await bridge.acompletion(
             model="gemini-3-flash-preview",
             messages=[{"role": "user", "content": "ping"}],
             model_response=ModelResponse(id="fallback"),
-            logging_obj=_logging_stub("gemini-3-flash-preview", stream=True),
+            logging_obj=log_obj,
             optional_params={"stream": True},
             litellm_params={},
             api_key="test-gemini-key",
@@ -157,7 +174,11 @@ async def test_streaming_error_reads_unconsumed_response_body_into_provider_exce
         )
 
     assert exc_info.value.status_code == 429
+    assert getattr(exc_info.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(exc_info.value, "llm_provider", None) == "gemini"
+    assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
     assert "Quota exceeded for interactions" in str(exc_info.value)
+    assert "Quota exceeded for interactions" in _logged_original_response(log_obj)
 
 
 def test_gemini_sync_streaming_yields_custom_stream_wrapper() -> None:
@@ -173,13 +194,14 @@ def test_gemini_sync_streaming_yields_custom_stream_wrapper() -> None:
 
     sync_client: Final = HTTPHandler()
     sync_client.client = httpx.Client(transport=httpx.MockTransport(stream_transport))
+    log_obj: Final = _logging_stub("gemini-3-flash-preview", stream=True)
 
     bridge: Final = InteractionsToCompletionBridgeHandler()
     stream_resp: Final = bridge.completion(
         model="gemini-3-flash-preview",
         messages=[{"role": "user", "content": "ping"}],
         model_response=ModelResponse(id="fallback"),
-        logging_obj=_logging_stub("gemini-3-flash-preview", stream=True),
+        logging_obj=log_obj,
         optional_params={"stream": True},
         litellm_params={},
         api_key="test-gemini-key",
@@ -189,5 +211,127 @@ def test_gemini_sync_streaming_yields_custom_stream_wrapper() -> None:
     )
 
     assert isinstance(stream_resp, CustomStreamWrapper)
+    assert _logged_original_response(log_obj) == "first stream response received"
     emitted: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream_resp)
     assert emitted == "STREAM_OK"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_cls"),
+    (
+        (400, BadRequestError),
+        (401, AuthenticationError),
+        (429, RateLimitError),
+        (500, InternalServerError),
+    ),
+)
+def test_sync_http_status_errors_map_to_litellm_exceptions_with_model_and_provider(
+    status_code: int,
+    expected_cls: type[Exception],
+) -> None:
+    def failing_transport(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"error": {"message": f"HTTP {status_code} failure"}})
+
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=httpx.MockTransport(failing_transport))
+    log_obj: Final = _logging_stub("gemini-3-flash-preview")
+    bridge: Final = InteractionsToCompletionBridgeHandler()
+
+    with pytest.raises(expected_cls) as exc_info:
+        bridge.completion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=log_obj,
+            optional_params={},
+            litellm_params={},
+            api_key="test-gemini-key",
+            client=sync_client,
+            custom_llm_provider="gemini",
+            stream=False,
+        )
+
+    assert getattr(exc_info.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(exc_info.value, "llm_provider", None) == "gemini"
+    assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
+    assert f"HTTP {status_code} failure" in _logged_original_response(log_obj)
+
+
+@pytest.mark.asyncio
+async def test_connect_error_and_non_raising_4xx_response_map_cleanly_sync_and_async() -> None:
+    def connect_fail(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("DNS lookup failed", request=req)
+
+    def raw_400(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "Invalid generation_config"}})
+
+    sync_conn_client: Final = HTTPHandler()
+    sync_conn_client.client = httpx.Client(transport=httpx.MockTransport(connect_fail))
+    sync_conn_log: Final = _logging_stub("gemini-3-flash-preview")
+    bridge: Final = InteractionsToCompletionBridgeHandler()
+
+    with pytest.raises(APIConnectionError, match="DNS lookup failed") as sync_conn_exc:
+        bridge.completion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=sync_conn_log,
+            api_key="test-gemini-key",
+            client=sync_conn_client,
+            custom_llm_provider="gemini",
+        )
+    assert getattr(sync_conn_exc.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(sync_conn_exc.value, "llm_provider", None) == "gemini"
+    assert isinstance(sync_conn_exc.value.__cause__, httpx.ConnectError)
+    assert "DNS lookup failed" in _logged_original_response(sync_conn_log)
+
+    async_conn_log: Final = _logging_stub("gemini-3-flash-preview")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(connect_fail)) as async_conn_client:
+        with pytest.raises(APIConnectionError, match="DNS lookup failed") as async_conn_exc:
+            await bridge.acompletion(
+                model="gemini-3-flash-preview",
+                messages=[{"role": "user", "content": "ping"}],
+                model_response=ModelResponse(id="fallback"),
+                logging_obj=async_conn_log,
+                api_key="test-gemini-key",
+                client=async_conn_client,
+                custom_llm_provider="gemini",
+            )
+    assert getattr(async_conn_exc.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(async_conn_exc.value, "llm_provider", None) == "gemini"
+    assert isinstance(async_conn_exc.value.__cause__, httpx.ConnectError)
+    assert "DNS lookup failed" in _logged_original_response(async_conn_log)
+
+    sync_raw_log: Final = _logging_stub("gemini-3-flash-preview")
+    with (
+        httpx.Client(transport=httpx.MockTransport(raw_400)) as non_raising_sync,
+        pytest.raises(BadRequestError, match="Invalid generation_config") as sync_400_exc,
+    ):
+        bridge.completion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=sync_raw_log,
+            api_key="test-gemini-key",
+            client=non_raising_sync,
+            custom_llm_provider="gemini",
+        )
+    assert getattr(sync_400_exc.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(sync_400_exc.value, "llm_provider", None) == "gemini"
+    assert "Invalid generation_config" in _logged_original_response(sync_raw_log)
+
+    async_raw_log: Final = _logging_stub("gemini-3-flash-preview")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(raw_400)) as non_raising_async:
+        with pytest.raises(BadRequestError, match="Invalid generation_config") as async_400_exc:
+            await bridge.acompletion(
+                model="gemini-3-flash-preview",
+                messages=[{"role": "user", "content": "ping"}],
+                model_response=ModelResponse(id="fallback"),
+                logging_obj=async_raw_log,
+                api_key="test-gemini-key",
+                client=non_raising_async,
+                custom_llm_provider="gemini",
+            )
+    assert getattr(async_400_exc.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(async_400_exc.value, "llm_provider", None) == "gemini"
+    assert "Invalid generation_config" in _logged_original_response(async_raw_log)
