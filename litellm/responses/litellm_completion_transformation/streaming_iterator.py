@@ -9,6 +9,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
 from litellm.responses.litellm_completion_transformation.custom_tools import (
@@ -26,7 +27,11 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, stamp_responses_usage_cost
+from litellm.responses.streaming_iterator import (
+    ResponsesAPIStreamingIterator,
+    dispatch_stream_success,
+    stamp_responses_usage_cost,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
@@ -119,6 +124,10 @@ def _delta_carries_reasoning_and_answer(delta: ChatCompletionDelta) -> bool:
     return has_reasoning and bool(delta.content or delta.tool_calls)
 
 
+def _logged_by_this_stream(_assembled: object) -> None:
+    return None
+
+
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     """
     Async iterator for processing streaming responses from the Responses API.
@@ -132,9 +141,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
         litellm_metadata: dict | None = None,
+        logs_completion: bool = False,
     ):
+        """``logs_completion`` makes this stream, not the chat stream it wraps, log the request as a Responses row."""
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
+        self._logs_completion = logs_completion
+        if logs_completion:
+            litellm_custom_stream_wrapper.hand_completion_to(_logged_by_this_stream)
         self.request_input: str | ResponseInputParam = request_input
         self.responses_api_request: ResponsesAPIOptionalRequestParams = responses_api_request
         self.custom_llm_provider: str | None = custom_llm_provider
@@ -143,7 +157,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
         self.finished: bool = False
-        self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
+        self.litellm_logging_obj: LiteLLMLoggingObj = litellm_custom_stream_wrapper.logging_obj
         self.sent_response_created_event: bool = False
         self.sent_response_in_progress_event: bool = False
         self.sent_output_item_added_event: bool = False
@@ -1120,6 +1134,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # Latch so wrappers (FallbackResponsesStreamWrapper) + proxy
             # container-ownership hook can read completed_response.
             self.completed_response = response_completed_event
+            if self._logs_completion:
+                dispatch_stream_success(
+                    self.litellm_logging_obj,
+                    response_completed_event,
+                    start_time=None,
+                    end_time=None,
+                    cache_hit=None,
+                    is_async=not sync_mode,
+                )
             return response_completed_event
         else:
             if sync_mode:
@@ -1492,6 +1515,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
         self.litellm_custom_stream_wrapper.bill_failure_after_earlier_rounds(earlier)
+
+    def log_rounds_as_chat(self) -> None:
+        """An MCP auto-execute bills its rounds from each chat stream's assembled response, so the chat stream logs."""
+        if self._logs_completion:
+            self._logs_completion = False
+            self.litellm_custom_stream_wrapper.take_completion_back()
 
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """

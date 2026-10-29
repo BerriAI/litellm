@@ -1245,3 +1245,134 @@ async def test_session_lookup_follows_the_owner_across_keys_and_keeps_ownerless_
 
     assert await _history_request_ids(sqlite_db, "alice-new-key") == ["alice-old-key", "alice-new-key"]
     assert await _history_request_ids(sqlite_db, "ownerless-2") == ["ownerless-2"]
+
+
+def _text(content: object) -> object:
+    if isinstance(content, list):
+        return "".join(part["text"] for part in content)
+    return content
+
+
+def _responses_spend_log(request_id: str, session_id: str, prompt: str, output: list[dict[str, object]]) -> dict:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": session_id,
+        "proxy_server_request": {"input": [{"role": "user", "content": prompt}], "model": "claude-bridge"},
+        "response": {"id": request_id, "object": "response", "status": "completed", "output": output},
+    }
+
+
+@pytest.mark.asyncio
+async def test_message_history_reads_responses_shaped_rows_next_to_chat_shaped_rows():
+    session_id = "0f6f2d8e-6c8a-4b55-9a39-3d0b1f3c9e11"
+    fake_prisma_client = _FakePrismaClient(
+        results=[
+            [
+                _spend_log("chatcmpl-3333", session_id, "My favorite color is chartreuse.", "Got it."),
+                _responses_spend_log(
+                    "resp_4444",
+                    session_id,
+                    "What is the weather in Lisbon?",
+                    [
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "Let me check.", "annotations": []}],
+                        },
+                        {
+                            "type": "function_call",
+                            "id": "fc_1",
+                            "call_id": "call_weather",
+                            "name": "get_weather",
+                            "arguments": '{"city": "Lisbon"}',
+                        },
+                    ],
+                ),
+            ]
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id("resp_4444")
+
+    messages: Final = result["messages"]
+    assert [(message.get("role"), _text(message.get("content"))) for message in messages[:4]] == [
+        ("user", "My favorite color is chartreuse."),
+        ("assistant", "Got it."),
+        ("user", "What is the weather in Lisbon?"),
+        ("assistant", "Let me check."),
+    ]
+    tool_calls: Final = [call for message in messages[3:] for call in message.get("tool_calls") or []]
+    assert [(call["id"], call["function"]["name"], call["function"]["arguments"]) for call in tool_calls] == [
+        ("call_weather", "get_weather", '{"city": "Lisbon"}')
+    ]
+
+
+_WEB_SEARCH_RESULT: Final = {
+    "type": "web_search_tool_result",
+    "tool_use_id": "srvtoolu_1",
+    "content": [{"type": "web_search_result", "url": "https://x.com", "title": "X", "encrypted_content": "EC"}],
+}
+
+
+def _bridged_anthropic_web_search_turn() -> dict[str, object]:
+    """A Claude turn served through the Responses to chat bridge, stored as its Responses object."""
+    return {
+        "id": "resp_1",
+        "object": "response",
+        "output": [
+            {
+                "id": "ws_srvtoolu_1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {
+                    "type": "search",
+                    "query": "weather sf",
+                    "sources": [{"type": "url", "url": "https://x.com"}],
+                },
+            },
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "It is sunny.", "annotations": []}],
+            },
+        ],
+        "provider_specific_fields": {"web_search_results": [_WEB_SEARCH_RESULT]},
+    }
+
+
+def test_message_history_replays_a_bridged_anthropic_web_search_as_server_tool_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    history: Final = ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+        spend_log={"request_id": "resp_1", "response": _bridged_anthropic_web_search_turn()},
+        proxy_server_request_dict={"input": "weather in sf?"},
+        chat_completion_message_history=[],
+    )
+    anthropic_messages: Final = anthropic_messages_pt(
+        messages=history, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assert [message["role"] for message in anthropic_messages] == ["user", "assistant"]
+    assistant_content: Final = anthropic_messages[1]["content"]
+    assert [block["type"] for block in assistant_content] == ["text", "server_tool_use", "web_search_tool_result"]
+    assert assistant_content[1]["id"] == "srvtoolu_1"
+    assert assistant_content[1]["input"] == {"query": "weather sf"}
+    assert assistant_content[2]["content"] == _WEB_SEARCH_RESULT["content"]
+
+
+def test_message_history_keeps_a_web_search_without_a_stored_result_as_text():
+    turn: Final = {**_bridged_anthropic_web_search_turn(), "provider_specific_fields": None}
+
+    history: Final = ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+        spend_log={"request_id": "resp_1", "response": turn},
+        proxy_server_request_dict=None,
+        chat_completion_message_history=[],
+    )
+
+    assert str(_text_of(history[0]["content"])).startswith("Hosted web search: ")

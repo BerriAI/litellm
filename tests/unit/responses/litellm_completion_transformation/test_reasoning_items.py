@@ -58,5 +58,7 @@ def test_a_reasoning_item_is_litellm_minted_by_its_id_or_by_its_encoded_thinking
             "encrypted_content": A_PROVIDER_OWNED_ENCRYPTED_BLOB,
         }
     )
-    assert not is_litellm_minted_reasoning_item({"type": "message", "id": mint_reasoning_item_id(), "role": "assistant"})
+    assert not is_litellm_minted_reasoning_item(
+        {"type": "message", "id": mint_reasoning_item_id(), "role": "assistant"}
+    )
     assert not is_litellm_minted_reasoning_item("a bare string input")

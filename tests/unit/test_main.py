@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 import urllib.parse
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -20,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError, AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -45,10 +46,12 @@ from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.native import chat as native_chat
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
+    CallTypes,
     Delta,
     ModelResponseStream,
     StandardCallbackDynamicParams,
@@ -517,7 +520,7 @@ def test_drop_anthropic_only_tool_keys_strips_tool_and_function_levels(key: str)
         "opaque_tool",
     ]
 
-    cleaned = litellm_main._drop_anthropic_only_tool_keys(tools=tools)
+    cleaned = native_chat._drop_anthropic_only_tool_keys(tools=tools)
 
     assert cleaned == [
         {"type": "function", "name": "example_tool", "function": {"name": "example_tool"}},
@@ -551,6 +554,98 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     sent_tool: Final = json.loads(respx_mock.calls[0].request.content)["tools"][0]
     assert "eager_input_streaming" not in sent_tool
     assert sent_tool["function"]["name"] == "write_file"
+
+
+class _SyncSuccessCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []  # mutable-ok: test recorder of success-callback events
+
+    def log_success_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object):
+        self.calls.append(str(kwargs.get("call_type")))
+
+
+def _settled_success_calls(counter: _SyncSuccessCounter, expected: int) -> int:
+    for _ in range(50):
+        if len(counter.calls) >= expected:
+            break
+        time.sleep(0.02)
+    return len(counter.calls)
+
+
+class _DeploymentHookCounter(CustomLogger):
+    call_types: tuple[str, ...] = ()
+
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, object], call_type: CallTypes | None) -> None:
+        self.call_types = (*self.call_types, str(call_type))
+
+
+@pytest.mark.asyncio
+async def test_responses_mode_model_without_a_responses_api_stays_on_chat(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    counter: Final = _DeploymentHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    litellm.register_model(
+        {"groq/responses-only-model": {"litellm_provider": "groq", "mode": "responses", "max_tokens": 100}}
+    )
+    api_base: Final = "https://example.invalid/openai/v1"
+    chat_route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="groq/responses-only-model",
+        api_base=api_base,
+        api_key="sk-x",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.id == openai_api_response["id"]
+    assert chat_route.call_count == 1
+    assert counter.call_types == ("CallTypes.acompletion",)
+
+
+def test_execute_chat_calls_the_provider_without_logging(
+    respx_mock: respx.MockRouter, openai_api_response, monkeypatch: pytest.MonkeyPatch
+):
+    counter: Final = _SyncSuccessCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    api_base: Final = "http://localhost:12347/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+    logging_obj: Final = LiteLLMLogging(
+        model="hosted_vllm/served-model",
+        messages=messages,
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="execute-chat-call",
+        function_id="execute-chat-fn",
+    )
+
+    response: Final = litellm_main.execute_chat(
+        model="hosted_vllm/served-model",
+        messages=list(messages),
+        kwargs={"api_base": api_base, "api_key": "sk-x", "litellm_logging_obj": logging_obj},
+        non_default_params={},
+        control_options=ControlOptions(),
+        prompt_id=None,
+        prompt_variables=None,
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.id == openai_api_response["id"]
+    assert mock_route.call_count == 1
+    assert _settled_success_calls(counter, expected=1) == 0
+
+    litellm.completion(model="hosted_vllm/served-model", messages=messages, api_base=api_base, api_key="sk-x")
+    assert _settled_success_calls(counter, expected=1) == 1
 
 
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
@@ -2591,7 +2686,7 @@ def test_completion_optional_params_base_model(
 
     Regression for #29618: overwriting ``model`` with a friendly ``base_model``
     label made Bedrock drop ``tools``/``tool_choice`` under ``drop_params``."""
-    with patch("litellm.main.get_optional_params") as mock_get_optional_params:
+    with patch("litellm.native.chat.get_optional_params") as mock_get_optional_params:
         mock_get_optional_params.return_value = MagicMock()
 
         import litellm
@@ -5683,7 +5778,7 @@ def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_
 def test_aiohttp_openai_warns_only_when_http2_enabled(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, http2_on: bool
 ):
-    from litellm.main import base_llm_aiohttp_handler
+    from litellm.native.chat_providers.handlers import base_llm_aiohttp_handler
 
     monkeypatch.setattr(litellm, "http2", http2_on)
     monkeypatch.delenv("LITELLM_HTTP2", raising=False)
@@ -5984,7 +6079,6 @@ def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
 def test_acompletion_params():
     import inspect
 
-    from litellm.types.completion import CompletionRequest
 
     acompletion_params_odict = inspect.signature(acompletion).parameters
     completion_params_dict = inspect.signature(completion).parameters

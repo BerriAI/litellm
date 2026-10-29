@@ -213,6 +213,7 @@ from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.messages.held_stream_completion import HeldStreamCompletion
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
@@ -326,6 +327,7 @@ class AnthropicAdapter:
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
         completion_request: Mapping[str, object] | None = None,
+        held_completion: "HeldStreamCompletion | None" = None,
     ) -> AsyncIterator[bytes] | Iterator[bytes] | None:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -355,6 +357,7 @@ class AnthropicAdapter:
             litellm_logging_obj=litellm_logging_obj,
             safeguards_evaluator=safeguards_evaluator,
             completion_request=completion_request,
+            held_completion=held_completion,
         )
         # Return the SSE-wrapped version for proper event formatting.
         if is_async:
@@ -1620,7 +1623,8 @@ class LiteLLMAnthropicMessagesAdapter:
             else translated_finish_reason
         )
         # extract usage
-        usage: Final[Usage] = getattr(response, "usage")
+        # A provider reply with no usage block leaves the response without one; it reads as zero tokens.
+        usage: Final[Usage] = getattr(response, "usage", None) or Usage()
         message_usage: Final = self.translate_openai_usage_to_anthropic_usage(usage)
         polyfill_iterations: Final = polyfill_result.iterations_usage if polyfill_result is not None else None
         anthropic_usage: Final[AnthropicUsage] = (

@@ -20,7 +20,7 @@ class TestGetFileContentsFromS3:
     """Test suite for S3 config loading functionality."""
 
     @patch("boto3.client")
-    @patch("litellm.main.bedrock_converse_chat_completion")
+    @patch("litellm.native.chat_providers.handlers.bedrock_converse_chat_completion")
     @patch("yaml.safe_load")
     def test_get_file_contents_from_s3_no_temp_file_creation(
         self, mock_yaml_load, mock_bedrock, mock_boto3_client

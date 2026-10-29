@@ -9251,11 +9251,11 @@ def validate_and_fix_openai_messages(messages: list):
     return validate_chat_completion_user_messages(messages=new_messages)
 
 
-def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
+def validate_and_fix_openai_tools(tools: list | None) -> list[dict[str, object]] | None:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
-    new_tools: Final = []
+    new_tools: Final[list[dict[str, object]]] = []
     if tools is None:
         return tools
     for tool in tools:
@@ -9343,9 +9343,9 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 
 
 def validate_chat_completion_tool_choice(
-    tool_choice: dict | str | None,
+    tool_choice: dict[str, object] | str | None,
     model: str = "",
-) -> dict | str | None:
+) -> dict[str, object] | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
 
@@ -9376,7 +9376,7 @@ def validate_chat_completion_tool_choice(
     )
 
 
-def validate_openai_optional_params(stop: str | list[str] | None = None, **kwargs) -> str | list[str] | None:
+def validate_openai_optional_params(stop: str | list[str] | None = None, **kwargs: object) -> str | list[str] | None:
     """
     Validates and fixes OpenAI optional parameters.
 
@@ -11426,8 +11426,8 @@ def reasoning_effort_with_summary_alias(
 
 
 def strip_reasoning_summary_aliases_from_optional_params(
-    optional_params: dict,
-) -> tuple[dict, object | None]:
+    optional_params: Mapping[str, object],
+) -> tuple[dict[str, object], object | None]:
     """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
     op: Final = dict(optional_params)
     rs_val = op.pop("reasoningSummary", None)

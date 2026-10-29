@@ -4,7 +4,7 @@ Handler for transforming responses api requests to litellm.completion requests
 
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -30,6 +30,9 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse
 
+if TYPE_CHECKING:
+    from litellm.native.chat_plan import PlannedChat
+
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
@@ -53,6 +56,29 @@ def _bridged_request(
             else responses_api_request
         ),
     )
+
+
+def _plan_bridged_chat(request: Mapping[str, object]) -> "PlannedChat | None":
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.native.chat_plan import plan_chat
+
+    logging_obj: Final = request.get("litellm_logging_obj")
+    return plan_chat(request, logging_obj) if isinstance(logging_obj, Logging) else None
+
+
+def _price_planned_chat_response(
+    request: Mapping[str, object], response: ModelResponse | litellm.CustomStreamWrapper
+) -> None:
+    """Prices the chat response as `acompletion` would have, before it becomes a Responses object."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = request.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging):
+        return
+    if isinstance(response, ModelResponse):
+        logging_obj.price_bridged_provider_response(response)
+    else:
+        logging_obj.price_bridged_provider_stream(response)
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -116,9 +142,17 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+        completion_args: Final = {**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True}
+
+        from litellm.native.chat_plan import execute_planned_chat
+
+        planned_chat: Final = _plan_bridged_chat(_REQUEST_KWARGS_ADAPTER.validate_python(completion_args))
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = (
+            litellm.completion(**completion_args) if planned_chat is None else execute_planned_chat(planned_chat)
         )
+
+        if planned_chat is not None:
+            _price_planned_chat_response(completion_args, litellm_completion_response)
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
@@ -139,6 +173,7 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                logs_completion=planned_chat is not None,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
@@ -208,9 +243,20 @@ class LiteLLMCompletionTransformationHandler:
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+        acompletion_args: Final = {**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True}
+
+        from litellm.native.chat_plan import aexecute_planned_chat
+
+        planned_chat: Final = _plan_bridged_chat(_REQUEST_KWARGS_ADAPTER.validate_python(acompletion_args))
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = (
+            await litellm.acompletion(**acompletion_args)
+            if planned_chat is None
+            else await aexecute_planned_chat(planned_chat)
         )
+
+        if planned_chat is not None:
+            _price_planned_chat_response(acompletion_args, litellm_completion_response)
+
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
@@ -230,5 +276,6 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                logs_completion=planned_chat is not None,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")

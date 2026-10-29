@@ -2,13 +2,16 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, groupby
 from typing import TYPE_CHECKING, Any, Final, cast
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -41,6 +44,7 @@ else:
 # Cold Storage Handler
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
+_STORED_REQUEST: Final = TypeAdapter(dict[str, object])
 ########################################################
 
 
@@ -178,6 +182,82 @@ def _instruction_items_before(
             for request in proxy_server_requests[: start.index]
             if request is not None
         )
+    )
+
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _stored_web_search_results(stored_response: object) -> Sequence[Mapping[str, object]]:
+    """The Anthropic ``web_search_tool_result`` blocks a bridged response kept in its ``provider_specific_fields``."""
+    response: Final = as_str_mapping(stored_response)
+    fields: Final = None if response is None else as_str_mapping(response.get("provider_specific_fields"))
+    results: Final = None if fields is None else fields.get("web_search_results")
+    if not isinstance(results, list):
+        return ()
+    return tuple(result for result in map(as_str_mapping, _OBJECT_LIST.validate_python(results)) if result is not None)
+
+
+def _server_web_search_call_id(item: object, web_search_results: Sequence[Mapping[str, object]]) -> str | None:
+    """The ``server_tool_use`` id behind a stored ``web_search_call`` item, when its result block was kept."""
+    if not isinstance(item, Mapping) or item.get("type") != "web_search_call":
+        return None
+    item_id: Final = item.get("id")
+    call_id: Final = item_id.removeprefix("ws_") if isinstance(item_id, str) else None
+    if call_id and any(result.get("tool_use_id") == call_id for result in web_search_results):
+        return call_id
+    return None
+
+
+def _server_web_search_message(items: Sequence[object], web_search_results: Sequence[Mapping[str, object]]) -> Message:
+    """Replay stored web search calls as the assistant tool calls the chat completion carried,
+    so an Anthropic target rebuilds its ``server_tool_use`` / ``web_search_tool_result`` blocks."""
+    calls: Final = tuple(
+        (call_id, item)
+        for item in map(as_str_mapping, items)
+        if item is not None and (call_id := _server_web_search_call_id(item, web_search_results)) is not None
+    )
+    call_ids: Final = frozenset(call_id for call_id, _ in calls)
+    return Message(
+        role="assistant",
+        content=None,
+        tool_calls=[
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": "web_search", "arguments": json.dumps({"query": _web_search_query(item)})},
+            }
+            for call_id, item in calls
+        ],
+        provider_specific_fields={
+            "web_search_results": [result for result in web_search_results if result.get("tool_use_id") in call_ids]
+        },
+    )
+
+
+def _web_search_query(item: Mapping[str, object]) -> str:
+    action: Final = item.get("action")
+    query: Final = action.get("query") if isinstance(action, Mapping) else None
+    return query if isinstance(query, str) else ""
+
+
+_CHAT_MESSAGE_CONTENT_ITEM_TYPES: Final = ("reasoning", "message")
+
+
+def _in_chat_message_order(
+    output: ResponseInputParam, web_search_results: Sequence[Mapping[str, object]]
+) -> ResponseInputParam:
+    """A turn with server web searches in the order its chat completion message replayed it: reasoning, then text,
+    then the tool calls as they happened. Any other turn keeps its output order."""
+    if not any(_server_web_search_call_id(item, web_search_results) is not None for item in output):
+        return output
+    return sorted(
+        output,
+        key=lambda item: (
+            _CHAT_MESSAGE_CONTENT_ITEM_TYPES.index(item_type)
+            if (item_type := item.get("type")) in _CHAT_MESSAGE_CONTENT_ITEM_TYPES
+            else len(_CHAT_MESSAGE_CONTENT_ITEM_TYPES)
+        ),
     )
 
 
@@ -371,15 +451,23 @@ class ResponsesSessionHandler:
         ############################################################
         _response_output: Final[object] = spend_log.get("response", "{}")
         if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
-            chat_completion_message_history.extend(
-                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=bridge_client_tool_search(responses_api_output, None).input,
-                    responses_api_request={},
-                    replay_reasoning=True,
-                    item_cache_control=item_cache_control,
-                    only_since_compaction=True,
+            web_search_results: Final = _stored_web_search_results(_response_output)
+            for is_server_web_search, items in groupby(
+                _in_chat_message_order(responses_api_output, web_search_results),
+                key=lambda item: _server_web_search_call_id(item, web_search_results) is not None,
+            ):
+                if is_server_web_search:
+                    chat_completion_message_history.append(_server_web_search_message(tuple(items), web_search_results))
+                    continue
+                chat_completion_message_history.extend(
+                    LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                        input=bridge_client_tool_search(list(items), None).input,
+                        responses_api_request={},
+                        replay_reasoning=True,
+                        item_cache_control=item_cache_control,
+                        only_since_compaction=True,
+                    )
                 )
-            )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response: Final = ModelResponse(**_response_output)
@@ -397,30 +485,23 @@ class ResponsesSessionHandler:
         Get the parsed proxy server request from the spend log
         """
         proxy_server_request: Final[str | dict] = spend_log.get("proxy_server_request") or "{}"
-        proxy_server_request_dict: dict[str, object] | None = None
-        if isinstance(proxy_server_request, dict):
-            proxy_server_request_dict = proxy_server_request
-        else:
-            proxy_server_request_dict = json.loads(proxy_server_request)
+        proxy_server_request_dict: Final = _STORED_REQUEST.validate_python(
+            proxy_server_request if isinstance(proxy_server_request, dict) else json.loads(proxy_server_request)
+        )
 
         ############################################################
         # Check if user has setup cold storage for session handling
         ############################################################
-        if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
-            # Try to get cold storage object key from spend log metadata
-            _proxy_server_request_dict: dict | None = None
-            cold_storage_object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
-            if cold_storage_object_key:
-                # Use the object key directly from metadata
-                _proxy_server_request_dict = (
-                    await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage_with_object_key(
-                        object_key=cold_storage_object_key,
-                    )
-                )
-            if _proxy_server_request_dict:
-                proxy_server_request_dict = _proxy_server_request_dict
-
-        return proxy_server_request_dict
+        if not ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
+            return proxy_server_request_dict
+        cold_storage_object_key: Final = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
+        if not cold_storage_object_key:
+            return proxy_server_request_dict
+        return (
+            await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage_with_object_key(
+                object_key=cold_storage_object_key,
+            )
+        ) or proxy_server_request_dict
 
     @staticmethod
     def _get_cold_storage_object_key_from_spend_log(
@@ -462,13 +543,9 @@ class ResponsesSessionHandler:
         """
         verbose_proxy_logger.debug("inside get_proxy_server_request_from_cold_storage_with_object_key...")
 
-        proxy_server_request_dict: Final = (
-            await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage_with_object_key(
-                object_key=object_key,
-            )
+        return await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage_with_object_key(
+            object_key=object_key,
         )
-
-        return proxy_server_request_dict
 
     @staticmethod
     def _should_check_cold_storage_for_full_payload(

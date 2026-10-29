@@ -23,16 +23,14 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
         choices=[
             litellm.utils.Choices(
                 index=0,
-                message=litellm.utils.Message(
-                    role="assistant", content="Test response"
-                ),
+                message=litellm.utils.Message(role="assistant", content="Test response"),
                 finish_reason="stop",
             )
         ],
     )
 
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
-        mock_acompletion.return_value = mock_response
+    with patch("litellm.native.chat_plan.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
+        mock_chat.return_value = mock_response
 
         request_model = "gemini/gemini-2.5-flash"
         await litellm.aresponses(
@@ -41,11 +39,10 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
             tools=[{"type": "web_search_preview", "search_context_size": "low"}],
         )
 
-        # Verify that acompletion was called
-        assert mock_acompletion.called
+        assert mock_chat.called
 
-        # Get the call arguments
-        call_args, call_kwargs = mock_acompletion.call_args
+        plan = mock_chat.call_args.args[0]
+        call_kwargs = {**plan.kwargs, **plan.named}
 
         # Verify the expected parameters were passed
         print(
@@ -65,5 +62,5 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
             call_kwargs["messages"][0]["content"]
             == "what is the latest version of supabase python package and when was it released?"
         )
-        assert "tools" not in call_kwargs
-        assert "tool_choice" not in call_kwargs
+        assert call_kwargs.get("tools") is None
+        assert call_kwargs.get("tool_choice") is None

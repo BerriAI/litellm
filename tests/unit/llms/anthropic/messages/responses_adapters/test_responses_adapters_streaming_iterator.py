@@ -8,7 +8,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from types import SimpleNamespace
 
 import anyio
@@ -18,10 +18,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
+from litellm.llms.anthropic.messages.held_stream_completion import HeldStreamCompletion
 from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_superseded_attempt
 from litellm.llms.anthropic.messages.native.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
@@ -818,3 +820,56 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         asyncio.run(_disconnect_mid_hook())
         assert len(finished) == 1
+
+
+class _AsyncSuccessRecorder(CustomLogger):
+    calls: tuple[object, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.calls = (*self.calls, response_obj)
+
+
+def test_a_stream_that_fails_after_the_executor_completed_logs_no_success_row():
+    recorder = _AsyncSuccessRecorder()
+    logging_obj = LitellmLogging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="fails-after-complete",
+        function_id="fails-after-complete",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    held = HeldStreamCompletion(logging_obj)
+    completed = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        status="completed",
+        model="m",
+        output=[],
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+    )
+
+    async def _gen() -> AsyncIterator[dict[str, object]]:
+        yield {"type": "response.created"}
+        held.take(completed)
+        yield {"type": "response.completed", "response": completed}
+        raise ConnectionResetError("Response payload is not completed")
+
+    async def _run() -> list[bytes]:
+        wrapper = AnthropicResponsesStreamWrapper(
+            responses_stream=_gen(), model="m", litellm_logging_obj=logging_obj, held_completion=held
+        )
+        frames: list[bytes] = [frame async for frame in wrapper.async_anthropic_sse_wrapper()]
+        await asyncio.sleep(0.2)
+        return frames
+
+    frames = asyncio.run(_run())
+
+    assert frames[-1].startswith(b"event: error")
+    assert recorder.calls == ()

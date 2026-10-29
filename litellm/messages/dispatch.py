@@ -3,9 +3,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.messages.native import handler as main
+from litellm.native.route_plan import NativeMessages, NativeResponses, plan_messages_route
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
@@ -86,16 +88,20 @@ def _resolved(request: NativeCall) -> tuple[str, str | None]:
 
 
 def _target(request: NativeCall, model: str, provider: str | None) -> Target:
-    requested_model: Final = str(request.resolved["model"])
-    model_info: Final = request.resolved.get("model_info")
     api_base: Final = request.resolved.get("api_base")
-    native_config: Final = main._native_messages_config(  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
-        model, provider, model_info, api_base if isinstance(api_base, str) else None
+    route: Final = plan_messages_route(
+        requested_model=str(request.resolved["model"]),
+        resolved_model=model,
+        custom_llm_provider=provider,
+        model_info=request.resolved.get("model_info"),
+        api_base=api_base if isinstance(api_base, str) else None,
+        compaction_requested=request.resolved.get("compaction") is not None,
+        force_chat_completions=bool(litellm.use_chat_completions_url_for_anthropic_messages),
+        stop_requested=bool(request.resolved.get("stop_sequences")),
     )
-    if native_config is not None:
+    if isinstance(route, NativeMessages):
         return Target.MESSAGES
-    compacting: Final = request.resolved.get("compaction") is not None
-    if not compacting and main._should_route_to_responses_api(provider, requested_model, model, model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
+    if isinstance(route, NativeResponses):
         return Target.RESPONSES
     return Target.CHAT_COMPLETIONS
 
