@@ -5,8 +5,10 @@ Utils used for litellm.transcription() and litellm.atranscription()
 import base64
 import binascii
 import hashlib
+import io
 import math
 import os
+import wave
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -444,3 +446,18 @@ def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
     if (audio[1] & _ADTS_SYNC_AND_LAYER_MASK) == _ADTS_SYNC_AND_LAYER:
         return _adts_aac_frame_media_type(audio)
     return _mpeg_audio_frame_media_type(audio)
+
+
+def _wav_frames(audio: bytes) -> bytes | None:
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            return wav.readframes(wav.getnframes())
+    except (wave.Error, EOFError):
+        return None
+
+
+def as_raw_pcm16_base64(media_type: str, audio_base64: str) -> str:
+    if media_type.partition(";")[0].strip().lower() != FILE_MIME_TYPES[FileType.WAV]:
+        return audio_base64
+    frames: Final = _wav_frames(base64.b64decode(audio_base64))
+    return audio_base64 if frames is None else base64.b64encode(frames).decode("ascii")
