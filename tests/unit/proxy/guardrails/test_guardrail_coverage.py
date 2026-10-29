@@ -934,30 +934,43 @@ def _google_text_moderation_flagging_finance():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "embedding_input"),
-    [("aembedding", "stocks"), ("embedding", ["stocks", "mortgage"])],
+    ("call_type", "data"),
+    [
+        ("aembedding", {"model": "text-embedding-ada-002", "input": "stocks"}),
+        ("embedding", {"model": "text-embedding-ada-002", "input": ["stocks", "mortgage"]}),
+        ("allm_passthrough_route", {"model": "gigachat-embeddings", "endpoint": "embeddings", "input": ["stocks"]}),
+    ],
 )
 async def test_google_text_moderation_leaves_embedding_input_unmoderated(
-    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, embedding_input: str | list[str]
+    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, data: dict[str, object]
 ):
     guard: Final = _google_text_moderation_flagging_finance()
-    data: Final = {"model": "text-embedding-ada-002", "input": embedding_input}
 
-    assert await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type) is data
+    await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type)
+
     assert guard.client.moderated_texts == []
 
 
 @pytest.mark.asyncio
-async def test_google_text_moderation_still_blocks_chat_messages(user_api_key: UserAPIKeyAuth):
+@pytest.mark.parametrize(
+    ("call_type", "data"),
+    [
+        ("acompletion", {"model": "gpt-4o", "messages": [{"role": "user", "content": "stocks"}]}),
+        ("anthropic_messages", {"model": "claude", "messages": [{"role": "user", "content": "stocks"}]}),
+        ("aresponses", {"model": "gpt-4o", "input": "stocks"}),
+        (
+            "allm_passthrough_route",
+            {"model": "gigachat", "endpoint": "chat/completions", "messages": [{"role": "user", "content": "stocks"}]},
+        ),
+    ],
+)
+async def test_google_text_moderation_still_blocks_conversations(
+    user_api_key: UserAPIKeyAuth, call_type: CallTypesLiteral, data: dict[str, object]
+):
     guard: Final = _google_text_moderation_flagging_finance()
 
     with pytest.raises(HTTPException) as exc_info:
-        await guard.async_moderation_hook(
-            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "stocks"}]},
-            user_api_key_dict=user_api_key,
-            call_type="acompletion",
-        )
+        await guard.async_moderation_hook(data=data, user_api_key_dict=user_api_key, call_type=call_type)
 
     assert exc_info.value.status_code == 400
     assert guard.client.moderated_texts == ["stocks"]
-
