@@ -454,6 +454,98 @@ async def test_bedrock_max_completion_tokens_become_converse_max_tokens() -> Non
     assert request_body["inferenceConfig"] == {"maxTokens": 10}
 
 
+_CLAUDE_WINDOW: Final = {"litellm_provider": "bedrock_converse", "mode": "chat", "max_input_tokens": 2000}
+_CLAUDE_OUTPUT_CAP: Final = 500
+
+
+@pytest.mark.parametrize(
+    ("model", "cost_map_entry", "prompt", "params", "expected_inference_config"),
+    [
+        (
+            "anthropic.claude-window-test",
+            {**_CLAUDE_WINDOW, "max_output_tokens": _CLAUDE_OUTPUT_CAP},
+            "Hello!",
+            {},
+            {"maxTokens": _CLAUDE_OUTPUT_CAP},
+        ),
+        (
+            "anthropic.claude-window-test",
+            {**_CLAUDE_WINDOW, "max_output_tokens": _CLAUDE_OUTPUT_CAP},
+            "x" * (_CLAUDE_WINDOW["max_input_tokens"] - _CLAUDE_OUTPUT_CAP + 100),
+            {},
+            {},
+        ),
+        (
+            "anthropic.claude-window-test",
+            {**_CLAUDE_WINDOW, "max_output_tokens": _CLAUDE_OUTPUT_CAP},
+            "Hello!",
+            {"max_tokens": 10},
+            {"maxTokens": 10},
+        ),
+        (
+            "anthropic.claude-window-test",
+            {"litellm_provider": "bedrock_converse", "mode": "chat", "max_output_tokens": _CLAUDE_OUTPUT_CAP},
+            "Hello!",
+            {},
+            {},
+        ),
+        (
+            "mistral.window-test",
+            {**_CLAUDE_WINDOW, "max_output_tokens": _CLAUDE_OUTPUT_CAP},
+            "Hello!",
+            {},
+            {},
+        ),
+        ("anthropic.claude-unlisted-test-model", None, "Hello!", {}, {}),
+    ],
+    ids=[
+        "claude-gets-its-output-cap",
+        "prompt-that-could-overflow-the-window-keeps-bedrock-default",
+        "caller-max-tokens-wins",
+        "unknown-window-keeps-bedrock-default",
+        "non-claude-keeps-bedrock-default",
+        "unmapped-claude-keeps-bedrock-default",
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_converse_claude_defaults_max_tokens_to_its_mapped_output_cap(
+    model: str,
+    cost_map_entry: dict[str, object] | None,
+    prompt: str,
+    params: dict[str, int],
+    expected_inference_config: dict[str, int],
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if cost_map_entry is not None:
+        monkeypatch.setitem(litellm.model_cost, model, cost_map_entry)
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+            request=request,
+        )
+
+    await litellm.acompletion(
+        model=f"bedrock/converse/{model}",
+        messages=[{"role": "user", "content": prompt}],
+        aws_access_key_id="AKIAMAXTOKENKEY",
+        aws_secret_access_key="max-token-secret",
+        aws_region_name="us-west-2",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+        **params,
+    )
+
+    assert json.loads(requests[0].content)["inferenceConfig"] == expected_inference_config
+
+
 @pytest.mark.parametrize("parameter", ["top_k", "topK"])
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_nova_top_k_aliases_are_forwarded(parameter: str, respx_mock: respx.Router) -> None:

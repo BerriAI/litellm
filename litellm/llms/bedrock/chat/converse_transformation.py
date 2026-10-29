@@ -197,6 +197,31 @@ def _has_native_text_format(output_config: object) -> bool:
         return False
 
 
+def _mapped_context_window_and_max_output_tokens(model: str) -> tuple[int, int] | None:
+    try:
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="bedrock_converse")
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return None
+    context_window: Final = model_info.get("max_input_tokens")
+    max_output_tokens: Final = model_info.get("max_output_tokens")
+    if context_window is None or max_output_tokens is None:
+        return None
+    return context_window, max_output_tokens
+
+
+def _claude_default_max_tokens(model: str, request_content: object) -> Mapping[str, int]:
+    if not BedrockModelInfo.get_base_model(model).startswith("anthropic"):
+        return {}
+    limits: Final = _mapped_context_window_and_max_output_tokens(model)
+    if limits is None:
+        return {}
+    context_window, max_output_tokens = limits
+    prompt_tokens_upper_bound: Final = len(json.dumps(request_content, default=str))
+    if prompt_tokens_upper_bound + max_output_tokens > context_window:
+        return {}
+    return {"maxTokens": max_output_tokens}
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -2098,7 +2123,16 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         data: Final[CommonRequestObject] = {
-            "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
+            "inferenceConfig": self._transform_inference_params(
+                inference_params=(
+                    inference_params
+                    if "maxTokens" in inference_params
+                    else {
+                        **inference_params,
+                        **_claude_default_max_tokens(model, (messages, system_content_blocks, bedrock_tools)),
+                    }
+                )
+            ),
         }
         if additional_request_params:
             data["additionalModelRequestFields"] = additional_request_params
