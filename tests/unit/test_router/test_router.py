@@ -59,6 +59,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
+    _search_tool_support,
     Span,
 )
 from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
@@ -7938,6 +7939,86 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
     assert calls == [1]
 
 
+_MULTILINGUAL_PROMPT: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+
+
+def _context_limited_router(*served: str) -> litellm.Router:
+    limit: Final = (
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
+        + litellm.token_counter(model="prod", messages=_MULTILINGUAL_PROMPT)
+    ) // 2
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "prod",
+                "litellm_params": {"model": model, "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": limit},
+            }
+            for model in served
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+def test_pre_call_checks_count_a_group_of_one_openai_model_with_that_models_tokenizer():
+    router: Final = _context_limited_router("openai/gpt-6.1-sol")
+
+    kept: Final = router._pre_call_checks(
+        model="prod", healthy_deployments=router.get_model_list(model_name="prod"), messages=_MULTILINGUAL_PROMPT
+    )
+
+    assert len(kept) == 1
+
+
+def test_pre_call_checks_count_a_group_mixing_in_another_vendor_by_its_own_name():
+    router: Final = _context_limited_router("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="prod", healthy_deployments=router.get_model_list(model_name="prod"), messages=_MULTILINGUAL_PROMPT
+        )
+
+
+async def test_acount_pre_call_check_tokens_counts_a_group_of_one_openai_model_with_that_models_tokenizer():
+    router: Final = _context_limited_router("openai/gpt-6.1-sol")
+
+    count: Final = await router._acount_pre_call_check_tokens(
+        model="prod",
+        healthy_deployments=router.get_model_list(model_name="prod"),
+        messages=_MULTILINGUAL_PROMPT,
+        input=None,
+        request_kwargs=None,
+    )
+
+    assert count == litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
+
+
+async def test_a_wildcard_route_checks_the_context_window_with_the_requested_openai_models_tokenizer():
+    limit: Final = (
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
+        + litellm.token_counter(model="my-model", messages=_MULTILINGUAL_PROMPT)
+    ) // 2
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": limit},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    sync_response: Final = router.completion(
+        model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT, mock_response="ok"
+    )
+    async_response: Final = await router.acompletion(
+        model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT, mock_response="ok"
+    )
+
+    assert (sync_response.choices[0].message.content, async_response.choices[0].message.content) == ("ok", "ok")
+
+
 def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
     """
     An async caller counts off the event loop and passes the result in. _pre_call_checks
@@ -13435,6 +13516,80 @@ def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_r
     assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-1") == (["ultrafast"],)
     assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-2") == (["ultrafast"], None)
     assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"],)
+
+
+@pytest.mark.parametrize(
+    "litellm_params, model_info, expected",
+    [
+        ({"model": "anthropic/claude-fable-5-1"}, None, True),
+        ({"model": "bedrock/invoke/us.anthropic.claude-fable-5-1"}, None, True),
+        ({"model": "openai/gpt-6-astra"}, None, None),
+        ({"model": "gemini/gemini-3.8-flash"}, None, None),
+        ({"model": "sonar-pro", "api_base": "https://api.perplexity.ai"}, None, None),
+        ({"model": "gemini/gemini-3.8-flash"}, {"supports_search_tool": True}, True),
+        ({"model": "anthropic/claude-fable-5-1"}, {"supports_search_tool": False}, False),
+    ],
+    ids=[
+        "anthropic-defaults-on",
+        "bedrock-invoke-anthropic-defaults-on",
+        "openai-passthrough-unset",
+        "other-bridged-provider-unset",
+        "provider-inferred-from-api-base-unset",
+        "model-info-opt-in-wins",
+        "model-info-opt-out-wins",
+    ],
+)
+def test_get_search_tool_support_defaults_from_the_provider_and_lets_model_info_override(
+    litellm_params: dict[str, str], model_info: dict[str, bool] | None, expected: bool | None
+):
+    deployment: Final = {"model_name": "codex-model", "litellm_params": litellm_params}
+    router: Final = litellm.Router(model_list=[{**deployment, "model_info": model_info} if model_info else deployment])
+
+    assert router.get_search_tool_support("codex-model") == (expected,)
+
+
+def test_get_search_tool_support_reports_each_routable_deployment_of_the_group():
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "mixed", "litellm_params": {"model": "anthropic/claude-fable-5-1"}},
+            {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-6-astra"}},
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "anthropic/claude-fable-5-1", "api_base": "https://paused.example"},
+                "model_info": {"blocked": True, "supports_search_tool": False},
+            },
+        ]
+    )
+
+    assert router.get_search_tool_support("mixed") == (True, None)
+    assert router.get_search_tool_support("not-a-real-model") == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("provider", ["chatgpt", "github_copilot"])
+@pytest.mark.parametrize("explicit_provider", [False, True])
+async def test_search_tool_catalog_lookup_needs_no_credentials(
+    provider: str, explicit_provider: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "copilot"))
+    (tmp_path / "chatgpt").mkdir()
+    (tmp_path / "chatgpt" / "auth.json").write_text(
+        json.dumps({"access_token": "expired-access", "refresh_token": "test-refresh", "expires_at": 1})
+    )
+    (tmp_path / "copilot").mkdir()
+    (tmp_path / "copilot" / "api-key.json").write_text(json.dumps({"token": "expired-key", "expires_at": 1}))
+    (tmp_path / "copilot" / "access-token").write_text("test-access")
+    respx_mock.route().respond(401, json={"error": "invalid_grant"})
+    params: Final = (
+        {"model": "catalog-model", "custom_llm_provider": provider}
+        if explicit_provider
+        else {"model": f"{provider}/catalog-model"}
+    )
+
+    assert _search_tool_support({"model_name": "catalog-model", "litellm_params": params}) is None
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.parametrize(
@@ -31228,3 +31383,51 @@ async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     finally:
         await GLOBAL_LOGGING_WORKER.flush()
         await client.close()
+
+
+_FALLBACK_VALIDATION_MODEL_LIST: Final = (
+    {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "fake-key"}},
+    {"model_name": "gpt-3.5", "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "fake-key"}},
+)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "expected_message"),
+    [
+        ({"fallbacks": [{"gpt-4": "gpt-3.5"}]}, "Fallbacks for 'gpt-4' must be a list of model names, got 'gpt-3.5'"),
+        ({"default_fallbacks": "gpt-3.5"}, "default_fallbacks must be a list of model names, got 'gpt-3.5'"),
+        (
+            {"content_policy_fallbacks": [{"gpt-4": "gpt-3.5"}]},
+            "Fallbacks for 'gpt-4' must be a list of model names, got 'gpt-3.5'",
+        ),
+    ],
+    ids=["string_fallback_target", "string_default_fallbacks", "string_content_policy_fallback_target"],
+)
+def test_router_rejects_a_string_fallback_target_at_init(
+    router_kwargs: Mapping[str, object], expected_message: str
+) -> None:
+    with pytest.raises(TypeError, match="must be a list of model names") as excinfo:
+        Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
+
+    assert expected_message in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "expected_fallbacks"),
+    [
+        ({"fallbacks": [{"gpt-4": ["gpt-3.5"]}]}, [{"gpt-4": ["gpt-3.5"]}]),
+        ({"default_fallbacks": ["gpt-3.5"]}, [{"*": ["gpt-3.5"]}]),
+        (
+            {"fallbacks": [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}]},
+            [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}],
+        ),
+        ({"fallbacks": [{"model": "gpt-3.5"}]}, [{"model": "gpt-3.5"}]),
+    ],
+    ids=["list_fallback_target", "list_default_fallbacks", "dict_override_fallback_target", "direct_target_entry"],
+)
+def test_router_keeps_supported_fallback_shapes(
+    router_kwargs: Mapping[str, object], expected_fallbacks: list[dict[str, object]]
+) -> None:
+    router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
+
+    assert router.fallbacks == expected_fallbacks
