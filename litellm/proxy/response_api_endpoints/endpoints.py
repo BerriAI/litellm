@@ -2399,12 +2399,20 @@ def _frame_guardrail_selections(body: Mapping[str, object]) -> tuple[_FrameGuard
     ``litellm_metadata``, the top level last so its ``guardrail_config`` wins"""
     return (
         *(
-            _frame_guardrail_selection((key,), _WS_FRAME.validate_python(value), _METADATA_GUARDRAIL_SELECTORS)
+            _frame_guardrail_selection((key,), _metadata_picks(key, value), _METADATA_GUARDRAIL_SELECTORS)
             for key, value in body.items()
             if key in _CLIENT_METADATA_KEYS and isinstance(value, dict)
         ),
         _frame_guardrail_selection((), body, _CLIENT_GUARDRAIL_SELECTORS),
     )
+
+
+def _metadata_picks(key: str, metadata: object) -> Mapping[str, object]:
+    """OpenAI ``metadata`` values are strings, so a string there is the client's own metadata and never a pick"""
+    validated: Final = _WS_FRAME.validate_python(metadata)
+    if key != "metadata":
+        return validated
+    return {name: item for name, item in validated.items() if not isinstance(item, str)}
 
 
 def _frame_guardrail_selection(
@@ -2422,7 +2430,7 @@ def _without_guardrail_selection(metadata: object) -> object:
     return {
         name: item
         for name, item in _WS_FRAME.validate_python(metadata).items()
-        if name not in _METADATA_GUARDRAIL_SELECTORS
+        if name not in _METADATA_GUARDRAIL_SELECTORS or isinstance(item, str)
     }
 
 

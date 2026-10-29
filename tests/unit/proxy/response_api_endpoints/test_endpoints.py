@@ -2530,7 +2530,7 @@ class TestResponsesWSFirstFrameModelAuth:
         ],
         ids=["top-level", "with-extra-body", "metadata", "litellm-metadata", "nested"],
     )
-    async def test_frame_guard_runs_the_guardrails_a_frame_selects_on_top_of_the_admitted_ones(self, selected):
+    async def test_frame_guard_runs_the_guardrails_a_frame_selects_on_top_of_the_admitted_ones(self, selected: dict[str, object]):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
         key_required = _FrameGuardrail("key-required")
@@ -2556,6 +2556,27 @@ class TestResponsesWSFirstFrameModelAuth:
         assert frame_pick.inputs == ["hi"]
         assert unselected.inputs == []
         assert admitted["litellm_metadata"] == {"guardrails": ["key-required"]}
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_forwards_string_metadata_named_like_a_pick_without_running_it(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        key_required = _FrameGuardrail("key-required")
+        frame_pick = _FrameGuardrail("frame-pick")
+        metadata = {"guardrails": "frame-pick", "guardrail_config": "strict", "trace": "t1"}
+
+        with _guardrails_on(key_required, frame_pick) as proxy_logging_obj:
+            guard = _responses_ws_frame_guard(
+                {"model": "gpt-4o-mini", "litellm_metadata": {"guardrails": ["key-required"]}},
+                _key(),
+                proxy_logging_obj,
+                MagicMock(),
+            )
+            guarded = await guard(json.dumps({"type": "response.create", "input": "hi", "metadata": metadata}))
+
+        assert json.loads(guarded.frame) == {"type": "response.create", "input": "hi", "metadata": metadata}
+        assert key_required.inputs == ["hi"]
+        assert frame_pick.inputs == []
 
     @pytest.mark.asyncio
     async def test_frame_guard_hands_a_selected_guardrail_its_config_with_the_top_level_winning(self):
@@ -2672,8 +2693,8 @@ class TestResponsesWSFirstFrameModelAuth:
             ),
             ({"policies": [1]}, "response.create policies.0: Input should be a valid string"),
             (
-                {"metadata": {"guardrails": "frame-pick"}},
-                "response.create metadata.guardrails: 'str' instances are not allowed as a Sequence value",
+                {"litellm_metadata": {"guardrails": "frame-pick"}},
+                "response.create litellm_metadata.guardrails: 'str' instances are not allowed as a Sequence value",
             ),
             (
                 {"litellm_metadata": {"guardrail_config": []}},
@@ -2682,7 +2703,7 @@ class TestResponsesWSFirstFrameModelAuth:
         ],
     )
     async def test_frame_guard_refuses_and_bills_a_frame_whose_guardrail_selection_is_malformed(
-        self, selection, message
+        self, selection: dict[str, object], message: str
     ):
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
@@ -2879,7 +2900,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("field", ["input", "instructions", "tools"])
-    async def test_frame_guard_rejects_and_bills_a_guarded_field_beside_a_nested_response(self, field):
+    async def test_frame_guard_rejects_and_bills_a_guarded_field_beside_a_nested_response(self, field: str):
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
@@ -2911,7 +2932,7 @@ class TestResponsesWSFirstFrameModelAuth:
         ],
         ids=["top-level", "metadata", "litellm-metadata"],
     )
-    async def test_frame_guard_runs_the_guardrails_a_nested_frame_selects_beside_its_response(self, top_level):
+    async def test_frame_guard_runs_the_guardrails_a_nested_frame_selects_beside_its_response(self, top_level: dict[str, object]):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
         key_required = _FrameGuardrail("key-required")
@@ -2951,7 +2972,7 @@ class TestResponsesWSFirstFrameModelAuth:
         ],
         ids=["top-level", "metadata", "global-toggle", "nested", "beside-nested", "policies", "nested-policies"],
     )
-    async def test_frame_guard_refuses_guardrail_and_policy_picks_from_a_team_without_permission(self, frame):
+    async def test_frame_guard_refuses_guardrail_and_policy_picks_from_a_team_without_permission(self, frame: dict[str, object]):
         from litellm.proxy._types import LiteLLM_TeamTable
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
