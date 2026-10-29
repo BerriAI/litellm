@@ -316,22 +316,28 @@ async def test_extract_tags_nested_metadata_allowlisted(clean_env):
 
 
 @pytest.mark.parametrize(
-    ("metadata", "expected_tag"),
+    ("metadata", "request_tags", "expected_tag"),
     [
-        ({"is_silent_experiment": True, "requester_metadata": {"is_silent_experiment": False}}, "true"),
+        (
+            {"is_silent_experiment": True, "requester_metadata": {"is_silent_experiment": False}},
+            ["is_silent_experiment:false"],
+            "true",
+        ),
         (
             {
                 "requester_metadata": {"is_silent_experiment": True},
                 "spend_logs_metadata": {"is_silent_experiment": "true"},
             },
+            [],
             None,
         ),
+        ({}, ["is_silent_experiment:true"], None),
     ],
-    ids=["mirrored call", "direct call with a client flag"],
+    ids=["mirrored call", "direct call with a client flag", "direct call with a client request tag"],
 )
 @pytest.mark.asyncio
 async def test_extract_tags_takes_the_silent_experiment_flag_only_from_the_router(
-    clean_env: None, metadata: dict[str, object], expected_tag: str | None
+    clean_env: None, metadata: dict[str, object], request_tags: list[str], expected_tag: str | None
 ):
     logger: Final = DatadogCostManagementLogger(cost_tag_keys=["is_silent_experiment"])
     log: Final = StandardLoggingPayload(
@@ -340,6 +346,7 @@ async def test_extract_tags_takes_the_silent_experiment_flag_only_from_the_route
         response_cost=0.01,
         startTime=time.time(),
         metadata=metadata,
+        request_tags=request_tags,
     )
 
     assert logger._extract_tags(log).get("is_silent_experiment") == expected_tag
