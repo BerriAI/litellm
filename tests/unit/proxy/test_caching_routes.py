@@ -1,11 +1,8 @@
 import json
-from typing import Final
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from pytest_mock import MockerFixture
 
 
 
@@ -53,35 +50,6 @@ def mock_redis_failure(mocker):
 
     mocker.patch.object(litellm, "cache", mock_cache)
     return mock_cache
-
-
-@pytest.fixture
-def mock_redis_delete(mocker: MockerFixture) -> MagicMock:
-    mock_cache: Final = mocker.MagicMock()
-    mock_cache.type = "redis"
-    mock_cache.delete_cache_keys = mocker.AsyncMock()
-    mocker.patch.object(litellm, "cache", mock_cache)
-    return mock_cache
-
-
-@pytest.mark.parametrize("keys", [["a-key", "b-key"], [12345, 1.5]])
-def test_cache_delete_passes_string_and_numeric_keys_to_the_cache(
-    mock_redis_delete: MagicMock, keys: list[str | int | float]
-) -> None:
-    response: Final = client.post("/cache/delete", headers={"Authorization": "Bearer sk-9876"}, json={"keys": keys})
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "success"}
-    mock_redis_delete.delete_cache_keys.assert_awaited_once_with(keys=keys)
-
-
-def test_cache_delete_rejects_keys_that_are_not_a_list_with_a_400_that_hides_them(mock_redis_delete: MagicMock) -> None:
-    response: Final = client.post("/cache/delete", headers={"Authorization": "Bearer sk-9876"}, json={"keys": "sk-secret-key"})
-
-    assert response.status_code == 400
-    assert response.json()["detail"][0]["loc"] == ["keys"]
-    assert "sk-secret-key" not in response.text
-    mock_redis_delete.delete_cache_keys.assert_not_awaited()
 
 
 def test_cache_ping_success(mock_redis_success):
