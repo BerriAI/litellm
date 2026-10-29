@@ -2501,6 +2501,7 @@ def refresh_proxy_server_request_body_snapshot(
                 "litellm_logging_obj",
                 VECTOR_STORE_CALLER_METADATA_KWARG,
                 STREAM_USAGE_INJECTED_FIELD,
+                "_litellm_strip_stream_usage",
             }
         )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
