@@ -11878,7 +11878,1291 @@ GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JS
     }
 )
 
+GPT_6_1_TERRA_RESPONSES_NATIVE_JSON: Final = GPT_5_6_TERRA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-terra-responses_native_json",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "resp_$REQUEST_ID",
+                "object": "response",
+                "created_at": 1793302483,
+                "status": "completed",
+                "access_programs": {"cyber": "standard"},
+                "background": False,
+                "billing": {"payer": "developer"},
+                "completed_at": 1793302485,
+                "error": None,
+                "frequency_penalty": 0.0,
+                "incomplete_details": None,
+                "instructions": None,
+                "max_output_tokens": None,
+                "max_tool_calls": None,
+                "model": "gpt-6.1-terra",
+                "moderation": None,
+                "output": [
+                    {
+                        "id": "rs_$REQUEST_ID",
+                        "type": "reasoning",
+                        "content": [],
+                        "encrypted_content": "$ENCRYPTED_CONTENT",
+                        "summary": [],
+                    },
+                    {
+                        "id": "msg_$REQUEST_ID",
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"}
+                        ],
+                        "phase": "final_answer",
+                        "role": "assistant",
+                    },
+                ],
+                "parallel_tool_calls": True,
+                "presence_penalty": 0.0,
+                "previous_response_id": None,
+                "prompt_cache_key": None,
+                "prompt_cache_retention": "24h",
+                "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+                "safety_identifier": None,
+                "service_tier": "default",
+                "store": True,
+                "temperature": 1.0,
+                "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                "tool_choice": "auto",
+                "tool_usage": {
+                    "image_gen": {
+                        "input_tokens": 0,
+                        "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                        "output_tokens": 0,
+                        "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                        "total_tokens": 0,
+                    },
+                    "web_search": {"num_requests": 0},
+                },
+                "tools": [],
+                "top_logprobs": 0,
+                "top_p": 0.98,
+                "truncation": "disabled",
+                "usage": {
+                    "input_tokens": 1840,
+                    "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 2252,
+                },
+                "user": None,
+                "metadata": {},
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM: Final = GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM.model_copy(
+    update={
+        "name": "gpt-6.1-terra-responses_native_stream",
+        "model": "gpt-6.1-terra",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_$REQUEST_ID",
+                        "object": "response",
+                        "created_at": 1793302484,
+                        "status": "in_progress",
+                        "access_programs": {"cyber": "standard"},
+                        "background": False,
+                        "completed_at": None,
+                        "error": None,
+                        "frequency_penalty": 0.0,
+                        "incomplete_details": None,
+                        "instructions": None,
+                        "max_output_tokens": None,
+                        "max_tool_calls": None,
+                        "model": "gpt-6.1-terra",
+                        "moderation": None,
+                        "output": [],
+                        "parallel_tool_calls": True,
+                        "presence_penalty": 0.0,
+                        "previous_response_id": None,
+                        "prompt_cache_key": None,
+                        "prompt_cache_retention": "24h",
+                        "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+                        "safety_identifier": None,
+                        "service_tier": "auto",
+                        "store": True,
+                        "temperature": 1.0,
+                        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                        "tool_choice": "auto",
+                        "tool_usage": {
+                            "image_gen": {
+                                "input_tokens": 0,
+                                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                                "output_tokens": 0,
+                                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                                "total_tokens": 0,
+                            },
+                            "web_search": {"num_requests": 0},
+                        },
+                        "tools": [],
+                        "top_logprobs": 0,
+                        "top_p": 0.98,
+                        "truncation": "disabled",
+                        "usage": None,
+                        "user": None,
+                        "metadata": {},
+                    },
+                    "sequence_number": 0,
+                },
+                {
+                    "type": "response.in_progress",
+                    "response": {
+                        "id": "resp_$REQUEST_ID",
+                        "object": "response",
+                        "created_at": 1793302484,
+                        "status": "in_progress",
+                        "access_programs": {"cyber": "standard"},
+                        "background": False,
+                        "completed_at": None,
+                        "error": None,
+                        "frequency_penalty": 0.0,
+                        "incomplete_details": None,
+                        "instructions": None,
+                        "max_output_tokens": None,
+                        "max_tool_calls": None,
+                        "model": "gpt-6.1-terra",
+                        "moderation": None,
+                        "output": [],
+                        "parallel_tool_calls": True,
+                        "presence_penalty": 0.0,
+                        "previous_response_id": None,
+                        "prompt_cache_key": None,
+                        "prompt_cache_retention": "24h",
+                        "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+                        "safety_identifier": None,
+                        "service_tier": "auto",
+                        "store": True,
+                        "temperature": 1.0,
+                        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                        "tool_choice": "auto",
+                        "tool_usage": {
+                            "image_gen": {
+                                "input_tokens": 0,
+                                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                                "output_tokens": 0,
+                                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                                "total_tokens": 0,
+                            },
+                            "web_search": {"num_requests": 0},
+                        },
+                        "tools": [],
+                        "top_logprobs": 0,
+                        "top_p": 0.98,
+                        "truncation": "disabled",
+                        "usage": None,
+                        "user": None,
+                        "metadata": {},
+                    },
+                    "sequence_number": 1,
+                },
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "rs_$REQUEST_ID",
+                        "type": "reasoning",
+                        "content": [],
+                        "encrypted_content": "$ENCRYPTED_CONTENT",
+                        "summary": [],
+                    },
+                    "output_index": 0,
+                    "sequence_number": 2,
+                },
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "rs_$REQUEST_ID",
+                        "type": "reasoning",
+                        "content": [],
+                        "encrypted_content": "$ENCRYPTED_CONTENT",
+                        "summary": [],
+                    },
+                    "output_index": 0,
+                    "sequence_number": 3,
+                },
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "msg_$REQUEST_ID",
+                        "type": "message",
+                        "status": "in_progress",
+                        "content": [],
+                        "phase": "final_answer",
+                        "role": "assistant",
+                    },
+                    "output_index": 1,
+                    "sequence_number": 4,
+                },
+                {
+                    "type": "response.content_part.added",
+                    "content_index": 0,
+                    "item_id": "msg_$REQUEST_ID",
+                    "output_index": 1,
+                    "part": {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"},
+                    "sequence_number": 5,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "JrC7s7XzkYj",
+                    "output_index": 1,
+                    "sequence_number": 6,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "IfWzBR4r2IHO",
+                    "output_index": 1,
+                    "sequence_number": 7,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "9AIJwA89",
+                    "output_index": 1,
+                    "sequence_number": 8,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "vptH1Y0Z1D7",
+                    "output_index": 1,
+                    "sequence_number": 9,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "xVrjeDHlUrge",
+                    "output_index": 1,
+                    "sequence_number": 10,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "p6AtvuR6cj9",
+                    "output_index": 1,
+                    "sequence_number": 11,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "IopCWl62reoRX",
+                    "output_index": 1,
+                    "sequence_number": 12,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "egIriHbDYv2gxv",
+                    "output_index": 1,
+                    "sequence_number": 13,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "CTMOzZm",
+                    "output_index": 1,
+                    "sequence_number": 14,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "bEViqsilb",
+                    "output_index": 1,
+                    "sequence_number": 15,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "lRKsPDF0",
+                    "output_index": 1,
+                    "sequence_number": 16,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "SRjB9Qi2BgD4XE",
+                    "output_index": 1,
+                    "sequence_number": 17,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "Idw1mc485Zjs",
+                    "output_index": 1,
+                    "sequence_number": 18,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "IJhDqqFdsvIv",
+                    "output_index": 1,
+                    "sequence_number": 19,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "ihgH7cEe",
+                    "output_index": 1,
+                    "sequence_number": 20,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "fThQuJZRSAMW",
+                    "output_index": 1,
+                    "sequence_number": 21,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "wuaRqguUtTjrrC",
+                    "output_index": 1,
+                    "sequence_number": 22,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "bSJqEd8exe6",
+                    "output_index": 1,
+                    "sequence_number": 23,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "xYwK9ngY",
+                    "output_index": 1,
+                    "sequence_number": 24,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "Jo7PgOig5FGd",
+                    "output_index": 1,
+                    "sequence_number": 25,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "enVawdjcyClD",
+                    "output_index": 1,
+                    "sequence_number": 26,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "JmZSSWo1kIm",
+                    "output_index": 1,
+                    "sequence_number": 27,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "bBRPZxsi6BGBJq",
+                    "output_index": 1,
+                    "sequence_number": 28,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "FzupuK",
+                    "output_index": 1,
+                    "sequence_number": 29,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "Y4SlpbL7GBNR",
+                    "output_index": 1,
+                    "sequence_number": 30,
+                },
+                {
+                    "type": "response.output_text.delta",
+                    "content_index": 0,
+                    "delta": "scripted response",
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "obfuscation": "XrhO0sNCTKi9leV",
+                    "output_index": 1,
+                    "sequence_number": 31,
+                },
+                {
+                    "type": "response.output_text.done",
+                    "content_index": 0,
+                    "item_id": "msg_$REQUEST_ID",
+                    "logprobs": [],
+                    "output_index": 1,
+                    "sequence_number": 32,
+                    "text": "scripted response",
+                },
+                {
+                    "type": "response.content_part.done",
+                    "content_index": 0,
+                    "item_id": "msg_$REQUEST_ID",
+                    "output_index": 1,
+                    "part": {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"},
+                    "sequence_number": 33,
+                },
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "msg_$REQUEST_ID",
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "annotations": [], "logprobs": [], "text": "scripted response"}
+                        ],
+                        "phase": "final_answer",
+                        "role": "assistant",
+                    },
+                    "output_index": 1,
+                    "sequence_number": 34,
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_$REQUEST_ID",
+                        "object": "response",
+                        "created_at": 1793302484,
+                        "status": "completed",
+                        "access_programs": {"cyber": "standard"},
+                        "background": False,
+                        "completed_at": 1793302486,
+                        "error": None,
+                        "frequency_penalty": 0.0,
+                        "incomplete_details": None,
+                        "instructions": None,
+                        "max_output_tokens": None,
+                        "max_tool_calls": None,
+                        "model": "gpt-6.1-terra",
+                        "moderation": None,
+                        "output": [
+                            {
+                                "id": "rs_$REQUEST_ID",
+                                "type": "reasoning",
+                                "content": [],
+                                "encrypted_content": "$ENCRYPTED_CONTENT",
+                                "summary": [],
+                            },
+                            {
+                                "id": "msg_$REQUEST_ID",
+                                "type": "message",
+                                "status": "completed",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "annotations": [],
+                                        "logprobs": [],
+                                        "text": "scripted response",
+                                    }
+                                ],
+                                "phase": "final_answer",
+                                "role": "assistant",
+                            },
+                        ],
+                        "parallel_tool_calls": True,
+                        "presence_penalty": 0.0,
+                        "previous_response_id": None,
+                        "prompt_cache_key": None,
+                        "prompt_cache_retention": "24h",
+                        "reasoning": {"context": "all_turns", "effort": "medium", "mode": "standard", "summary": None},
+                        "safety_identifier": None,
+                        "service_tier": "default",
+                        "store": True,
+                        "temperature": 1.0,
+                        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                        "tool_choice": "auto",
+                        "tool_usage": {
+                            "image_gen": {
+                                "input_tokens": 0,
+                                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                                "output_tokens": 0,
+                                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                                "total_tokens": 0,
+                            },
+                            "web_search": {"num_requests": 0},
+                        },
+                        "tools": [],
+                        "top_logprobs": 0,
+                        "top_p": 0.98,
+                        "truncation": "disabled",
+                        "usage": {
+                            "input_tokens": 1840,
+                            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                            "output_tokens": 412,
+                            "output_tokens_details": {"reasoning_tokens": 0},
+                            "total_tokens": 2252,
+                        },
+                        "user": None,
+                        "metadata": {},
+                    },
+                    "sequence_number": 35,
+                },
+            ),
+        ),
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_INPUT_TEXT: Final = GPT_5_6_TERRA_INPUT_TEXT.model_copy(
+    update={
+        "name": "gpt-6.1-terra-input_text",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302481,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "default",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_TIERED_INPUT_ABOVE_272K: Final = GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K.model_copy(
+    update={
+        "name": "gpt-6.1-terra-tiered_input_above_272k",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302510,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 300000,
+                    "completion_tokens": 412,
+                    "total_tokens": 300412,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "default",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=2.231433, input_cost=2.22, output_cost=0.011433, prompt_tokens=300000, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K.model_copy(
+    update={
+        "name": "gpt-6.1-terra-tiered_cache_read_above_272k",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302514,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 300000,
+                    "completion_tokens": 412,
+                    "total_tokens": 300412,
+                    "prompt_tokens_details": {"cached_tokens": 200000, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "default",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.825433, input_cost=0.814, output_cost=0.011433, prompt_tokens=300000, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_STREAM: Final = GPT_5_6_TERRA_STREAM.model_copy(
+    update={
+        "name": "gpt-6.1-terra-stream",
+        "model": "gpt-6.1-terra",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": "scripted response", "refusal": None},
+                            "finish_reason": None,
+                        }
+                    ],
+                    "usage": None,
+                    "obfuscation": "yFmUq4QVAifje",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "kVV8RN1Hu",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "vdAdq7l4",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "Y8Gm7vExO5C",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "rdO3c9",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "NIhgpai7IBP",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "puWSRcV",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "5FyI7GOoMmP",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "OVc01f2XN9",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "xXG9qtJvy52",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "HQkSPraYkAE",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "gFytS7F",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {"content": "scripted response"}, "finish_reason": None}],
+                    "usage": None,
+                    "obfuscation": "6bPfb02unu4VIP",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": None,
+                    "obfuscation": "2DJpnqMOY",
+                },
+                {
+                    "id": "chatcmpl-$REQUEST_ID",
+                    "object": "chat.completion.chunk",
+                    "created": 1793302481,
+                    "model": "gpt-6.1-terra",
+                    "service_tier": "default",
+                    "system_fingerprint": None,
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 1840,
+                        "completion_tokens": 412,
+                        "total_tokens": 2252,
+                        "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 0,
+                            "audio_tokens": 0,
+                            "accepted_prediction_tokens": 0,
+                            "rejected_prediction_tokens": 0,
+                        },
+                    },
+                    "obfuscation": "kuOOk",
+                },
+                done=True,
+            ),
+        ),
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-terra-responses_deployment_json",
+        "model": "gpt-6.1-terra",
+        "deployment": Deployment(model="openai/responses/gpt-6.1-terra"),
+        "response": GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_CHAT_BRIDGED_JSON: Final = GPT_5_6_TERRA_CHAT_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-terra-chat_bridged_json",
+        "model": "gpt-6.1-terra",
+        "deployment": Deployment(model="openai/responses/gpt-6.1-terra"),
+        "response": GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_CACHE_READ: Final = GPT_5_6_TERRA_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-6.1-terra-cache_read",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302497,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12928,
+                    "completion_tokens": 380,
+                    "total_tokens": 13308,
+                    "prompt_tokens_details": {"cached_tokens": 12288, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "default",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.01167128, input_cost=0.00464128, output_cost=0.00703, prompt_tokens=12928, completion_tokens=380
+        ),
+    }
+)
+
+GPT_6_1_TERRA_CACHE_WRITE_5M: Final = GPT_5_6_TERRA_CACHE_WRITE_5M.model_copy(
+    update={
+        "name": "gpt-6.1-terra-cache_write_5m",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302496,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12928,
+                    "completion_tokens": 380,
+                    "total_tokens": 13308,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12288, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "default",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.06623, input_cost=0.0592, output_cost=0.00703, prompt_tokens=12928, completion_tokens=380
+        ),
+    }
+)
+
+GPT_6_1_TERRA_REASONING: Final = GPT_5_6_TERRA_REASONING.model_copy(
+    update={
+        "name": "gpt-6.1-terra-reasoning",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302483,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1240,
+                    "completion_tokens": 4040,
+                    "total_tokens": 5280,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 3480,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "default",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.079328, input_cost=0.004588, output_cost=0.07474, prompt_tokens=1240, completion_tokens=4040
+        ),
+    }
+)
+
+GPT_6_1_TERRA_SERVICE_TIER_FLEX: Final = GPT_5_6_TERRA_SERVICE_TIER_FLEX.model_copy(
+    update={
+        "name": "gpt-6.1-terra-service_tier_flex",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302481,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "flex",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.007215, input_cost=0.003404, output_cost=0.003811, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_SERVICE_TIER_PRIORITY: Final = GPT_5_6_TERRA_SERVICE_TIER_PRIORITY.model_copy(
+    update={
+        "name": "gpt-6.1-terra-service_tier_priority",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302481,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "fast",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.02886, input_cost=0.013616, output_cost=0.015244, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_TOOL_CALL: Final = GPT_5_6_TERRA_TOOL_CALL.model_copy(
+    update={
+        "name": "gpt-6.1-terra-tool_call",
+        "model": "gpt-6.1-terra",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "created": 1793302483,
+                "model": "gpt-6.1-terra",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "scripted response",
+                            "refusal": None,
+                            "annotations": [],
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "audio_tokens": 0},
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                        "accepted_prediction_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "service_tier": "default",
+                "system_fingerprint": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-terra-messages_bridged_json",
+        "model": "gpt-6.1-terra",
+        "response": GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM.model_copy(
+    update={
+        "name": "gpt-6.1-terra-messages_bridged_stream",
+        "model": "gpt-6.1-terra",
+        "response": GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM.response,
+        "expected": ExactExpected(
+            spend=0.01443, input_cost=0.006808, output_cost=0.007622, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_1_TERRA_INPUT_TEXT,
+    GPT_6_1_TERRA_TIERED_INPUT_ABOVE_272K,
+    GPT_6_1_TERRA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_1_TERRA_STREAM,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_1_TERRA_CHAT_BRIDGED_JSON,
+    GPT_6_1_TERRA_CACHE_READ,
+    GPT_6_1_TERRA_CACHE_WRITE_5M,
+    GPT_6_1_TERRA_REASONING,
+    GPT_6_1_TERRA_SERVICE_TIER_FLEX,
+    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_6_1_TERRA_TOOL_CALL,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM,
+    GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM,
     GPT_5_6_SLASH_ALIAS,
     GPT_5_6_SLASH_ALIAS_STREAM,
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
@@ -12120,6 +13404,9 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(plain=GPT_6_1_TERRA_INPUT_TEXT, streamed=GPT_6_1_TERRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_INCOMPLETE),
     StreamParityTestCase(plain=GPT_5_3_CODEX_INPUT_TEXT, streamed=GPT_5_3_CODEX_STREAM_UNVALIDATED),
@@ -12159,6 +13446,11 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(native=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
+    BridgeCostParityTestCase(native=GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_TERRA_CHAT_BRIDGED_JSON),
     *bridge_pairs(
         (
             GPT_5_6_RESPONSES_NATIVE_JSON,
