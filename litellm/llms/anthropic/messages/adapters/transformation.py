@@ -203,7 +203,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     ToolMessageContentPart,
 )
-from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import Choices, LlmProviders, ModelResponse, StreamingChoices, Usage
 from litellm.utils import supports_mid_conversation_system
 
 from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
@@ -360,6 +360,9 @@ class AnthropicAdapter:
 
 
 _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
+
+
+_CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.value})
 
 
 class LiteLLMAnthropicMessagesAdapter:
@@ -1128,7 +1131,8 @@ class LiteLLMAnthropicMessagesAdapter:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
         A Claude-family target keeps ``thinking`` verbatim, since every bridged provider serving one
-        speaks that param. Carrying its adaptive effort tier alongside takes two different params,
+        speaks that param, except Kyma, which serves Claude over the OpenAI dialect and takes only
+        ``reasoning_effort``, so its Claude models get the non-Claude mapping. Carrying its adaptive effort tier alongside takes two different params,
         because the two are not interchangeable at the provider mapping below.
 
         Bedrock takes ``output_config`` directly, which attaches the tier and leaves ``thinking``
@@ -1159,7 +1163,9 @@ class LiteLLMAnthropicMessagesAdapter:
         is_bedrock_target: Final = model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(
             model
         )
-        is_claude_target: Final = self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
+        is_claude_target: Final = (
+            self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
+        ) and custom_llm_provider not in _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS
         output_config: Final = anthropic_message_request.get("output_config")
 
         if is_claude_target:

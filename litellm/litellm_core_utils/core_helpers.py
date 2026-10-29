@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
@@ -1014,6 +1015,16 @@ def chunk_usage(chunk: object) -> object:
     if isinstance(chunk, Mapping):
         return _USAGE_BLOCK_ADAPTER.validate_python(chunk).get("usage")
     return getattr(chunk, "usage", None)
+
+
+USAGE_COST_BILLED_PROVIDERS: Final = frozenset({"kyma"})
+
+
+def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
+    if custom_llm_provider not in USAGE_COST_BILLED_PROVIDERS:
+        return None
+    cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
