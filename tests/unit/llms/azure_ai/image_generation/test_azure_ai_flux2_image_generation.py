@@ -334,6 +334,20 @@ def test_flux2_pro_generation_bills_first_megapixel_per_returned_image(
     )
 
 
+@respx.mock
+def test_flux2_pro_generation_without_returned_images_has_no_cost() -> None:
+    respx.post(url__regex=_flux2_route("flux-2-pro")).mock(
+        return_value=httpx.Response(200, json=_metered_body(3.0, 1.5, num_images=0))
+    )
+
+    response: Final = litellm.image_generation(
+        model="azure_ai/flux.2-pro", prompt="A red fox", n=4, api_base=FOUNDRY_BASE, api_key="test-key"
+    )
+
+    assert response.data == []
+    assert response._hidden_params["response_cost"] == 0.0
+
+
 @pytest.mark.asyncio
 async def test_async_flux2_pro_generation_bills_the_reported_megapixels(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

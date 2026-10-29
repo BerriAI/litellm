@@ -50,13 +50,15 @@ def record_megapixel_usage(response: object, response_body: bytes | Mapping[str,
 
 
 def _megapixel_cost(model_info: ModelInfo, image_response: ImageResponse) -> float | None:
+    images: Final = len(image_response.data or ())
+    if not images:
+        return None
     try:
         prices: Final = _MegapixelPrices.model_validate(model_info)
         usage: Final = _MegapixelUsage.model_validate(image_response.hidden_params.get(_MEGAPIXEL_USAGE_HIDDEN_PARAM))
     except ValidationError:
         return None
     first_rate: Final = prices.output_cost_per_first_megapixel
-    images: Final = max(len(image_response.data or ()), 1)
     output_mp_per_image: Final = usage.output_mp / images
     return images * (
         (prices.output_cost_per_megapixel if first_rate is None else first_rate)
