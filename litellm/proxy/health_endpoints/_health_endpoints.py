@@ -86,6 +86,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.router import Router
+from litellm.router_api import deployment_usable_by_team
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
@@ -1168,7 +1169,7 @@ def _deployment_id(deployment: object) -> str | None:
 
 def _granted_names(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
     grants: Final = (
-        *_OBJECTS.validate_python(user_api_key_dict.models),
+        *_ModelGrants.model_validate(user_api_key_dict).models,
         *_OBJECTS.validate_python(user_api_key_dict.team_models),
     )
     return frozenset(name for name in grants if isinstance(name, str))
@@ -1185,7 +1186,7 @@ async def _names_any_limit_grants(user_api_key_dict: UserAPIKeyAuth, owner: Lite
 
 def _served_group(model_name: str, aliases: CallerAliases, llm_router: Router | None) -> str:
     dispatched: Final = dispatched_model(model_name, aliases)
-    return llm_router.routable_model_group(dispatched) if llm_router is not None else dispatched
+    return llm_router.registry().resolve(dispatched) if llm_router is not None else dispatched
 
 
 def _name_id_pairs(deployment: object, team_id: str | None) -> tuple[tuple[str, str], ...]:
@@ -1209,7 +1210,7 @@ def _ids_of(deployments: Iterable[object]) -> frozenset[str]:
 def _holds_access_group(user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None) -> bool:
     if llm_router is None:
         return False
-    access_groups: Final = llm_router.get_model_access_groups(team_id=user_api_key_dict.team_id)
+    access_groups: Final = llm_router.registry().access_groups(team_id=user_api_key_dict.team_id)
     return not _granted_names(user_api_key_dict).isdisjoint(access_groups)
 
 
@@ -1224,12 +1225,15 @@ def _ids_serving_group(
     if llm_router is None:
         return named or frozenset()
     if named is None:
-        return _ids_of(llm_router.wildcard_route_deployments(group, user_api_key_dict.team_id))
+        return _ids_of(llm_router.registry().deployments(group, source="wildcard", team_id=user_api_key_dict.team_id))
     if not narrow_by_access_group:
         return named
-    routed: Final = llm_router.get_routable_deployments(
+    routed: Final = llm_router.registry().deployments(
         group,
-        {"metadata": {"user_api_key_team_id": user_api_key_dict.team_id, "user_api_key_auth": user_api_key_dict}},
+        source="routable",
+        request={
+            "metadata": {"user_api_key_team_id": user_api_key_dict.team_id, "user_api_key_auth": user_api_key_dict}
+        },
     )
     return named & _ids_of(routed)
 
@@ -1329,7 +1333,8 @@ def _model_param_target(
     if llm_router is None or deployments_targeted_by_name(llm_model_list, group, team_id):
         return group
     patterns: Final = frozenset(
-        deployment.get("model_name") for deployment in llm_router.wildcard_route_deployments(group, team_id)
+        deployment.get("model_name")
+        for deployment in llm_router.registry().deployments(group, source="wildcard", team_id=team_id)
     )
     match tuple(patterns):
         case (str(pattern),):
@@ -1342,7 +1347,7 @@ def _caller_may_probe_deployment(
     deployment: Mapping[str, object], reachable: _ReachableDeployments, team_id: str | None, caller_is_admin: bool
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not deployment_usable_by_team(deployment, team_id):
         return False
     return reachable.include(deployment, team_id)
 
@@ -1449,7 +1454,7 @@ async def _perform_health_check_and_save(
 def _health_endpoint_resolve_target_model_name(
     model: str | None,
     model_id: str | None,
-    llm_router,
+    llm_router: Router | None,
 ) -> str | None:
     """Map ``model_id`` to its deployment's ``model_name`` for live health checks.
 
@@ -1464,7 +1469,7 @@ def _health_endpoint_resolve_target_model_name(
             detail={"error": f"Model with ID {model_id} not found"},
         )
     try:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
     except Exception as e:
         verbose_proxy_logger.error("Error getting deployment for model_id %s: %s", model_id, e)
         raise HTTPException(
@@ -2060,7 +2065,9 @@ async def no_redis_on_multiple_workers() -> bool:
 def _redis_configured() -> bool:
     from litellm.proxy.proxy_server import llm_router, redis_usage_cache
 
-    return redis_usage_cache is not None or (llm_router is not None and llm_router.cache.redis_cache is not None)
+    return redis_usage_cache is not None or (
+        llm_router is not None and llm_router.health().store.redis_cache is not None
+    )
 
 
 def no_redis_warning_disabled_by_env() -> bool:
@@ -2550,7 +2557,7 @@ async def test_model_connection(
             request_model_id: Final = request_model_info.get("id")
             try:
                 if request_model_id:
-                    deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
+                    deployment_by_id = llm_router.registry().deployment(request_model_id)
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
@@ -2559,12 +2566,12 @@ async def test_model_connection(
                     # Fall back to model_name lookup for callers (e.g. the
                     # "Add Model" wizard, or curl) that don't supply an id.
                     # First try to find by proxy model_name (e.g., "gpt-4o")
-                    deployments = llm_router.get_model_list(model_name=model_name)
+                    deployments = llm_router.registry().deployments(model_name)
 
                     # If not found, try to find by litellm model name
                     # (e.g., "azure/gpt-4o")
                     if not deployments or len(deployments) == 0:
-                        all_deployments: Final = llm_router.get_model_list(model_name=None)
+                        all_deployments: Final = llm_router.registry().deployments(None)
                         if all_deployments:
                             for deployment in all_deployments:
                                 if deployment.get("litellm_params", {}).get("model") == model_name:
