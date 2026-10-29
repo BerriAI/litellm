@@ -18,6 +18,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows a message to its
 
 from litellm._logging import verbose_logger
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -466,12 +467,25 @@ def type_to_response_format_param(
     }
 
 
+def _missing_content_error(index: int) -> BadRequestError:
+    return BadRequestError(
+        message=f"Missing required parameter: 'messages[{index}].content'.", model="", llm_provider=""
+    )
+
+
+def _require_developer_message_content(messages: Sequence[AllMessageValues]) -> None:
+    for index, message in enumerate(messages):
+        if message["role"] == "developer" and "content" not in message:
+            raise _missing_content_error(index)
+
+
 def map_developer_role_to_system_role(
     messages: Sequence[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
+    _require_developer_message_content(messages)
     new_messages: Final[list[AllMessageValues]] = []
     for m in messages:
         if m["role"] == "developer":
