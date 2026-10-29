@@ -404,9 +404,10 @@ class WebSearchInterceptionLogger(CustomLogger):
                 }
             )
             content.append(
-                WebSearchTransformation.build_web_search_outcome_block(tool_use_id=tool_use_id, outcome=outcome)
+                WebSearchTransformation.build_web_search_outcome_block(
+                    tool_use_id=tool_use_id, outcome=outcome, with_snippets=False
+                )
             )
-        # Callers that sent the litellm standard search tool read the result from this text block.
         content.append({"type": "text", "text": search_result_text})
 
         response: Final[dict[str, object]] = {

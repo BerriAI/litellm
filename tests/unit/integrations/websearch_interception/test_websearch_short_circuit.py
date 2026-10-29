@@ -539,11 +539,13 @@ class TestShortCircuitThroughMessagesEntryPoint:
             "web_search_tool_result",
             "text",
         ]
-        server_tool_use, tool_result, _ = response["content"]
+        server_tool_use, tool_result, text = response["content"]
         assert server_tool_use["name"] == "web_search"
         assert server_tool_use["input"] == {"query": "latest python release"}
         assert tool_result["tool_use_id"] == server_tool_use["id"]
         assert [result["url"] for result in tool_result["content"]] == ["https://example.com/releases"]
+        assert "Release notes" in text["text"]
+        assert "Release notes" not in json.dumps(tool_result)
 
     @pytest.mark.asyncio
     async def test_native_blocks_reply_can_be_costed(self):
@@ -554,7 +556,7 @@ class TestShortCircuitThroughMessagesEntryPoint:
             messages=[{"role": "user", "content": "latest python release"}],
             stream=False,
             call_type="anthropic_messages",
-            start_time=datetime.datetime.now(),
+            start_time=datetime.datetime(2026, 1, 1),
             litellm_call_id="short-circuit-cost",
             function_id="short-circuit-cost",
         )
