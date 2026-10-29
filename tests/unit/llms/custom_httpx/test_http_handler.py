@@ -1388,6 +1388,22 @@ async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
     assert not (AsyncHTTPHandler._finalizer_close_tasks & scheduled)
 
 
+
+async def _drop_unused_handler() -> None:
+    AsyncHTTPHandler(timeout=61.0)
+    gc.collect()
+
+
+def test_finalizer_close_does_not_keep_a_loop_closed_right_after_it_alive():
+    loop: Final = asyncio.new_event_loop()
+    loop.run_until_complete(_drop_unused_handler())
+    loop.close()
+    closed_loop: Final = weakref.ref(loop)
+    del loop
+    gc.collect()
+
+    assert closed_loop() is None
+
 @pytest.mark.asyncio
 async def test_sync_close_helper_respects_session_ownership():
     """The loop-less fallback closes only sessions the transport owns; a

@@ -1120,6 +1120,15 @@ class AsyncHTTPHandler:
     _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
 
     @classmethod
+    async def _close_client_at_finalization(cls, client: httpx.AsyncClient) -> None:
+        try:
+            await client.aclose()
+        finally:
+            task: Final = asyncio.current_task()
+            if task is not None:
+                cls._finalizer_close_tasks.discard(task)
+
+    @classmethod
     def _on_finalizer_close_done(cls, task: "asyncio.Task[None]") -> None:
         cls._finalizer_close_tasks.discard(task)
         if task.cancelled():
@@ -1186,8 +1195,8 @@ class AsyncHTTPHandler:
                 # here is the cross-loop path the transport refuses.
                 self._dispose_wrapped_aiohttp_session()
                 return
-            task: Final = loop.create_task(self._client.aclose())
             cls: Final = type(self)
+            task: Final = loop.create_task(cls._close_client_at_finalization(self._client))
             cls._finalizer_close_tasks.add(task)
             task.add_done_callback(cls._on_finalizer_close_done)
         except Exception:
