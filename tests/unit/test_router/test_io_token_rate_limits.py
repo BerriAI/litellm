@@ -472,7 +472,7 @@ class TestModelRateLimitingCheckIOTokens:
         admitted: Final = [m for m in await asyncio.gather(*[_attempt() for _ in range(8)]) if m is not None]
         otpm_key: Final = admitted[0][OTPM_CACHE_KEY]
 
-        assert len(admitted) == NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+        assert len(admitted) == round(1 / NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)
         assert {m[OTPM_CACHE_KEY] for m in admitted} == {otpm_key}
         assert await dual_cache.async_get_cache(key=otpm_key) == sum(m[OTPM_RESERVED_KEY] for m in admitted)
         assert await dual_cache.async_get_cache(key=otpm_key) <= otpm_limit
@@ -571,6 +571,28 @@ class TestModelRateLimitingCheckIOTokens:
         set_io_token_rate_limit_request_kwargs({"messages": [{"role": "user", "content": "hi"}], "metadata": {}})
         with pytest.raises(litellm.RateLimitError):
             await check.async_pre_call_check(deployment)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("use_sync_check", [False, True])
+    async def test_deployment_max_tokens_sets_the_reservation_unless_the_request_sets_one(self, use_sync_check: bool):
+        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+        deployment: Final = {
+            "litellm_params": {"model": MANTLE_OPUS, "otpm": 4000, "max_tokens": 100},
+            "model_info": {"id": "io-deployment-max-tokens-id"},
+            "model_name": "opus",
+        }
+        without_cap: Final = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
+        with_cap: Final = {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 300, "metadata": {}}
+
+        for request_kwargs in (without_cap, with_cap):
+            set_io_token_rate_limit_request_kwargs(request_kwargs)
+            if use_sync_check:
+                check.pre_call_check(deployment)
+            else:
+                await check.async_pre_call_check(deployment)
+
+        assert without_cap["metadata"][OTPM_RESERVED_KEY] == 100
+        assert with_cap["metadata"][OTPM_RESERVED_KEY] == 300
 
     def test_sync_io_pre_call_reserves_and_reconciles(self):
         from litellm.utils import get_utc_datetime
@@ -896,6 +918,32 @@ class TestModelRateLimitingCheckIOTokens:
         assert await dual_cache.async_get_cache(key=itpm_key) == 4
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("use_sync_reconcile", [False, True])
+    async def test_reconcile_charges_usage_above_the_reservation_to_the_minute_it_finished_in(
+        self, use_sync_reconcile: bool
+    ):
+        dual_cache: Final = DualCache()
+        counter: Final = "global_router:io-late-id:bedrock_mantle/test:otpm"
+        reserved_minute_key: Final = f"{counter}:99-99"
+        await dual_cache.async_increment_cache(key=reserved_minute_key, value=10, ttl=60)
+        kwargs: Final = {"metadata": {ITPM_RESERVED_KEY: 0, OTPM_RESERVED_KEY: 10, OTPM_CACHE_KEY: reserved_minute_key}}
+        response: Final = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=4, completion_tokens=25, total_tokens=29),
+        )
+        minute_before: Final = get_utc_datetime().strftime("%H-%M")
+
+        if use_sync_reconcile:
+            io_token_reconcile_success(dual_cache, kwargs, response)
+        else:
+            await async_io_token_reconcile_success(dual_cache, kwargs, response)
+
+        finished_minutes: Final = {minute_before, get_utc_datetime().strftime("%H-%M")}
+        charged: Final = [await dual_cache.async_get_cache(key=f"{counter}:{minute}") for minute in finished_minutes]
+        assert await dual_cache.async_get_cache(key=reserved_minute_key) == 10
+        assert sum(value or 0 for value in charged) == 25 - 10
+
+    @pytest.mark.asyncio
     async def test_reconcile_missing_usage_keeps_reservation(self):
         dual_cache = DualCache()
         itpm_key = "global_router:io-missing-usage:bedrock_mantle/test:itpm:00-00"
@@ -989,12 +1037,12 @@ class TestModelRateLimitingCheckIOTokens:
         dual_cache = DualCache()
         itpm_key = "global_router:io-anthropic:bedrock_mantle/test:itpm:00-00"
         otpm_key = "global_router:io-anthropic:bedrock_mantle/test:otpm:00-00"
-        dual_cache.set_cache(key=itpm_key, value=6, ttl=60)
+        dual_cache.set_cache(key=itpm_key, value=10, ttl=60)
         dual_cache.set_cache(key=otpm_key, value=4, ttl=60)
 
         kwargs = {
             "metadata": {
-                ITPM_RESERVED_KEY: 6,
+                ITPM_RESERVED_KEY: 10,
                 OTPM_RESERVED_KEY: 4,
                 ITPM_CACHE_KEY: itpm_key,
                 OTPM_CACHE_KEY: otpm_key,

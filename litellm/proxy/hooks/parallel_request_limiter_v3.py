@@ -997,10 +997,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         per-tenant cap can't be tripped by the floor alone. Returns the
         baseline floor when no limit is provided.
         """
-        baseline: Final = DEFAULT_MAX_TOKENS_ESTIMATE // NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+        baseline: Final = int(DEFAULT_MAX_TOKENS_ESTIMATE * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)
         if min_configured_tpm_limit is None:
             return baseline
-        return min(baseline, max(1, min_configured_tpm_limit // NO_MAX_TOKENS_TPM_RESERVATION_FRACTION))
+        return min(baseline, max(1, int(min_configured_tpm_limit * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)))
 
     @staticmethod
     def _is_embedding_request(data: object, call_type: str | None) -> bool:
@@ -1132,7 +1132,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if call_type in RESPONSES_API_CALL_TYPES
             else base_capped_floor
         )
-        baseline_floor: Final = DEFAULT_MAX_TOKENS_ESTIMATE // NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+        baseline_floor: Final = int(DEFAULT_MAX_TOKENS_ESTIMATE * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)
         is_embedding: Final = PROXY_MaxParallelRequestsHandler_v3._is_embedding_request(data, call_type)
         if (
             capped_floor >= baseline_floor

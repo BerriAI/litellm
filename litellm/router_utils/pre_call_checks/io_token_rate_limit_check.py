@@ -184,11 +184,19 @@ def _explicit_max_tokens(request_kwargs: Mapping[str, object] | None) -> int | N
             return None
 
 
-def _otpm_reservation(explicit_max_tokens: int | None, model_name: str, otpm_limit: int) -> int:
-    if explicit_max_tokens is not None:
-        return explicit_max_tokens
+def _output_cap(request_kwargs: Mapping[str, object] | None, deployment: Mapping[str, object]) -> int | None:
+    from_request: Final = _explicit_max_tokens(request_kwargs)
+    if from_request is not None:
+        return from_request
+    params: Final = deployment.get("litellm_params")
+    return _explicit_max_tokens(params) if is_str_keyed_mapping(params) else None
+
+
+def _otpm_reservation(output_cap: int | None, model_name: str, otpm_limit: int) -> int:
+    if output_cap is not None:
+        return output_cap
     model_max: Final = _model_max_output_tokens(model_name) if model_name else None
-    share_of_limit: Final = max(1, otpm_limit // NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)
+    share_of_limit: Final = max(1, int(otpm_limit * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION))
     return min(4096 if model_max is None else model_max, share_of_limit)
 
 
@@ -277,6 +285,21 @@ def _resolve_reconcile_usage_tokens(
                 return max(0, prompt_tokens - cached_tokens), completion_tokens, True
 
     return 0, 0, False
+
+
+def _key_for_this_minute(reserved_key: str) -> str:
+    counter, _, _ = reserved_key.rpartition(":")
+    return f"{counter}:{get_utc_datetime().strftime('%H-%M')}"
+
+
+def _reconcile_increments(
+    reservation: tuple[int, int, str | None, str | None], billable_input: int, completion_tokens: int
+) -> tuple[tuple[str, int], ...]:
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = reservation
+    deltas: Final = ((itpm_key, billable_input - itpm_reserved), (otpm_key, completion_tokens - otpm_reserved))
+    return tuple(
+        (key if delta < 0 else _key_for_this_minute(key), delta) for key, delta in deltas if key is not None and delta
+    )
 
 
 def _stash_reservation_in_metadata(
@@ -455,7 +478,7 @@ def io_token_pre_call_check(
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
-    explicit_max_tokens: Final = _explicit_max_tokens(request_kwargs)
+    output_cap: Final = _output_cap(request_kwargs, deployment)
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
@@ -478,7 +501,7 @@ def io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _otpm_reservation(explicit_max_tokens, served_model, otpm_limit)
+        otpm_reserved = _otpm_reservation(output_cap, served_model, otpm_limit)
         try:
             _sync_increment_with_rollback(
                 dual_cache,
@@ -519,7 +542,7 @@ async def async_io_token_pre_call_check(
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
-    explicit_max_tokens: Final = _explicit_max_tokens(request_kwargs)
+    output_cap: Final = _output_cap(request_kwargs, deployment)
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
@@ -543,7 +566,7 @@ async def async_io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _otpm_reservation(explicit_max_tokens, served_model, otpm_limit)
+        otpm_reserved = _otpm_reservation(output_cap, served_model, otpm_limit)
         try:
             await _increment_with_rollback(
                 dual_cache,
@@ -584,7 +607,8 @@ def io_token_reconcile_success(
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
+    reservation: Final = _read_reservation_from_kwargs(request_kwargs)
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = reservation
     if itpm_key is None and otpm_key is None:
         return
 
@@ -592,23 +616,8 @@ def io_token_reconcile_success(
 
     try:
         if usage_resolved:
-            if itpm_key is not None:
-                itpm_delta: Final = billable_input - itpm_reserved
-                if itpm_delta != 0:
-                    dual_cache.increment_cache(
-                        key=itpm_key,
-                        value=itpm_delta,
-                        ttl=RoutingArgsTTL,
-                    )
-
-            if otpm_key is not None:
-                otpm_delta: Final = completion_tokens - otpm_reserved
-                if otpm_delta != 0:
-                    dual_cache.increment_cache(
-                        key=otpm_key,
-                        value=otpm_delta,
-                        ttl=RoutingArgsTTL,
-                    )
+            for key, delta in _reconcile_increments(reservation, billable_input, completion_tokens):
+                dual_cache.increment_cache(key=key, value=delta, ttl=RoutingArgsTTL)
         else:
             verbose_router_logger.debug(
                 "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
@@ -638,39 +647,23 @@ async def async_io_token_reconcile_success(
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
+    reservation: Final = _read_reservation_from_kwargs(request_kwargs)
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = reservation
     if itpm_key is None and otpm_key is None:
         return
 
     billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(request_kwargs, response)
 
-    # Reconcile against the exact key that held the reservation (which encodes
-    # the reservation's minute), not a key recomputed at response time. This
-    # tracks actual usage even when the pre-call estimate was 0, and avoids a
-    # minute-boundary mismatch for calls that span into the next minute. Always
-    # clear the stash afterwards (even if an increment throws) so a retry or a
-    # duplicate success event can't re-process it.
+    # A refund goes back to the minute that held the reservation, while usage above the reservation is charged
+    # to the minute the response finished in, so a call that runs past its minute still counts against a live
+    # window. Always clear the stash afterwards (even if an increment throws) so a retry or a duplicate success
+    # event can't re-process it.
     try:
         if usage_resolved:
-            if itpm_key is not None:
-                itpm_delta: Final = billable_input - itpm_reserved
-                if itpm_delta != 0:
-                    await dual_cache.async_increment_cache(
-                        key=itpm_key,
-                        value=itpm_delta,
-                        ttl=RoutingArgsTTL,
-                        parent_otel_span=parent_otel_span,
-                    )
-
-            if otpm_key is not None:
-                otpm_delta: Final = completion_tokens - otpm_reserved
-                if otpm_delta != 0:
-                    await dual_cache.async_increment_cache(
-                        key=otpm_key,
-                        value=otpm_delta,
-                        ttl=RoutingArgsTTL,
-                        parent_otel_span=parent_otel_span,
-                    )
+            for key, delta in _reconcile_increments(reservation, billable_input, completion_tokens):
+                await dual_cache.async_increment_cache(
+                    key=key, value=delta, ttl=RoutingArgsTTL, parent_otel_span=parent_otel_span
+                )
         else:
             verbose_router_logger.debug(
                 "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
