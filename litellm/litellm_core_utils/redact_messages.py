@@ -10,18 +10,25 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Mapping, Sequence
+import itertools
+import json
+import re
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import EMPTY_MAPPING, REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
+from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
+)
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
@@ -31,7 +38,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayloadErrorInformation
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -55,6 +62,80 @@ def redact_message_input_output_from_custom_logger(
     if _opted_out_of_message_logging(custom_logger):
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
     return result
+
+
+def failure_details_for_custom_logger(
+    model_call_details: dict[str, object],  # mutable-ok: the kwargs dict a CustomLogger failure hook receives
+    custom_logger: CustomLogger,
+) -> dict[str, object]:  # mutable-ok: the kwargs dict a CustomLogger failure hook receives
+    """
+    The per-callback message redaction the success path applies, for a failure event, with the
+    request's text also scrubbed out of the error. The excluded fields are left out, since several
+    callbacks index the payload's fields on failure.
+    """
+    redacted: Final = redacted_standard_logging_details(model_call_details, custom_logger, excluded_fields=None)
+    if redacted is model_call_details and not _opted_out_of_message_logging(custom_logger):
+        return model_call_details
+    texts: Final = failure_request_texts(model_call_details)
+    payload: Final = _as_mapping(redacted.get("standard_logging_object"))
+    traceback_exception: Final = redacted.get("traceback_exception")
+    return redacted_model_call_details_for_custom_logger(
+        {
+            **redacted,
+            **(
+                {"standard_logging_object": {**payload, **scrubbed_error_fields(payload, texts)}}
+                if payload is not None
+                else {}
+            ),
+            **(
+                {"traceback_exception": scrub_request_text(traceback_exception, texts)}
+                if isinstance(traceback_exception, str)
+                else {}
+            ),
+        },
+        custom_logger,
+    )
+
+
+def redacted_standard_logging_details(
+    model_call_details: dict[str, object],  # mutable-ok: the kwargs dict a CustomLogger hook receives
+    custom_logger: CustomLogger,
+    *,
+    excluded_fields: Sequence[str] | None,
+) -> dict[str, object]:  # mutable-ok: the kwargs dict a CustomLogger hook receives
+    """``CustomLogger.redact_standard_logging_payload_from_model_call_details`` with the excluded fields passed in."""
+    turn_off_message_logging: Final[bool] = getattr(custom_logger, "turn_off_message_logging", False)
+
+    # Early return if no processing needed
+    if turn_off_message_logging is False and not excluded_fields:
+        return model_call_details
+
+    params: Final = _as_mapping(model_call_details.get("litellm_params"))
+    redacted_params: Final = (
+        MappingProxyType({"litellm_params": redacted_litellm_params(params)})
+        if turn_off_message_logging and params is not None
+        else EMPTY_MAPPING
+    )
+    standard_logging_object: Final = _as_mapping(model_call_details.get("standard_logging_object"))
+    if standard_logging_object is None:
+        return {**model_call_details, **redacted_params}
+
+    # Make a copy of just the standard_logging_object to avoid modifying the original
+    standard_logging_object_copy: Final = {
+        key: value
+        for key, value in standard_logging_object.items()
+        if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
+    }
+
+    return {
+        **model_call_details,
+        **redacted_params,
+        "standard_logging_object": (
+            redacted_standard_logging_payload(standard_logging_object_copy)
+            if turn_off_message_logging and not custom_logger.redacts_messages_itself()
+            else standard_logging_object_copy
+        ),
+    }
 
 
 def redacted_model_call_details_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
@@ -222,6 +303,10 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
 
 
+def _as_items(value: object) -> tuple[object, ...] | None:
+    return tuple(value) if isinstance(value, (list, tuple)) else None  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # items are walked one by one
+
+
 def _redact_provider_specific_fields(message: object) -> None:
     if (fields := _as_mapping(getattr(message, "provider_specific_fields", None))) is not None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
@@ -358,6 +443,126 @@ def _redacted_responses_api_response(
         else output,
     }
     return _with_redacted_instructions(redacted) if redact_instructions else redacted
+
+
+_REQUEST_TEXT_KEYS: Final = ("messages", "input", "prompt", "system", "instructions")
+_STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name"})
+_MIN_SCRUBBED_TEXT_LENGTH: Final = 4
+_ECHO_FRAGMENT_LENGTH: Final = 24
+_MAX_SCRUB_COMPARISONS: Final = 10_000_000
+
+
+def request_texts(*values: object) -> frozenset[str]:
+    """
+    The strings a request carries under ``values``, skipping structural fields such as ``role`` and
+    ``type`` and strings too short to point at the prompt.
+    """
+    texts: Final[set[str]] = set()  # mutable-ok: filled by the walk below
+    pending: Final[list[object]] = list(values)  # mutable-ok: the walk's work stack
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            if len(value) >= _MIN_SCRUBBED_TEXT_LENGTH:
+                texts.add(value)
+        elif (mapping := _as_mapping(value)) is not None:
+            pending.extend(item for key, item in mapping.items() if key not in _STRUCTURAL_KEYS)
+        elif (items := _as_items(value)) is not None:
+            pending.extend(items)
+        elif isinstance(value, BaseModel):
+            pending.append(value.model_dump())
+    return frozenset(texts)
+
+
+def failure_request_texts(model_call_details: Mapping[str, object], *originals: object) -> frozenset[str]:
+    """The request text a failure on this call can quote: its messages, input, prompt, system prompt and instructions."""
+    optional_params: Final = _as_mapping(model_call_details.get("optional_params")) or {}
+    return request_texts(
+        *originals,
+        *(model_call_details.get(key) for key in _REQUEST_TEXT_KEYS),
+        *(optional_params.get(key) for key in ("system", "instructions")),
+    )
+
+
+def _echo_forms(text: str) -> tuple[str, ...]:
+    """How an error can quote ``text``: verbatim or JSON or repr escaped, whole or cut down to its head and tail."""
+    whole: Final = {text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]}
+    long_forms: Final = tuple(form for form in whole if len(form) >= 2 * _ECHO_FRAGMENT_LENGTH)
+    return (
+        *whole,
+        *(form[:_ECHO_FRAGMENT_LENGTH] for form in long_forms),
+        *(form[-_ECHO_FRAGMENT_LENGTH:] for form in long_forms),
+    )
+
+
+def scrub_request_text(text: str, texts: Collection[str]) -> str:
+    """
+    ``text`` with every quote of the request's own ``texts`` replaced by ``REDACTED_BY_LITELLM``, so an
+    error that does not echo the prompt keeps its wording. A search too large for a failure path
+    replaces the whole text.
+    """
+    if not text or not texts:
+        return text
+    if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
+        return REDACTED_BY_LITELLM
+    forms: Final = frozenset(itertools.chain.from_iterable(map(_echo_forms, texts)))
+    quoted: Final = sorted((form for form in forms if form in text), key=len, reverse=True)
+    if not quoted:
+        return text
+    return re.sub("|".join(map(re.escape, quoted)), REDACTED_BY_LITELLM, text)
+
+
+def scrubbed_error_information(
+    error_information: StandardLoggingPayloadErrorInformation, texts: Collection[str]
+) -> StandardLoggingPayloadErrorInformation:
+    """``error_information`` with the request's ``texts`` scrubbed out of its message and traceback. The type,
+    status code and every other field carry no prompt and are left as they are."""
+    scrubbed: Final = error_information.copy()
+    error_message: Final = scrubbed.get("error_message")
+    if isinstance(error_message, str):
+        scrubbed["error_message"] = scrub_request_text(error_message, texts)
+    traceback_text: Final = scrubbed.get("traceback")
+    if isinstance(traceback_text, str):
+        scrubbed["traceback"] = scrub_request_text(traceback_text, texts)
+    return scrubbed
+
+
+def _with_scrubbed_text(
+    mapping: Mapping[str, object], fields: tuple[str, ...], texts: Collection[str]
+) -> Mapping[str, object]:
+    return {
+        key: scrub_request_text(value, texts) if key in fields and isinstance(value, str) else value
+        for key, value in mapping.items()
+    }
+
+
+def scrubbed_error_fields(payload: Mapping[str, object], texts: Collection[str]) -> Mapping[str, object]:
+    """The ``error_str`` and ``error_information`` entries of a ``StandardLoggingPayload`` with the request's
+    ``texts`` scrubbed out, to merge over a copy of the payload. Absent entries are left out."""
+    error_str: Final = payload.get("error_str")
+    error_information: Final = _as_mapping(payload.get("error_information"))
+    return {
+        **({"error_str": scrub_request_text(error_str, texts)} if isinstance(error_str, str) else {}),
+        **(
+            {"error_information": _with_scrubbed_text(error_information, ("error_message", "traceback"), texts)}
+            if error_information is not None
+            else {}
+        ),
+    }
+
+
+def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
+    """
+    The error message and traceback a failure payload logged when redaction scrubbed the request's text
+    out of them, for callbacks that would otherwise record the raw exception. ``None`` when nothing was
+    scrubbed.
+    """
+    payload: Final = _as_mapping(model_call_details.get("standard_logging_object")) or {}
+    error_information: Final = _as_mapping(payload.get("error_information")) or {}
+    message: Final = error_information.get("error_message")
+    if not isinstance(message, str) or REDACTED_BY_LITELLM not in message:
+        return None
+    traceback_text: Final = error_information.get("traceback")
+    return message, traceback_text if isinstance(traceback_text, str) else ""
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -641,6 +846,47 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
 
     # Priority 3: Fall back to global setting
     return litellm.turn_off_message_logging is True
+
+
+def should_redact_failure_logging(model_call_details: Mapping[str, object]) -> bool:
+    """
+    ``should_redact_message_logging`` for the failure path, which must log the failure whatever the
+    request carried. Headers that are not a mapping make the payload build fail on the success and
+    failure paths alike, so the failure is logged unredacted, as before.
+    """
+    try:
+        return should_redact_message_logging(dict(model_call_details))
+    except AttributeError:
+        return False
+
+
+def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
+    """
+    The redaction decision for proxy failure hooks, which get the request body but not its logging
+    object: the same metadata, headers and dynamic params the logging object would read. Callback
+    params the logging object rejects leave the failure unredacted, as before.
+    """
+    body: Final = dict(request_data)
+    try:
+        dynamic_params: Final = initialize_standard_callback_dynamic_params(body)
+    except ValueError:
+        return False
+    return should_redact_failure_logging(
+        {
+            "litellm_params": {key: body[key] for key in ("metadata", "litellm_metadata") if key in body},
+            "standard_callback_dynamic_params": dynamic_params,
+        }
+    )
+
+
+def scrubbed_error_information_for_request(
+    error_information: StandardLoggingPayloadErrorInformation, request_data: Mapping[str, object]
+) -> StandardLoggingPayloadErrorInformation:
+    """``error_information`` built from a proxy failure hook's exception, with the request's own text
+    scrubbed out when the request's message logging is redacted."""
+    if not should_redact_failed_request(request_data):
+        return error_information
+    return scrubbed_error_information(error_information, failure_request_texts(request_data))
 
 
 def redact_message_input_output_from_logging(model_call_details: dict, result, input: object | None = None) -> Any:

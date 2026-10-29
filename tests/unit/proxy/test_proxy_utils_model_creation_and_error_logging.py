@@ -203,6 +203,36 @@ async def test_proxy_only_error_log_keeps_tags_and_drops_caller_logging_fields(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "opt_in",
+    [
+        {"turn_off_message_logging": True},
+        {"metadata": {"turn_off_message_logging": True}},
+        {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+    ],
+    ids=["body_flag", "metadata_flag", "enable_header"],
+)
+async def test_proxy_only_error_log_keeps_the_request_redaction_opt_in(opt_in: Mapping[str, object]) -> None:
+    secret: Final = "my ssn is 123-45-6789"
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": secret}],
+        **opt_in,
+    }
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", team_id="team-a", request_route="/v1/rerank"),
+        route="/v1/rerank",
+        original_exception=HTTPException(status_code=400, detail=f"blocked: {secret}"),
+    )
+
+    payload: Final = request_data["litellm_logging_obj"].model_call_details["standard_logging_object"]
+    assert secret not in json.dumps(payload, default=str)
+    assert "blocked: redacted-by-litellm" in payload["error_str"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
 async def test_proxy_only_error_log_drops_malformed_metadata_tags(metadata_field: str) -> None:
     guardrail_info: Final = [{"guardrail_name": "g", "guardrail_status": "guardrail_intervened"}]

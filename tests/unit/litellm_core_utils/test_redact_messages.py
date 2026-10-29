@@ -33,6 +33,10 @@ from litellm.litellm_core_utils.redact_messages import (
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
+    request_texts,
+    scrub_request_text,
+    scrubbed_error_information_for_request,
+    should_redact_failed_request,
     should_redact_message_logging,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -43,6 +47,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ResponsesAPIResponse,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     TextCompletionResponse,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -2075,3 +2080,86 @@ def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_tr
     assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
     assert "123-45-6789" not in str(redacted_dict)
     assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"
+
+
+PROMPT: Final = "my ssn is 123-45-6789\nand my pin is 4321, keep both safe"
+
+
+@pytest.mark.parametrize(
+    "quoted",
+    [PROMPT, json.dumps(PROMPT)[1:-1], repr(PROMPT)[1:-1], PROMPT[:24] + "...", "..." + PROMPT[-24:]],
+    ids=["verbatim", "json", "repr", "head", "tail"],
+)
+def test_scrub_request_text_replaces_each_way_an_error_quotes_the_prompt(quoted: str) -> None:
+    scrubbed: Final = scrub_request_text(f"Invalid content: <{quoted}> rejected", request_texts(PROMPT))
+
+    assert "123-45-6789" not in scrubbed and "4321" not in scrubbed
+    assert "redacted-by-litellm" in scrubbed
+    assert scrubbed.startswith("Invalid content: <") and scrubbed.endswith("> rejected")
+
+
+def test_scrub_request_text_leaves_an_error_that_does_not_quote_the_prompt() -> None:
+    assert scrub_request_text("Incorrect API key provided", request_texts(PROMPT, "hi")) == "Incorrect API key provided"
+
+
+def test_scrub_request_text_replaces_the_whole_text_when_the_search_is_too_large() -> None:
+    texts: Final = request_texts([f"message number {index}" for index in range(5_000)])
+
+    assert scrub_request_text("x" * 5_000, texts) == "redacted-by-litellm"
+
+
+def test_request_texts_reads_content_and_skips_structural_fields() -> None:
+    texts: Final = request_texts(
+        [
+            {"role": "assistant", "content": [{"type": "text", "text": "part one text"}]},
+            {"role": "tool", "tool_call_id": "call_123456", "name": "lookup", "content": "tool output"},
+            litellm.Message(role="assistant", content="from a model object"),
+        ]
+    )
+
+    assert texts == {"part one text", "tool output", "from a model object"}
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"turn_off_message_logging": True},
+        {"metadata": {"turn_off_message_logging": True}},
+        {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+    ],
+    ids=["body_flag", "metadata_flag", "enable_header"],
+)
+def test_should_redact_failed_request_follows_the_request_opt_ins(request_data: dict) -> None:
+    assert should_redact_failed_request(request_data) is True
+    assert should_redact_failed_request({}) is False
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [{"metadata": {"headers": "x"}}, {"turn_off_message_logging": "os.environ/REDACT"}],
+    ids=["non_mapping_headers", "env_reference"],
+)
+def test_should_redact_failed_request_leaves_an_undecidable_request_unredacted(
+    monkeypatch: pytest.MonkeyPatch, request_data: dict
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+
+    assert should_redact_failed_request(request_data) is False
+
+
+def test_scrubbed_error_information_for_request_scrubs_only_when_the_request_redacts() -> None:
+    error_information: Final = StandardLoggingPayloadErrorInformation(
+        error_code="400", error_class="BadRequestError", error_message=f"bad: {PROMPT}", traceback=f"tb {PROMPT}"
+    )
+    messages: Final = [{"role": "user", "content": PROMPT}]
+
+    scrubbed: Final = scrubbed_error_information_for_request(
+        error_information, {"messages": messages, "turn_off_message_logging": True}
+    )
+
+    assert scrubbed == {
+        **error_information,
+        "error_message": "bad: redacted-by-litellm",
+        "traceback": "tb redacted-by-litellm",
+    }
+    assert scrubbed_error_information_for_request(error_information, {"messages": messages}) == error_information

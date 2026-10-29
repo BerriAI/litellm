@@ -1548,6 +1548,37 @@ def test_record_error_attributes_on_span_decorates_without_ending():
     assert [e.name for e in span.events] == ["exception"]
 
 
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+def test_failure_hook_scrubs_the_prompt_out_of_the_server_span_and_the_restamp_keeps_it(monkeypatch, redact):
+    import json
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    secret = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc(f"blocked: {secret}", 400)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"messages": [{"role": "user", "content": secret}]},
+            original_exception=exc,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    )
+    logger.record_error_attributes_on_span(server, exc, 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    logged = json.dumps(
+        [dict(span.attributes), [dict(event.attributes or {}) for event in span.events], span.status.description]
+    )
+    assert (secret in logged) is not redact
+    assert span.attributes["error.message"].startswith("blocked: ")
+    assert span.attributes["error.type"] == "ProxyException"
+
+
 def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_error():
     """A failure that already went through ``async_post_call_failure_hook`` reaches
     the exception handler too; the second stamp must keep one exception event while

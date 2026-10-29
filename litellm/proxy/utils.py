@@ -162,6 +162,7 @@ from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -3972,6 +3973,9 @@ class ProxyLogging:
                 ),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
+            if should_redact_failed_request(request_fields):
+                # The allowlist leaves out the request's redaction opt-in, so carry the decision over
+                litellm_logging_obj.standard_callback_dynamic_params["turn_off_message_logging"] = True
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
             if "metadata" not in request_data:
                 request_data["metadata"] = {}
