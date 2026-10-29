@@ -819,14 +819,29 @@ async def test_a_hung_wildcard_listing_during_a_credential_lookup_leaves_the_eve
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "custom_llm_provider, vllm_api_base, applied_credential",
+    "custom_llm_provider, vllm_api_base, openai_deployment, applied_credential",
     [
-        ("openai", "http://vllm-beside-openai.test:8000/v1", ("api_key", "openai-key")),
-        ("hosted_vllm", "http://vllm-route-match.test:8000/v1", ("api_base", "http://vllm-route-match.test:8000/v1")),
+        ("openai", "http://vllm-beside-openai.test:8000/v1", ("gpt-4o", "openai/gpt-4o"), ("api_key", "openai-key")),
+        (
+            "openai",
+            "http://vllm-before-openai-wildcard.test:8000/v1",
+            ("openai/*", "openai/*"),
+            ("api_key", "openai-key"),
+        ),
+        (
+            "hosted_vllm",
+            "http://vllm-route-match.test:8000/v1",
+            ("gpt-4o", "openai/gpt-4o"),
+            ("api_base", "http://vllm-route-match.test:8000/v1"),
+        ),
     ],
 )
 async def test_a_credential_lookup_a_configured_model_answers_never_lists_the_wildcard_server(
-    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, vllm_api_base: str, applied_credential: tuple[str, str]
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    vllm_api_base: str,
+    openai_deployment: tuple[str, str],
+    applied_credential: tuple[str, str],
 ) -> None:
     import litellm
 
@@ -845,7 +860,10 @@ async def test_a_credential_lookup_a_configured_model_answers_never_lists_the_wi
                         "model_name": "hosted_vllm/*",
                         "litellm_params": {"model": "hosted_vllm/*", "api_base": vllm_api_base},
                     },
-                    {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "openai-key"}},
+                    {
+                        "model_name": openai_deployment[0],
+                        "litellm_params": {"model": openai_deployment[1], "api_key": "openai-key"},
+                    },
                 ]
             ),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),

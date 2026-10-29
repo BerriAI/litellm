@@ -559,7 +559,7 @@ def get_team_provider_credentials(
         return None
 
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.auth.model_checks import get_key_models, iter_complete_model_list
+    from litellm.proxy.auth.model_checks import get_key_models, iter_model_names_expanding_wildcards_last
 
     team_id: Final = user_api_key_dict.team_id
     team_models: Final = user_api_key_dict.team_models or []
@@ -637,23 +637,19 @@ def get_team_provider_credentials(
     #    effective allowlist (sentinels and access groups already expanded by
     #    get_key_models) wins when set; otherwise the team's allowlist applies.
     #    The all-proxy-models sentinel isn't expanded by
-    #    iter_complete_model_list, so normalize it to an empty allowlist, which
+    #    iter_model_names_expanding_wildcards_last, so normalize it to an empty allowlist, which
     #    defers to the team-scoped proxy model list. A team or key with a
     #    restricted allowlist (e.g. anthropic only) therefore never resolves
     #    another provider's key.
     grants_all_models: Final = SpecialModelNames.all_proxy_models.value in team_models
     effective_team_models: Final = [] if grants_all_models else team_models
 
-    models_to_try: Final = iter_complete_model_list(
+    models_to_try: Final = iter_model_names_expanding_wildcards_last(
         key_models=key_model_allowlist,
         team_models=effective_team_models,
         proxy_model_list=proxy_model_list,
-        user_model=None,
-        infer_model_from_keys=False,
-        return_wildcard_routes=True,
         llm_router=llm_router,
         model_access_groups=model_access_groups,
-        include_model_access_groups=True,
         team_id=team_id,
     )
     return next(

@@ -255,7 +255,7 @@ def get_complete_model_list(
             if model in model_access_groups
         ]
     return list(
-        iter_complete_model_list(
+        _iter_complete_model_list(
             key_models=key_models,
             team_models=team_models,
             proxy_model_list=proxy_model_list,
@@ -292,7 +292,7 @@ def _unexpanded_model_list(
     return [model for model in dict.fromkeys(granted_model_names) if model != SpecialModelNames.no_default_models.value]
 
 
-def iter_complete_model_list(
+def _iter_complete_model_list(
     key_models: Sequence[str],
     team_models: Sequence[str],
     proxy_model_list: Sequence[str],
@@ -318,6 +318,31 @@ def iter_complete_model_list(
     for wildcard_route in (model for model in unexpanded_models if _check_wildcard_routing(model=model)):
         if return_wildcard_routes:
             yield wildcard_route
+        yield from _wildcard_route_models(wildcard_route, llm_router, team_id, routes_to_model)
+
+
+def iter_model_names_expanding_wildcards_last(
+    key_models: Sequence[str],
+    team_models: Sequence[str],
+    proxy_model_list: Sequence[str],
+    llm_router: Router | None,
+    model_access_groups: Mapping[str, Sequence[str]],
+    team_id: str | None,
+) -> Iterator[str]:
+    unexpanded_models: Final = _unexpanded_model_list(
+        key_models=key_models,
+        team_models=team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=True,
+    )
+    wildcard_routes: Final = tuple(model for model in unexpanded_models if _check_wildcard_routing(model=model))
+    yield from (model for model in unexpanded_models if not _check_wildcard_routing(model=model))
+    yield from wildcard_routes
+    routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
+    for wildcard_route in wildcard_routes:
         yield from _wildcard_route_models(wildcard_route, llm_router, team_id, routes_to_model)
 
 
