@@ -80538,5 +80538,14 @@
             "/v1/messages"
         ],
         "supports_native_streaming": true
+    },
+    "baseten/decision-models/baseten-joey-2b-latest": {
+        "input_cost_per_token": 1e-08,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 16384,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_vision": true
     }
 }
