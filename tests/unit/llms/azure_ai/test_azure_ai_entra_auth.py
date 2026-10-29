@@ -5,8 +5,13 @@ Every azure_ai route must authenticate with an Entra ID token when no API key is
 instead of requiring an API key.
 """
 
+import json
+import queue
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 import litellm
@@ -16,6 +21,7 @@ from litellm.llms.azure_ai.common_utils import (
     has_azure_entra_params,
     resolve_azure_ai_agent_auth_header,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 ENTRA_PARAMS = {"azure_ad_token": "entra-token"}
 
@@ -290,3 +296,53 @@ async def test_agent_auth_header_is_the_entra_bearer():
     headers = await resolve_azure_ai_agent_auth_header({"azure_ad_token": "entra-token"})
 
     assert headers == {"Authorization": "Bearer entra-token"}
+
+
+OPENAI_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-6.1-sol",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+ANTHROPIC_MESSAGE: Final = {
+    "id": "msg_test",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5-5",
+    "content": [{"type": "text", "text": "OK"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "provider_response"),
+    [
+        pytest.param("azure_ai/gpt-6.1-sol", OPENAI_CHAT_COMPLETION, id="openai-shaped"),
+        pytest.param("azure_ai/claude-sonnet-5-5", ANTHROPIC_MESSAGE, id="claude"),
+    ],
+)
+def test_completion_sends_the_entra_token_only_as_the_bearer_header(
+    model: str, provider_response: Mapping[str, object]
+):
+    sent: Final[queue.Queue[httpx.Request]] = queue.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.put_nowait(request)
+        return httpx.Response(200, json=provider_response)
+
+    response: Final = litellm.completion(
+        model=model,
+        api_base="https://example-resource.services.ai.azure.com",
+        azure_ad_token="entra-token",
+        messages=[{"role": "user", "content": "hi"}],
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+    request: Final = sent.get_nowait()
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert "azure_ad_token" not in json.loads(request.content)
+    assert response.choices[0].message.content == "OK"

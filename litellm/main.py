@@ -1645,6 +1645,8 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
+    optional_params.get("extra_body", {}).pop("azure_ad_token", None)
+
     from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
     azure_ai_route: Final = AzureFoundryModelInfo.get_azure_ai_route(model)
