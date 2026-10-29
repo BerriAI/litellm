@@ -139,8 +139,8 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
 )
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
 from litellm.router import Router
+from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
@@ -266,6 +266,8 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
 )
 from litellm.proxy.litellm_pre_call_utils import (
+    ROUTER_SCHEDULED_ROUTE_TYPES,
+    SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
     get_metadata_variable_name,
@@ -722,7 +724,7 @@ def _router_defaults(llm_router: Router | None) -> Mapping[str, object]:
     return {name: value for name, value in _REQUEST_FIELDS.validate_python(configured).items() if value is not None}
 
 
-def _counted_drop_policies(
+def counted_drop_policies(
     data: Mapping[str, object], llm_router: Router | None, team_id: str | None
 ) -> tuple[DropPolicy, ...]:
     requested: Final = {**_router_defaults(llm_router), **data}
@@ -738,7 +740,7 @@ def _counted_drop_policies(
 def resolve_counted_tool_fields(
     data: Mapping[str, object], llm_router: Router | None, team_id: str | None
 ) -> Mapping[str, object] | ProxyException:
-    resolved: Final = resolve_tool_fields(data, lambda: _counted_drop_policies(data, llm_router, team_id))
+    resolved: Final = resolve_tool_fields(data, lambda: counted_drop_policies(data, llm_router, team_id))
     if isinstance(resolved, MalformedField):
         return ProxyException(
             message=resolved.message,
@@ -2478,14 +2480,20 @@ class ProxyBaseLLMRequestProcessing:
                     self.data["model"] = alias_target
 
         aliased_model: Final = self.data.get("model")
+        if llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES and isinstance(aliased_model, str):
+            self.data.update(
+                llm_router.priority_header_update(
+                    model=aliased_model, kwargs=self.data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
+                )
+            )
 
         litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         self.data["litellm_call_id"] = litellm_call_id
         bind_telemetry_call_id(litellm_call_id)
-        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_call_id(litellm_call_id)
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
-            requested_model=self.data.get("model"),
+            requested_model=aliased_model,
         )
 
         ### AUTO STREAM USAGE TRACKING ###
@@ -2573,7 +2581,6 @@ class ProxyBaseLLMRequestProcessing:
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
         # add_litellm_data_to_request predates that mutation.
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
-        verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
@@ -4226,7 +4233,7 @@ class ProxyBaseLLMRequestProcessing:
             e = transformed_exception
         litellm_debug_info: Final = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s %s",
             e,
             litellm_debug_info,
         )
@@ -4589,7 +4596,7 @@ class ProxyBaseLLMRequestProcessing:
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
-                "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+                "An error occurred: %s",
                 e,
             )
 

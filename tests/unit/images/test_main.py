@@ -300,7 +300,7 @@ async def test_aimage_generation_ignores_a_non_string_base_url_like_the_sync_pat
     )
 
     response: Final = await litellm.aimage_generation(
-        model="dall-e-3",
+        model="gpt-image-2.5-sunburst",
         prompt="a red circle",
         api_base=api_base,
         base_url=httpx.URL(api_base),
@@ -355,6 +355,24 @@ def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
 
     assert cost_at("global") == pytest.approx(0.04)
     assert cost_at("us-central1") == pytest.approx(0.044)
+
+
+def test_image_edit_accepts_a_string_additional_drop_params(respx_mock: respx.MockRouter) -> None:
+    edits_route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(status_code=200, json={"created": 1792551838, "data": [{"b64_json": "aW1n"}]})
+    )
+
+    response: Final = litellm.image_edit(
+        model="openai/gpt-image-2.5-sunburst",
+        image=b"\x89PNG\r\n\x1a\nfakepng",
+        prompt="make the circle blue",
+        api_key="sk-test",
+        quality="high",
+        additional_drop_params="quality",
+    )
+
+    assert edits_route.called
+    assert response.data[0].b64_json == "aW1n"
 
 
 class TestCustomLogger(CustomLogger):
@@ -670,3 +688,24 @@ async def test_chatgpt_images_forward_client_login_and_workspace(
     assert "cookie" not in request.headers
     assert "x-litellm-api-key" not in request.headers
     assert json.loads(request.content) == {"model": "gpt-image-2", "prompt": "A blue circle"}
+
+
+def test_image_generation_without_a_model_or_provider_fails_before_calling_any_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="model is required"):
+        litellm.image_generation(prompt="a red circle", api_key="fake_openai_api_key")
+
+    assert not respx_mock.calls
+
+
+def test_topaz_image_variation_works_without_a_model(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.topazlabs.com/image/v1/enhance").mock(
+        return_value=httpx.Response(200, content=b"enhanced-image", headers={"content-type": "image/png"})
+    )
+
+    response: Final = litellm.image_variation(image=b"source-image", custom_llm_provider="topaz", api_key="fake-key")
+
+    assert route.call_count == 1
+    assert response.data is not None
+    assert response.data[0].b64_json == base64.b64encode(b"enhanced-image").decode()
