@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.url_utils import (
 )
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
+    MaskedHTTPStatusError,
     get_async_httpx_client,
     get_httpx_client,
 )
@@ -81,9 +82,11 @@ def _vertex_batch_list_payload(response: _VertexBatchListJsonSource) -> dict[str
     return response.json()
 
 
-def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> httpx.HTTPStatusError:
-    return httpx.HTTPStatusError(
-        f"Vertex AI batch create failed: {error.response.text}", request=error.request, response=error.response
+def _vertex_batch_create_error(error: httpx.HTTPStatusError) -> MaskedHTTPStatusError:
+    return MaskedHTTPStatusError(
+        httpx.HTTPStatusError(
+            f"Vertex AI batch create failed: {error.response.text}", request=error.request, response=error.response
+        )
     )
 
 

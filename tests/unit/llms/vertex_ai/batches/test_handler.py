@@ -42,6 +42,7 @@ from litellm.llms.vertex_ai.batches.handler import (  # noqa: E402
     VertexAIBatchPrediction,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError  # noqa: E402
+from litellm.proxy.utils import handle_exception_on_proxy  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
 HMOD = "litellm.llms.vertex_ai.batches.handler"
@@ -396,6 +397,7 @@ def test_create_batch_sync_httpstatuserror_carries_vertex_status_body_and_header
             )
     assert exc_info.value.response.status_code == 429
     assert exc_info.value.response.headers["retry-after"] == "30"
+    assert handle_exception_on_proxy(exc_info.value).code == "429"
 
 
 def test_create_batch_input_file_id_without_model_raises_400_before_post():
@@ -834,6 +836,7 @@ def test_create_batch_async_httpstatuserror_carries_vertex_status_body_and_heade
             _run(coro)
     assert exc_info.value.response.status_code == 429
     assert exc_info.value.response.headers["retry-after"] == "30"
+    assert handle_exception_on_proxy(exc_info.value).code == "429"
 
 
 def test_async_retrieve_batch_non_200_raises():
