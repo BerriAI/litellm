@@ -2123,10 +2123,12 @@ def _chat_completion_prompt_cache_breakpoint(marker: object) -> ChatCompletionPr
 
 
 def _part_with_chat_completion_prompt_cache_breakpoint(part: object) -> object:
+    if not isinstance(part, Mapping):
+        return part
     fields: Final = _BREAKPOINT_FIELDS.validate_python(part)
     marker: Final = fields.get("prompt_cache_breakpoint")
     if marker is None:
-        return part
+        return fields
     unmarked: Final = {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
     return with_prompt_cache_breakpoint(unmarked, _chat_completion_prompt_cache_breakpoint(marker))
 

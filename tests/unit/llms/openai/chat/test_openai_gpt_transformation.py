@@ -1753,6 +1753,29 @@ class TestChatCompletionsClientBreakpointUnderDropParams:
         ]
 
 
+    @pytest.mark.parametrize("stray_part", ["Answer briefly", None], ids=["string", "null"])
+    def test_drop_params_leaves_a_part_that_is_not_an_object_for_openai_to_reject(self, stray_part: object):
+        assert OpenAIGPTConfig().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        stray_part,
+                        {"type": "text", "text": "and nothing else", "prompt_cache_breakpoint": {"mode": "implicit"}},
+                    ],
+                },
+                {"role": "user", "content": "Describe this"},
+            ],
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": True},
+            headers={},
+        )["messages"] == [
+            {"role": "system", "content": [stray_part, {"type": "text", "text": "and nothing else"}]},
+            {"role": "user", "content": "Describe this"},
+        ]
+
+
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 
