@@ -229,7 +229,11 @@ class UserProvisionerHelpers:
             return None
 
         requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
-        new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
+        new_teams: Final = (
+            list(_keep_record_team_order(existing_user.teams or [], requested_teams))
+            if requested_teams
+            else list(existing_user.teams or [])
+        )
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(

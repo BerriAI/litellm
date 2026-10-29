@@ -941,6 +941,57 @@ async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocke
     assert update_calls[0].kwargs["data"]["teams"] == ["team-a", "team-b"]
 
 
+class _EmailMatchedUserRow:
+    def __init__(self, user: LiteLLM_UserTable) -> None:
+        self.user = user
+
+    async def find_first(self, *, where: dict[str, object]) -> LiteLLM_UserTable:
+        return self.user
+
+    async def update(self, *, where: dict[str, object], data: dict[str, object]) -> LiteLLM_UserTable:
+        self.user = self.user.model_copy(update=data)
+        return self.user
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_keeps_record_team_order(mocker):
+    user_rows = _EmailMatchedUserRow(
+        LiteLLM_UserTable(
+            user_id="same-id",
+            user_email="member@example.com",
+            user_alias="Member",
+            teams=["team-zeta", "team-alpha", "team-kappa"],
+            metadata={},
+        )
+    )
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = user_rows
+
+    mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=None),
+    )
+    mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client,
+        new_user_request=NewUserRequest(
+            user_id="same-id",
+            user_email="member@example.com",
+            user_alias="Member",
+            teams=["team-mu", "team-kappa", "team-beta", "team-zeta"],
+            metadata={},
+            auto_create_key=False,
+        ),
+    )
+
+    assert user_rows.user.teams == ["team-zeta", "team-kappa", "team-mu", "team-beta"]
+
+
 @pytest.mark.asyncio
 async def test_handle_existing_user_by_email_without_teams_preserves_memberships(mocker):
     """Adoption via POST /Users without ``groups`` must keep the user's existing teams.
