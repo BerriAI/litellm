@@ -97,6 +97,10 @@ class TestDashScopeImageGenerationConfig:
                 "https://llm-abc123.cn-beijing.maas.aliyuncs.com/apps/anthropic",
                 "https://llm-abc123.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
             ),
+            (
+                "https://dashscope-us.aliyuncs.com/api/v1/",
+                "https://dashscope-us.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
         ],
     )
     def test_get_complete_url_derives_from_the_domain(
@@ -104,6 +108,20 @@ class TestDashScopeImageGenerationConfig:
     ):
         url: Final = self.cfg.get_complete_url(api_base, None, "qwen-image-3.0", {}, {})
         assert url == expected
+
+    @pytest.mark.parametrize(
+        "endpoint_url",
+        [
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation",
+            "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis",
+        ],
+    )
+    def test_get_complete_url_keeps_a_full_dashscope_endpoint_url(
+        self, monkeypatch: pytest.MonkeyPatch, endpoint_url: str
+    ):
+        monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", "https://images.example.com/generate")
+        url: Final = self.cfg.get_complete_url(endpoint_url, None, "qwen-image-3.0", {}, {})
+        assert url == endpoint_url
 
     def test_validate_environment_sets_auth_header(self):
         headers = self.cfg.validate_environment(
