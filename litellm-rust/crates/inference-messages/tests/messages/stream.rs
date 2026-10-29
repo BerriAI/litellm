@@ -150,9 +150,21 @@ async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Er
 
 #[rstest]
 #[tokio::test]
-async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: MessagesCall) {
+async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(
+    call: MessagesCall,
+    #[values("anthropic", "minimax")] provider: &str,
+) {
     let upstream = upstream([sse_response()]).await;
-    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+    let host = RecordingStreamHost::new(
+        streaming(
+            MessagesCall {
+                custom_llm_provider: Some(provider.into()),
+                ..call
+            },
+            upstream.uri(),
+        ),
+        usize::MAX,
+    );
 
     let outcome = stream_through(&host).await.expect("streamed call succeeds");
 
@@ -248,13 +260,7 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
         .await
         .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: body.into()
-        })
-    );
+    assert_eq!(error.upstream_response(), Some((429, body)));
     assert!(host.seen.into_inner().unwrap().is_empty());
 }
 
@@ -320,7 +326,9 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
         .expect("the stalled stream gives up within the timeout")
         .expect_err("a stalled body fails the call");
 
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(error.dispatched(), "{error:?}");
+    assert!(!error.is_request(), "{error:?}");
+    assert_eq!(error.upstream_response(), None);
     let seen = host.seen.into_inner().unwrap();
     assert!(
         matches!(seen.as_slice(), [Seen::Open(_), Seen::Deliver(chunk)] if chunk.as_ref() == b"event: message_start\ndata: {}\n\n"),
@@ -336,6 +344,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::edenai("edenai")]
 #[tokio::test]
 async fn the_sdk_returns_stream_headers_and_every_sse_byte(
     call: MessagesCall,
@@ -346,6 +355,8 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         .execute(
             MessagesCall {
                 custom_llm_provider: Some(provider.into()),
+                api_key: Some("stream-key".into()),
+                litellm_params: Default::default(),
                 ..streaming(call, upstream.uri())
             },
             &(),
@@ -375,13 +386,7 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
         .err()
         .expect("upstream failure is returned by messages()");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: "slow down".into(),
-        })
-    );
+    assert_eq!(error.upstream_response(), Some((429, "slow down")));
 }
 
 #[rstest]
@@ -455,7 +460,9 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
         .expect("the stalled body times out")
         .unwrap()
         .unwrap_err();
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(error.dispatched(), "{error:?}");
+    assert!(!error.is_request(), "{error:?}");
+    assert_eq!(error.upstream_response(), None);
     assert!(chunks.next().await.is_none());
     tokio::time::timeout(Duration::from_secs(5), connection)
         .await
@@ -470,6 +477,7 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
     let host = RecordingStreamHost::new(
         MessagesCall {
             custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
             ..streaming(call, upstream.uri())
         },
         usize::MAX,

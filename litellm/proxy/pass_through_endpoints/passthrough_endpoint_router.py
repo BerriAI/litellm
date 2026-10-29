@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
@@ -10,7 +11,11 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     LiteLLM_ManagedVectorStore,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import (
+    UnresolvableSecretReference,
+    get_secret_str,
+    resolve_local_oidc_reference,
+)
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
@@ -39,22 +44,17 @@ def _credential_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | 
     return credentials
 
 
-# Network I/O prohibited; get_credentials() is synchronous inside async routes.
-# oidc/env_path/ is excluded because it bypasses the oidc/file/ credential-directory allowlist.
-_LOCAL_OIDC_PREFIXES: Final = ("oidc/file/", "oidc/env/")
-
-
 def _resolve_oidc_reference(credential: str | None) -> str | None:
-    """Resolve local ``oidc/...`` credentials on every call to pick up rotated tokens."""
-    if credential is None or not credential.startswith(_LOCAL_OIDC_PREFIXES):
-        return credential
-    try:
-        return get_secret_str(credential)
-    except (OSError, ValueError) as exc:
-        raise HTTPException(
-            status_code=401,
-            detail=f"pass-through credential {credential} could not be resolved: {exc}",
-        ) from exc
+    if credential is None:
+        return None
+    match resolve_local_oidc_reference(credential):
+        case UnresolvableSecretReference(kind=kind, reason=reason):
+            raise HTTPException(
+                status_code=401,
+                detail=f"pass-through credential {kind} secret reference could not be resolved: {reason}",
+            )
+        case str() as resolved:
+            return resolved
 
 
 class PassthroughEndpointRouter:
@@ -88,6 +88,14 @@ class PassthroughEndpointRouter:
             custom_llm_provider=custom_llm_provider,
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
+
+    def has_credentials(self, custom_llm_provider: str) -> bool:
+        if self._get_deployment_api_key(custom_llm_provider=custom_llm_provider, region_name=None) is not None:
+            return True
+        env_variable_name: Final = self._get_default_env_variable_name_passthrough_endpoint(
+            custom_llm_provider=custom_llm_provider,
+        )
+        return bool(os.environ.get(env_variable_name))
 
     def _get_deployment_api_key(
         self,

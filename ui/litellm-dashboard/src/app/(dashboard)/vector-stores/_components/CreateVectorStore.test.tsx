@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CreateVectorStore from "./CreateVectorStore";
 import * as networking from "@/components/networking";
+import { toast } from "@/lib/toast";
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
@@ -215,6 +216,44 @@ describe("CreateVectorStore", () => {
     });
   });
 
+  it("should report the created store and the failed file when a later file fails to ingest", async () => {
+    const firstIngest = { id: "ingest-1", status: "completed", vector_store_id: "vs_123", file_id: "file_1" };
+    vi.mocked(networking.ragIngestCall)
+      .mockResolvedValueOnce(firstIngest)
+      .mockRejectedValueOnce(new Error("upstream rejected the file"));
+    const onSuccess = vi.fn();
+    render(<CreateVectorStore accessToken="test-token" onSuccess={onSuccess} />);
+
+    const uploadInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(uploadInput, {
+        target: {
+          files: [
+            new File(["first"], "first.txt", { type: "text/plain" }),
+            new File(["second"], "second.txt", { type: "text/plain" }),
+          ],
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Uploaded Documents (2)")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Create Vector Store/i }));
+    });
+
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Vector store vs_123 was created with 1 document(s), but second.txt failed to ingest",
+        { description: "upstream rejected the file" },
+      );
+    });
+    expect(toast.fromError).not.toHaveBeenCalled();
+    expect(onSuccess).toHaveBeenCalledWith("vs_123");
+    expect(screen.getByText("Vector Store Created Successfully")).toBeInTheDocument();
+  });
+
   it("should exclude valkey from the provider dropdown since it has no RAG ingestion", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
 
@@ -231,15 +270,16 @@ describe("CreateVectorStore", () => {
   });
 
   it("should display S3 Vectors provider-specific fields when selected", async () => {
+    const user = userEvent.setup();
     render(<CreateVectorStore accessToken="test-token" />);
 
     // Find and click the provider dropdown
     const providerSelect = screen.getByRole("combobox");
 
-    await userEvent.click(providerSelect);
+    await user.click(providerSelect);
 
     // Wait for dropdown options to appear
-    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
+    await user.click(await screen.findByRole("option", { name: /AWS S3 Vectors/ }));
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
@@ -250,6 +290,7 @@ describe("CreateVectorStore", () => {
   });
 
   it("should validate S3 Vectors required fields before submission", async () => {
+    const user = userEvent.setup();
     render(<CreateVectorStore accessToken="test-token" />);
 
     // Upload a file first
@@ -267,11 +308,11 @@ describe("CreateVectorStore", () => {
     });
 
     // Select S3 Vectors provider
-    const providerSelect = screen.getByRole("combobox");
+    const providerSelect = screen.getByRole("combobox", { name: /Provider/ });
 
-    await userEvent.click(providerSelect);
+    await user.click(providerSelect);
 
-    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
+    await user.click(await screen.findByRole("option", { name: /AWS S3 Vectors/ }));
 
     // Try to create without filling required fields
     const createButton = screen.getByRole("button", { name: /Create Vector Store/i });
@@ -280,7 +321,7 @@ describe("CreateVectorStore", () => {
       fireEvent.click(createButton);
     });
 
-    // Should show validation warning (mocked message.warning would be called)
-    // The actual validation happens in the component
+    expect(toast.warning).toHaveBeenCalledWith("Please provide Vector Bucket Name");
+    expect(networking.ragIngestCall).not.toHaveBeenCalled();
   });
 });

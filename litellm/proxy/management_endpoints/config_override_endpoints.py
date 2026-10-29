@@ -311,6 +311,9 @@ def _clear_cyberark_state(proxy_config: "ProxyConfig") -> None:
     proxy_config._last_cyberark_config = None  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
 
 
+_STORED_CONFIG_VALUE: Final = TypeAdapter(dict[str, object])
+
+
 async def _persist_cyberark_config(
     prisma_client: "PrismaClient",
     proxy_config: "ProxyConfig",
@@ -331,7 +334,7 @@ async def _persist_cyberark_config(
             },
         },
     )
-    return safe_json_loads(config_value)
+    return _STORED_CONFIG_VALUE.validate_python(safe_json_loads(config_value))
 
 
 # --- Hashicorp Vault endpoints ---

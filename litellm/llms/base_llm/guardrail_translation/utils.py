@@ -4,10 +4,13 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -22,7 +25,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
 
     events: Final[list[dict]] = []
     for block in chunk.split("\n\n"):
-        for line in block.splitlines():
+        for line in split_sse_lines(block):
             stripped = line.strip()
             if not stripped.startswith("data:"):
                 continue
@@ -30,7 +33,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
             if not payload or payload == "[DONE]":
                 continue
             try:
-                parsed = json.loads(payload)
+                parsed = _DECODED_JSON.validate_python(json.loads(payload))
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):
@@ -290,6 +293,17 @@ def openai_tool_name(tool: object) -> str | None:
         return function_name if isinstance(function_name, str) else None
     flat_name: Final = tool.get("name")
     return flat_name if isinstance(flat_name, str) else None
+
+
+_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
+_ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
+
+
+def list_field(data: object, key: str) -> Sequence[object]:
+    try:
+        return _ITEMS.validate_python(_FIELDS.validate_python(data).get(key))
+    except ValidationError:
+        return ()
 
 
 def anthropic_tool_names(tool: object) -> tuple[str, ...]:

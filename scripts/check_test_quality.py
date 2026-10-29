@@ -4,8 +4,8 @@
 Sibling of scripts/check_type_discipline.py, same output contract
 (``path:line: CODE message``) and same stdlib-only constraint, aimed at the test
 tree instead of the package. Each rule is a shape the testing-strategy audit
-measured and named; scripts/test_quality_gate.py caps the codebase total of each
-one against test-quality-budget.json so the counts can only ratchet down.
+measured and named; scripts/test_quality_gate.py fails any change that grows the
+codebase total of one past its merge-base count.
 
 Rules
 -----
@@ -63,6 +63,38 @@ TQ009   A child interpreter spawned as `subprocess.run([sys.executable, ...])` w
         same working-directory hazard seen from the child's side. Use
         tests.test_litellm_rust.support.child_interpreter.run_child_interpreter, which
         also asserts the child resolved the same `litellm.__file__` as the parent.
+TQ010   An integration test that signals a process itself, outside the harness in
+        tests/integration/_support: `os.kill`, `os.killpg`, a SIGKILL / SIGSTOP / SIGCONT
+        constant handed to any call, or a zero-argument `.kill()` / `.terminate()` /
+        `.suspend()` / `.resume()` / a `.send_signal(...)` method call. A hand-rolled
+        worker kill returns as soon as a replacement process exists rather than once it
+        serves, and a hand-rolled suspend outlives the owned proxy's worker healthcheck,
+        after which uvicorn kills the suspended worker under the test. Use the owned
+        proxy's `kill_worker` / `replacing_worker` / `suspended` and the process helpers in
+        tests/integration/_support/process.py.
+        Only files under tests/integration, outside tests/integration/_support, are
+        examined.
+TQ011   An integration-test assertion that compares an elapsed time against a numeric
+        literal (`assert elapsed < 2`, `assert time.monotonic() - started <= 5`,
+        `assert all(duration < 2 for ...)`). A fixed wall-clock bound measures the
+        machine as much as the code, so it fails whenever sibling workers load the box.
+        Assert relative to a measured control or to the injected delay instead, or,
+        when the time is the behaviour under test (a cap, timeout or cooldown the
+        product enforces), against that configured value plus explicit slack with
+        `assert_enforced_within` (tests/integration/_support/timing.py). An operand is an elapsed time when it
+        reads a clock (`time.monotonic()`, `time.perf_counter()`, `time.time()` and
+        their `_ns` forms), names something called elapsed / duration / latency, or
+        names a local the enclosing function bound to a clock reading. The other operand
+        is a literal when it is built only from numbers, or names a module-level number.
+        Only `assert` statements are examined, so a polling deadline in a `while` loop is
+        left alone. Same path scope as TQ010.
+TQ012   A port read back from a port-0 bind: `sock.bind((host, 0))` in a function
+        that also calls `getsockname`. The number is free only until the socket
+        closes, so a server started on it later can lose it to another process and
+        fail with "Address already in use". Take the port from `allocate_port()` in
+        tests/integration/_support/ports.py, which hands each pytest worker its own
+        block of ports. Every file under tests/integration is examined, including
+        tests/integration/_support.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -147,8 +179,25 @@ SUBPROCESS_SPAWNS: Final = frozenset(("run", "Popen", "check_output", "check_cal
 INTERPRETER_ISOLATION_FLAGS: Final = frozenset(("-I", "-P"))
 
 RULE_CODES: Final = frozenset((
-    "TQ000", "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ009",
+    "TQ000", "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ009", "TQ010", "TQ011", "TQ012",
 ))
+
+INTEGRATION_ROOT: Final = ("tests", "integration")
+INTEGRATION_HARNESS: Final = "_support"
+SIGNAL_SENDERS: Final = frozenset(("os.kill", "os.killpg"))
+PROCESS_CONTROL_SIGNALS: Final = frozenset(("SIGKILL", "SIGSTOP", "SIGCONT"))
+ZERO_ARGUMENT_PROCESS_CONTROLS: Final = frozenset(("kill", "terminate", "suspend", "resume"))
+SIGNAL_METHOD: Final = "send_signal"
+BIND_METHOD: Final = "bind"
+PORT_READBACK: Final = "getsockname"
+CLOCK_READERS: Final = frozenset((
+    "time.monotonic", "time.perf_counter", "time.time",
+    "time.monotonic_ns", "time.perf_counter_ns", "time.time_ns",
+    "monotonic", "perf_counter", "monotonic_ns", "perf_counter_ns",
+))
+ELAPSED_NAME_RE: Final = re.compile(r"elapsed|duration|latenc", re.IGNORECASE)
+DURATION_READER: Final = "total_seconds"
+DURATION_FOLDS: Final = frozenset(("max", "min", "sum", "abs", "round", "float"))
 
 CREDENTIAL_NAME_RE: Final = re.compile(
     r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
@@ -687,6 +736,200 @@ def iter_child_interpreter_violations(path: Path, tree: ast.Module) -> Iterator[
         )
 
 
+def is_integration_test_path(path: Path) -> bool:
+    parts: Final = path.parts
+    return any(
+        parts[index:index + 2] == INTEGRATION_ROOT and parts[index + 2] != INTEGRATION_HARNESS
+        for index in range(len(parts) - 2)
+    )
+
+
+def _names_control_signal(node: ast.expr) -> bool:
+    if isinstance(node, ast.Attribute):
+        return node.attr in PROCESS_CONTROL_SIGNALS
+    return isinstance(node, ast.Name) and node.id in PROCESS_CONTROL_SIGNALS
+
+
+def _signals_a_process(call: ast.Call) -> bool:
+    if _dotted_name(call.func) in SIGNAL_SENDERS:
+        return True
+    if any(_names_control_signal(argument) for argument in (*call.args, *(k.value for k in call.keywords))):
+        return True
+    func: Final = call.func
+    if not isinstance(func, ast.Attribute):
+        return False
+    if func.attr == SIGNAL_METHOD:
+        return True
+    return func.attr in ZERO_ARGUMENT_PROCESS_CONTROLS and not call.args and not call.keywords
+
+
+def iter_process_signal_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    if not is_integration_test_path(path):
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _signals_a_process(node):
+            yield Violation(
+                path,
+                node.lineno,
+                "TQ010",
+                "an integration test signals a process itself; a hand-rolled kill returns before the "
+                "replacement worker serves and a hand-rolled suspend outlives the worker healthcheck, so use "
+                "the owned proxy's kill_worker / replacing_worker / suspended, or a tests/integration/_support helper "
+                f"(suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+            )
+
+
+def _reads_clock(node: ast.expr) -> bool:
+    if isinstance(node, ast.Call):
+        return _dotted_name(node.func) in CLOCK_READERS
+    if isinstance(node, ast.BinOp):
+        return _reads_clock(node.left) or _reads_clock(node.right)
+    return False
+
+
+def _bound_values(scope: ast.AST) -> Iterator[tuple[ast.expr, ast.expr]]:
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Assign):
+            yield from ((target, node.value) for target in node.targets)
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            yield node.target, node.value
+
+
+def _clock_bound_names(scope: ast.AST) -> frozenset[str]:
+    return frozenset(
+        target.id for target, value in _bound_values(scope) if isinstance(target, ast.Name) and _reads_clock(value)
+    )
+
+
+def _numeric_constant_names(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        target.id
+        for statement in tree.body
+        for target, value in _bound_values(statement)
+        if isinstance(target, ast.Name) and _is_numeric_literal(value, frozenset())
+    )
+
+
+def _is_numeric_literal(node: ast.expr, constants: frozenset[str]) -> bool:
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
+    if isinstance(node, ast.UnaryOp):
+        return _is_numeric_literal(node.operand, constants)
+    if isinstance(node, ast.BinOp):
+        return _is_numeric_literal(node.left, constants) and _is_numeric_literal(node.right, constants)
+    return isinstance(node, ast.Name) and node.id in constants
+
+
+def _is_elapsed(node: ast.expr, clock_names: frozenset[str]) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in clock_names or ELAPSED_NAME_RE.search(node.id) is not None
+    if isinstance(node, ast.Attribute):
+        return ELAPSED_NAME_RE.search(node.attr) is not None
+    if isinstance(node, ast.BinOp):
+        return _is_elapsed(node.left, clock_names) or _is_elapsed(node.right, clock_names)
+    if isinstance(node, ast.Subscript):
+        return _is_elapsed(node.value, clock_names)
+    if isinstance(node, (ast.GeneratorExp, ast.ListComp)):
+        return _is_elapsed(node.elt, clock_names)
+    if not isinstance(node, ast.Call):
+        return False
+    if _dotted_name(node.func) in CLOCK_READERS:
+        return True
+    if isinstance(node.func, ast.Attribute) and node.func.attr == DURATION_READER:
+        return _is_elapsed(node.func.value, clock_names)
+    return _dotted_name(node.func) in DURATION_FOLDS and any(_is_elapsed(arg, clock_names) for arg in node.args)
+
+
+def _upper_bounded_operands(compare: ast.Compare) -> Iterator[tuple[ast.expr, ast.expr]]:
+    operands: Final = (compare.left, *compare.comparators)
+    for left, operator, right in zip(operands, compare.ops, operands[1:]):
+        if isinstance(operator, (ast.Lt, ast.LtE)):
+            yield left, right
+        elif isinstance(operator, (ast.Gt, ast.GtE)):
+            yield right, left
+
+
+def _asserts_in_scope(node: ast.AST, scope: ast.AST) -> Iterator[tuple[ast.Assert, ast.AST]]:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.Assert):
+            yield child, scope
+        inner: Final = child if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else scope
+        yield from _asserts_in_scope(child, inner)
+
+
+def iter_wall_clock_bound_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    if not is_integration_test_path(path):
+        return
+    constants: Final = _numeric_constant_names(tree)
+    for statement, scope in _asserts_in_scope(tree, tree):
+        clock_names: Final = _clock_bound_names(scope)
+        capped: Final = tuple(
+            compare
+            for compare in ast.walk(statement.test)
+            if isinstance(compare, ast.Compare)
+            and any(
+                _is_elapsed(bounded, clock_names) and _is_numeric_literal(bound, constants)
+                for bounded, bound in _upper_bounded_operands(compare)
+            )
+        )
+        yield from (
+            Violation(
+                path,
+                compare.lineno,
+                "TQ011",
+                "an elapsed time is capped by a fixed number, which fails whenever sibling workers load the "
+                "machine; bound it by a measured control or by the injected delay, or a product-enforced limit by "
+                "its configured value plus slack with assert_enforced_within "
+                f"(tests/integration/_support/timing.py) (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+            )
+            for compare in capped
+        )
+
+
+def is_integration_tree_path(path: Path) -> bool:
+    parts: Final = path.parts
+    return any(parts[index:index + 2] == INTEGRATION_ROOT for index in range(len(parts) - 1))
+
+
+def _calls_in_scope(node: ast.AST, scope: ast.AST) -> Iterator[tuple[ast.Call, ast.AST]]:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.Call):
+            yield child, scope
+        inner: Final = child if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else scope
+        yield from _calls_in_scope(child, inner)
+
+
+def _binds_port_zero(call: ast.Call) -> bool:
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != BIND_METHOD or not call.args:
+        return False
+    address: Final = call.args[0]
+    return (
+        isinstance(address, ast.Tuple)
+        and len(address.elts) == 2
+        and isinstance(address.elts[1], ast.Constant)
+        and address.elts[1].value == 0
+    )
+
+
+def _reads_back_port(scope: ast.AST) -> bool:
+    return any(isinstance(node, ast.Attribute) and node.attr == PORT_READBACK for node in ast.walk(scope))
+
+
+def iter_port_readback_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    if not is_integration_tree_path(path):
+        return
+    for call, scope in _calls_in_scope(tree, tree):
+        if _binds_port_zero(call) and _reads_back_port(scope):
+            yield Violation(
+                path,
+                call.lineno,
+                "TQ012",
+                "a port read back from a port-0 bind is free only until the socket closes, so a server started on "
+                "it later can lose it to another process; take the port from allocate_port() in "
+                f"tests/integration/_support/ports.py (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+            )
+
+
 def iter_conftest_inventory_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
     if path.name != CONFTEST_NAME:
         return
@@ -724,6 +967,9 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_credential_skip_violations(path, tree),
             *iter_conftest_inventory_violations(path, tree),
             *iter_child_interpreter_violations(path, tree),
+            *iter_process_signal_violations(path, tree),
+            *iter_wall_clock_bound_violations(path, tree),
+            *iter_port_readback_violations(path, tree),
         )
         if violation.line not in skip
     )
