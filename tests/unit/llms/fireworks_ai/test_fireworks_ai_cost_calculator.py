@@ -7,10 +7,6 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.fallback_generalizations import (
-    get_fallback_generalization_rules,
-    set_fallback_generalizations,
-)
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_prompt_caching_savings,
     generic_cost_per_token,
@@ -367,36 +363,6 @@ def test_an_unknown_fireworks_model_still_falls_back_to_the_parameter_size_bucke
 
     assert (prompt_cost, completion_cost) == (bucket_prompt_cost, bucket_completion_cost)
     assert prompt_cost > 0
-
-
-@pytest.fixture
-def priced_rule_for_prefixed_fireworks_names() -> Generator[None, None, None]:
-    previous_rules: Final = list(get_fallback_generalization_rules())
-    try:
-        set_fallback_generalizations(
-            [
-                {
-                    "name": "fireworks-sol-ruled-priced",
-                    "pattern": r"fireworks_ai/accounts/fireworks/models/sol-ruled-[a-z]+",
-                    "model_info": {"mode": "chat", "input_cost_per_token": 3.21e-05, "output_cost_per_token": 7.65e-05},
-                }
-            ]
-        )
-        yield
-    finally:
-        set_fallback_generalizations(previous_rules)
-
-
-def test_a_model_priced_only_by_a_fallback_rule_bills_at_the_rule_rates(
-    priced_rule_for_prefixed_fireworks_names: None,
-):
-    prompt_cost, completion_cost = cost_per_token(
-        model="accounts/fireworks/models/sol-ruled-max",
-        usage=_usage(prompt_tokens=100, cached_tokens=0, completion_tokens=10),
-    )
-
-    assert prompt_cost == pytest.approx(100 * 3.21e-05)
-    assert completion_cost == pytest.approx(10 * 7.65e-05)
 
 
 _TIERED_INPUT_PATTERN: Final = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")

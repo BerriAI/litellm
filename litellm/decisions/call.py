@@ -11,10 +11,10 @@ from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
+from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.utils import cost_map_key_prices_anything
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_urls_to_base64,
     convert_url_to_base64,

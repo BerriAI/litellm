@@ -11,13 +11,9 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    cost_map_entry_prices_anything,
-    cost_map_key_prices_anything,
-    generic_cost_per_token,
-)
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import ModelInfo, Usage
-from litellm.utils import get_model_info, unmapped_model_generalization
+from litellm.utils import get_model_info
 
 
 # Extract the number of billion parameters from the model name
@@ -60,22 +56,11 @@ def get_base_model_for_pricing(model_name: str) -> str:
     return "fireworks-ai-default"
 
 
-def has_size_bucket(model_name: str) -> bool:
-    return get_base_model_for_pricing(model_name) != "fireworks-ai-default"
-
-
 def _resolve_model_info(model: str) -> ModelInfo:
     try:
-        model_info: Final = get_model_info(model=model, custom_llm_provider="fireworks_ai")
+        return get_model_info(model=model, custom_llm_provider="fireworks_ai")
     except Exception:
         return _resolve_routed_model_info(model)
-    declares_rates: Final = cost_map_key_prices_anything(model_info["key"]) or _rule_declares_rates(model)
-    return model_info if declares_rates else _resolve_routed_model_info(model)
-
-
-def _rule_declares_rates(model: str) -> bool:
-    rule_info: Final = unmapped_model_generalization(model, "fireworks_ai")
-    return rule_info is not None and cost_map_entry_prices_anything(rule_info)
 
 
 def _resolve_routed_model_info(model: str) -> ModelInfo:

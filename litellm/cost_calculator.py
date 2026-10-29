@@ -39,8 +39,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     calculate_cache_writing_cost,
     calculate_cost_component,
-    cost_map_entry_prices_anything,
-    cost_map_key_prices_anything,
     generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
@@ -50,7 +48,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_token_type_cost_breakdown,
     get_vertex_regional_endpoint_uplift,
     parse_prompt_tokens_details,
-    raw_cost_map_entry,
     select_cost_metric_for_model,
 )
 from litellm.llms.anthropic.cost_calculation import (
@@ -77,9 +74,6 @@ from litellm.llms.deepseek.cost_calculator import (
 )
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
-)
-from litellm.llms.fireworks_ai.cost_calculator import (
-    has_size_bucket as fireworks_ai_has_size_bucket,
 )
 from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
 from litellm.llms.lemonade.cost_calculator import (
@@ -864,8 +858,27 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
     return value if isinstance(value, str) and value else None
 
 
+_NON_TOKEN_RATE_FIELDS: Final = frozenset(
+    {
+        "cost_per_second",
+        "input_cost_per_second",
+        "output_cost_per_second",
+        "input_cost_per_query",
+        "input_cost_per_text_message",
+        "tiered_pricing",
+    }
+)
+
+
+def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
+    return any(
+        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
+        for field, value in entry.items()
+    )
+
+
 def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
-    return cost_map_entry_prices_anything(entry) or any(
+    return _cost_map_entry_prices_anything(entry) or any(
         value is not None and field.startswith("cache_") and is_server_derived_pricing_key(field)
         for field, value in entry.items()
     )
@@ -893,6 +906,11 @@ def _bedrock_pricing_info(
     if registration is None or registration[0] == profile["key"]:
         return profile
     return model_info_with_pricing_overrides(profile, registration[1])
+
+
+def cost_map_key_prices_anything(key: str) -> bool:
+    entry: Final = _raw_cost_map_entry(key)
+    return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
 def _declares_rates(model_info: ModelInfo | None) -> bool:
@@ -972,7 +990,7 @@ def select_model_name_for_cost_calc(
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
             entry: Final = litellm.model_cost[router_model_id]
-            if cost_map_entry_prices_anything(entry):
+            if _cost_map_entry_prices_anything(entry):
                 return_model = router_model_id
             else:
                 return_model = model
@@ -1020,15 +1038,11 @@ def _row_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
 
 def _rule_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
     rule_info: Final = unmapped_model_generalization(model, custom_llm_provider)
-    return rule_info is not None and cost_map_entry_prices_anything(rule_info)
+    return rule_info is not None and _cost_map_entry_prices_anything(rule_info)
 
 
 def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
-    return (
-        _row_declares_rates(model, custom_llm_provider)
-        or _rule_declares_rates(model, custom_llm_provider)
-        or (custom_llm_provider == "fireworks_ai" and fireworks_ai_has_size_bucket(model))
-    )
+    return _row_declares_rates(model, custom_llm_provider) or _rule_declares_rates(model, custom_llm_provider)
 
 
 def _served_or_priced_requested_model(
@@ -1038,11 +1052,12 @@ def _served_or_priced_requested_model(
     if requested_model is None:
         return served
     requested: Final = _cost_map_model_name(requested_model, custom_llm_provider, None)
-    if requested == served or _row_declares_rates(served, custom_llm_provider):
+    if served in (requested, requested.partition("/")[2]):
         return served
-    if not _resolves_to_rates(requested, _get_provider_for_cost_calc(requested, custom_llm_provider)):
+    pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
+    if not _resolves_to_rates(requested, pricing_provider):
         return served
-    return served if _rule_declares_rates(served, custom_llm_provider) else requested
+    return served if _resolves_to_rates(served, pricing_provider) else requested
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
@@ -2373,7 +2388,7 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
-    registered_deployment_info: Final = raw_cost_map_entry(router_model_id) if router_model_id is not None else None
+    registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
         return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
@@ -2435,7 +2450,7 @@ def _is_unpriced_generalized_candidate(candidate: _CostCandidate) -> bool:
     if model is None:
         return False
     rule_info: Final = unmapped_model_generalization(model, pricing_provider)
-    return rule_info is not None and not cost_map_entry_prices_anything(rule_info)
+    return rule_info is not None and not _cost_map_entry_prices_anything(rule_info)
 
 
 def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, ...]) -> tuple[_CostCandidate, ...]:
@@ -2444,6 +2459,11 @@ def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, .
         *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if not is_unpriced),
         *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if is_unpriced),
     )
+
+
+def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
+    raw_entry: Final = litellm.model_cost.get(key)
+    return raw_entry if isinstance(raw_entry, Mapping) else None
 
 
 def pricing_entry_for_cost_calc(
@@ -2485,7 +2505,7 @@ def pricing_entry_for_cost_calc(
     )
     if resolved is None:
         return None
-    return resolved["key"], raw_cost_map_entry(resolved["key"]) or resolved
+    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
 
 
 def ocr_cost(
@@ -3477,7 +3497,7 @@ def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) 
         litellm.model_cost.get(model_name),
         litellm.model_cost.get(f"{custom_llm_provider}/{model_name}"),
     )
-    return any(entry is not None and cost_map_entry_prices_anything(entry) for entry in entries)
+    return any(entry is not None and _cost_map_entry_prices_anything(entry) for entry in entries)
 
 
 def _first_priced_realtime_token_costs(

@@ -12128,6 +12128,26 @@ def test_get_model_cost_information_maps_requested_model_when_response_names_an_
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_get_model_cost_information_keeps_a_priced_response_model_that_echoes_without_its_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    served_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}
+    requested_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6}
+    monkeypatch.setitem(litellm.model_cost, "mistral/sol-snapshot-test", served_row)
+    monkeypatch.setitem(litellm.model_cost, "mistral/sol-alias-test", requested_row)
+    response: Final = ModelResponse(model="sol-snapshot-test", choices=[])
+    response._hidden_params["litellm_model_name"] = "mistral/sol-alias-test"
+
+    result: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model=None, custom_pricing=False, custom_llm_provider="mistral", init_response_obj=response
+    )
+
+    assert result["model_map_key"] == "sol-snapshot-test"
+    assert result["model_map_value"] is not None
+    assert result["model_map_value"]["input_cost_per_token"] == served_row["input_cost_per_token"]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_standard_logging_payload_uses_deployment_when_no_base_model():
     """metadata["deployment"] is used for cost-map lookup when base_model is not set."""
     from datetime import datetime as datetime_standard_logging

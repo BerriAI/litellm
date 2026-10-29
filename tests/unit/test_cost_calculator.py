@@ -13,7 +13,7 @@ from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
 import litellm
-from litellm import Router, TranscriptionResponse, model_cost
+from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
@@ -542,47 +542,6 @@ def test_completion_cost_keeps_response_pricing_when_requested_alias_has_no_rate
     )
 
     assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[size_bucket], usage))
-
-
-@pytest.mark.parametrize("model_passed", [True, False])
-def test_completion_cost_bills_requested_size_bucket_when_response_names_an_unmapped_display_name(
-    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model_passed: bool
-) -> None:
-    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-display-70b-test"
-    size_bucket: Final = get_base_model_for_pricing(requested_model)
-    monkeypatch.setitem(
-        litellm.model_cost,
-        size_bucket,
-        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
-    )
-    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
-    response: Final = ModelResponse(model="Sol Display Max", choices=[], usage=usage)
-    response._hidden_params["litellm_model_name"] = requested_model
-
-    cost: Final = (
-        completion_cost(completion_response=response, model=requested_model, custom_llm_provider="fireworks_ai")
-        if model_passed
-        else completion_cost(completion_response=response)
-    )
-
-    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[size_bucket], usage))
-
-
-@pytest.mark.parametrize("served_model", ["Sol Display Max", "accounts/fireworks/models/sol-unmapped-70b-test"])
-def test_completion_cost_bills_size_bucket_for_a_router_deployment_of_an_unmapped_fireworks_model(
-    _local_model_cost_map: None, served_model: str
-) -> None:
-    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-unmapped-70b-test"
-    Router(model_list=[{"model_name": "fw-sol", "litellm_params": {"model": requested_model, "api_key": "sk-test"}}])
-    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
-    response: Final = ModelResponse(model=served_model, choices=[], usage=usage)
-    response._hidden_params["litellm_model_name"] = requested_model
-
-    cost: Final = completion_cost(completion_response=response)
-
-    size_bucket_row: Final = litellm.model_cost[get_base_model_for_pricing(requested_model)]
-    assert cost == pytest.approx(_token_rates_cost(size_bucket_row, usage))
-    assert cost > 0
 
 
 def test_completion_cost_bills_requested_model_priced_only_by_a_rule_when_response_row_has_no_rates(
