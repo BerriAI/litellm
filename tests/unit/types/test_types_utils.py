@@ -1189,6 +1189,23 @@ def test_batch_dump_forwards_every_provider_usage_detail_field() -> None:
     assert python_usage["output_tokens_details"] == {"reasoning_tokens": 448, "audio_tokens": 2}
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"input_tokens": 29, "output_tokens": None, "total_tokens": 29},
+        {"input_tokens": 29, "input_tokens_details": {"cached_tokens": 8}, "total_tokens": 29},
+    ],
+)
+def test_batch_dump_serves_unparsed_provider_usage_unchanged(usage: dict[str, object]) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+
+    python_usage: Final = batch.model_dump()["usage"]
+    json_usage: Final = json.loads(batch.model_dump_json(warnings=False))["usage"]
+
+    assert python_usage == json_usage
+    assert {key: python_usage[key] for key in usage} == usage
+
+
 def test_batch_dump_applies_exclude_none_to_provider_usage_detail_fields() -> None:
     batch: Final = LiteLLMBatch.model_validate(
         {

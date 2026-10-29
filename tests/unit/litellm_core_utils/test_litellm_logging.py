@@ -1591,12 +1591,18 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         assert batch.usage is not None
         assert batch.usage.total_tokens == 35
 
-    @pytest.mark.parametrize(("batch_ignore_default_logging", "expected_events"), [(True, 0), (False, 1)])
-    def test_sync_logger_skips_the_cost_poller_retrieve(self, batch_ignore_default_logging, expected_events) -> None:
+    @pytest.mark.parametrize("batch_ignore_default_logging", [True, False])
+    def test_sync_logger_gets_a_free_event_for_the_cost_poller_retrieve(self, batch_ignore_default_logging: bool) -> None:
         sync_events: list[object] = []
 
         class SyncOnlyLogger(CustomLogger):
-            def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            def log_success_event(
+                self,
+                kwargs: dict[str, object],
+                response_obj: object,
+                start_time: dt_object,
+                end_time: dt_object,
+            ) -> None:
                 sync_events.append(kwargs["response_cost"])
 
         logging_obj = LitellmLogging(
@@ -1624,7 +1630,40 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
             for_async_request=True,
         )
 
-        assert len(sync_events) == expected_events
+        assert len(sync_events) == 1
+        assert isinstance(sync_events[0], float)
+        assert (sync_events[0] == 0.0) is batch_ignore_default_logging
+
+    def test_logged_usage_object_keeps_the_batch_chat_usage(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+        from litellm.types.utils import Usage
+
+        aggregate: Final = Usage(
+            prompt_tokens=29, completion_tokens=48, total_tokens=77, reasoning_tokens=3, cache_creation_input_tokens=300
+        )
+        billed: Final = self._batch("completed", "file-out").model_copy(update={"usage": aggregate})
+        provider_read: Final = self._batch("completed", "file-out")
+        now: Final = dt_object(2026, 1, 1, 12, 0, 0)
+
+        usage_objects: Final = tuple(
+            payload["metadata"]["usage_object"]
+            for payload in (
+                get_standard_logging_object_payload(
+                    kwargs={"litellm_params": {}},
+                    init_response_obj=batch,
+                    start_time=now,
+                    end_time=now,
+                    logging_obj=self._logging_obj(),
+                    status="success",
+                )
+                for batch in (billed, provider_read)
+            )
+            if payload is not None
+        )
+
+        assert usage_objects[0] == aggregate.model_dump()
+        assert usage_objects[1]["prompt_tokens"] == 29
+        assert "input_tokens" not in usage_objects[1]
 
 
 class TestAnthropicPassthroughCustomPricing:

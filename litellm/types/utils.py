@@ -4845,6 +4845,12 @@ def _provider_batch_usage_details(usage: Usage) -> _ProviderBatchUsageDetails:
         return _ProviderBatchUsageDetails()
 
 
+def _has_unparsed_batch_token_counts(usage: Usage) -> bool:
+    provider_fields: Final = usage.model_extra or {}
+    sent_batch_counts: Final = "input_tokens" in provider_fields or "output_tokens" in provider_fields
+    return sent_batch_counts and _parse_batch_token_counts(provider_fields) is None
+
+
 def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
     provider_details: Final = _provider_batch_usage_details(usage)
     cached_tokens: Final = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else None
@@ -4889,15 +4895,18 @@ class LiteLLMBatch(Batch):
     ) -> Mapping[str, object] | None:
         if not isinstance(usage, Usage):
             return usage
+        chat_fields: Final = usage.model_dump(
+            mode=info.mode,
+            include=info.include,
+            exclude=info.exclude,
+            exclude_unset=info.exclude_unset,
+            exclude_defaults=info.exclude_defaults,
+            exclude_none=info.exclude_none,
+        )
+        if _has_unparsed_batch_token_counts(usage):
+            return chat_fields
         return {
-            **usage.model_dump(
-                mode=info.mode,
-                include=info.include,
-                exclude=info.exclude,
-                exclude_unset=info.exclude_unset,
-                exclude_defaults=info.exclude_defaults,
-                exclude_none=info.exclude_none,
-            ),
+            **chat_fields,
             **_batch_usage_from_chat_usage(usage).model_dump(
                 mode=info.mode,
                 include=info.include,

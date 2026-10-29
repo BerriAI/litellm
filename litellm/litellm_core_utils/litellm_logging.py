@@ -20,6 +20,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response, Timeout
+from openai.types.batch_usage import BatchUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -2071,7 +2072,9 @@ class Logging(LiteLLMLoggingBaseClass):
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
-        if isinstance(priced_result, LiteLLMBatch) and not batch_cost_is_final(priced_result):
+        if isinstance(priced_result, LiteLLMBatch) and (
+            not batch_cost_is_final(priced_result) or self._is_batch_poll_without_logging(priced_result)
+        ):
             return 0.0
 
         # Fallback: extract router_model_id from litellm_params when not available
@@ -3278,8 +3281,6 @@ class Logging(LiteLLMLoggingBaseClass):
         **kwargs: Any,  # kwargs-ok: forwarded from success_handler
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
-        if self._is_batch_poll_without_logging(result):
-            return
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
         start_time, end_time, result, request_logging_payload = self._prepare_success_logging(
@@ -7252,6 +7253,15 @@ def _served_from_cache_at_no_charge(result: object) -> bool:
     return served_from_cache(result) and hidden_params is not None and hidden_params.get("response_cost") == 0
 
 
+_PROVIDER_ONLY_BATCH_USAGE_FIELDS: Final = frozenset(BatchUsage.model_fields) - frozenset(Usage.model_fields)
+
+
+def _batch_chat_usage(response: object) -> Usage | None:
+    if not isinstance(response, LiteLLMBatch) or response.usage is None:
+        return None
+    return Usage.model_validate(response.usage.model_dump(exclude=set(_PROVIDER_ONLY_BATCH_USAGE_FIELDS)))
+
+
 def _extract_response_obj_and_hidden_params(
     init_response_obj: object,
     original_exception: Exception | None,
@@ -7389,7 +7399,8 @@ def get_standard_logging_object_payload(
         # Extract usage as a plain dict, avoiding Pydantic round-trip
         raw_usage_dict: Final = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=None if is_unbilled_non_inference_call(call_type, metadata, response_obj) else response_obj,
-            combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object")),
+            combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object"))
+            or _batch_chat_usage(init_response_obj),
         )
         usage_dict: Final = (
             {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}
