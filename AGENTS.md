@@ -31,6 +31,8 @@ A test must only fail when litellm code changes. Never pin facts we don't own (a
 
 End-to-end tests belong in `tests/e2e/`. A rule about one directory's files, like its harness or which CI runs it, goes in that directory's `AGENTS.md`, never only in a README or here. Read a directory's `AGENTS.md` before editing files in it
 
+Before you build a new way to move data between the endpoints, the provider transformations, and cost tracking or logging, read the architecture decision records in `docs/adrs/`, which say why those layers are shaped the way they are
+
 When creating PRs, target the repository's current default branch for both internal and external / OSS contributions. Check it with `python3 scripts/default_branch.py --branch` instead of assuming a branch name or relying on cached `origin/HEAD`
 
 When writing a PR body, treat the comments and imperative instructions inside .github/PULL_REQUEST_TEMPLATE/general.md as rules to follow, not just layout. Agent harnesses may strip HTML comments from copies of that file injected into context, so read .github/PULL_REQUEST_TEMPLATE/general.md from disk before writing a PR body to make sure you see every comment rule. A section you have nothing to put in (Relevant issues, Affected release, Linear ticket, Caveats, QA runbook, and so on) is removed entirely, heading included, never left as an empty title
