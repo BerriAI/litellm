@@ -133,9 +133,11 @@ class LeastBusyLoggingHandler(CustomLogger):
         return _unexpired(_RESERVATION_TIMES.validate_python(raw) or (), now)
 
     def _store_reservations(self, key: str, times: tuple[float, ...]) -> None:
-        self.router_cache.set_cache(
-            _reservation_key(key), times, local_only=True, ttl=SELECTION_RESERVATION_TTL_SECONDS
-        )
+        # InMemoryCache keeps a live key's first TTL, so drop the key to restart it
+        local: Final = self.router_cache.in_memory_cache
+        local.delete_cache(_reservation_key(key))
+        if times:
+            local.set_cache(_reservation_key(key), times, ttl=SELECTION_RESERVATION_TTL_SECONDS)
 
     def _select(
         self,

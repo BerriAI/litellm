@@ -453,6 +453,21 @@ def test_a_reservation_that_never_reaches_the_api_call_expires() -> None:
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
 
 
+def test_a_fresh_reservation_outlives_the_ttl_of_the_first_one_on_its_deployment() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    worker: Final = LeastBusyLoggingHandler(router_cache=cache, clock=clock)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    worker.log_success_event(kwargs=_call_kwargs("dep-a"), response_obj=None, start_time=None, end_time=None)
+    clock.now = SELECTION_RESERVATION_TTL_SECONDS - 0.1
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    clock.now = SELECTION_RESERVATION_TTL_SECONDS + 0.1
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+
+
 def test_a_started_request_moves_its_reservation_into_the_in_flight_count() -> None:
     worker: Final = _worker(None)
 
