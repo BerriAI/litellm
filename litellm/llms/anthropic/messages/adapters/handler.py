@@ -163,17 +163,17 @@ async def prepare_context_managed_request(
     )
 
     # Skip the client-history pre-processing when a ``compact_20260112``
-    # polyfill edit runs first: that editor already slices around any client-sent
+    # polyfill spec will run: that editor already slices around any client-sent
     # compaction block in its Phase A (and uses the full post-compaction tail
     # for its token-threshold check). Pre-collapsing to just the latest user
     # question here would starve the polyfill of conversation context and
     # silently drop intermediate turns.
-    compact_runs_first: Final = _compact_runs_first(
+    polyfill_will_run: Final = _polyfill_will_run(
         context_management_spec=context_management_spec,
         additional_drop_params=additional_drop_params,
     )
 
-    if compact_runs_first:
+    if polyfill_will_run:
         history_result: PolyfillResult | None = None
         working_messages: _AnthropicMessages = messages
         working_system: _AnthropicSystem = system
@@ -211,7 +211,7 @@ async def prepare_context_managed_request(
     # ``_run_polyfill_if_enabled``), apply the slice-only fallback now so
     # Anthropic-specific ``compaction`` content blocks don't leak through
     # to non-Anthropic backends that would reject them.
-    if compact_runs_first and history_result is None:
+    if polyfill_will_run and history_result is None:
         history_result = apply_client_compaction_block_history(
             messages=messages,
             system=system,
@@ -219,18 +219,18 @@ async def prepare_context_managed_request(
     return history_result
 
 
-def _compact_runs_first(
+def _polyfill_will_run(
     *,
     context_management_spec: _ContextManagementSpec,
     additional_drop_params: list[str] | None,
 ) -> bool:
-    """Return True when ``compact_20260112`` is the first edit the polyfill dispatcher runs.
+    """Return True when ``compact_20260112`` will run via the polyfill dispatcher.
 
     Mirrors the gating in ``_run_polyfill_if_enabled``: an empty spec or an
     explicit ``context_management`` entry in ``additional_drop_params``
-    short-circuits the polyfill. The pre-processing skip only applies when
-    ``apply_compact_20260112`` (which has its own compaction-block slicing)
-    sees the messages before any other editor does.
+    short-circuits the polyfill. The pre-processing skip only applies when the
+    dispatcher will actually invoke ``apply_compact_20260112`` (which has its
+    own compaction-block slicing).
     """
     edits: Final = _normalize_spec_edits(
         context_management_spec=context_management_spec,
@@ -243,7 +243,7 @@ def _compact_runs_first(
         COMPACT_EDIT_TYPE,
     )
 
-    return bool(edits) and edits[0].get("type") == COMPACT_EDIT_TYPE
+    return any(edit.get("type") == COMPACT_EDIT_TYPE for edit in edits)
 
 
 def _spec_has_non_compact_edits(

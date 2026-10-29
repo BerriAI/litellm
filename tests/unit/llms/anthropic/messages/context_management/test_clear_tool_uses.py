@@ -762,6 +762,42 @@ async def test_input_tokens_trigger_counts_a_client_compaction_summary(compact_p
     assert cleared(with_summary) == [2]
 
 
+async def test_compact_after_clearing_replaces_the_client_compaction_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "summary-model")
+    summary: Final = MagicMock()
+    summary.choices = [MagicMock(message=MagicMock(content="<summary>Fresh summary</summary>"))]
+    summary.usage = MagicMock(prompt_tokens=50, completion_tokens=100)
+    router: Final = MagicMock()
+    router.acompletion = AsyncMock(return_value=summary)
+    tail: Final = _make_history(n_pairs=3)
+    result: Final = await prepare_context_managed_request(
+        model=MODEL,
+        messages=[{"role": "assistant", "content": [{"type": "compaction", "content": "Old summary. " * 20_000}]}, *tail],
+        tools=None,
+        system="You are a helpful assistant.",
+        context_management_spec={
+            "edits": [
+                {
+                    "type": "clear_tool_uses_20250919",
+                    "trigger": {"type": "input_tokens", "value": 1_000},
+                    "keep": {"type": "tool_uses", "value": 1},
+                },
+                {"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50_000}},
+            ]
+        },
+        litellm_metadata=None,
+        additional_drop_params=None,
+        llm_router=router,
+    )
+    assert result is not None
+    assert isinstance(result.system, str)
+    assert "Fresh summary" in result.system
+    assert "Old summary" not in result.system
+    assert result.system.endswith("You are a helpful assistant.")
+
+
 @pytest.mark.parametrize(("clear_tool_inputs", "triggers"), [(False, False), (True, True)])
 def test_tool_uses_trigger_counts_tiny_results_only_when_their_inputs_are_cleared(
     clear_tool_inputs: bool, triggers: bool

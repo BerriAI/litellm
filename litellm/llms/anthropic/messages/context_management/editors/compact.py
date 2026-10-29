@@ -167,6 +167,21 @@ def _slice_around_compaction_block(
     return sliced_messages, compaction_block
 
 
+def after_client_compaction(
+    messages: Sequence[Mapping[str, object]],
+    system: str | Sequence[Mapping[str, object]] | None,
+) -> tuple[int, str | Sequence[Mapping[str, object]] | None] | None:
+    """Return where the history after the latest compaction block starts and the system text with its summary."""
+    sliced, block = _slice_around_compaction_block(messages)
+    if block is None:
+        return None
+    tail_start: Final = len(messages) - len(sliced) + 1
+    summary: Final = block.get("content")
+    if not isinstance(summary, str) or not summary:
+        return tail_start, system
+    return tail_start, _augment_system_with_summary(_system_to_text(system) or None, summary)
+
+
 def _strip_compaction_blocks(
     messages: Sequence[dict[str, object]],
 ) -> list[dict[str, object]]:
