@@ -1064,6 +1064,15 @@ async def _guardrail_spend_or_empty(
         return ()
 
 
+async def _user_entity_metadata(
+    repository: DailyActivityRepository, entity_rows: Sequence[EntityRollupRow]
+) -> Mapping[str, dict[str, object]]:  # mutable-ok: entity_metadata_field shape
+    users: Final = await repository.user_metadata(frozenset(row.entity_id for row in entity_rows if row.entity_id))
+    return MappingProxyType(
+        {user_id: {"user_email": user.user_email, "user_alias": user.user_alias} for user_id, user in users.items()}
+    )
+
+
 async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
@@ -1101,19 +1110,22 @@ async def get_daily_activity_aggregated(
             entity_api_keys: Final = frozenset(
                 row.api_key for row in entity_records if row.api_key and row.api_key != PTU_SENTINEL_API_KEY
             )
-            entity_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
-                await repository.key_metadata(
+            entity_key_metadata, rollup_entity_metadata = await asyncio.gather(
+                repository.key_metadata(
                     entity_api_keys, spend_logs_window(frozenset(row.date for row in entity_records))
                 )
                 if entity_api_keys
-                else MappingProxyType({})
+                else asyncio.sleep(0, result=MappingProxyType({})),
+                _user_entity_metadata(repository, entity_records)
+                if scope.table is DailyActivityTable.USER
+                else asyncio.sleep(0, result=MappingProxyType({})),
             )
             await asyncio.to_thread(
                 _fold_entity_rollups_sync,
                 results=aggregated["results"],
                 entity_rows=entity_records,
                 api_key_metadata=entity_key_metadata,
-                entity_metadata_field=entity_metadata_field,
+                entity_metadata_field=MappingProxyType({**rollup_entity_metadata, **(entity_metadata_field or {})}),
             )
         results: Final = (
             list(await asyncio.to_thread(_with_guardrail_breakdown, aggregated["results"], guardrail_rows))
