@@ -463,13 +463,9 @@ def _token_model_budget_fields(valid_token: _TokenModelBudgetFields) -> _TokenMo
     return valid_token
 
 
-class _RouterFallbacks(Protocol):
-    @property
-    def fallbacks(self) -> Sequence[object] | None: ...
-
-
-def _router_fallbacks(router: _RouterFallbacks) -> Sequence[object] | None:
-    return router.fallbacks
+def _router_fallbacks(router: litellm.Router) -> Sequence[object] | None:
+    fallbacks: Final[Sequence[object] | None] = router.settings().fallbacks
+    return fallbacks
 
 
 async def _read_user_model_max_budget(
@@ -977,7 +973,7 @@ async def _try_team_member_model_budget_fallback(
                             fallback_candidate,
                             fallback_model,
                             served_model,
-                            llm_router.routable_model_group(served_model),
+                            llm_router.registry().resolve(served_model),
                         )
                     )
                 ),

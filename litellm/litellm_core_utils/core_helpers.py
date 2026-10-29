@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
@@ -32,6 +33,49 @@ _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
+    """Put the provider prefix back on a provider-stripped model."""
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    if _already_routes_to(model, custom_llm_provider):
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def _already_routes_to(model: str, custom_llm_provider: str) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+
+    return _leads_with_provider(model) and inferred_provider(model) == custom_llm_provider
+
+
+def _leads_with_provider(model: str) -> bool:
+    leading_segment, separator, _ = model.partition("/")
+    return bool(separator) and names_a_provider(leading_segment)
+
+
+def names_a_provider(candidate: str) -> bool:
+    """Whether a model name's leading segment is a provider rather than part of the model."""
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_names: Final = {getattr(provider, "value", provider) for provider in litellm.provider_list}
+    return (
+        candidate in provider_names
+        or JSONProviderRegistry.exists(candidate)
+        or is_registered_custom_provider(candidate)
+    )
+
+
+def qualify_agentic_followup_model(patch_model: str | None, model: str, custom_llm_provider: str) -> str:
+    """Resolve the model an agentic follow-up re-dispatches, keeping a hook's own provider."""
+    if not patch_model or patch_model == model:
+        return qualify_provider_stripped_model(model, custom_llm_provider)
+    if _leads_with_provider(patch_model):
+        return patch_model
+    return qualify_provider_stripped_model(patch_model, custom_llm_provider)
 
 
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
@@ -971,6 +1015,16 @@ def chunk_usage(chunk: object) -> object:
     if isinstance(chunk, Mapping):
         return _USAGE_BLOCK_ADAPTER.validate_python(chunk).get("usage")
     return getattr(chunk, "usage", None)
+
+
+USAGE_COST_BILLED_PROVIDERS: Final = frozenset({"kyma"})
+
+
+def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
+    if custom_llm_provider not in USAGE_COST_BILLED_PROVIDERS:
+        return None
+    cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+    return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
