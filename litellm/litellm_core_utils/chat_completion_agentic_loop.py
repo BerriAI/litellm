@@ -304,21 +304,8 @@ async def maybe_run_chat_completion_agentic_loop(
             model=model,
         )
 
-        try:
-            if not _build_plan_overridden(callback):
-                return await callback.async_run_agentic_loop(
-                    tools=tool_calls,
-                    model=model,
-                    messages=messages,
-                    response=response,
-                    anthropic_messages_provider_config=None,
-                    anthropic_messages_optional_request_params=optional_params,
-                    logging_obj=logging_obj,
-                    stream=stream,
-                    kwargs=hook_kwargs,
-                )
-
-            plan = await callback.async_build_agentic_loop_plan(
+        if not _build_plan_overridden(callback):
+            return await callback.async_run_agentic_loop(
                 tools=tool_calls,
                 model=model,
                 messages=messages,
@@ -330,31 +317,38 @@ async def maybe_run_chat_completion_agentic_loop(
                 kwargs=hook_kwargs,
             )
 
-            if plan.response_override is not None:
-                return plan.response_override
-            if plan.terminate:
-                return response
-            if not plan.run_agentic_loop:
-                continue
+        plan = await callback.async_build_agentic_loop_plan(
+            tools=tool_calls,
+            model=model,
+            messages=messages,
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params=optional_params,
+            logging_obj=logging_obj,
+            stream=stream,
+            kwargs=hook_kwargs,
+        )
 
-            return await _execute_chat_completion_agentic_plan(
-                plan=plan,
-                callback=callback,
-                model=model,
-                optional_params=optional_params,
-                kwargs=kwargs,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
-                depth=depth,
-                max_loops=max_loops,
-                fingerprints=fingerprints,
-                fingerprint=fingerprint,
-            )
-        except Exception as e:
-            verbose_logger.exception(
-                "LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: %s",
-                str(e),
-            )
+        if plan.response_override is not None:
+            return plan.response_override
+        if plan.terminate:
+            return response
+        if not plan.run_agentic_loop:
+            continue
+
+        return await _execute_chat_completion_agentic_plan(
+            plan=plan,
+            callback=callback,
+            model=model,
+            optional_params=optional_params,
+            kwargs=kwargs,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            depth=depth,
+            max_loops=max_loops,
+            fingerprints=fingerprints,
+            fingerprint=fingerprint,
+        )
 
     return _converted_stream_replay(
         response,

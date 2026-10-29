@@ -64,6 +64,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -4990,6 +4991,119 @@ async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_s
     )
 
     assert followup_calls[0]["prompt_cache_key"] == "from-plan-params"
+
+
+class _PlannedChatLoop(CustomLogger):
+    def __init__(self, plan: AgenticLoopPlan) -> None:
+        super().__init__()
+        self._plan = plan
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return True, {"tool_calls": [{"id": "call_search", "name": "litellm_web_search"}]}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        return self._plan
+
+
+class _RunOnlyChatLoop(CustomLogger):
+    def __init__(self, result: ModelResponse) -> None:
+        super().__init__()
+        self._result = result
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return True, {"tool_calls": [{"id": "call_search", "name": "litellm_web_search"}]}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        return self._result
+
+
+async def _run_chat_completion_agentic_hooks(response: ModelResponse, *callbacks: CustomLogger) -> object:
+    logging_obj: Final = Mock(litellm_call_id="call-1", dynamic_success_callbacks=list(callbacks), model_call_details={})
+    return await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+        response=response,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is new in litellm?"}],
+        optional_params={},
+        logging_obj=logging_obj,
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_surface_a_failed_follow_up_instead_of_the_tool_call_turn():
+    rate_limited_follow_up: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            messages=[{"role": "user", "content": "here are the search results"}],
+            kwargs={"mock_response": "litellm.RateLimitError"},
+        ),
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await _run_chat_completion_agentic_hooks(ModelResponse(), _PlannedChatLoop(rate_limited_follow_up))
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_return_the_tool_call_turn_when_the_plan_terminates():
+    response: Final = ModelResponse()
+
+    assert await _run_chat_completion_agentic_hooks(response, _PlannedChatLoop(AgenticLoopPlan(terminate=True))) is response
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_move_past_a_plan_that_declines_the_loop():
+    override: Final = ModelResponse()
+    declined: Final = _PlannedChatLoop(AgenticLoopPlan(run_agentic_loop=False))
+    overriding: Final = _PlannedChatLoop(AgenticLoopPlan(response_override=override))
+
+    assert await _run_chat_completion_agentic_hooks(ModelResponse(), declined, overriding) is override
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_return_a_run_only_loops_result():
+    loop_result: Final = ModelResponse()
+
+    assert await _run_chat_completion_agentic_hooks(ModelResponse(), _RunOnlyChatLoop(loop_result)) is loop_result
 
 
 @pytest.mark.asyncio

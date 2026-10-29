@@ -6353,27 +6353,12 @@ class BaseLLMHTTPHandler:
                     api_surface,
                 )
 
-            try:
-                kwargs_with_provider = hook_kwargs.copy()
-                kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-                build_plan_overridden = (
-                    callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
-                )
-                if not build_plan_overridden:
-                    agentic_result: object = await callback.async_run_agentic_loop(
-                        tools=tool_calls,
-                        model=model,
-                        messages=messages,
-                        response=response,
-                        anthropic_messages_provider_config=anthropic_messages_provider_config,
-                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                        logging_obj=logging_obj,
-                        stream=stream,
-                        kwargs=kwargs_with_provider,
-                    )
-                    return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
-
-                plan = await callback.async_build_agentic_loop_plan(
+            kwargs_with_provider = {**hook_kwargs, "custom_llm_provider": custom_llm_provider}
+            build_plan_overridden = (
+                callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
+            )
+            if not build_plan_overridden:
+                agentic_result: object = await callback.async_run_agentic_loop(
                     tools=tool_calls,
                     model=model,
                     messages=messages,
@@ -6384,67 +6369,72 @@ class BaseLLMHTTPHandler:
                     stream=stream,
                     kwargs=kwargs_with_provider,
                 )
+                return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
 
-                if plan.response_override is not None:
-                    return self._maybe_wrap_in_fake_stream(plan.response_override, logging_obj, api_surface)
-                if plan.terminate:
-                    verbose_logger.debug(
-                        "Agentic loop terminated by callback=%s reason=%s",
-                        callback.__class__.__name__,
-                        plan.stop_reason,
-                    )
-                    return self._maybe_wrap_in_fake_stream(
-                        await callback.async_post_agentic_loop_response_hook(
-                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
-                            plan=plan,
-                            kwargs=kwargs_with_provider,
-                        ),
-                        logging_obj,
-                        api_surface,
-                    )
-                if not plan.run_agentic_loop:
-                    continue
+            plan = await callback.async_build_agentic_loop_plan(
+                tools=tool_calls,
+                model=model,
+                messages=messages,
+                response=response,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                logging_obj=logging_obj,
+                stream=stream,
+                kwargs=kwargs_with_provider,
+            )
 
-                if api_surface == "responses":
-                    return await self._execute_responses_agentic_plan(
-                        plan=plan,
-                        model=model,
-                        response_api_optional_request_params=anthropic_messages_optional_request_params,
-                        logging_obj=logging_obj,
-                        kwargs=kwargs_with_provider,
-                        depth=depth,
-                        max_loops=max_loops,
-                        fingerprints=fingerprints,
-                        fingerprint=fingerprint,
-                        callback=callback,
-                    )
-
+            if plan.response_override is not None:
+                return self._maybe_wrap_in_fake_stream(plan.response_override, logging_obj, api_surface)
+            if plan.terminate:
+                verbose_logger.debug(
+                    "Agentic loop terminated by callback=%s reason=%s",
+                    callback.__class__.__name__,
+                    plan.stop_reason,
+                )
                 return self._maybe_wrap_in_fake_stream(
-                    await self._execute_anthropic_agentic_plan(
+                    await callback.async_post_agentic_loop_response_hook(
+                        response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
                         plan=plan,
-                        model=model,
-                        messages=messages,
-                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                        logging_obj=logging_obj,
                         kwargs=kwargs_with_provider,
-                        depth=depth,
-                        max_loops=max_loops,
-                        fingerprints=fingerprints,
-                        fingerprint=fingerprint,
-                        stream=stream,
-                        callback=callback,
                     ),
                     logging_obj,
                     api_surface,
                 )
-            except Exception as e:
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks [call_id=%s model=%s]: %s",
-                    _call_id,
-                    model,
-                    str(e),
+            if not plan.run_agentic_loop:
+                continue
+
+            if api_surface == "responses":
+                return await self._execute_responses_agentic_plan(
+                    plan=plan,
+                    model=model,
+                    response_api_optional_request_params=anthropic_messages_optional_request_params,
+                    logging_obj=logging_obj,
+                    kwargs=kwargs_with_provider,
+                    depth=depth,
+                    max_loops=max_loops,
+                    fingerprints=fingerprints,
+                    fingerprint=fingerprint,
+                    callback=callback,
                 )
+
+            return self._maybe_wrap_in_fake_stream(
+                await self._execute_anthropic_agentic_plan(
+                    plan=plan,
+                    model=model,
+                    messages=messages,
+                    anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                    logging_obj=logging_obj,
+                    kwargs=kwargs_with_provider,
+                    depth=depth,
+                    max_loops=max_loops,
+                    fingerprints=fingerprints,
+                    fingerprint=fingerprint,
+                    stream=stream,
+                    callback=callback,
+                ),
+                logging_obj,
+                api_surface,
+            )
 
         # Check if we need to convert response to fake stream
         # This happens when:
@@ -6524,26 +6514,13 @@ class BaseLLMHTTPHandler:
                 model=model,
             )
 
-            try:
-                kwargs_with_provider = kwargs.copy() if kwargs else {}
-                kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-                build_plan_overridden = (
-                    callback.__class__.async_build_chat_completion_agentic_loop_plan
-                    is not CustomLogger.async_build_chat_completion_agentic_loop_plan
-                )
-                if not build_plan_overridden:
-                    return await callback.async_run_chat_completion_agentic_loop(
-                        tools=tool_calls,
-                        model=model,
-                        messages=messages,
-                        response=response,
-                        optional_params=optional_params,
-                        logging_obj=logging_obj,
-                        stream=stream,
-                        kwargs=kwargs_with_provider,
-                    )
-
-                plan = await callback.async_build_chat_completion_agentic_loop_plan(
+            kwargs_with_provider = {**(kwargs or {}), "custom_llm_provider": custom_llm_provider}
+            build_plan_overridden = (
+                callback.__class__.async_build_chat_completion_agentic_loop_plan
+                is not CustomLogger.async_build_chat_completion_agentic_loop_plan
+            )
+            if not build_plan_overridden:
+                return await callback.async_run_chat_completion_agentic_loop(
                     tools=tool_calls,
                     model=model,
                     messages=messages,
@@ -6554,32 +6531,41 @@ class BaseLLMHTTPHandler:
                     kwargs=kwargs_with_provider,
                 )
 
-                if plan.response_override is not None:
-                    return plan.response_override
-                if plan.terminate:
-                    verbose_logger.debug(
-                        "Agentic chat loop terminated by callback=%s reason=%s",
-                        callback.__class__.__name__,
-                        plan.stop_reason,
-                    )
-                    return response
-                if not plan.run_agentic_loop:
-                    continue
+            plan = await callback.async_build_chat_completion_agentic_loop_plan(
+                tools=tool_calls,
+                model=model,
+                messages=messages,
+                response=response,
+                optional_params=optional_params,
+                logging_obj=logging_obj,
+                stream=stream,
+                kwargs=kwargs_with_provider,
+            )
 
-                return await self._execute_chat_completion_agentic_plan(
-                    plan=plan,
-                    model=model,
-                    messages=messages,
-                    optional_params=optional_params,
-                    kwargs=kwargs_with_provider,
-                    custom_llm_provider=custom_llm_provider,
-                    depth=depth,
-                    max_loops=max_loops,
-                    fingerprints=fingerprints,
-                    fingerprint=fingerprint,
+            if plan.response_override is not None:
+                return plan.response_override
+            if plan.terminate:
+                verbose_logger.debug(
+                    "Agentic chat loop terminated by callback=%s reason=%s",
+                    callback.__class__.__name__,
+                    plan.stop_reason,
                 )
-            except Exception as e:
-                verbose_logger.exception("LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: %s", e)
+                return response
+            if not plan.run_agentic_loop:
+                continue
+
+            return await self._execute_chat_completion_agentic_plan(
+                plan=plan,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                kwargs=kwargs_with_provider,
+                custom_llm_provider=custom_llm_provider,
+                depth=depth,
+                max_loops=max_loops,
+                fingerprints=fingerprints,
+                fingerprint=fingerprint,
+            )
 
         # Check if we need to convert response to fake stream for chat completions
         # This happens when:

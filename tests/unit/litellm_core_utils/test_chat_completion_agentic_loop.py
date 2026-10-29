@@ -467,6 +467,103 @@ async def test_dispatcher_raises_on_repeated_tool_call_fingerprint(restore_callb
 
 
 @pytest.mark.asyncio
+async def test_dispatcher_surfaces_a_failed_follow_up_instead_of_the_tool_call_turn():
+    logger: Final = _GateOnlyLogger(
+        plan=AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=_patched_messages(), kwargs={"mock_response": "litellm.RateLimitError"}
+            ),
+        ),
+        tool_calls={"tool_calls": [{"id": "call_abc"}]},
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await _dispatch_tool_call_turn(_tool_call_model_response(), logger)
+
+    assert logger.cleanup_calls == 1
+
+
+class _RunOnlyLoopLogger(CustomLogger):
+    def __init__(self, result: ModelResponse) -> None:
+        super().__init__()
+        self._result = result
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict[str, Any],
+    ) -> Tuple[bool, Dict[str, Any]]:
+        return True, {"tool_calls": [{"id": "call_abc"}]}
+
+    async def async_run_agentic_loop(
+        self,
+        tools: Dict[str, Any],
+        model: str,
+        messages: List[Dict[str, Any]],
+        response: Any,
+        anthropic_messages_provider_config: Any,
+        anthropic_messages_optional_request_params: Dict[str, Any],
+        logging_obj: Any,
+        stream: bool,
+        kwargs: Dict[str, Any],
+    ) -> Any:
+        return self._result
+
+
+class _LoggingWithCallbacks(_LoggingStub):
+    def __init__(self, callbacks: Tuple[CustomLogger, ...]) -> None:
+        self.dynamic_success_callbacks = list(callbacks)
+
+
+async def _dispatch_tool_call_turn(
+    response: ModelResponse, *callbacks: CustomLogger
+) -> ModelResponse | CustomStreamWrapper | None:
+    return await maybe_run_chat_completion_agentic_loop(
+        response=response,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={},
+        logging_obj=_LoggingWithCallbacks(callbacks),
+        custom_llm_provider="openai",
+        stream=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_returns_the_tool_call_turn_when_the_plan_terminates():
+    response: Final = _tool_call_model_response()
+    terminating: Final = _GateOnlyLogger(
+        plan=AgenticLoopPlan(terminate=True), tool_calls={"tool_calls": [{"id": "call_abc"}]}
+    )
+
+    assert await _dispatch_tool_call_turn(response, terminating) is response
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_moves_past_a_plan_that_declines_the_loop():
+    override: Final = _plain_model_response("from the next callback")
+    tool_calls: Final = {"tool_calls": [{"id": "call_abc"}]}
+    declined: Final = _GateOnlyLogger(plan=AgenticLoopPlan(run_agentic_loop=False), tool_calls=tool_calls)
+    overriding: Final = _GateOnlyLogger(plan=AgenticLoopPlan(response_override=override), tool_calls=tool_calls)
+
+    assert await _dispatch_tool_call_turn(_tool_call_model_response(), declined, overriding) is override
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_returns_a_run_only_loops_result():
+    loop_result: Final = _plain_model_response()
+
+    assert await _dispatch_tool_call_turn(_tool_call_model_response(), _RunOnlyLoopLogger(loop_result)) is loop_result
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("include_usage", (True, False), ids=("usage_requested", "usage_not_requested"))
 @pytest.mark.parametrize(
     "prefix", (WEBSEARCH_INTERCEPTION_PREFIX, CODE_INTERPRETER_INTERCEPTION_PREFIX, HEADROOM_INTERCEPTION_PREFIX)

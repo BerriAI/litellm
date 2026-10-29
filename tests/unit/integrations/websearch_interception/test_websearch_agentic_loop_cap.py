@@ -509,6 +509,50 @@ def _response_asking_for_searches(*queries: str) -> dict:
     }
 
 
+class TestFailedFollowUpCallReachesTheClient:
+    """
+    A follow-up model call that fails after a successful search used to be
+    logged and dropped, so the client got the pre-loop turn holding a
+    litellm_web_search tool_use it never declared.
+    """
+
+    def setup_method(self):
+        self.handler = BaseLLMHTTPHandler()
+        self.logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+
+    @staticmethod
+    async def _rate_limited_follow_up(**call_kwargs):
+        raise RateLimitError(
+            "UserByModelByMinuteUncachedInputTokens", llm_provider="anthropic", model="claude-sonnet-4-5"
+        )
+
+    @staticmethod
+    async def _search(query, kwargs=None, rich=None):
+        found = SearchResult(title="Result", url="https://example.com", snippet="A result.", date=None)
+        return ("Title: Result\nURL: https://example.com", SearchResponse(results=[found]))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("converted_stream", (False, True), ids=("non_streaming", "streaming_client"))
+    async def test_follow_up_rate_limit_is_raised_to_the_caller(self, monkeypatch, converted_stream):
+        monkeypatch.setattr("litellm.anthropic_interface.messages.acreate", self._rate_limited_follow_up)
+
+        with (
+            patch.object(self.logger, "_execute_search", side_effect=self._search),
+            pytest.raises(RateLimitError, match="UserByModelByMinuteUncachedInputTokens"),
+        ):
+            await self.handler._call_agentic_completion_hooks(
+                response=_response_asking_for_searches("who won the world cup"),
+                model="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "who won the world cup"}],
+                anthropic_messages_provider_config=MagicMock(),
+                anthropic_messages_optional_request_params={"tools": [get_litellm_web_search_tool()]},
+                logging_obj=_logging_obj(self.logger, converted_stream=converted_stream),
+                stream=False,
+                custom_llm_provider="anthropic",
+                kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3, WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+            )
+
+
 class TestFailedSearchEndsTheTurn:
     """
     A search that failed used to come back to the client as an empty successful
