@@ -2,18 +2,31 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from integration._support.client import Gateway, object_value
 from integration._support.database import scratch_database
-from integration._support.process import owned_proxy
+from integration._support.process import DB_PUSH, LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, owned_proxy
 
 MASTER_KEY_USER: Final = "default_user_id"
 
 
-def test_master_key_invites_on_a_proxy_where_nobody_signed_in(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "database_setup",
+    (DB_PUSH, MIGRATE_DEPLOY, LEGACY_MIGRATE_DEPLOY),
+    ids=("db-push", "v2-resolver", "legacy-resolver"),
+)
+def test_master_key_invites_on_a_proxy_where_nobody_signed_in(
+    gateway: Gateway, tmp_path: Path, database_setup: tuple[str, ...]
+) -> None:
     with (
         scratch_database() as database_url,
         owned_proxy(
-            gateway, tmp_path, {"DATABASE_URL": database_url}, remove_environment=("DATABASE_URL_READ_REPLICA",)
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database_url},
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+            database_setup=database_setup,
         ) as proxy,
         proxy.scenario() as scenario,
     ):

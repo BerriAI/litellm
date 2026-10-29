@@ -13,7 +13,8 @@ from pydantic import TypeAdapter
 
 Schema: TypeAlias = Mapping[str, Mapping[str, str]]
 MODELS: Final = re.compile(r"^[ \t]*model\s+(\w+)\s*\{(.*?)^[ \t]*\}", re.MULTILINE | re.DOTALL)
-REFERENTIAL_ACTION: Final = re.compile(r"\bon(?:Delete|Update)\s*:")
+ON_DELETE: Final = re.compile(r"\bonDelete\s*:\s*(\w+)")
+ROW_PRESERVING_ON_DELETE: Final = frozenset({"Restrict", "NoAction"})
 
 
 def parse_model_fields(schema: str) -> Schema:
@@ -37,9 +38,17 @@ def _field_changes(model: str, field: str, old_type: str, new_fields: Mapping[st
         yield f"Breaking: Field {model}.{field} changed type from {old_type} to {new_type}"
 
 
+def _on_delete(field_type: str) -> str:
+    written: Final = ON_DELETE.search(field_type)
+    if written is not None:
+        return written[1]
+    return "SetNull" if field_type.split()[0].endswith("?") else "Restrict"
+
+
 def _is_droppable_relation(field_type: str, old_schema: Schema) -> bool:
     is_relation: Final = re.split(r"[\[?\s]", field_type, maxsplit=1)[0] in old_schema
-    return is_relation and REFERENTIAL_ACTION.search(field_type) is None
+    holds_key: Final = "fields:" in field_type
+    return is_relation and (not holds_key or _on_delete(field_type) in ROW_PRESERVING_ON_DELETE)
 
 
 def _model_changes(model: str, old_schema: Schema, new_schema: Schema) -> Iterator[str]:

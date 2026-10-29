@@ -50,15 +50,36 @@ RELATED: Final = (
 )
 
 
-def test_schema_compatibility_allows_dropping_relations_but_not_their_columns() -> None:
-    relations_dropped: Final = (
-        "model Owner {\n id String @id\n}\nmodel Item {\n id String @id\n owner_id String?\n created_by String\n}\n"
-    )
-    columns_dropped: Final = "model Owner {\n id String @id\n}\nmodel Item {\n id String @id\n}\n"
-    assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(relations_dropped)) == ()
-    assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(columns_dropped)) == (
-        "Breaking: Field Item.owner_id was removed",
+def _without(schema: str, *prefixes: str) -> str:
+    return "\n".join(line for line in schema.splitlines() if not line.startswith(prefixes))
+
+
+def test_schema_compatibility_allows_dropping_a_restrict_relation_but_not_its_column() -> None:
+    relation_dropped: Final = _without(RELATED, " created ", " creator ")
+    column_dropped: Final = _without(RELATED, " created ", " creator ", " created_by ")
+    assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(relation_dropped)) == ()
+    assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(column_dropped)) == (
         "Breaking: Field Item.created_by was removed",
+    )
+
+
+@pytest.mark.parametrize(
+    ("schema", "removed", "expected"),
+    (
+        pytest.param(RELATED, (" items ", " owner "), "Item.owner", id="optional-relation-defaults-to-set-null"),
+        pytest.param(
+            RELATED.replace("references: [id])\n}", "references: [id], onDelete: Cascade)\n}"),
+            (" created ", " creator "),
+            "Item.creator",
+            id="written-cascade",
+        ),
+    ),
+)
+def test_schema_compatibility_rejects_dropping_a_relation_whose_delete_rule_changes_rows(
+    schema: str, removed: tuple[str, ...], expected: str
+) -> None:
+    assert check_breaking_changes(parse_model_fields(schema), parse_model_fields(_without(schema, *removed))) == (
+        f"Breaking: Field {expected} was removed",
     )
 
 
@@ -70,11 +91,3 @@ def test_schema_compatibility_still_rejects_changes_to_a_kept_relation() -> None
         f"Breaking: Field Item.creator changed type from {old_creator} to {new_creator}",
     )
 
-
-def test_schema_compatibility_rejects_dropping_a_relation_with_a_referential_action() -> None:
-    cascading: Final = RELATED.replace("references: [id])\n creator", "references: [id], onDelete: Cascade)\n creator")
-    kept_lines: Final = (line for line in cascading.splitlines() if not line.startswith((" items ", " owner ")))
-    owner_dropped: Final = "\n".join(kept_lines)
-    assert check_breaking_changes(parse_model_fields(cascading), parse_model_fields(owner_dropped)) == (
-        "Breaking: Field Item.owner was removed",
-    )
