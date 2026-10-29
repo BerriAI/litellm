@@ -25,7 +25,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -1913,7 +1913,10 @@ def completion_cost(
                             model=search_model,
                             custom_llm_provider=custom_llm_provider,
                             number_of_queries=number_of_queries,
-                            optional_params=optional_params,
+                            optional_params={
+                                **(get_hidden_params(completion_response) or {}),
+                                **(optional_params or {}),
+                            },
                         )
                     )
 

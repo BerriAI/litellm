@@ -14,7 +14,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
-from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_DOLLARS_PARAM, exa_ai_reported_cost
+from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_DOLLARS_PARAM
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 from litellm.search.cost_calculator import search_provider_cost_per_query
 
@@ -50,7 +50,7 @@ def test_transform_search_response_snippet_falls_back_through_content_modes(
         json={"results": [{"title": "Title", "url": "https://example.com", **content_fields}]},
     )
 
-    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=Mock(optional_params={}))
+    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=Mock())
 
     assert response.results[0].snippet == expected_snippet
 
@@ -102,9 +102,7 @@ def test_search_sends_max_results_as_num_results(respx_mock: respx.MockRouter) -
 
 
 def _transform(payload: object) -> SearchResponse:
-    return ExaAISearchConfig().transform_search_response(
-        httpx.Response(200, json=payload), logging_obj=Mock(optional_params={})
-    )
+    return ExaAISearchConfig().transform_search_response(httpx.Response(200, json=payload), logging_obj=Mock())
 
 
 def test_transform_search_response_maps_every_exa_result_in_provider_order():
@@ -256,7 +254,9 @@ def test_transform_search_response_joins_whatever_the_highlights_value_iterates_
     assert response.results[0].snippet == expected_snippet
 
 
-@pytest.mark.parametrize("payload", [{}, {"results": []}, {"results": ""}, {"results": {}}, {"requestId": "abc"}])
+@pytest.mark.parametrize(
+    "payload", [{}, {"results": []}, {"results": None}, {"results": ""}, {"results": {}}, {"requestId": "abc"}]
+)
 def test_transform_search_response_without_results_is_empty(payload: dict[str, object]):
     assert _transform(payload).results == []
 
@@ -384,17 +384,21 @@ def test_a_caller_cannot_set_the_cost_exa_reports(respx_mock: respx.MockRouter) 
     assert response.hidden_params["response_cost"] == pytest.approx(_catalog_price(25))
 
 
-def test_a_reply_without_a_cost_does_not_keep_an_earlier_replys_cost() -> None:
-    logging_obj: Final = Mock(optional_params={})
-    config: Final = ExaAISearchConfig()
+@pytest.mark.usefixtures("exa_api_key")
+def test_costing_an_exa_reply_directly_returns_the_cost_exa_reports(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": EXA_REPORTED_COST}})
+    response: Final = litellm.search(query="asyncio TaskGroup", search_provider="exa_ai", max_results=25)
+    assert _catalog_price(25) != EXA_REPORTED_COST
 
-    config.transform_search_response(
-        httpx.Response(200, json={"results": [], "costDollars": {"total": EXA_REPORTED_COST}}), logging_obj=logging_obj
+    completion_cost: Final = litellm.completion_cost(
+        completion_response=response, model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search"
     )
-    assert exa_ai_reported_cost(logging_obj.optional_params) == EXA_REPORTED_COST
-    config.transform_search_response(httpx.Response(200, json={"results": []}), logging_obj=logging_obj)
+    per_token: Final = litellm.cost_per_token(
+        model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search", response=response
+    )
 
-    assert exa_ai_reported_cost(logging_obj.optional_params) is None
+    assert completion_cost == pytest.approx(EXA_REPORTED_COST)
+    assert per_token == pytest.approx((EXA_REPORTED_COST, 0.0))
 
 
 class _SpendCapture(CustomLogger):

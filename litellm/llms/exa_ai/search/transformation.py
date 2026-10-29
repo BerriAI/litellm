@@ -10,6 +10,7 @@ from typing import Final, TypedDict
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
@@ -176,7 +177,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         - every other results[] field Exa returned (id, author, image, summary, highlights, score, ...)
           → the SearchResult as is
         - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
-        - costDollars → the logging object's optional_params, where search cost tracking reads Exa's reported total
+        - costDollars → the response's hidden params, where search cost tracking reads Exa's reported total
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -189,16 +190,14 @@ class ExaAISearchConfig(BaseSearchConfig):
         response: Final = SearchResponse.model_validate(
             {
                 "results": [
-                    _transform_result(value) for value in _JSON_VALUES.validate_python(response_json.get("results", []))
+                    _transform_result(value)
+                    for value in _JSON_VALUES.validate_python(response_json.get("results") or [])
                 ],
                 "object": "search",
                 "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
             }
         )
-        logging_obj.optional_params = {  # rebind-ok: the logging object is the adapter's only channel to cost tracking
-            **logging_obj.optional_params,
-            EXA_AI_COST_DOLLARS_PARAM: response_json.get("costDollars"),
-        }
+        set_hidden_params(response, {EXA_AI_COST_DOLLARS_PARAM: response_json.get("costDollars")})
         return response
 
 

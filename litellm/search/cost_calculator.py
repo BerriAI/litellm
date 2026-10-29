@@ -10,16 +10,15 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.llms.exa_ai.search.cost_calculator import exa_ai_reported_cost
+from litellm.llms.exa_ai.search.cost_calculator import exa_ai_price_set, exa_ai_reported_cost
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
-PRICE_ENTRY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
-    {"tavily": "search_depth", "linkup": "depth"}
+    {"tavily": "search_depth", "linkup": "depth", "exa_ai": "type"}
 )
 
 
@@ -40,11 +39,8 @@ def _generic_search_entry(model: str, custom_llm_provider: str | None) -> str:
     return generic_model if model == f"{custom_llm_provider}/{generic_model}" else model
 
 
-def _has_flat_price(entry: str) -> bool:
-    live: Final[object] = litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
-    return (
-        isinstance(live, Mapping) and PRICE_ENTRY_ADAPTER.validate_python(live).get("input_cost_per_query") is not None
-    )
+def _live_entry(entry: str) -> object:
+    return litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
 
 
 def _registered_at_runtime(entry: str) -> bool:
@@ -84,9 +80,9 @@ def search_provider_cost_per_query(
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
-    provider's mode parameter (Tavily `search_depth`, Linkup `depth`). An Exa request is billed the
-    `costDollars.total` Exa reported for it, unless its price entry has an `input_cost_per_query`. LiteLLM ships
-    Exa's entry with tiers only (what older releases bill), so a flat price there is always someone's override.
+    provider's mode parameter (Tavily `search_depth`, Linkup `depth`, Exa `type`). A flat price beats the tiers on
+    the same entry, since LiteLLM never ships both, so the flat one is someone's override. An Exa request is billed
+    the `costDollars.total` Exa reported for it unless its entry holds a price someone set.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -109,25 +105,21 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
-    exa_price_set: Final = custom_llm_provider == "exa_ai" and _has_flat_price(
-        _generic_search_entry(model, custom_llm_provider)
-    )
+    pricing_model: Final = _pricing_model(model, custom_llm_provider, optional_params)
     reported_cost: Final = (
         exa_ai_reported_cost(optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS)
-        if custom_llm_provider == "exa_ai" and not exa_price_set
+        if custom_llm_provider == "exa_ai"
+        and not exa_ai_price_set(_live_entry(_generic_search_entry(pricing_model, custom_llm_provider)))
         else None
     )
     if reported_cost is not None:
         return (reported_cost, 0.0)
 
-    model_info: Final = get_model_info(
-        model=_pricing_model(model, custom_llm_provider, optional_params),
-        custom_llm_provider=custom_llm_provider,
-    )
+    model_info: Final = get_model_info(model=pricing_model, custom_llm_provider=custom_llm_provider)
 
     # Check for tiered pricing (e.g., Exa AI based on max_results)
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if tiered_pricing and isinstance(tiered_pricing, list) and not exa_price_set:
+    if tiered_pricing and isinstance(tiered_pricing, list) and model_info.get("input_cost_per_query") is None:
         max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results
         cost_per_query = 0.0
 

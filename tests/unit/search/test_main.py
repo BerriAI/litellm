@@ -172,9 +172,19 @@ def test_unpriced_fallback_search_tool_bills_the_cost_exa_reports_not_the_failed
     assert fallback.hidden_params["response_cost"] == pytest.approx(EXA_REPORTED_COST)
 
 
+def _single_tier(price: float) -> list[dict[str, object]]:
+    return [{"input_cost_per_query": price, "max_results_range": [0, 100]}]
+
+
 def _register_exa_price(monkeypatch: pytest.MonkeyPatch, price: float) -> None:
     litellm.register_model(
         {"exa_ai/search": {"input_cost_per_query": price, "litellm_provider": "exa_ai", "mode": "search"}}
+    )
+
+
+def _register_exa_tiers(monkeypatch: pytest.MonkeyPatch, price: float) -> None:
+    litellm.register_model(
+        {"exa_ai/search": {"tiered_pricing": _single_tier(price), "litellm_provider": "exa_ai", "mode": "search"}}
     )
 
 
@@ -184,12 +194,23 @@ def _serve_exa_price_in_cost_map(monkeypatch: pytest.MonkeyPatch, price: float) 
     )
 
 
+def _serve_exa_tiers_in_cost_map(monkeypatch: pytest.MonkeyPatch, price: float) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "exa_ai/search",
+        {**litellm.model_cost["exa_ai/search"], "tiered_pricing": _single_tier(price)},
+    )
+
+
 @pytest.mark.usefixtures("_local_model_cost_map")
-@pytest.mark.parametrize("set_exa_price", [_register_exa_price, _serve_exa_price_in_cost_map])
+@pytest.mark.parametrize(
+    "set_exa_price",
+    [_register_exa_price, _register_exa_tiers, _serve_exa_price_in_cost_map, _serve_exa_tiers_in_cost_map],
+)
 @pytest.mark.parametrize(
     "exa_reply", [EXA_REPLY_WITH_COST, {"results": []}], ids=["exa-reports-a-cost", "exa-reports-no-cost"]
 )
-def test_an_exa_price_someone_set_overrides_the_cost_exa_reports_and_the_tiers(
+def test_an_exa_price_someone_set_overrides_the_cost_exa_reports_and_litellms_tiers(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     set_exa_price: Callable[[pytest.MonkeyPatch, float], None],
@@ -208,6 +229,72 @@ def test_an_exa_price_someone_set_overrides_the_cost_exa_reports_and_the_tiers(
     )
 
     assert response.hidden_params["response_cost"] == pytest.approx(set_price)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_registering_litellms_own_exa_tiers_still_overrides_the_cost_exa_reports(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json=EXA_REPLY_WITH_COST)
+    tier_price, _ = search_provider_cost_per_query(
+        model="exa_ai/search", custom_llm_provider="exa_ai", optional_params={"max_results": 25}
+    )
+    assert tier_price != EXA_REPORTED_COST
+    litellm.register_model(
+        {
+            "exa_ai/search": {
+                "tiered_pricing": litellm.model_cost["exa_ai/search"]["tiered_pricing"],
+                "litellm_provider": "exa_ai",
+                "mode": "search",
+            }
+        }
+    )
+
+    response: Final = litellm.search(
+        query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key", max_results=25
+    )
+
+    assert response.hidden_params["response_cost"] == pytest.approx(tier_price)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+@pytest.mark.parametrize(("search_type", "expected_cost"), [("lite", 0.002), ("auto", EXA_REPORTED_COST)])
+def test_a_price_set_for_one_exa_search_type_applies_only_to_that_type(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, search_type: str, expected_cost: float
+) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json=EXA_REPLY_WITH_COST)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "exa_ai/search-lite",
+        {"input_cost_per_query": 0.002, "litellm_provider": "exa_ai", "mode": "search"},
+    )
+
+    response: Final = litellm.search(
+        query="litellm release notes", search_provider="exa_ai", api_key="test-exa-key", type=search_type
+    )
+
+    assert json.loads(respx_mock.calls.last.request.content)["type"] == search_type
+    assert response.hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_a_flat_price_registered_on_a_tiered_search_entry_beats_its_tiers() -> None:
+    tier_price, _ = search_provider_cost_per_query(
+        model="firecrawl/search", custom_llm_provider="firecrawl", optional_params={"max_results": 15}
+    )
+    registered_price: Final = 0.002
+    assert tier_price != registered_price
+    litellm.register_model(
+        {
+            "firecrawl/search": {
+                "input_cost_per_query": registered_price,
+                "litellm_provider": "firecrawl",
+                "mode": "search",
+            }
+        }
+    )
+
+    assert search_provider_cost_per_query(
+        model="firecrawl/search", custom_llm_provider="firecrawl", optional_params={"max_results": 15}
+    ) == pytest.approx((registered_price, 0.0))
 
 
 @pytest.mark.usefixtures("_local_model_cost_map")
