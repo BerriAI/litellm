@@ -8298,6 +8298,27 @@ async def test_websocket_passthrough_logs_the_unfinished_turn_a_client_walked_ou
 
 
 @pytest.mark.asyncio
+async def test_websocket_passthrough_logs_no_extra_row_for_what_the_provider_sends_after_the_last_turn():
+    """
+    A realtime provider follows each finished turn with frames that start no
+    turn, such as rate_limits.updated. The session ends with nothing running,
+    so its turn is its only row and the request count stays one per turn.
+    """
+    client = _turn_taking_client([json.dumps({"type": "response.create"})], answered_by='"rate_limits.updated"')
+    upstream_ws = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[[REALTIME_RESPONSE_DONE, json.dumps({"type": "rate_limits.updated", "rate_limits": []})]],
+    )
+
+    relayed = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ] == [["session.created", "response.done"]]
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_carries_the_session_the_provider_opened_into_every_later_turn():
     """
     A realtime provider names the session's model once, when it opens the

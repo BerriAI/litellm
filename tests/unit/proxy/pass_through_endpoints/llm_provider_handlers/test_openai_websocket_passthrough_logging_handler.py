@@ -365,10 +365,10 @@ def test_a_responses_turn_falls_back_to_the_requested_model_only_when_its_own_ha
         ("response.failed", "ends_turn"),
         ("response.done", "ends_turn"),
         ("session.created", "opens_session"),
-        ("response.created", "relayed"),
+        ("response.created", "starts_turn"),
         ("response.output_text.delta", "relayed"),
         ("error", "relayed"),
     ],
 )
-def test_every_frame_that_settles_a_turn_closes_it_and_nothing_else_does(frame_type, kind):
+def test_each_frame_is_classified_by_what_it_does_to_a_turn(frame_type, kind):
     assert openai_websocket_frame_kind({"type": frame_type}) == kind

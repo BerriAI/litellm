@@ -2730,6 +2730,19 @@ class _WebsocketTurnLedger:
         self.queued_turns = self.queued_turns[1:]
 
 
+def _session_end_needs_a_row(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
+    unlogged_frames: Sequence[Mapping[str, object]],
+    ledger: _WebsocketTurnLedger,
+) -> bool:
+    """A session logs one row per turn as each ends, so at its end it only owes a row for a turn still running, or
+    for whatever the provider sent when no turn ever ended"""
+    if upstream_frame_kind is None:
+        return True
+    kinds: Final = frozenset(map(upstream_frame_kind, unlogged_frames))
+    return "starts_turn" in kinds or (ledger.logged_turns == 0 and bool(kinds - {"opens_session"}))
+
+
 async def _relay_client_frame(
     websocket: WebSocket,
     upstream_ws: ClientConnection,
@@ -3191,9 +3204,7 @@ async def websocket_passthrough_request(
                     reason=_truncated_close_reason(upstream_close.reason),
                 )
 
-            if upstream_frame_kind is None or any(
-                upstream_frame_kind(frame) != "opens_session" for frame in websocket_messages
-            ):
+            if _session_end_needs_a_row(upstream_frame_kind, websocket_messages, ledger):
                 log_turn()
 
             # Call the proxy logging success hook

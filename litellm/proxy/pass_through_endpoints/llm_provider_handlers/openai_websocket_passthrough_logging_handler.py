@@ -100,6 +100,8 @@ def openai_websocket_frame_kind(frame: Mapping[str, object]) -> WebsocketUpstrea
         return "ends_turn"
     if frame_type == _SESSION_CREATED:
         return "opens_session"
+    if frame_type == _RESPONSE_CREATED:
+        return "starts_turn"
     return "relayed"
 
 

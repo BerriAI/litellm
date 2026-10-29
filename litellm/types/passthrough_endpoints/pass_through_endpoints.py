@@ -29,7 +29,7 @@ LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__
 
 SETTLES_BACKGROUND_RESPONSE_KWARG: Final = "settles_background_response"
 
-WebsocketUpstreamFrameKind: TypeAlias = Literal["ends_turn", "opens_session", "relayed"]
+WebsocketUpstreamFrameKind: TypeAlias = Literal["starts_turn", "ends_turn", "opens_session", "relayed"]
 
 
 class BackgroundResponseSettlement(str, Enum):
