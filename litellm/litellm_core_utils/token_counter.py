@@ -15,6 +15,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from openai.types.chat import ChatCompletionContentPartRefusalParam
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -1255,6 +1256,7 @@ def _count_content_list(
     content_list: str
     | Iterable[
         OpenAIMessageContentListBlock
+        | ChatCompletionContentPartRefusalParam
         | ChatCompletionThinkingBlock
         | ChatCompletionRedactedThinkingBlock
         | AnthropicMessagesTextParam
@@ -1271,8 +1273,8 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif c["type"] == "text":
-                num_tokens += count_function(str(c.get("text", "")))
+            elif c["type"] in ("text", "refusal"):
+                num_tokens += count_function(str(c.get(c["type"], "")))
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
@@ -1324,7 +1326,7 @@ def _count_content_list(
                 raise UnsupportedContentTypeError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
+                    f"(text, refusal, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
                     f"tool_reference, search_result)."
                 )
         return num_tokens
