@@ -1,9 +1,9 @@
 "use client";
 
 import React, { createContext, useContext, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useQueryState } from "nuqs";
 import { useChatHistory } from "@/components/chat/useChatHistory";
-import type { ChatMessage, Conversation } from "@/components/chat/types";
+import type { AssistantMessageUpdate, ChatMessage, Conversation } from "@/components/chat/types";
 
 interface ChatShellContextValue {
   accessToken: string;
@@ -20,10 +20,7 @@ interface ChatShellContextValue {
   staleId: boolean;
   createConversation: (model: string) => string;
   appendMessage: (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => void;
-  updateLastAssistantMessage: (
-    conversationId: string,
-    updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>,
-  ) => void;
+  updateLastAssistantMessage: (conversationId: string, updates: AssistantMessageUpdate) => void;
   truncateFromMessage: (conversationId: string, messageId: string) => void;
   deleteConversation: (id: string) => void;
   renameConversation: (id: string, newTitle: string) => void;
@@ -56,13 +53,13 @@ export function ChatShellProvider({
   premiumUser,
   children,
 }: ChatShellProviderProps) {
-  const searchParams = useSearchParams();
-  const activeConversationId = searchParams.get("id");
+  const [urlConversationId] = useQueryState("id");
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
 
   const {
     conversations,
     activeConversation,
+    currentActiveId,
     storageUnavailable,
     staleId,
     createConversation,
@@ -71,7 +68,7 @@ export function ChatShellProvider({
     truncateFromMessage,
     deleteConversation,
     renameConversation,
-  } = useChatHistory(activeConversationId, userId);
+  } = useChatHistory(urlConversationId, userId);
 
   return (
     <ChatShellContext.Provider
@@ -85,7 +82,7 @@ export function ChatShellProvider({
         setSelectedMCPServers,
         conversations,
         activeConversation,
-        activeConversationId,
+        activeConversationId: currentActiveId,
         storageUnavailable,
         staleId,
         createConversation,

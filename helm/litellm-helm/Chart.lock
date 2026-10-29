@@ -5,5 +5,8 @@ dependencies:
 - name: redis
   repository: oci://registry-1.docker.io/bitnamicharts
   version: 18.19.1
-digest: sha256:8660fe6287f9941d08c0902f3f13731079b8cecd2a5da2fbc54e5b7aae4a6f62
-generated: "2024-03-10T02:28:52.275022+05:30"
+- name: lens
+  repository: oci://ghcr.io/berriai/charts
+  version: 0.1.0-dev.0
+digest: sha256:16b92c3d7fc74632e8aa11e602c136d273c774ed39b2fe970b80273e0570898b
+generated: '2026-10-09T04:18:10.643228000Z'

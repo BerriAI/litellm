@@ -2,7 +2,8 @@
 Constants for Copilot integration
 """
 
-from typing import Optional, Union
+from collections.abc import MutableMapping
+from typing import Final
 from uuid import uuid4
 
 import httpx
@@ -10,11 +11,11 @@ import httpx
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 # Constants
-COPILOT_VERSION = "0.26.7"
-EDITOR_PLUGIN_VERSION = f"copilot-chat/{COPILOT_VERSION}"
-USER_AGENT = f"GitHubCopilotChat/{COPILOT_VERSION}"
-API_VERSION = "2025-04-01"
-DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
+COPILOT_VERSION: Final = "0.26.7"
+EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
+USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
+API_VERSION: Final = "2025-04-01"
+DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
 
 
 class GithubCopilotError(BaseLLMException):
@@ -22,10 +23,10 @@ class GithubCopilotError(BaseLLMException):
         self,
         status_code,
         message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[Union[httpx.Headers, dict]] = None,
-        body: Optional[dict] = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        headers: httpx.Headers | dict | None = None,
+        body: dict | None = None,
     ):
         super().__init__(
             status_code=status_code,
@@ -57,7 +58,9 @@ class GetAPIKeyError(GithubCopilotError):
     pass
 
 
-def get_copilot_default_headers(api_key: str) -> dict:
+def get_copilot_default_headers(
+    api_key: str,
+) -> dict[str, str]:  # mutable-ok: callers merge caller headers into the returned dict
     """
     Get default headers for GitHub Copilot Responses API.
 
@@ -75,3 +78,15 @@ def get_copilot_default_headers(api_key: str) -> dict:
         "x-request-id": str(uuid4()),
         "x-vscode-user-agent-library-version": "electron-fetch",
     }
+
+
+def pin_session_authorization(
+    headers: MutableMapping[str, str],  # mutable-ok: the helper fixes caller-owned headers in place
+    session_token: str,
+) -> None:
+    """The stored per-user session token owns Authorization outright: drop every
+    caller-supplied bearer header (any casing) so it can never displace the
+    session's on the wire."""
+    for key in tuple(k for k in headers if k.lower() == "authorization"):
+        del headers[key]
+    headers["Authorization"] = f"Bearer {session_token}"

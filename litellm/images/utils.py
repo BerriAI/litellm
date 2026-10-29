@@ -1,5 +1,9 @@
+import base64
+import os
+from collections.abc import Collection, Mapping
 from io import BufferedReader, BytesIO
-from typing import Any, Dict, List, Optional, cast, get_type_hints
+from pathlib import Path
+from typing import Any, Final, Protocol, cast, get_type_hints, runtime_checkable
 
 import litellm
 from litellm.litellm_core_utils.token_counter import get_image_type
@@ -14,9 +18,9 @@ class ImageEditRequestUtils:
         model: str,
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_params: ImageEditOptionalRequestParams,
-        drop_params: Optional[bool] = None,
-        additional_drop_params: Optional[List[str]] = None,
-    ) -> Dict:
+        drop_params: bool | None = None,
+        additional_drop_params: Collection[str] | None = None,
+    ) -> dict:
         """
         Get optional parameters for the image edit API.
 
@@ -30,16 +34,16 @@ class ImageEditRequestUtils:
         Returns:
             A dictionary of supported parameters for the image edit API
         """
-        supported_params = image_edit_provider_config.get_supported_openai_params(model)
+        supported_params: Final = image_edit_provider_config.get_supported_openai_params(model)
 
-        should_drop = litellm.drop_params is True or drop_params is True
+        should_drop: Final = litellm.drop_params is True or drop_params is True
 
-        filtered_optional_params = dict(image_edit_optional_params)
+        filtered_optional_params: Final = dict(image_edit_optional_params)
         if additional_drop_params:
             for param in additional_drop_params:
                 filtered_optional_params.pop(param, None)
 
-        unsupported_params = [param for param in filtered_optional_params if param not in supported_params]
+        unsupported_params: Final = [param for param in filtered_optional_params if param not in supported_params]
 
         if unsupported_params:
             if should_drop:
@@ -51,7 +55,7 @@ class ImageEditRequestUtils:
                     message=f"The following parameters are not supported for model {model}: {', '.join(unsupported_params)}",
                 )
 
-        mapped_params = image_edit_provider_config.map_openai_params(
+        mapped_params: Final = image_edit_provider_config.map_openai_params(
             image_edit_optional_params=cast(ImageEditOptionalRequestParams, filtered_optional_params),
             model=model,
             drop_params=should_drop,
@@ -61,7 +65,8 @@ class ImageEditRequestUtils:
 
     @staticmethod
     def get_requested_image_edit_optional_param(
-        params: Dict[str, Any],
+        params: Mapping[str, object],
+        provider_supported_params: Collection[str] = (),
     ) -> ImageEditOptionalRequestParams:
         """
         Filter parameters to only include those defined in ImageEditOptionalRequestParams.
@@ -72,8 +77,10 @@ class ImageEditRequestUtils:
         Returns:
             ImageEditOptionalRequestParams instance with only the valid parameters
         """
-        valid_keys = get_type_hints(ImageEditOptionalRequestParams).keys()
-        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
+        valid_keys: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams)) | frozenset(
+            provider_supported_params
+        )
+        filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         return cast(ImageEditOptionalRequestParams, filtered_params)
 
     @staticmethod
@@ -118,13 +125,13 @@ class ImageEditRequestUtils:
                     return FILE_MIME_TYPES[FileType.PNG]  # Default fallback
 
             # Use the existing get_image_type function to detect image type
-            image_type_str = get_image_type(bytes_data)
+            image_type_str: Final = get_image_type(bytes_data)
 
             if image_type_str is None:
                 return FILE_MIME_TYPES[FileType.PNG]  # Default if detection fails
 
             # Map detected type string to FileType enum and get MIME type
-            type_mapping = {
+            type_mapping: Final = {
                 "png": FileType.PNG,
                 "jpeg": FileType.JPEG,
                 "gif": FileType.GIF,
@@ -132,7 +139,7 @@ class ImageEditRequestUtils:
                 "heic": FileType.HEIC,
             }
 
-            file_type = type_mapping.get(image_type_str)
+            file_type: Final = type_mapping.get(image_type_str)
             if file_type is None:
                 return FILE_MIME_TYPES[FileType.PNG]  # Default to PNG if unknown
 
@@ -141,3 +148,36 @@ class ImageEditRequestUtils:
         except Exception:
             # If anything goes wrong, default to PNG
             return FILE_MIME_TYPES[FileType.PNG]
+
+
+@runtime_checkable
+class _SeekableBinaryReader(Protocol):
+    def tell(self) -> int: ...
+
+    def seek(self, offset: int) -> int: ...
+
+    def read(self) -> bytes: ...
+
+
+def _read_image_bytes(image: object) -> bytes:
+    if isinstance(image, bytes):
+        return image
+    if isinstance(image, tuple):
+        return _read_image_bytes(image[1])
+    if isinstance(image, os.PathLike):
+        return Path(image).read_bytes()
+    if isinstance(image, _SeekableBinaryReader):
+        position: Final = image.tell()
+        image.seek(0)
+        data: Final = image.read()
+        image.seek(position)
+        return data
+    raise ValueError(f"Unsupported image type for image edit: {type(image).__name__}")
+
+
+def image_to_data_url(image: object) -> str:
+    if isinstance(image, str):
+        return image
+    image_bytes: Final = _read_image_bytes(image)
+    mime_type: Final = ImageEditRequestUtils.get_image_content_type(image_bytes)
+    return f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"

@@ -4,17 +4,37 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 [TODO]: migrate embeddings to a base handler as well.
 """
 
-from typing import Any, Dict, List
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Final, Protocol, TypedDict
+
+import httpx
+from typing_extensions import NotRequired, ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.types.mcp import has_header
 from litellm.types.utils import EmbeddingResponse
 
 
+class TokenEncoder(Protocol):
+    """The tokenizer surface used to estimate prompt tokens."""
+
+    def encode(self, text: str, /) -> Sequence[int]: ...
+
+
+class OllamaEmbeddingResponse(TypedDict):
+    """Body of an Ollama ``/api/embed`` response."""
+
+    embeddings: ReadOnly[list[list[float]]]
+    prompt_eval_count: ReadOnly[NotRequired[int]]
+
+
 def _prepare_ollama_embedding_payload(
-    model: str, prompts: List[str], optional_params: Dict[str, Any]
-) -> Dict[str, Any]:
-    data: Dict[str, Any] = {"model": model, "input": prompts}
-    special_optional_params = ["truncate", "options", "keep_alive", "dimensions"]
+    model: str, prompts: list[str], optional_params: Mapping[str, object]
+) -> dict[str, object]:
+    data: Final[dict[str, object]] = {"model": model, "input": prompts}
+    special_optional_params: Final = ["truncate", "options", "keep_alive", "dimensions"]
 
     for k, v in optional_params.items():
         if k in special_optional_params:
@@ -27,15 +47,15 @@ def _prepare_ollama_embedding_payload(
 
 
 def _process_ollama_embedding_response(
-    response_json: dict,
-    prompts: List[str],
+    response_json: OllamaEmbeddingResponse,
+    prompts: list[str],
     model: str,
     model_response: EmbeddingResponse,
     logging_obj: Any,
-    encoding: Any,
+    encoding: TokenEncoder | None,
 ) -> EmbeddingResponse:
-    output_data = []
-    embeddings: List[List[float]] = response_json["embeddings"]
+    output_data: Final = []
+    embeddings: Final[list[list[float]]] = response_json["embeddings"]
 
     for idx, emb in enumerate(embeddings):
         output_data.append({"object": "embedding", "index": idx, "embedding": emb})
@@ -65,22 +85,37 @@ def _process_ollama_embedding_response(
     return model_response
 
 
+def _ollama_embedding_headers(api_key: str | None, headers: Mapping[str, str] | None) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            **({"Authorization": f"Bearer {api_key}"} if api_key and not has_header(headers, "Authorization") else {}),
+            **(headers or {}),
+        }
+    )
+
+
 async def ollama_aembeddings(
     api_base: str,
     model: str,
-    prompts: List[str],
+    prompts: list[str],
     model_response: EmbeddingResponse,
-    optional_params: dict,
-    logging_obj: Any,
-    encoding: Any,
-):
-    if not api_base.endswith("/api/embed"):
-        api_base += "/api/embed"
+    optional_params: Mapping[str, object],
+    logging_obj: object,
+    encoding: TokenEncoder | None,
+    *,
+    api_key: str | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+) -> EmbeddingResponse:
+    data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    data = _prepare_ollama_embedding_payload(model, prompts, optional_params)
-
-    response = await litellm.module_level_aclient.post(url=api_base, json=data)
-    response_json = response.json()
+    response: Final = await litellm.module_level_aclient.post(
+        url=ensure_api_route(api_base, "api/embed"),
+        json=data,
+        headers=dict(_ollama_embedding_headers(api_key, headers)),
+        timeout=timeout,
+    )
+    response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(
         response_json=response_json,
@@ -95,19 +130,25 @@ async def ollama_aembeddings(
 def ollama_embeddings(
     api_base: str,
     model: str,
-    prompts: List[str],
-    optional_params: dict,
+    prompts: list[str],
+    optional_params: Mapping[str, object],
     model_response: EmbeddingResponse,
-    logging_obj: Any,
-    encoding: Any = None,
-):
-    if not api_base.endswith("/api/embed"):
-        api_base += "/api/embed"
+    logging_obj: object,
+    encoding: TokenEncoder | None = None,
+    *,
+    api_key: str | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+) -> EmbeddingResponse:
+    data: Final = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    data = _prepare_ollama_embedding_payload(model, prompts, optional_params)
-
-    response = litellm.module_level_client.post(url=api_base, json=data)
-    response_json = response.json()
+    response: Final = litellm.module_level_client.post(
+        url=ensure_api_route(api_base, "api/embed"),
+        json=data,
+        headers=dict(_ollama_embedding_headers(api_key, headers)),
+        timeout=timeout,
+    )
+    response_json: Final[OllamaEmbeddingResponse] = response.json()
 
     return _process_ollama_embedding_response(
         response_json=response_json,

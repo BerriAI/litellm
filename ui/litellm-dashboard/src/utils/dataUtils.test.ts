@@ -1,23 +1,22 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { copyToClipboard, formatNumberWithCommas, getSpendString, updateExistingKeys } from "./dataUtils";
+// @vitest-environment jsdom
 
-// Mock NotificationsManager
-vi.mock("../../src/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
+import "@testing-library/jest-dom/vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import {
+  copyToClipboard,
+  formatNumberWithCommas,
+  formatPerSecondCost,
+  getSpendString,
+  updateExistingKeys,
+} from "./dataUtils";
 
 // Import the mocked module
-import NotificationsManager from "../components/molecules/notifications_manager";
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+import { toast } from "@/lib/toast";
+const mockToast = vi.mocked(toast);
 
 describe("dataUtils", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset document.execCommand mock
-    delete (document as any).execCommand;
   });
 
   afterEach(() => {
@@ -121,193 +120,127 @@ describe("dataUtils", () => {
     });
   });
 
+  describe("formatPerSecondCost", () => {
+    it("should keep at least two decimals and append the per-second unit", () => {
+      expect(formatPerSecondCost(0.4)).toBe("$0.40/s");
+      expect(formatPerSecondCost(1)).toBe("$1.00/s");
+    });
+
+    it("should show sub-cent rates without rounding them to zero", () => {
+      expect(formatPerSecondCost(0.015)).toBe("$0.015/s");
+      expect(formatPerSecondCost(0.000025)).toBe("$0.000025/s");
+    });
+  });
+
   describe("copyToClipboard", () => {
-    describe("when Clipboard API is available (HTTPS scenario)", () => {
-      beforeEach(() => {
-        // Mock modern Clipboard API
-        Object.assign(navigator, {
-          clipboard: {
-            writeText: vi.fn().mockResolvedValue(undefined),
-          },
-        });
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+    const writeText = vi.fn<(text: string) => Promise<void>>();
+    const execCommand = vi.fn<(command: string) => boolean>();
+    const selectedText = vi.fn(() => {
+      const element = document.activeElement;
+      return element instanceof HTMLTextAreaElement
+        ? element.value.slice(element.selectionStart, element.selectionEnd)
+        : undefined;
+    });
+    const trigger = document.createElement("button");
+    const text = "Request α\nsecond line";
+
+    beforeEach(() => {
+      writeText.mockResolvedValue(undefined);
+      execCommand.mockImplementation(() => {
+        selectedText();
+        return true;
       });
-
-      it("should use navigator.clipboard.writeText when available", async () => {
-        const result = await copyToClipboard("test text");
-
-        expect(navigator.clipboard.writeText).toHaveBeenCalledWith("test text");
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Copied to clipboard");
-        expect(result).toBe(true);
-      });
-
-      it("should use custom message when provided", async () => {
-        await copyToClipboard("test text", "Custom message");
-
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Custom message");
-      });
-
-      it("should return false for null/undefined text", async () => {
-        expect(await copyToClipboard(null)).toBe(false);
-        expect(await copyToClipboard(undefined)).toBe(false);
-        expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
-      });
-
-      it("should fall back to execCommand when clipboard API fails", async () => {
-        // Make clipboard API fail
-        navigator.clipboard.writeText = vi.fn().mockRejectedValue(new Error("Permission denied"));
-
-        // Mock successful execCommand
-        document.execCommand = vi.fn().mockReturnValue(true);
-
-        // Mock DOM methods
-        const mockTextArea = {
-          value: "",
-          style: {} as Record<string, string>,
-          setAttribute: vi.fn(),
-          focus: vi.fn(),
-          select: vi.fn(),
-        };
-        document.createElement = vi.fn().mockReturnValue(mockTextArea);
-        document.body.appendChild = vi.fn();
-        document.body.removeChild = vi.fn();
-
-        const result = await copyToClipboard("test text");
-
-        expect(navigator.clipboard.writeText).toHaveBeenCalledWith("test text");
-        expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Copied to clipboard");
-        expect(result).toBe(true);
-      });
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+      Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      document.body.appendChild(trigger);
+      trigger.focus();
     });
 
-    describe("when Clipboard API is not available (HTTP scenario)", () => {
-      beforeEach(() => {
-        // Mock HTTP scenario - no clipboard API
-        Object.assign(navigator, {
-          clipboard: undefined,
-        });
-
-        // Mock successful execCommand
-        document.execCommand = vi.fn().mockReturnValue(true);
-
-        // Mock DOM methods
-        const mockTextArea = {
-          value: "",
-          style: {} as Record<string, string>,
-          setAttribute: vi.fn(),
-          focus: vi.fn(),
-          select: vi.fn(),
-        };
-        document.createElement = vi.fn().mockReturnValue(mockTextArea);
-        document.body.appendChild = vi.fn();
-        document.body.removeChild = vi.fn();
-      });
-
-      it("should fall back to execCommand when clipboard API is not available", async () => {
-        const result = await copyToClipboard("test text");
-
-        expect(document.createElement).toHaveBeenCalledWith("textarea");
-        expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Copied to clipboard");
-        expect(result).toBe(true);
-      });
-
-      it("should set textarea properties correctly", async () => {
-        const mockTextArea = {
-          value: "",
-          style: {} as Record<string, string>,
-          setAttribute: vi.fn(),
-          focus: vi.fn(),
-          select: vi.fn(),
-        };
-        document.createElement = vi.fn().mockReturnValue(mockTextArea);
-
-        await copyToClipboard("test text");
-
-        expect(mockTextArea.value).toBe("test text");
-        expect(mockTextArea.style.position).toBe("fixed");
-        expect(mockTextArea.style.left).toBe("-999999px");
-        expect(mockTextArea.style.top).toBe("-999999px");
-        expect(mockTextArea.setAttribute).toHaveBeenCalledWith("readonly", "");
-        expect(mockTextArea.focus).toHaveBeenCalled();
-        expect(mockTextArea.select).toHaveBeenCalled();
-      });
-
-      it("should handle execCommand failure", async () => {
-        document.execCommand = vi.fn().mockReturnValue(false);
-
-        const result = await copyToClipboard("test text");
-
-        expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to copy to clipboard");
-        expect(result).toBe(false);
-      });
-
-      it("should handle DOM manipulation errors", async () => {
-        document.createElement = vi.fn().mockImplementation(() => {
-          throw new Error("DOM error");
-        });
-
-        const result = await copyToClipboard("test text");
-
-        expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to copy to clipboard");
-        expect(result).toBe(false);
-      });
-
-      it("should clean up textarea element after successful copy", async () => {
-        const mockTextArea = {
-          value: "",
-          style: {} as Record<string, string>,
-          setAttribute: vi.fn(),
-          focus: vi.fn(),
-          select: vi.fn(),
-        };
-        document.createElement = vi.fn().mockReturnValue(mockTextArea);
-
-        await copyToClipboard("test text");
-
-        expect(document.body.appendChild).toHaveBeenCalledWith(mockTextArea);
-        expect(document.body.removeChild).toHaveBeenCalledWith(mockTextArea);
-      });
+    afterEach(() => {
+      document.body.replaceChildren();
+      if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      else Reflect.deleteProperty(navigator, "clipboard");
+      if (execCommandDescriptor) Object.defineProperty(document, "execCommand", execCommandDescriptor);
+      else Reflect.deleteProperty(document, "execCommand");
     });
 
-    describe("edge cases", () => {
-      beforeEach(() => {
-        // Mock scenario where navigator exists but clipboard is null
-        Object.assign(navigator, {
-          clipboard: null,
-        });
+    it("confirms a modern clipboard write only after it succeeds", async () => {
+      const pendingWrite = Promise.withResolvers<void>();
+      writeText.mockReturnValue(pendingWrite.promise);
+      const result = copyToClipboard(text, "Request copied");
 
-        document.execCommand = vi.fn().mockReturnValue(true);
-        const mockTextArea = {
-          value: "",
-          style: {} as Record<string, string>,
-          setAttribute: vi.fn(),
-          focus: vi.fn(),
-          select: vi.fn(),
-        };
-        document.createElement = vi.fn().mockReturnValue(mockTextArea);
-        document.body.appendChild = vi.fn();
-        document.body.removeChild = vi.fn();
+      expect(writeText).toHaveBeenCalledWith(text);
+      expect(mockToast.success).not.toHaveBeenCalled();
+      pendingWrite.resolve();
+
+      expect(await result).toBe(true);
+      expect(mockToast.success).toHaveBeenCalledWith("Request copied");
+      expect(execCommand).not.toHaveBeenCalled();
+      expect(trigger).toHaveFocus();
+    });
+
+    it.each([null, undefined, ""])("does not copy absent content %s", async (value) => {
+      expect(await copyToClipboard(value)).toBe(false);
+      expect(writeText).not.toHaveBeenCalled();
+      expect(execCommand).not.toHaveBeenCalled();
+      expect(mockToast.success).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, null, {}])("copies the full selection when the Clipboard API is %s", async (clipboard) => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard });
+
+      expect(await copyToClipboard(text)).toBe(true);
+
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(selectedText).toHaveReturnedWith(text);
+      expect(mockToast.success).toHaveBeenCalledWith("Copied to clipboard");
+      expect(document.querySelector("textarea")).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
+
+    it("falls back after a rejected modern write", async () => {
+      writeText.mockRejectedValue(new Error("Permission denied"));
+
+      expect(await copyToClipboard(text, "Request copied")).toBe(true);
+
+      expect(writeText).toHaveBeenCalledWith(text);
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(selectedText).toHaveReturnedWith(text);
+      expect(mockToast.success).toHaveBeenCalledExactlyOnceWith("Request copied");
+      expect(document.querySelector("textarea")).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
+
+    it.each(["false", "throw"])("cleans up and reports failure when the fallback returns %s", async (outcome) => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      execCommand.mockImplementation(() => {
+        selectedText();
+        if (outcome === "throw") throw new Error("Copy denied");
+        return false;
       });
 
-      it("should handle navigator.clipboard being null", async () => {
-        const result = await copyToClipboard("test text");
+      expect(await copyToClipboard(text)).toBe(false);
 
-        expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(result).toBe(true);
+      expect(selectedText).toHaveReturnedWith(text);
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to copy to clipboard");
+      expect(mockToast.success).not.toHaveBeenCalled();
+      expect(document.querySelector("textarea")).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
+
+    it("reports failure when the fallback cannot create its selection", async () => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      vi.spyOn(document, "createElement").mockImplementationOnce(() => {
+        throw new Error("DOM error");
       });
 
-      it("should handle navigator.clipboard.writeText being undefined", async () => {
-        Object.assign(navigator, {
-          clipboard: {}, // clipboard exists but writeText doesn't
-        });
-
-        const result = await copyToClipboard("test text");
-
-        expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(result).toBe(true);
-      });
+      expect(await copyToClipboard(text)).toBe(false);
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to copy to clipboard");
+      expect(mockToast.success).not.toHaveBeenCalled();
+      expect(trigger).toHaveFocus();
     });
   });
 });

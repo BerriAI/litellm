@@ -3,10 +3,20 @@
 
 import os
 import traceback
-from litellm._uuid import uuid
-from typing import Any
+from collections.abc import Callable, Mapping
+from datetime import datetime
+from typing import Final, Protocol
 
 import litellm
+from litellm._uuid import uuid
+
+
+class _DynamoTable(Protocol):
+    def put_item(self, *, Item: Mapping[str, object]) -> object: ...
+
+
+class _DynamoResource(Protocol):
+    def Table(self, name: str) -> _DynamoTable: ...
 
 
 class DyanmoDBLogger:
@@ -16,15 +26,24 @@ class DyanmoDBLogger:
         # Instance variables
         import boto3
 
-        self.dynamodb: Any = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])
+        self.dynamodb: Final[_DynamoResource] = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])
         if litellm.dynamodb_table_name is None:
             raise ValueError(
                 "LiteLLM Error, trying to use DynamoDB but not table name passed. Create a table and set `litellm.dynamodb_table_name=<your-table>`"
             )
         self.table_name = litellm.dynamodb_table_name
 
-    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def async_log_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str], object],
+    ) -> None:
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+
+    _async_log_event = async_log_event
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
@@ -32,16 +51,16 @@ class DyanmoDBLogger:
 
             # construct payload to send to DynamoDB
             # follows the same params as langfuse.py
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
-            messages = kwargs.get("messages")
-            optional_params = kwargs.get("optional_params", {})
-            call_type = kwargs.get("call_type", "litellm.completion")
-            usage = response_obj["usage"]
-            id = response_obj.get("id", str(uuid.uuid4()))
+            litellm_params: Final = kwargs.get("litellm_params", {})
+            metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
+            messages: Final = kwargs.get("messages")
+            optional_params: Final = kwargs.get("optional_params", {})
+            call_type: Final = kwargs.get("call_type", "litellm.completion")
+            usage: Final = response_obj["usage"]
+            id: Final = response_obj.get("id", str(uuid.uuid4()))
 
             # Build the initial payload
-            payload = {
+            payload: Final[dict[str, object]] = {
                 "id": id,
                 "call_type": call_type,
                 "startTime": start_time,
@@ -66,14 +85,13 @@ class DyanmoDBLogger:
             print_verbose(f"\nDynamoDB Logger - Logging payload = {payload}")
 
             # put data in dyanmo DB
-            table = self.dynamodb.Table(self.table_name)
+            table: Final = self.dynamodb.Table(self.table_name)
             # Assuming log_data is a dictionary with log information
-            response = table.put_item(Item=payload)
+            response: Final = table.put_item(Item=payload)
 
-            print_verbose(f"Response from DynamoDB:{str(response)}")
+            print_verbose(f"Response from DynamoDB:{response}")
 
             print_verbose(f"DynamoDB Layer Logging - final response object: {response_obj}")
             return response
         except Exception:
             print_verbose(f"DynamoDB Layer Error - {traceback.format_exc()}")
-            pass

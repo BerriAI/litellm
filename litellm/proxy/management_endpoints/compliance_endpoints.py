@@ -7,6 +7,8 @@ Endpoints for checking regulatory compliance of LLM request logs.
 /compliance/gdpr      - Check GDPR compliance
 """
 
+from typing import Final
+
 from fastapi import APIRouter, Depends, Request
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -18,7 +20,7 @@ from litellm.types.proxy.compliance_endpoints import (
     ComplianceResponse,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 @router.post(
@@ -41,8 +43,8 @@ async def check_eu_ai_act_compliance(
     - Art. 5: Content screened before LLM (pre-call guardrails)
     - Art. 12: Audit record complete (user_id, model, timestamp, guardrail_results)
     """
-    checker = ComplianceChecker(data)
-    checks = checker.check_eu_ai_act()
+    checker: Final = ComplianceChecker(data)
+    checks: Final = checker.check_eu_ai_act()
     return ComplianceResponse(
         compliant=all(c.passed for c in checks),
         regulation="EU AI Act",
@@ -70,8 +72,8 @@ async def check_gdpr_compliance(
     - Art. 5(1)(c): Sensitive data protected (masked/blocked or no issues)
     - Art. 30: Audit record complete (user_id, model, timestamp, guardrail_results)
     """
-    checker = ComplianceChecker(data)
-    checks = checker.check_gdpr()
+    checker: Final = ComplianceChecker(data)
+    checks: Final = checker.check_gdpr()
     return ComplianceResponse(
         compliant=all(c.passed for c in checks),
         regulation="GDPR",

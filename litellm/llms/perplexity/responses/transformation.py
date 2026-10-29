@@ -9,17 +9,21 @@ The only provider quirks:
 Ref: https://docs.perplexity.ai/api-reference/responses-post
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
@@ -40,25 +44,25 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.PERPLEXITY
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
+        api_key: Final = (
             litellm_params.api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         )
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
-        return f"{api_base.rstrip('/')}/v1/responses"
+        return join_api_base(api_base, "v1/responses")
 
-    def _ensure_message_type(self, input: Union[str, ResponseInputParam]) -> Union[str, ResponseInputParam]:
+    def _ensure_message_type(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """Ensure list input items have type='message' (required by Perplexity)."""
         if isinstance(input, str):
             return input
         if isinstance(input, list):
-            result: List[Any] = []
+            result: Final[list[Any]] = []
             for item in input:
                 if isinstance(item, dict) and "type" not in item:
                     new_item = dict(item)  # convert to plain dict to avoid TypedDict checking
@@ -72,16 +76,16 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def transform_responses_api_request(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """Handle preset/ model prefix: send as {"preset": name} instead of {"model": name}."""
         input = self._ensure_message_type(input)
         if model.startswith("preset/"):
             input = self._validate_input_param(input)
-            data: Dict = {
+            data: Final[dict] = {
                 "preset": model[len("preset/") :],
                 "input": input,
             }
@@ -103,12 +107,12 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """Check for Perplexity's status:'failed' on HTTP 200 before delegating to base."""
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raw_response_json = None
 
         if isinstance(raw_response_json, dict) and raw_response_json.get("status") == "failed":
-            error = raw_response_json.get("error", {})
+            error: Final = raw_response_json.get("error", {})
             raise BaseLLMException(
                 status_code=raw_response.status_code,
                 message=error.get("message", "Unknown Perplexity error"),

@@ -27,6 +27,7 @@ const buildProps = (overrides: Partial<React.ComponentProps<typeof MCPSemanticFi
   onTest: vi.fn(),
   filterEnabled: true,
   testResult: null as TestResult | null,
+  testError: null as string | null,
   curlCommand: "curl --location 'http://localhost:4000/v1/responses'",
   ...overrides,
 });
@@ -68,7 +69,7 @@ describe("MCPSemanticFilterTestPanel", () => {
 
   it("should enable the Test Filter button when testQuery is set and filter is enabled", () => {
     render(<MCPSemanticFilterTestPanel {...buildProps({ testQuery: "search query" })} />);
-    expect(screen.getByRole("button", { name: /test filter/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /test filter/i })).toBeEnabled();
   });
 
   it("should call onTest when the Test Filter button is clicked", async () => {
@@ -134,9 +135,24 @@ describe("MCPSemanticFilterTestPanel", () => {
     expect(screen.queryByText("Results")).not.toBeInTheDocument();
   });
 
+  it("should render an error banner with the backend message when testError is set", () => {
+    const testError =
+      "MCP semantic tool filtering could not run: embedding model 'text-embedding-3-small' exceeded its context window while embedding the user query. Switch to an embedding model with a larger context window, or disable semantic tool filtering.";
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testError })} />);
+
+    expect(screen.getByText("Semantic filtering did not run")).toBeInTheDocument();
+    expect(screen.getByText(testError)).toBeInTheDocument();
+  });
+
+  it("should not render the error banner when testError is null", () => {
+    render(<MCPSemanticFilterTestPanel {...buildProps({ testError: null })} />);
+    expect(screen.queryByText("Semantic filtering did not run")).not.toBeInTheDocument();
+  });
+
   it("should show the curl command in the API Usage tab", async () => {
     const user = userEvent.setup();
-    const curlCommand = "curl --location 'http://localhost:4000/v1/responses' --header 'Authorization: Bearer sk-1234'";
+    const curlCommand =
+      'curl --location "http://localhost:4000/v1/responses" --header "Authorization: Bearer $LITELLM_MASTER_KEY"';
     render(<MCPSemanticFilterTestPanel {...buildProps({ curlCommand })} />);
 
     await user.click(screen.getByRole("tab", { name: "API Usage" }));

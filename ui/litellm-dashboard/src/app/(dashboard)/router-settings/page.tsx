@@ -1,6 +1,6 @@
 "use client";
 
-import GeneralSettings from "@/components/general_settings";
+import GeneralSettings from "./_components/general_settings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function RouterSettingsPage() {

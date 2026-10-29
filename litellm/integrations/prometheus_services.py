@@ -3,7 +3,9 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
-from typing import Dict, List, Optional, Union
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -15,7 +17,43 @@ from litellm.types.services import (
     ServiceTypes,
 )
 
-FAILED_REQUESTS_LABELS = ["error_class", "function_name"]
+FAILED_REQUESTS_LABELS: Final = ["error_class", "function_name"]
+
+if TYPE_CHECKING:
+    from prometheus_client import Counter as PrometheusCounter
+    from prometheus_client import Gauge
+
+
+@dataclass(frozen=True, slots=True)
+class _RedisBreakerCollectors:
+    state: "Gauge"
+    transitions: "PrometheusCounter"
+    failures: "PrometheusCounter"
+
+
+@lru_cache(maxsize=1)
+def _redis_breaker_collectors() -> _RedisBreakerCollectors:
+    from prometheus_client import Counter as PrometheusCounter
+    from prometheus_client import Gauge
+
+    return _RedisBreakerCollectors(
+        state=Gauge(
+            "litellm_redis_circuit_breaker_state",
+            "Number of Redis circuit breakers currently in each state",
+            labelnames=("state",),
+            multiprocess_mode="livesum",
+        ),
+        transitions=PrometheusCounter(
+            "litellm_redis_circuit_breaker_transitions",
+            "Redis circuit breaker state transitions",
+            labelnames=("state",),
+        ),
+        failures=PrometheusCounter(
+            "litellm_redis_circuit_breaker_failures",
+            "Redis health failures counted by the circuit breaker",
+            labelnames=("failure_class",),
+        ),
+    )
 
 
 class PrometheusServicesLogger:
@@ -34,20 +72,25 @@ class PrometheusServicesLogger:
             except ImportError:
                 raise Exception("Missing prometheus_client. Run `pip install prometheus-client`")
 
-            _custom_buckets = litellm.prometheus_latency_buckets
+            _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
 
             self.Histogram = Histogram
             self.Counter = Counter
             self.Gauge = Gauge
             self.REGISTRY = REGISTRY
+            breaker_collectors: Final = _redis_breaker_collectors()
+            self.redis_breaker_state = breaker_collectors.state
+            self.redis_breaker_transitions = breaker_collectors.transitions
+            self.redis_breaker_failures = breaker_collectors.failures
+            self._refresh_redis_breaker_gauge()
 
             verbose_logger.debug("in init prometheus services metrics")
 
-            self.payload_to_prometheus_map: Dict[str, List[Union[Histogram, Counter, Gauge, Collector]]] = {}
+            self.payload_to_prometheus_map: dict[str, list[Histogram | Counter | Gauge | Collector]] = {}
 
             for service in ServiceTypes:
-                service_metrics: List[Union[Histogram, Counter, Gauge, Collector]] = []
+                service_metrics: list[Histogram | Counter | Gauge | Collector] = []
 
                 metrics_to_initialize = self._get_service_metrics_initialize(service)
 
@@ -84,24 +127,38 @@ class PrometheusServicesLogger:
             self.mock_testing_failure_calls = 0
 
         except Exception as e:
-            print_verbose(f"Got exception on init prometheus client {str(e)}")
+            print_verbose(f"Got exception on init prometheus client {e}")
             raise e
 
-    def _get_service_metrics_initialize(self, service: ServiceTypes) -> List[ServiceMetrics]:
-        DEFAULT_METRICS = [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
+    def _get_service_metrics_initialize(self, service: ServiceTypes) -> list[ServiceMetrics]:
+        DEFAULT_METRICS: Final = [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
         if service not in DEFAULT_SERVICE_CONFIGS:
             return DEFAULT_METRICS
 
-        metrics = DEFAULT_SERVICE_CONFIGS.get(service, {}).get("metrics", [])
+        metrics: Final = DEFAULT_SERVICE_CONFIGS.get(service, {}).get("metrics", [])
         if not metrics:
-            verbose_logger.debug(f"No metrics found for service {service}")
+            verbose_logger.debug("No metrics found for service %s", service)
             return DEFAULT_METRICS
         return metrics
+
+    def _refresh_redis_breaker_gauge(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker, redis_breaker_state_counts
+
+        counts: Final = redis_breaker_state_counts()
+        for state in (RedisCircuitBreaker.CLOSED, RedisCircuitBreaker.OPEN, RedisCircuitBreaker.HALF_OPEN):
+            self.redis_breaker_state.labels(state).set(counts.get(state, 0))
+
+    def redis_breaker_hook(self, transitions_to: str | None, failure_class: str | None) -> None:
+        self._refresh_redis_breaker_gauge()
+        if transitions_to is not None:
+            self.redis_breaker_transitions.labels(transitions_to).inc()
+        if failure_class is not None:
+            self.redis_breaker_failures.labels(failure_class).inc()
 
     def is_metric_registered(self, metric_name) -> bool:
         # Use _names_to_collectors (O(1)) instead of REGISTRY.collect() (O(n)) to avoid
         # perf regression when a new Router is created per request (e.g. router_settings in DB).
-        names_to_collectors = getattr(self.REGISTRY, "_names_to_collectors", None)
+        names_to_collectors: Final = getattr(self.REGISTRY, "_names_to_collectors", None)
         if names_to_collectors is not None:
             return metric_name in names_to_collectors
         for metric in self.REGISTRY.collect():
@@ -113,40 +170,42 @@ class PrometheusServicesLogger:
         """
         Helper function to get a metric from the registry by name.
         """
-        return self.REGISTRY._names_to_collectors.get(metric_name)
+        return self.REGISTRY._names_to_collectors.get(  # pyright: ignore[reportPrivateUsage]  # Registry lookup has no public API
+            metric_name
+        )
 
     def create_histogram(self, service: str, type_of_request: str):
-        metric_name = "litellm_{}_{}".format(service, type_of_request)
-        is_registered = self.is_metric_registered(metric_name)
+        metric_name: Final = f"litellm_{service}_{type_of_request}"
+        is_registered: Final = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
         return self.Histogram(
             metric_name,
-            "Latency for {} service".format(service),
+            f"Latency for {service} service",
             labelnames=[service],
             buckets=self.latency_buckets,
         )
 
     def create_gauge(self, service: str, type_of_request: str):
-        metric_name = "litellm_{}_{}".format(service, type_of_request)
-        is_registered = self.is_metric_registered(metric_name)
+        metric_name: Final = f"litellm_{service}_{type_of_request}"
+        is_registered: Final = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
-        return self.Gauge(metric_name, "Gauge for {} service".format(service), labelnames=[service])
+        return self.Gauge(metric_name, f"Gauge for {service} service", labelnames=[service])
 
     def create_counter(
         self,
         service: str,
         type_of_request: str,
-        additional_labels: Optional[List[str]] = None,
+        additional_labels: list[str] | None = None,
     ):
-        metric_name = "litellm_{}_{}".format(service, type_of_request)
-        is_registered = self.is_metric_registered(metric_name)
+        metric_name: Final = f"litellm_{service}_{type_of_request}"
+        is_registered: Final = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
         return self.Counter(
             metric_name,
-            "Total {} for {} service".format(type_of_request, service),
+            f"Total {type_of_request} for {service} service",
             labelnames=[service] + (additional_labels or []),
         )
 
@@ -174,7 +233,7 @@ class PrometheusServicesLogger:
         counter,
         labels: str,
         amount: float,
-        additional_labels: Optional[List[str]] = [],
+        additional_labels: list[str] | None = [],
     ):
         assert isinstance(counter, self.Counter)
 
@@ -188,7 +247,7 @@ class PrometheusServicesLogger:
             self.mock_testing_success_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Histogram):
                     self.observe_histogram(
@@ -196,7 +255,7 @@ class PrometheusServicesLogger:
                         labels=payload.service.value,
                         amount=payload.duration,
                     )
-                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
+                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:  # pyright: ignore[reportPrivateUsage]  # Metric names have no public accessor
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
@@ -208,7 +267,7 @@ class PrometheusServicesLogger:
             self.mock_testing_failure_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Counter):
                     self.increment_counter(
@@ -225,7 +284,7 @@ class PrometheusServicesLogger:
             self.mock_testing_success_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Histogram):
                     self.observe_histogram(
@@ -233,7 +292,7 @@ class PrometheusServicesLogger:
                         labels=payload.service.value,
                         amount=payload.duration,
                     )
-                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
+                elif isinstance(obj, self.Counter) and "total_requests" in obj._name:  # pyright: ignore[reportPrivateUsage]  # Metric names have no public accessor
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
@@ -250,19 +309,19 @@ class PrometheusServicesLogger:
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
-        error: Union[str, Exception],
+        error: str | Exception,
     ):
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
-        error_class = error.__class__.__name__
-        function_name = payload.call_type
+        error_class: Final = error.__class__.__name__
+        function_name: Final = payload.call_type
 
         if payload.service.value in self.payload_to_prometheus_map:
-            prom_objects = self.payload_to_prometheus_map[payload.service.value]
+            prom_objects: Final = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 # increment both failed and total requests
                 if isinstance(obj, self.Counter):
-                    if "failed_requests" in obj._name:
+                    if "failed_requests" in obj._name:  # pyright: ignore[reportPrivateUsage]  # Metric names have no public accessor
                         self.increment_counter(
                             counter=obj,
                             labels=payload.service.value,

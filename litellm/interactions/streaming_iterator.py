@@ -8,9 +8,10 @@ from the Google Interactions API, similar to the responses API streaming iterato
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
@@ -20,10 +21,15 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
+
+_INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(
+    object, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class BaseInteractionsAPIStreamingIterator:
@@ -36,43 +42,43 @@ class BaseInteractionsAPIStreamingIterator:
     def __init__(
         self,
         response: httpx.Response,
-        model: Optional[str],
+        model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
     ):
         self.response = response
         self.model = model
         self.logging_obj = logging_obj
         self.finished = False
         self.interactions_api_config = interactions_api_config
-        self.completed_response: Optional[InteractionsAPIStreamingResponse] = None
-        self.start_time = datetime.now()
+        self.completed_response: InteractionsAPIStreamingResponse | None = None
+        self.start_time = logging_obj.start_time
 
         # set request kwargs
         self.litellm_metadata = litellm_metadata
         self.custom_llm_provider = custom_llm_provider
 
         # set hidden params for response headers
-        _api_base = get_api_base(
+        _api_base: Final = get_api_base(
             model=model or "",
             optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
-        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        _model_info: Final[dict] = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
         }
         self._hidden_params["additional_headers"] = process_response_headers(self.response.headers or {})
 
-    def _process_chunk(self, chunk: str) -> Optional[InteractionsAPIStreamingResponse]:
+    def _process_chunk(self, chunk: str) -> InteractionsAPIStreamingResponse | None:
         """Process a single chunk of data from the stream."""
         if not chunk:
             return None
 
         # Handle SSE format (data: {...})
-        stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
+        stripped_chunk: Final = CustomStreamWrapper.strip_sse_data_from_chunk(chunk)
         if stripped_chunk is None:
             return None
 
@@ -83,11 +89,13 @@ class BaseInteractionsAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk = json.loads(stripped_chunk)
+            parsed_chunk: Final = _INTERACTIONS_STREAMING_CHUNK_ADAPTER.validate_python(json.loads(stripped_chunk))
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
-                streaming_response = self.interactions_api_config.transform_streaming_response(
+                if self.logging_obj.completion_start_time is None:
+                    self.logging_obj.update_completion_start_time(completion_start_time=datetime.now())
+                streaming_response: Final = self.interactions_api_config.transform_streaming_response(
                     model=self.model,
                     parsed_chunk=parsed_chunk,
                     logging_obj=self.logging_obj,
@@ -109,12 +117,11 @@ class BaseInteractionsAPIStreamingIterator:
             return None
         except json.JSONDecodeError:
             # If we can't parse the chunk, continue
-            verbose_logger.debug(f"Failed to parse streaming chunk: {stripped_chunk[:200]}...")
+            verbose_logger.debug("Failed to parse streaming chunk: %s...", stripped_chunk[:200])
             return None
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses."""
-        pass
 
 
 class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
@@ -125,11 +132,11 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
     def __init__(
         self,
         response: httpx.Response,
-        model: Optional[str],
+        model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
     ):
         super().__init__(
             response=response,
@@ -139,7 +146,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
         )
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = aiter_sse_lines(response.aiter_text())
 
     def __aiter__(self):
         return self
@@ -171,7 +178,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         """Handle logging for completed responses in async context."""
         import copy
 
-        logging_response = copy.deepcopy(self.completed_response)
+        logging_response: Final = copy.deepcopy(self.completed_response)
 
         asyncio.create_task(
             self.logging_obj.dispatch_success_handlers(
@@ -192,11 +199,11 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
     def __init__(
         self,
         response: httpx.Response,
-        model: Optional[str],
+        model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
-        custom_llm_provider: Optional[str] = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        custom_llm_provider: str | None = None,
     ):
         super().__init__(
             response=response,
@@ -206,7 +213,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
         )
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = iter_sse_lines(response.iter_text())
 
     def __iter__(self):
         return self
@@ -238,7 +245,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
         """Handle logging for completed responses in sync context."""
         import copy
 
-        logging_response = copy.deepcopy(self.completed_response)
+        logging_response: Final = copy.deepcopy(self.completed_response)
 
         run_async_function(
             async_function=self.logging_obj.async_success_handler,

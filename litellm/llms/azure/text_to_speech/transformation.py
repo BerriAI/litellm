@@ -4,12 +4,14 @@ Azure AVA (Cognitive Services) Text-to-Speech transformation
 Maps OpenAI TTS spec to Azure Cognitive Services TTS API
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Final, Union
 from urllib.parse import urlparse
 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -18,6 +20,7 @@ from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -61,20 +64,20 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: Optional[Union[str, Dict]],
-        optional_params: Dict,
-        litellm_params_dict: Dict,
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
-        timeout: Union[float, httpx.Timeout],
-        extra_headers: Optional[Dict[str, Any]],
-        base_llm_http_handler: Any,
+        timeout: float | httpx.Timeout,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        **kwargs: Any,
+        api_base: str | None,
+        api_key: str | None,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle Azure AVA TTS requests
@@ -100,7 +103,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Convert voice to string if it's a dict (for Azure AVA, voice must be a string)
-        voice_str: Optional[str] = None
+        voice_str: str | None = None
         if isinstance(voice, str):
             voice_str = voice
         elif isinstance(voice, dict):
@@ -114,7 +117,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             }
         )
         # Call the text_to_speech_handler
-        response = base_llm_http_handler.text_to_speech_handler(
+        response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
             voice=voice_str,
@@ -155,15 +158,15 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             speed=2.0 -> "+100%"
             speed=0.5 -> "-50%"
         """
-        rate_percentage = int((speed - 1.0) * 100)
+        rate_percentage: Final = int((speed - 1.0) * 100)
         return f"{rate_percentage:+d}%"
 
     def _build_express_as_element(
         self,
         content: str,
-        style: Optional[str] = None,
-        styledegree: Optional[str] = None,
-        role: Optional[str] = None,
+        style: str | None = None,
+        styledegree: str | None = None,
+        role: str | None = None,
     ) -> str:
         """
         Build mstts:express-as element with optional style, styledegree, and role attributes
@@ -180,7 +183,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         if not (style or styledegree or role):
             return content
 
-        express_as_attrs = []
+        express_as_attrs: Final = []
         if style:
             express_as_attrs.append(f"style='{style}'")
         if styledegree:
@@ -188,14 +191,14 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         if role:
             express_as_attrs.append(f"role='{role}'")
 
-        express_as_attrs_str = " ".join(express_as_attrs)
+        express_as_attrs_str: Final = " ".join(express_as_attrs)
         return f"<mstts:express-as {express_as_attrs_str}>{content}</mstts:express-as>"
 
     def _get_voice_language(
         self,
-        voice_name: Optional[str],
-        explicit_lang: Optional[str] = None,
-    ) -> Optional[str]:
+        voice_name: str | None,
+        explicit_lang: str | None = None,
+    ) -> str | None:
         """
         Get the language for the voice element's xml:lang attribute
 
@@ -223,21 +226,21 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict = {},
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to Azure AVA TTS parameters
         """
-        mapped_params = {}
+        mapped_params: Final = {}
         ##########################################################
         # Map voice
         # OpenAI uses voice as a required param, hence not in optional_params
         ##########################################################
         # If it's already an Azure voice, use it directly
-        mapped_voice: Optional[str] = None
+        mapped_voice: str | None = None
         if isinstance(voice, str):
             if voice in self.VOICE_MAPPINGS:
                 mapped_voice = self.VOICE_MAPPINGS[voice]
@@ -247,7 +250,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
         # Map response format
         if "response_format" in optional_params:
-            format_name = optional_params["response_format"]
+            format_name: Final = optional_params["response_format"]
             if format_name in self.FORMAT_MAPPINGS:
                 mapped_params["output_format"] = self.FORMAT_MAPPINGS[format_name]
             else:
@@ -259,7 +262,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
         # Map speed (OpenAI: 0.25-4.0, Azure: prosody rate)
         if "speed" in optional_params:
-            speed = optional_params["speed"]
+            speed: Final = optional_params["speed"]
             if speed is not None:
                 mapped_params["rate"] = self._convert_speed_to_azure_rate(speed=speed)
 
@@ -281,13 +284,13 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure environment and set up authentication headers
         """
-        validated_headers = headers.copy()
+        validated_headers: Final = headers.copy()
 
         # Azure AVA TTS requires either:
         # 1. Ocp-Apim-Subscription-Key header, or
@@ -311,7 +314,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -327,24 +330,18 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
                 f"https://{{region}}.{self.TTS_SPEECH_DOMAIN}"
             )
 
-        # Remove trailing slash and parse URL
-        api_base = api_base.rstrip("/")
-        parsed_url = urlparse(api_base)
-        hostname = parsed_url.hostname or ""
+        parsed_url: Final = urlparse(api_base)
+        hostname: Final = parsed_url.hostname or ""
 
         # Check if it's a Cognitive Services endpoint (convert to TTS endpoint)
         if self._is_cognitive_services_endpoint(hostname=hostname):
-            region = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
+            region: Final = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_tts_url(region=region)
 
-        # Check if it's already a TTS endpoint
         if self._is_tts_endpoint(hostname=hostname):
-            if not api_base.endswith(self.TTS_ENDPOINT_PATH):
-                return f"{api_base}{self.TTS_ENDPOINT_PATH}"
-            return api_base
+            return ensure_api_route(api_base, self.TTS_ENDPOINT_PATH)
 
-        # Assume it's a custom endpoint, append the path
-        return f"{api_base}{self.TTS_ENDPOINT_PATH}"
+        return join_api_base(api_base, self.TTS_ENDPOINT_PATH)
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
         """Check if hostname is a Cognitive Services endpoint"""
@@ -384,9 +381,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
@@ -407,10 +404,10 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             TextToSpeechRequestData: Contains SSML body and Azure-specific headers
         """
         # Get voice (already mapped in main.py, or use default)
-        azure_voice = voice or self.DEFAULT_VOICE
+        azure_voice: Final = voice or self.DEFAULT_VOICE
 
         # Get output format (already mapped in main.py)
-        output_format = optional_params.get("output_format", "audio-24khz-48kbitrate-mono-mp3")
+        output_format: Final = optional_params.get("output_format", "audio-24khz-48kbitrate-mono-mp3")
         headers["X-Microsoft-OutputFormat"] = output_format
 
         # Auto-detect SSML: if input contains <speak>, pass it through as-is
@@ -422,14 +419,14 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             )
 
         # Build SSML from plain text
-        rate = optional_params.get("rate", "0%")
-        style = optional_params.get("style")
-        styledegree = optional_params.get("styledegree")
-        role = optional_params.get("role")
-        lang = optional_params.get("lang")
+        rate: Final = optional_params.get("rate", "0%")
+        style: Final = optional_params.get("style")
+        styledegree: Final = optional_params.get("styledegree")
+        role: Final = optional_params.get("role")
+        lang: Final = optional_params.get("lang")
 
         # Escape XML special characters in input text
-        escaped_input = (
+        escaped_input: Final = (
             input.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
@@ -438,7 +435,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Determine if we need mstts namespace (for express-as element)
-        use_mstts = style or role or styledegree
+        use_mstts: Final = style or role or styledegree
 
         # Build the xmlns attributes
         if use_mstts:
@@ -447,10 +444,10 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             xmlns = "xmlns='http://www.w3.org/2001/10/synthesis'"
 
         # Build the inner content with prosody
-        prosody_content = f"<prosody rate='{rate}'>{escaped_input}</prosody>"
+        prosody_content: Final = f"<prosody rate='{rate}'>{escaped_input}</prosody>"
 
         # Wrap in mstts:express-as if style or role is specified
-        voice_content = self._build_express_as_element(
+        voice_content: Final = self._build_express_as_element(
             content=prosody_content,
             style=style,
             styledegree=styledegree,
@@ -458,13 +455,13 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Build voice element with optional xml:lang attribute
-        voice_lang = self._get_voice_language(
+        voice_lang: Final = self._get_voice_language(
             voice_name=azure_voice,
             explicit_lang=lang,
         )
-        voice_lang_attr = f" xml:lang='{voice_lang}'" if voice_lang else ""
+        voice_lang_attr: Final = f" xml:lang='{voice_lang}'" if voice_lang else ""
 
-        ssml_body = f"""<speak version='1.0' {xmlns} xml:lang='en-US'>
+        ssml_body: Final = f"""<speak version='1.0' {xmlns} xml:lang='en-US'>
     <voice name='{azure_voice}'{voice_lang_attr}>
         {voice_content}
     </voice>
