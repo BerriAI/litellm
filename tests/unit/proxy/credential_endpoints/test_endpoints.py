@@ -2,8 +2,9 @@
 
 import json
 from contextlib import contextmanager
+from functools import reduce
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
@@ -12,14 +13,16 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.llms.github_copilot.per_user_auth import _SESSION_CACHE, _session_cache_key
 from litellm.models.credentials import CredentialSource, UserConnectionFlowHandle
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.credential_endpoints.endpoints import _decode_flow_handle, get_llm_router
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
@@ -458,6 +461,264 @@ def test_update_credential_never_syncs_a_null_into_the_in_memory_credential(rest
     synced = next(c for c in litellm.credential_list if c.credential_name == "plain-cred")
     assert "anthropic_issuer_url" not in synced.credential_values
     assert synced.credential_values["api_key"] == "sk-rotated"
+
+
+_WRITTEN_JSON: Final = TypeAdapter(dict[str, object])
+
+
+class _InstallCredentialStore(Protocol):
+    def __call__(
+        self,
+        *,
+        connected: bool = True,
+        in_memory: tuple[object, ...] = (),
+        llm_router: object | None = None,
+        **repository_calls: AsyncMock,
+    ) -> None: ...
+
+
+def _encrypted_row(served: CredentialItem) -> CredentialItem:
+    return CredentialItem(
+        credential_name=served.credential_name,
+        credential_values={key: encrypt_value_helper(value) for key, value in served.credential_values.items()},
+        credential_info=dict(served.credential_info),
+    )
+
+
+def _written_values(update_by_name: AsyncMock) -> dict[str, object]:
+    written: Final = _WRITTEN_JSON.validate_json(update_by_name.await_args.kwargs["data"]["credential_values"])
+    return {
+        key: decrypt_value_helper(value, key) if isinstance(value, str) else value for key, value in written.items()
+    }
+
+
+def _written_info(update_by_name: AsyncMock) -> dict[str, object]:
+    return _WRITTEN_JSON.validate_json(update_by_name.await_args.kwargs["data"]["credential_info"])
+
+
+def _serve_credential(
+    credential_store: _InstallCredentialStore,
+    served: CredentialItem,
+    in_memory: tuple[CredentialItem, ...] | None = None,
+) -> AsyncMock:
+    update_by_name = AsyncMock(return_value=None)
+    credential_store(
+        in_memory=(served,) if in_memory is None else in_memory,
+        find_by_name=AsyncMock(side_effect=lambda _name: _encrypted_row(served)),
+        update_by_name=update_by_name,
+    )
+    return update_by_name
+
+
+def _service_account(
+    private_key: str = "pk-1234567890", client_email: str = "svc@example.com"
+) -> dict[str, dict[str, str]]:
+    return {"vertex_credentials": {"private_key": private_key, "client_email": client_email}}
+
+
+def test_update_credential_keeps_the_stored_secret_when_the_patch_echoes_its_masked_read_back(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234"},
+        credential_info={"custom_llm_provider": "openai", "description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_values": {"api_key": "sk****34"},
+            "credential_info": {"custom_llm_provider": "openai", "description": "edited"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234"}
+    assert _written_info(update_by_name)["description"] == "edited"
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "sk-real-secret-1234"}
+    assert litellm.credential_list[0].credential_info["description"] == "edited"
+
+
+def test_update_credential_keeps_the_secret_when_the_patch_echoes_what_get_by_name_served(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-real-secret-1234", "api_base": "https://api.example.com"},
+        credential_info={"custom_llm_provider": "openai", "description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = _call_as("GET", "/credentials/by_name/existing").json()
+    assert read_back["credential_values"]["api_key"] != "sk-real-secret-1234"
+
+    response = _patch_credential(
+        "existing", {**read_back, "credential_info": {**read_back["credential_info"], "description": "edited"}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234", "api_base": "https://api.example.com"}
+    assert _written_info(update_by_name)["description"] == "edited"
+
+
+def test_update_credential_keeps_a_short_secret_whose_read_back_is_all_asterisks(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(credential_name="existing", credential_values={"api_key": "abc"}, credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = _call_as("GET", "/credentials/by_name/existing").json()
+    assert read_back["credential_values"]["api_key"] != "abc"
+
+    response = _patch_credential(
+        "existing", {"credential_values": read_back["credential_values"], "credential_info": {}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "abc"}
+    assert CredentialAccessor.get_credential_values("existing") == {"api_key": "abc"}
+
+
+@pytest.mark.parametrize(
+    "rotated_values",
+    (
+        {"api_key": "sk-rotated-key-5678"},
+        {"api_key": "new**secret"},
+        _service_account(private_key="pk**rotated"),
+    ),
+)
+def test_update_credential_still_rotates_a_secret_sent_in_full(
+    credential_store: _InstallCredentialStore, rotated_values: dict[str, object]
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-old-key-000011", **_service_account()},
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential("existing", {"credential_values": rotated_values, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {**served.credential_values, **rotated_values}
+    assert CredentialAccessor.get_credential_values("existing") == {**served.credential_values, **rotated_values}
+
+
+def test_update_credential_saves_a_mask_shaped_value_on_a_key_get_never_masks(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={
+            "api_key": "sk-real-secret-1234",
+            "api_base": "https://api.example.com",
+            "extra_headers": {"x-team": "platform"},
+        },
+        credential_info={},
+    )
+    update_by_name = _serve_credential(credential_store, served)
+    sent: Final = {"api_base": "ab****cd", "organization": "*****", "extra_headers": {"x-team": "*****"}}
+    assert get_masked_values(sent, unmasked_length=4, number_of_asterisks=4) == sent
+
+    response = _patch_credential("existing", {"credential_values": sent, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-real-secret-1234", **sent}
+
+
+@pytest.mark.parametrize("client_email", ("svc@example.com", "new@example.com"))
+def test_update_credential_keeps_a_masked_secret_inside_a_stored_object(
+    credential_store: _InstallCredentialStore, client_email: str
+):
+    served = CredentialItem(credential_name="existing", credential_values=_service_account(), credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_values": _service_account(private_key="pk****90", client_email=client_email),
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == _service_account(client_email=client_email)
+    assert CredentialAccessor.get_credential_values("existing") == _service_account(client_email=client_email)
+
+
+def test_update_credential_drops_a_masked_leaf_the_stored_object_no_longer_has(
+    credential_store: _InstallCredentialStore,
+):
+    served = CredentialItem(credential_name="existing", credential_values=_service_account(), credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+
+    response = _patch_credential(
+        "existing",
+        {
+            "credential_values": {
+                "vertex_credentials": {
+                    "private_key": "pk****90",
+                    "refresh_token": "rt****89",
+                    "client_email": "svc@example.com",
+                }
+            },
+            "credential_info": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == _service_account()
+
+
+@pytest.mark.parametrize(
+    "in_memory",
+    (
+        pytest.param(
+            (
+                CredentialItem(
+                    credential_name="existing",
+                    credential_values={"api_key": "sk-old-key-000011"},
+                    credential_info={"description": "original"},
+                ),
+            ),
+            id="replica_not_resynced",
+        ),
+        pytest.param((), id="replica_never_loaded_it"),
+    ),
+)
+def test_update_credential_keeps_the_table_secret_whatever_this_replica_last_rendered(
+    credential_store: _InstallCredentialStore, in_memory: tuple[CredentialItem, ...]
+):
+    served = CredentialItem(
+        credential_name="existing",
+        credential_values={"api_key": "sk-rotated-key-000099"},
+        credential_info={"description": "original"},
+    )
+    update_by_name = _serve_credential(credential_store, served, in_memory=in_memory)
+
+    response = _patch_credential(
+        "existing",
+        {"credential_values": {"api_key": "sk****11"}, "credential_info": {"description": "edited"}},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == {"api_key": "sk-rotated-key-000099"}
+    assert _written_info(update_by_name)["description"] == "edited"
+
+
+@pytest.mark.parametrize("levels", (20, 21))
+def test_update_credential_keeps_a_secret_exactly_as_deep_as_the_masker_masks(
+    credential_store: _InstallCredentialStore, levels: int
+):
+    nested = reduce(lambda inner, _level: {"credentials": inner}, range(levels), {"api_key": "leaf-secret-1234"})
+    served = CredentialItem(credential_name="existing", credential_values=nested, credential_info={})
+    update_by_name = _serve_credential(credential_store, served)
+    read_back = get_masked_values(served.credential_values, unmasked_length=4, number_of_asterisks=4)
+
+    response = _patch_credential("existing", {"credential_values": read_back, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert _written_values(update_by_name) == nested
 
 
 def _generate_es256_pem() -> str:

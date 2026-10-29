@@ -85,10 +85,8 @@ from litellm.proxy._types import (
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
-    litellm_call_id_headers,
-    openai_error_param,
-    openai_error_type,
-    proxy_error_status_code,
+    error_status_code,
+    openai_shaped_proxy_exception,
     with_litellm_call_id,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -9194,30 +9192,15 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
 
         _recreate_writer_on_read_only_transaction(prisma_client)
 
-    headers: Final = litellm_call_id_headers(litellm_call_id)
-    if isinstance(e, HTTPException):
-        detail: Final = str(attribute_of(e, "detail", f"error({e})"))
-        http_status_code: Final = proxy_error_status_code(e, detail)
-        return ProxyException(
-            message=detail,
-            type=openai_error_type(e, http_status_code),
-            param=openai_error_param(e),
-            headers=headers,
-            code=http_status_code,
-        )
-    elif isinstance(e, ProxyException):
+    if isinstance(e, ProxyException):
         return with_litellm_call_id(e, litellm_call_id)
-    message: Final = strip_bug_report_notice(str(e))
-    _status_code: Final = proxy_error_status_code(e, message)
+    if isinstance(e, HTTPException):
+        return with_litellm_call_id(openai_shaped_proxy_exception(e, str(e.detail), e.status_code), litellm_call_id)
     if should_report_bug(e):
         verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
-    return ProxyException(
-        message=_redact_when_status_is_none(e, message),
-        type=openai_error_type(e, _status_code),
-        param=openai_error_param(e),
-        headers=headers,
-        code=_status_code,
-    )
+    message: Final = _redact_when_status_is_none(e, strip_bug_report_notice(str(e)))
+    status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return with_litellm_call_id(openai_shaped_proxy_exception(e, message, status_code), litellm_call_id)
 
 
 def require_enterprise_license(feature: str | None = None) -> None:

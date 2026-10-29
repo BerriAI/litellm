@@ -3816,14 +3816,14 @@ class ManagementEndpointLoggingPayload(LiteLLMPydanticObjectBase):
     end_time: datetime | None = None
 
 
-def router_error_status_code(message: str) -> int | None:
-    """The status a router failure answers with when its message names it: no deployment left maps to 429
-    (https://github.com/BerriAI/litellm/issues/2487) and no deployment matching the request's tags to 401."""
+def proxy_exception_status_code(message: str, code: str) -> str:
+    # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+    # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
     if "No healthy deployment available" in message or "No deployments available" in message:
-        return 429
+        return "429"
     if RouterErrors.no_deployments_with_tag_routing.value in message:
-        return 401
-    return None
+        return "401"
+    return code
 
 
 class ProxyException(Exception):
@@ -3847,14 +3847,14 @@ class ProxyException(Exception):
         # If we look on official python OpenAI lib, the code should be a string:
         # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
         # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
-        router_status_code: Final = router_error_status_code(self.message)
-        self.code = str(code if router_status_code is None else router_status_code)
+        self.code = str(code)
         if headers is not None:
             for k, v in headers.items():
                 if not isinstance(v, str):
                     headers[k] = str(v)
         self.headers = headers or {}
         self.provider_specific_fields = provider_specific_fields
+        self.code = proxy_exception_status_code(self.message, self.code)
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""

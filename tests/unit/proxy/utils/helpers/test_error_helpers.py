@@ -12,6 +12,7 @@ from prisma.errors import DataError
 import litellm
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.common_request_processing import proxy_exception_from_route_error
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.utils import get_error_message_str, handle_exception_on_proxy
 from litellm.types.router import RouterErrors
 
@@ -102,7 +103,7 @@ def test_handle_exception_on_proxy_happy_path_http_exception():
     assert snapshot == {
         "is_proxy_exception": True,
         "message": "forbidden",
-        "type": "permission_error",
+        "type": "auth_error",
         "code": "403",
     }
 
@@ -186,8 +187,8 @@ def test_handle_exception_on_proxy_error_path_none_input_wraps_as_500():
     "status_code, expected_type",
     [
         (400, "invalid_request_error"),
-        (401, "authentication_error"),
-        (403, "permission_error"),
+        (401, "auth_error"),
+        (403, "auth_error"),
         (404, "invalid_request_error"),
         (408, "invalid_request_error"),
         (409, "invalid_request_error"),
@@ -269,10 +270,32 @@ def test_handle_exception_on_proxy_labels_a_failure_the_way_the_chat_route_does(
 
 
 @pytest.mark.parametrize(
+    "exc",
+    [
+        HTTPException(status_code=400, detail="bad budget_duration"),
+        HTTPException(status_code=401, detail="not allowed"),
+        HTTPException(status_code=403, detail="admin only"),
+        HTTPException(status_code=404, detail="no such team"),
+        litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-6.1-sol"),
+        ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}=['paid']"),
+        _exception_carrying_status(409, "duplicate credential"),
+    ],
+    ids=["http_400", "http_401", "http_403", "http_404", "provider_401", "tag_denial", "carried_409"],
+)
+def test_handle_exception_on_proxy_labels_a_failure_the_way_route_catch_alls_do(exc: Exception):
+    """Management routes answer some failures through their own catch-all and the rest through this handler,
+    so a client reading /key/list and /key/generate must see the same type and status for the same failure."""
+    shared: Final = handle_exception_on_proxy(exc)
+    catch_all: Final = proxy_exception_for(exc, default_status_code=500)
+
+    assert (shared.code, shared.type, shared.message) == (catch_all.code, catch_all.type, catch_all.message)
+
+
+@pytest.mark.parametrize(
     "message, expected",
     [
         (f"{RouterErrors.no_deployments_with_provider_budget_routing.value}, try later", ("429", "rate_limit_error")),
-        (f"{RouterErrors.no_deployments_with_tag_routing.value}=['paid']", ("401", "authentication_error")),
+        (f"{RouterErrors.no_deployments_with_tag_routing.value}=['paid']", ("401", "auth_error")),
     ],
     ids=["no_deployment_left", "no_deployment_for_tags"],
 )
