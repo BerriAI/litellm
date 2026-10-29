@@ -2584,17 +2584,18 @@ def exception_type(
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,
+                    response=_without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider)),
                 )
 
             if (
                 custom_llm_provider == "litellm_proxy"
             ):  # handle special case where calling litellm proxy + exception str contains error message
                 extract_and_raise_litellm_exception(
-                    response=_litellm_proxy_response(mappable_exception, custom_llm_provider),
+                    response=_without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider)),
                     error_str=error_str,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    body=getattr(original_exception, "body", None),
+                    body=getattr(mappable_exception, "body", None),
                 )
             if (
                 custom_llm_provider == "openai"

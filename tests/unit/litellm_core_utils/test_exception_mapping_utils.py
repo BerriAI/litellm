@@ -53,8 +53,8 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.code == code
         assert caught.value.body == body
         assert caught.value.status_code == 400
-        assert caught.value.response is response
-        assert caught.value.request is request
+        assert caught.value.response.status_code == 400
+        assert caught.value.request.url == request.url
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 

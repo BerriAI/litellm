@@ -535,26 +535,31 @@ async def test_retryable_error_keeps_the_decoded_upstream_body_and_its_headers(
 
 
 _REFUSAL_BODY: Final = '{"error":{"message":"upstream refused","type":"upstream_refusal","param":null,"code":null}}'
+_GATEWAY_TIMEOUT_BODY: Final = (
+    '{"error":{"message":"litellm.Timeout: APITimeoutError - Request timed out.","type":"invalid_request_error",'
+    '"param":null,"code":"408"}}'
+)
 _PROVIDER_KEY: Final = "sk-provider-secret"
 _QUERY_SECRET: Final = "query-secret"
 
 
 @pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
 @pytest.mark.parametrize(
-    ("status_code", "mapped_error"),
+    ("status_code", "mapped_error", "body"),
     (
-        (400, litellm.BadRequestError),
-        (403, litellm.APIError),
-        (408, litellm.Timeout),
-        (409, litellm.APIError),
-        (413, litellm.APIError),
-        (429, litellm.RateLimitError),
-        (500, litellm.InternalServerError),
-        (504, litellm.Timeout),
+        (400, litellm.BadRequestError, _REFUSAL_BODY),
+        (403, litellm.APIError, _REFUSAL_BODY),
+        (408, litellm.Timeout, _REFUSAL_BODY),
+        (408, litellm.Timeout, _GATEWAY_TIMEOUT_BODY),
+        (409, litellm.APIError, _REFUSAL_BODY),
+        (413, litellm.APIError, _REFUSAL_BODY),
+        (429, litellm.RateLimitError, _REFUSAL_BODY),
+        (500, litellm.InternalServerError, _REFUSAL_BODY),
+        (504, litellm.Timeout, _REFUSAL_BODY),
     ),
 )
 def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
-    provider: str, status_code: int, mapped_error: type[Exception]
+    provider: str, status_code: int, mapped_error: type[Exception], body: str
 ) -> None:
     client: Final = OpenAI(
         api_key=_PROVIDER_KEY,
@@ -564,7 +569,7 @@ def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
         http_client=httpx.Client(
             transport=httpx.MockTransport(
                 lambda _request: httpx.Response(
-                    status_code, content=_REFUSAL_BODY, headers={"content-type": "application/json"}
+                    status_code, content=body, headers={"content-type": "application/json"}
                 )
             )
         ),
@@ -582,8 +587,8 @@ def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
 
     error_response: Final = getattr(raised.value, "response")
     assert error_response.status_code == status_code
-    assert error_response.text == _REFUSAL_BODY
-    assert error_response.json() == json.loads(_REFUSAL_BODY)
+    assert error_response.text == body
+    assert error_response.json() == json.loads(body)
     assert str(error_response.request.url) == f"{_UPSTREAM_BASE}/chat/completions"
     for exposed in (error_response.request, getattr(raised.value, "request")):
         assert _QUERY_SECRET not in str(exposed.url)
