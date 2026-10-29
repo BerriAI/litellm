@@ -865,7 +865,7 @@ async def _recorded_autorouter_savings(
             entity_id_field="user_id",
             entity_id=user_id,
             exclude_entity_ids=None,
-            api_key=api_key,
+            api_key=(api_key,) if api_key is not None else None,
             start_date=start_day,
             end_date=end_day,
             model=None,
