@@ -130,11 +130,17 @@ _CALL_STACK_END_MODULES: Final = ("asyncio", "concurrent", "threading")
 _INCREMENT_WITH_FLOOR_LUA: Final = (
     "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
     "if count < 0 then count = redis.call('INCRBY', KEYS[1], -count) end "
-    "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+    "if count == 0 then redis.call('DEL', KEYS[1]) return 0 end "
+    "redis.call('EXPIRE', KEYS[1], ARGV[2]) "
     "return count"
 )
 
+_INCREMENT_IF_PRESENT_LUA: Final = (
+    "if redis.call('EXISTS', KEYS[1]) == 0 then return false end return redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])"
+)
+
 _LUA_COUNT: Final = TypeAdapter(int)
+_LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
 
@@ -675,7 +681,7 @@ class RedisCache(BaseCache):
         # redis namespaces
         self.namespace = namespace
         # for high traffic, we store the redis results in memory and then batch write to redis
-        self.redis_batch_writing_buffer: list = []
+        self.redis_batch_writing_buffer: list[tuple[str, object]] = []
         if redis_flush_size is None:
             self.redis_flush_size: int = 100
         else:
@@ -957,10 +963,11 @@ class RedisCache(BaseCache):
         keeps it safe: a separate corrective write could land after another pod's increment and
         erase it.
 
-        The TTL is set only on a key that has none, so a counter expires ``ttl`` after it was
-        created rather than ``ttl`` after it was last touched. Refreshing it on every touch
-        would keep a count a dead worker never decremented alive for as long as the group
-        takes traffic. Returns the resulting count.
+        The TTL is refreshed on every touch while the count is positive, and the key is
+        deleted when the count hits zero. That keeps a busy deployment's counter from
+        expiring mid-flight (which used to let later decrements undercount it for
+        least-busy routing). A counter a dead worker never decremented still ages out
+        once the deployment goes idle for ``ttl`` seconds. Returns the resulting count.
         """
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
         count: Final[object] = self.redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue]  # stubs omit eval
@@ -1568,6 +1575,46 @@ class RedisCache(BaseCache):
         count: Final = await _redis_client.eval(_INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl)
         return _LUA_COUNT.validate_python(count)
 
+    @_redis_circuit_breaker_guard
+    async def async_increment_if_present(
+        self, key: str, value: float, parent_otel_span: Span | None = None
+    ) -> float | None:
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        start_time: Final = time.time()
+        try:
+            total: Final = _LUA_OPTIONAL_TOTAL.validate_python(
+                await _redis_client.eval(_INCREMENT_IF_PRESENT_LUA, 1, namespaced_key, value)
+            )
+        except Exception as e:
+            failed_at: Final = time.time()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=failed_at - start_time,
+                    error=e,
+                    call_type="async_increment_if_present",
+                    caller=_get_call_stack_info(),
+                    start_time=start_time,
+                    end_time=failed_at,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            raise
+        end_time: Final = time.time()
+        asyncio.create_task(
+            self.service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=end_time - start_time,
+                call_type="async_increment_if_present",
+                caller=_get_call_stack_info(),
+                start_time=start_time,
+                end_time=end_time,
+                parent_otel_span=parent_otel_span,
+            )
+        )
+        return total
+
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
         await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)
@@ -1693,7 +1740,9 @@ class RedisCache(BaseCache):
             return key_value_dict
 
     @_redis_circuit_breaker_guard
-    async def async_get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
+    async def async_get_cache(
+        self, key, parent_otel_span: Span | None = None, *, raise_on_error: bool = False, **kwargs
+    ):
         from redis.asyncio import Redis
 
         _redis_client: Final[Redis] = self.init_async_client()
@@ -1736,6 +1785,8 @@ class RedisCache(BaseCache):
                 )
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
+            if raise_on_error:
+                raise
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard
