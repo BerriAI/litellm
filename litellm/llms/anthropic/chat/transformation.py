@@ -23,6 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1706,7 +1707,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
-        self, value: dict | None, optional_params: dict, is_thinking_enabled: bool
+        self, value: dict | None, optional_params: dict, tool_is_forced: bool
     ) -> AnthropicMessagesTool | None:
         ignore_response_format_types: Final = ["text"]
         if value is None or value["type"] in ignore_response_format_types:  # value is a no-op
@@ -1724,6 +1725,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         _tool: Final = self._create_json_tool_call_for_response_format(
             json_schema=json_schema,
+            description=None if tool_is_forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
         )
 
         return _tool
@@ -1819,7 +1821,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params=non_default_params)
+        response_format_tool_is_forced: Final = (
+            "response_format" in non_default_params
+            and AnthropicModelInfo.response_format_tool_can_be_forced(
+                model, self._resolved_provider, REQUEST_PARAMS.validate_python(non_default_params)
+            )
+        )
 
         # NB: ``map_openai_params`` deliberately does NOT sanitize tool names
         # here. Names are the *original* OpenAI names at this stage, and must
@@ -1879,12 +1886,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
                 else:
-                    _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
+                    _tool = self.map_response_format_to_anthropic_tool(
+                        value, optional_params, response_format_tool_is_forced
+                    )
                     if _tool is None:
                         continue
-                    if AnthropicModelInfo.response_format_tool_can_be_forced(
-                        model, self._resolved_provider, REQUEST_PARAMS.validate_python(non_default_params)
-                    ):
+                    if response_format_tool_is_forced:
                         _tool_choice = {
                             "name": RESPONSE_FORMAT_TOOL_NAME,
                             "type": "tool",
@@ -2012,12 +2019,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: dict | None = None,
+        description: str | None = None,
     ) -> AnthropicMessagesTool:
         """
         Handles creating a tool call for getting responses in JSON format.
 
         Args:
             json_schema (Optional[dict]): The JSON schema the response should be in
+            description (Optional[str]): The tool description, left off the tool when None
 
         Returns:
             AnthropicMessagesTool: The tool call to send to Anthropic API to get responses in JSON format
@@ -2034,11 +2043,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         else:
             _input_schema.update(cast(AnthropicInputSchema, json_schema))
 
-        _tool: Final = AnthropicMessagesTool(
-            name=RESPONSE_FORMAT_TOOL_NAME,
-            input_schema=_input_schema,
+        if description is None:
+            return AnthropicMessagesTool(name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema)
+        return AnthropicMessagesTool(
+            name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema, description=description
         )
-        return _tool
 
     def should_strip_billing_metadata(self) -> bool:
         """

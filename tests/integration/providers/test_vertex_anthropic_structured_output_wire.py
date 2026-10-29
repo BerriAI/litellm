@@ -34,6 +34,9 @@ from pydantic import JsonValue, TypeAdapter
 pytestmark: Final = pytest.mark.shares_worker_state
 
 _JSON_TOOL: Final = "json_tool_call"
+_UNFORCED_JSON_TOOL_DESCRIPTION: Final = (
+    "When you are ready to answer, call this tool with your final answer as its input. Do not reply in plain text."
+)
 _USER_TOOL: Final = "lookup"
 _STRUCTURED_OUTPUTS_BETA: Final = "structured-outputs-2025-11-13"
 _TOOL_MODEL: Final = "claude-sonnet-5"
@@ -44,6 +47,7 @@ _THINKING_BY_DEFAULT_NATIVE_MODEL: Final = "claude-haiku-5-5"
 _THINKING_OFF_TOOL_MODEL: Final = "claude-opus-4-8"
 _UNMAPPED_MODEL: Final = "claude-scripted-9"
 _BEDROCK_INVOKE_MODEL: Final = "anthropic.claude-sonnet-5"
+_BEDROCK_TOOL_PATH_MODEL: Final = "anthropic.claude-opus-4-8"
 _BEDROCK_JSON_TOOL_MODEL: Final = "us.anthropic.claude-opus-4-8"
 _THINKING_SIGNATURE: Final = "c2NyaXB0ZWQtc2lnbmF0dXJl"
 _PROJECT: Final = "scripted-project"
@@ -610,11 +614,15 @@ def _one_delivery(wire: Wire, marker_hex: str) -> _Delivery:
     return sent
 
 
-def _json_tool_schema(delivery: _Delivery) -> dict[str, JsonValue]:
+def _json_tool(delivery: _Delivery) -> dict[str, JsonValue]:
     tools: Final = tuple(object_value(tool) for tool in list_value(delivery.body["tools"]))
     (json_tool,) = tuple(tool for tool in tools if tool["name"] == _JSON_TOOL)
-    assert json_tool.keys() == {"name", "input_schema"}, json_tool
-    return object_value(json_tool["input_schema"])
+    assert json_tool.keys() - {"description"} == {"name", "input_schema"}, json_tool
+    return json_tool
+
+
+def _json_tool_schema(delivery: _Delivery) -> dict[str, JsonValue]:
+    return object_value(_json_tool(delivery)["input_schema"])
 
 
 def _folded_format(delivery: _Delivery) -> dict[str, JsonValue]:
@@ -832,10 +840,10 @@ def _family_deployment(gateway: Gateway, scenario: Scenario, api_base: str, memb
         case "azure_ai_unmapped":
             return scenario.model(model=f"azure_ai/{_UNMAPPED_MODEL}", api_base=api_base, api_key=_AZURE_KEY)
         case "bedrock_invoke":
-            return _bedrock_invoke_deployment(scenario, api_base, _BEDROCK_INVOKE_MODEL)
+            return _bedrock_invoke_deployment(scenario, api_base, _BEDROCK_TOOL_PATH_MODEL)
         case "bedrock_mantle":
             return scenario.model(
-                model=f"bedrock_mantle/{_BEDROCK_INVOKE_MODEL}",
+                model=f"bedrock_mantle/{_BEDROCK_TOOL_PATH_MODEL}",
                 api_base=api_base,
                 api_key=_MANTLE_KEY,
                 aws_region_name="us-east-1",
@@ -1467,6 +1475,7 @@ def test_vertex_chat_json_schema_forces_the_json_tool_only_when_the_model_will_n
         sent: Final = _one_delivery(wire, marker_hex)
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
         assert sent.body.get("tool_choice") == (_FORCED_JSON_TOOL if forced else None), sent.body
+        assert _json_tool(sent).get("description") == (None if forced else _UNFORCED_JSON_TOOL_DESCRIPTION), sent.body
         assert "output_config" not in sent.body and "output_format" not in sent.body, sent.body
 
 
@@ -1504,6 +1513,7 @@ def test_bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_
         sent: Final = _one_delivery(wire, marker_hex)
         assert sent.target == f"/model/{backend}/invoke", sent.target
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+        assert _json_tool(sent).get("description") == _UNFORCED_JSON_TOOL_DESCRIPTION, sent.body
         assert "tool_choice" not in sent.body, sent.body
 
 

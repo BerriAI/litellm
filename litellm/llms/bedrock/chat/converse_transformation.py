@@ -22,6 +22,7 @@ from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_hea
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -1325,15 +1326,21 @@ class AmazonConverseConfig(BaseConfig):
         elif json_schema is not None:
             # Fallback: translate to a synthetic tool call
             # https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+            tool_is_forced: Final = litellm.utils.supports_tool_choice(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ) and AnthropicModelInfo.response_format_tool_can_be_forced(model, "bedrock", request_params)
+            schema_description: Final = description if isinstance(description, str) else None
             _tool: Final = self._create_json_tool_call_for_response_format(
                 json_schema=json_schema,
-                description=description,
+                description=(
+                    schema_description
+                    if tool_is_forced
+                    else " ".join(filter(None, (RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION, schema_description)))
+                ),
             )
             optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
 
-            if litellm.utils.supports_tool_choice(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ) and AnthropicModelInfo.response_format_tool_can_be_forced(model, "bedrock", request_params):
+            if tool_is_forced:
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
                 )

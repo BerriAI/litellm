@@ -19,6 +19,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.chat.transformation import (
@@ -2359,6 +2360,9 @@ def test_databricks_claude_json_tool_is_forced_only_when_the_model_will_not_thin
     assert (
         request.get("tool_choice") == {"type": "function", "function": {"name": "json_tool_call"}}
     ) is forced
+    assert optional_params["tools"][0]["function"].get("description") == (
+        None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
+    )
 
 
 def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:

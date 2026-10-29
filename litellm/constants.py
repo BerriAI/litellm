@@ -1639,6 +1639,9 @@ OPENAI_FINISH_REASONS: Final = [
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS: Final = get_env_int("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
+RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION: Final = (
+    "When you are ready to answer, call this tool with your final answer as its input. Do not reply in plain text."
+)
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION: Final = "2019-07-07"

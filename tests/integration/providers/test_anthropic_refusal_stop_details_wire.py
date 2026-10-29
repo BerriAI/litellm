@@ -200,14 +200,14 @@ def _marker() -> str:
     return uuid.uuid4().hex
 
 
-def _deployment(scenario: Scenario, provider: Provider, rig: Rig) -> str:
+def _deployment(scenario: Scenario, provider: Provider, rig: Rig, bedrock_model: str = BEDROCK_MODEL) -> str:
     wire_url: Final = rig.wire.url
     match provider:
         case "anthropic":
             return scenario.model(model=f"anthropic/{MODEL}", api_base=wire_url, api_key=_ANTHROPIC_KEY)
         case "bedrock_invoke":
             return scenario.model(
-                model=f"bedrock/invoke/{BEDROCK_MODEL}",
+                model=f"bedrock/invoke/{bedrock_model}",
                 api_base=wire_url,
                 aws_access_key_id="AKIASCRIPTEDPROVIDER",
                 aws_secret_access_key="scripted-secret",
@@ -1186,6 +1186,7 @@ def test_stream_cache_hit_skips_cached_provider_fields_that_are_not_an_object(ri
 
 JsonModeRoute: TypeAlias = Literal["anthropic_native", "anthropic_tool", "bedrock_invoke"]
 _UNMAPPED_MODEL: Final = "claude-scripted-9"
+_JSON_TOOL_BEDROCK_MODEL: Final = "anthropic.claude-opus-4-8"
 _JSON_ANSWER: Final = json.dumps({"answer": DOCS_PARTIAL_TEXT})
 
 
@@ -1225,17 +1226,23 @@ _JSON_MODE_CASES: Final[Mapping[str, JsonModeCase]] = {
 }
 
 
-def _json_mode_deployment(scenario: Scenario, route: JsonModeRoute, rig: Rig) -> tuple[str, Provider]:
+def _json_mode_deployment(scenario: Scenario, route: JsonModeRoute, rig: Rig) -> tuple[str, tuple[str, str]]:
     match route:
         case "anthropic_native":
-            return _deployment(scenario, "anthropic", rig), "anthropic"
+            return _deployment(scenario, "anthropic", rig), _STREAM_TARGETS["anthropic"]
         case "anthropic_tool":
             return (
                 scenario.model(model=f"anthropic/{_UNMAPPED_MODEL}", api_base=rig.wire.url, api_key=_ANTHROPIC_KEY),
-                "anthropic",
+                _STREAM_TARGETS["anthropic"],
             )
         case "bedrock_invoke":
-            return _deployment(scenario, "bedrock_invoke", rig), "bedrock_invoke"
+            return (
+                _deployment(scenario, "bedrock_invoke", rig, bedrock_model=_JSON_TOOL_BEDROCK_MODEL),
+                (
+                    f"/model/{_JSON_TOOL_BEDROCK_MODEL}/invoke",
+                    f"/model/{_JSON_TOOL_BEDROCK_MODEL}/invoke-with-response-stream",
+                ),
+            )
 
 
 def _requested_format(body: Mapping[str, JsonValue]) -> tuple[bool, bool]:
@@ -1259,7 +1266,7 @@ def test_json_mode_refusal_relays_the_docs_stop_details_through_the_response_for
 ) -> None:
     expected: Final = _JSON_MODE_CASES[case]
     with rig.gateway.scenario() as scenario:
-        model, provider = _json_mode_deployment(scenario, expected.route, rig)
+        model, targets = _json_mode_deployment(scenario, expected.route, rig)
         key: Final = scenario.key()
         request: Final = {
             **_chat_request(model, refusal_prompt(expected.fixture, _marker()), stream=stream, cached=False),
@@ -1267,7 +1274,7 @@ def test_json_mode_refusal_relays_the_docs_stop_details_through_the_response_for
         }
         content: Final = _post(rig, "/v1/chat/completions", request, key)
         requested: Final = (expected.requested == "json_tool", expected.requested == "native")
-        assert _received(rig.wire) == ((_STREAM_TARGETS[provider][int(stream)], requested),)
+        assert _received(rig.wire) == ((targets[int(stream)], requested),)
         if stream:
             chunks: Final = chunks_of(content.decode())
             streamed: Final = (_streamed_text(chunks), _finish_reasons(chunks), _relayed_in(chunks))

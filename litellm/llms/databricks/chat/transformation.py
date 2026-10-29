@@ -417,12 +417,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         value: dict | None,
         optional_params: dict,
-        is_thinking_enabled: bool,
+        tool_is_forced: bool,
     ) -> DatabricksTool | None:
         if value is None:
             return None
 
-        tool: Final = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
+        tool: Final = self.map_response_format_to_anthropic_tool(value, optional_params, tool_is_forced)
 
         databricks_tool: Final = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
@@ -450,7 +450,6 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         if "claude" in model:
             AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
@@ -467,19 +466,20 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             mapped_params.pop("max_completion_tokens", None)
 
         if "response_format" in non_default_params and "claude" in model:
+            tool_is_forced: Final = AnthropicConfig.response_format_tool_can_be_forced(
+                model, "databricks", REQUEST_PARAMS.validate_python(non_default_params)
+            )
             _tool: Final = self.map_response_format_to_databricks_tool(
                 model,
                 non_default_params["response_format"],
                 mapped_params,
-                is_thinking_enabled,
+                tool_is_forced,
             )
 
             if _tool is not None:
                 self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
                 optional_params["json_mode"] = True
-                if AnthropicConfig.response_format_tool_can_be_forced(
-                    model, "databricks", REQUEST_PARAMS.validate_python(non_default_params)
-                ):
+                if tool_is_forced:
                     _tool_choice: Final = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(name=RESPONSE_FORMAT_TOOL_NAME),

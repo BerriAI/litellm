@@ -19,6 +19,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -6760,6 +6761,7 @@ def test_response_format_tool_is_forced_only_when_the_model_will_not_think(
 
     assert [tool["name"] for tool in request["tools"]] == ["json_tool_call"]
     assert (request.get("tool_choice") == {"name": "json_tool_call", "type": "tool"}) is forced
+    assert request["tools"][0].get("description") == (None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION)
 
 
 def _eager_chat_function(**extra: object) -> dict[str, object]:

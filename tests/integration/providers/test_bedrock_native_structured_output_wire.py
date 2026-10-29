@@ -615,10 +615,15 @@ def test_messages_thinking_on_a_bedrock_converse_native_model_gets_native_output
 
 
 @pytest.mark.parametrize("route", ["converse", "invoke"])
-def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gateway: Gateway, route: str) -> None:
+@pytest.mark.parametrize(
+    ("backend", "thinks_by_default"), [(_OPUS_4_8, False), (_HAIKU, True)], ids=["opus_4_8", "haiku_5_5"]
+)
+def test_bedrock_native_model_with_no_thinking_param_gets_native_output_only_when_it_thinks_by_default(
+    gateway: Gateway, route: str, backend: str, thinks_by_default: bool
+) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire, route, _HAIKU)
+        model: Final = _deployment(scenario, wire, route, backend)
         response: Final = gateway.request(
             "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=_response_format(_SCHEMA))
         )
@@ -627,6 +632,9 @@ def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gatewa
         assert not message.get("tool_calls"), response.text
         _, body = _one_call(wire, marker_hex)
         invoke: Final = route == "invoke"
+        if thinks_by_default:
+            _assert_native_without_tools(body, invoke, _SCHEMA)
+            return
         assert _native_schema(body, invoke) is None, body
         assert _tools(body, invoke)[_JSON_TOOL]["properties"] == _SCHEMA["properties"], body
 

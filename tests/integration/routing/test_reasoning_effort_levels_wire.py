@@ -1977,6 +1977,9 @@ _INVOKE_NATIVE_OUTPUT: Final[dict[str, JsonValue]] = {
     "format": {"type": "json_schema", "schema": _NATIVE_OUTPUT_SCHEMA},
 }
 _JSON_TOOL: Final = "json_tool_call"
+_UNFORCED_JSON_TOOL_DESCRIPTION: Final = (
+    "When you are ready to answer, call this tool with your final answer as its input. Do not reply in plain text."
+)
 _CONVERSE_TOOL_SCHEMA: Final[dict[str, JsonValue]] = {
     key: value for key, value in _NATIVE_OUTPUT_SCHEMA.items() if key != "additionalProperties"
 }
@@ -1994,7 +1997,7 @@ _CONVERSE_WITH_JSON_TOOL: Final = _with_fields(
                 {
                     "toolSpec": {
                         "name": _JSON_TOOL,
-                        "description": _JSON_TOOL,
+                        "description": _UNFORCED_JSON_TOOL_DESCRIPTION,
                         "inputSchema": {"json": _CONVERSE_TOOL_SCHEMA},
                     }
                 }
@@ -2004,7 +2007,15 @@ _CONVERSE_WITH_JSON_TOOL: Final = _with_fields(
 )
 _INVOKE_WITH_JSON_TOOL: Final = _with_fields(
     _without(_invoke_chat("high", _ADAPTIVE, ()), "anthropic_beta"),
-    {"tools": [{"name": _JSON_TOOL, "input_schema": _NATIVE_OUTPUT_SCHEMA}]},
+    {
+        "tools": [
+            {
+                "name": _JSON_TOOL,
+                "description": _UNFORCED_JSON_TOOL_DESCRIPTION,
+                "input_schema": _NATIVE_OUTPUT_SCHEMA,
+            }
+        ]
+    },
 )
 
 

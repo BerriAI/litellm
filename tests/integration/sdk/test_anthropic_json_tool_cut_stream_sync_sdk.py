@@ -26,7 +26,7 @@ _RESPONSE_FORMAT: Final[dict[str, JsonValue]] = {
     "json_schema": {"name": "risk", "schema": _SCHEMA},
 }
 _ANTHROPIC_MODEL: Final = "anthropic/claude-scripted-9"
-_BEDROCK_INVOKE_MODEL: Final = "bedrock/invoke/anthropic.claude-sonnet-5"
+_BEDROCK_INVOKE_MODEL: Final = "bedrock/invoke/anthropic.claude-opus-4-8"
 
 
 def _payload(marker_hex: str) -> dict[str, JsonValue]:

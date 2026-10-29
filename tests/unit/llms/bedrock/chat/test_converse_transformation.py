@@ -14,6 +14,7 @@ import respx
 
 import litellm
 from litellm import ModelResponse, Router, completion
+from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
@@ -4879,18 +4880,18 @@ def test_translate_response_format_native_output_config(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-CAPITAL_RESPONSE_FORMAT: Final = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "capital",
-        "schema": {
-            "type": "object",
-            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
-            "required": ["city", "country"],
-            "additionalProperties": False,
-        },
+CAPITAL_JSON_SCHEMA: Final = {
+    "name": "capital",
+    "schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["city", "country"],
+        "additionalProperties": False,
     },
 }
+
+
+CAPITAL_RESPONSE_FORMAT: Final = {"type": "json_schema", "json_schema": CAPITAL_JSON_SCHEMA}
 
 
 ADAPTIVE_THINKING: Final = {"type": "adaptive"}
@@ -4982,8 +4983,13 @@ def test_json_tool_is_forced_only_when_the_model_will_not_think(
     set_native_structured_output(model, native_key)
     config: Final = AmazonConverseConfig()
 
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {**CAPITAL_JSON_SCHEMA, "description": "The capital of a country"},
+    }
+
     optional_params: Final = config.map_openai_params(
-        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, **thinking_params},
+        non_default_params={"response_format": response_format, **thinking_params},
         optional_params={},
         model=model,
         drop_params=False,
@@ -5000,6 +5006,11 @@ def test_json_tool_is_forced_only_when_the_model_will_not_think(
     assert "outputConfig" not in request
     assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
     assert (request["toolConfig"].get("toolChoice") == _JSON_TOOL_CHOICE) is forced
+    assert request["toolConfig"]["tools"][0]["toolSpec"]["description"] == (
+        "The capital of a country"
+        if forced
+        else f"{RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION} The capital of a country"
+    )
 
 
 @pytest.mark.parametrize(
