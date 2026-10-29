@@ -2116,6 +2116,25 @@ def test_dropping_an_unsupported_reasoning_effort_logs_one_warning(
     assert all(fragment in drop_warnings[0] for fragment in ("'none'", "terra-ptu", "model_info.base_model"))
 
 
+@pytest.mark.parametrize("provider", ["ollama", "ollama_chat", "lemonade", "huggingface"])
+def test_dropping_thinking_for_an_unmapped_local_model_sends_no_request(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    outbound: Final = respx.MockRouter(assert_all_mocked=False)
+    monkeypatch.setattr(
+        litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(outbound.handler)))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = get_optional_params(
+            model="unmapped-local-model", custom_llm_provider=provider, thinking={"type": "disabled"}, drop_params=True
+        )
+
+    assert "thinking" not in optional_params
+    assert len([record for record in caplog.records if "Dropping thinking" in record.getMessage()]) == 1
+    assert not outbound.calls
+
+
 def test_dropping_an_unsupported_thinking_logs_one_warning(
     local_model_cost_map: None, caplog: pytest.LogCaptureFixture
 ) -> None:

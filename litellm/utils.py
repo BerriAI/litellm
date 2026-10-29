@@ -3711,7 +3711,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
     return None
 
 
-def is_generalized_model_info(model_info: ModelInfo) -> bool:
+def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     """Whether ``model_info`` came from a fallback-generalization capability rule.
 
     Detected as the resolved key missing ``litellm.model_cost`` while matching a
@@ -3727,15 +3727,27 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
 
 _REGISTRATION_ATTEMPTS: Final = 3
 
+_ModelInfoT: Final = TypeVar("_ModelInfoT", bound=ModelInfoBase)
 
-def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+
+def _lookup_mapped_model_info(lookup: Callable[[], _ModelInfoT]) -> _ModelInfoT | ModelInfoLookupMiss:
     try:
-        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        info: Final = lookup()
     except ModelNotMappedError:
         return ModelInfoLookupMiss(tripped=False)
     except Exception:
         return ModelInfoLookupMiss(tripped=True)
     return ModelInfoLookupMiss(tripped=False) if is_generalized_model_info(info) else info
+
+
+def lookup_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(lambda: get_model_info(model=model, custom_llm_provider=custom_llm_provider))
+
+
+def lookup_catalog_model_info(model: str, custom_llm_provider: str | None) -> ModelInfoBase | ModelInfoLookupMiss:
+    return _lookup_mapped_model_info(
+        lambda: get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)
+    )
 
 
 def _get_builtin_model_info_for_registration(
@@ -5015,14 +5027,14 @@ def _turns_reasoning_off(value: object) -> bool:
 
 
 def is_known_non_reasoning_model(model: str, custom_llm_provider: str | None) -> bool:
-    info: Final = lookup_model_info_for_registration(model, custom_llm_provider)
+    info: Final = lookup_catalog_model_info(model, custom_llm_provider)
     if isinstance(info, ModelInfoLookupMiss) or info.get("supports_reasoning") is True:
         return False
     return info.get("supports_reasoning") is False or info["key"] in GetModelCostMap.loaded_model_cost_map()
 
 
 def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
-    info: Final = lookup_model_info_for_registration(model, custom_llm_provider)
+    info: Final = lookup_catalog_model_info(model, custom_llm_provider)
     return not isinstance(info, ModelInfoLookupMiss) and info["key"] in GetModelCostMap.loaded_model_cost_map()
 
 
@@ -6670,6 +6682,8 @@ def get_model_info_helper(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    *,
+    catalog_only: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -6703,7 +6717,7 @@ def get_model_info_helper(
         model_cost_custom_llm_provider: Final = custom_llm_provider
         #########################
         provider_config: BaseLLMModelInfo | None = None
-        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        if not catalog_only and custom_llm_provider and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -6727,7 +6741,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if not catalog_only and custom_llm_provider == "huggingface":
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
