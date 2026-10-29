@@ -912,20 +912,27 @@ class ContentFilterGuardrail(CustomGuardrail):
             return spans
         position: Final = next(index for index, entry in enumerate(self.compiled_patterns) if entry is pattern_entry)
         later_entries: Final = self.compiled_patterns[position + 1 :]
-        masking: Final = self._span_index(
-            text, (entry for entry in later_entries if entry["action"] != ContentFilterAction.BLOCK), check_candidate
+        later_masking_entries: Final = tuple(
+            entry for entry in later_entries if entry["action"] != ContentFilterAction.BLOCK
+        )
+        checksum_masking: Final = self._span_index(
+            text, (entry for entry in later_masking_entries if entry.get("validator") is not None), check_candidate
+        )
+        other_masking: Final = self._span_index(
+            text, (entry for entry in later_masking_entries if entry.get("validator") is None), check_candidate
         )
         blocking: Final = self._span_index(
             text, (entry for entry in later_entries if entry["action"] == ContentFilterAction.BLOCK), check_candidate
         )
-        if not masking.spans and not blocking.spans:
+        if not checksum_masking.spans and not other_masking.spans and not blocking.spans:
             return spans
         leftmost_spans: Final = tuple(match.span() for match in pattern_entry["regex"].finditer(text))
-        union_regions: Final = tuple(self._merge_spans([*spans, *masking.spans]))
+        union_regions: Final = tuple(self._merge_spans([*spans, *checksum_masking.spans]))
         resolved: Final = self._merge_spans(
             [
                 *itertools.chain.from_iterable(
-                    self._resolve_component(component, leftmost_spans, masking, union_regions) for component in spans
+                    self._resolve_component(component, leftmost_spans, checksum_masking, other_masking, union_regions)
+                    for component in spans
                 )
             ]
         )
@@ -942,20 +949,30 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         component: tuple[int, int],
         leftmost_spans: Sequence[tuple[int, int]],
-        masking: _SpanIndex,
+        checksum_masking: _SpanIndex,
+        other_masking: _SpanIndex,
         union_regions: Sequence[tuple[int, int]],
     ) -> Sequence[tuple[int, int]]:
-        sticking_out: Final = tuple(
-            span
-            for span in self._spans_reaching(component, masking)
-            if span[0] < component[0] or span[1] > component[1]
-        )
-        if not sticking_out:
-            return (component,)
         leftmost_in_component: Final = self._spans_overlapping(leftmost_spans, component)
-        if not any(self._spans_overlapping(leftmost_in_component, span) for span in sticking_out):
+        sticking_out: Final = tuple(self._spans_sticking_out(component, checksum_masking))
+        if sticking_out and not any(self._spans_overlapping(leftmost_in_component, span) for span in sticking_out):
             return leftmost_in_component
-        return (union_regions[bisect_right(union_regions, component[0], key=lambda region: region[0]) - 1],)
+        region: Final = (
+            union_regions[bisect_right(union_regions, component[0], key=lambda region: region[0]) - 1]
+            if sticking_out
+            else component
+        )
+        leftmost_in_region: Final = self._spans_overlapping(leftmost_spans, region)
+        if any(
+            not self._spans_overlapping(leftmost_in_region, span)
+            for span in self._spans_sticking_out(region, other_masking)
+        ):
+            return leftmost_in_component
+        return (region,)
+
+    @classmethod
+    def _spans_sticking_out(cls, region: tuple[int, int], index: _SpanIndex) -> Iterator[tuple[int, int]]:
+        return (span for span in cls._spans_reaching(region, index) if span[0] < region[0] or span[1] > region[1])
 
     def _span_index(
         self, text: str, entries: Iterable[CompiledPatternEntry], check_candidate: CandidateCheck

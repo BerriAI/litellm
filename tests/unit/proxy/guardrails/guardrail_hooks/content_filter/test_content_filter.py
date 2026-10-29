@@ -510,6 +510,63 @@ class TestContentFilterGuardrail:
         assert guardrailed_inputs.get("texts") == ["card [CREDIT_CARD_REDACTED] ok"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("checksum_patterns", "regex", "later_patterns", "text", "expected"),
+        [
+            (
+                ("credit_card",),
+                "1111 BSN",
+                ("nl_bsn_contextual",),
+                "4111 1111 1111 1111 BSN 123456789",
+                "[CREDIT_CARD_REDACTED] BSN [NL_BSN_CONTEXTUAL_REDACTED]",
+            ),
+            (
+                ("visa", "mastercard"),
+                "4444 BSN",
+                ("nl_bsn_contextual",),
+                "4532 0151 1283 0366 5555 5555 5555 4444 BSN 123456789",
+                "[VISA_REDACTED] [MASTERCARD_REDACTED] BSN [NL_BSN_CONTEXTUAL_REDACTED]",
+            ),
+            (
+                ("visa", "mastercard", "amex", "discover", "credit_card", "iban"),
+                "1330 BSN",
+                ("nl_bsn_contextual",),
+                "pay 5472 3038 5280 1841 1485 4534 3853 6336 1330 BSN 123456789",
+                "pay [VISA_REDACTED] BSN [NL_BSN_CONTEXTUAL_REDACTED]",
+            ),
+            (("credit_card",), "PIN 4821", (), "PIN 4821 4532 0151 1283 0366 ok", "PIN [CREDIT_CARD_REDACTED] ok"),
+        ],
+    )
+    async def test_checksum_mask_keeps_the_words_a_later_regex_match_shares_with_the_card(
+        self,
+        checksum_patterns: tuple[str, ...],
+        regex: str,
+        later_patterns: tuple[str, ...],
+        text: str,
+        expected: str,
+    ):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-checksum-mask-then-regex",
+            patterns=[
+                *(
+                    ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
+                    for name in checksum_patterns
+                ),
+                ContentFilterPattern(
+                    pattern_type="regex", pattern=regex, name="account_note", action=ContentFilterAction.MASK
+                ),
+                *(
+                    ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
+                    for name in later_patterns
+                ),
+            ],
+        )
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [text]}, request_data={}, input_type="request"
+        )
+        assert guardrailed_inputs.get("texts") == [expected]
+
+    @pytest.mark.asyncio
     async def test_checksum_pattern_streams_the_same_text_as_a_whole_response(self):
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
