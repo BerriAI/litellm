@@ -228,7 +228,9 @@ def resolve_api_key_oidc_reference(value: str) -> str | UnresolvableSecretRefere
     if not value.startswith(GOOGLE_OIDC_SECRET_PREFIX):
         return resolve_local_oidc_reference(value)
     try:
-        token: Final = get_secret_str(value)
+        token: Final = _google_id_token(
+            value, value.removeprefix(GOOGLE_OIDC_SECRET_PREFIX), timeout=_google_metadata_timeout()
+        )
     except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         return _logged_unresolvable(
             value,
@@ -244,12 +246,44 @@ def resolve_api_key_oidc_reference(value: str) -> str | UnresolvableSecretRefere
 
 def _metadata_server_failed_to_answer(exc: httpx.HTTPError | httpx.InvalidURL | ValueError) -> bool:
     match exc:
-        case httpx.TimeoutException() | httpx.NetworkError():
+        case httpx.TransportError():
             return True
         case GoogleMetadataStatusError(status_code=status_code):
             return status_code >= 500
         case _:
             return False
+
+
+def _google_id_token(reference: str, audience: str, timeout: float | None) -> str:
+    cached: Final = cached_oidc_token(reference)
+    if cached is not None:
+        return cached
+    oidc_client: Final = _get_oidc_http_handler()
+    try:
+        # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
+        response: Final = oidc_client.get(
+            _google_metadata_identity_url(),
+            params={"audience": audience},
+            headers={"Metadata-Flavor": "Google"},
+            timeout=timeout,
+        )
+    finally:
+        oidc_client.close()
+    if response.status_code != 200:
+        raise GoogleMetadataStatusError(response.status_code)
+    token: Final = response.text
+    ttl: Final = _oidc_token_cache_ttl(token, 3600 - 60)
+    if not token:
+        verbose_logger.warning("Google OIDC token for %s is empty; not caching it", _single_line(reference))
+    elif ttl > 0:
+        oidc_cache.set_cache(key=reference, value=token, ttl=ttl)
+    else:
+        verbose_logger.warning(
+            "Google OIDC token for %s is already expired or expires within %ss; not caching it",
+            _single_line(reference),
+            _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS,
+        )
+    return token
 
 
 def cached_oidc_token(reference: str) -> str | None:
@@ -340,36 +374,7 @@ def get_secret(
         oidc_aud = "/".join(secret_name_split.split("/")[1:])
         # TODO: Add caching for HTTP requests
         if oidc_provider == "google":
-            oidc_token = oidc_cache.get_cache(key=secret_name)
-            if oidc_token is not None:
-                return oidc_token
-
-            oidc_client = _get_oidc_http_handler()
-            # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
-            response = oidc_client.get(
-                _google_metadata_identity_url(),
-                params={"audience": oidc_aud},
-                headers={"Metadata-Flavor": "Google"},
-                timeout=_google_metadata_timeout(),
-            )
-            if response.status_code == 200:
-                oidc_token = response.text
-                ttl: Final = _oidc_token_cache_ttl(oidc_token, 3600 - 60)
-                if not oidc_token:
-                    verbose_logger.warning(
-                        "Google OIDC token for %s is empty; not caching it", _single_line(secret_name)
-                    )
-                elif ttl > 0:
-                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=ttl)
-                else:
-                    verbose_logger.warning(
-                        "Google OIDC token for %s is already expired or expires within %ss; not caching it",
-                        _single_line(secret_name),
-                        _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS,
-                    )
-                return oidc_token
-            else:
-                raise GoogleMetadataStatusError(response.status_code)
+            return _google_id_token(secret_name, oidc_aud, timeout=None)
         elif oidc_provider == "circleci":
             # https://circleci.com/docs/openid-connect-tokens/
             env_secret = os.getenv("CIRCLE_OIDC_TOKEN")

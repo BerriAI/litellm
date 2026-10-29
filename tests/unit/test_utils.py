@@ -7518,8 +7518,9 @@ async def test_router_fetches_an_oidc_google_api_key_token_off_the_event_loop_an
         (lambda: httpx.Response(200, text=""), 401),
         (lambda: httpx.ConnectError("[Errno -2] Name or service not known"), 503),
         (lambda: httpx.ReadTimeout("timed out"), 503),
+        (lambda: httpx.RemoteProtocolError("Server disconnected without sending a response."), 503),
     ],
-    ids=["server error", "refused", "empty token", "not on GCP", "timeout"],
+    ids=["server error", "refused", "empty token", "not on GCP", "timeout", "disconnected"],
 )
 async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_and_recovers_on_the_next_call(
     monkeypatch: pytest.MonkeyPatch,
@@ -7608,6 +7609,71 @@ async def test_a_pending_oidc_google_metadata_fetch_leaves_the_default_executor_
     assert other_work == "done"
     assert excinfo.value.status_code == 503
     assert chat.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata_answer",
+    [lambda token: httpx.Response(200, text=token), lambda _token: httpx.Response(500, text="metadata server down")],
+    ids=["token", "outage"],
+)
+async def test_concurrent_calls_that_miss_the_oidc_google_token_cache_share_one_metadata_fetch(
+    monkeypatch: pytest.MonkeyPatch, metadata_answer: Callable[[str], httpx.Response]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    token: Final = _google_id_token(audience, _CLOCK_START)
+    fetch_started: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
+    release: Final = threading.Event()
+
+    def held_metadata(_request: httpx.Request) -> httpx.Response:
+        fetch_started.put(threading.get_ident())
+        release.wait(timeout=30)
+        return metadata_answer(token)
+
+    with ThreadPoolExecutor(max_workers=1) as observer, respx.mock(assert_all_called=False) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=held_metadata)
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        calls: Final = [asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa")) for _ in range(24)]
+        try:
+            await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(observer, fetch_started.get), timeout=30)
+            await asyncio.sleep(0.5)
+        finally:
+            release.set()
+        outcomes: Final = await asyncio.gather(*calls, return_exceptions=True)
+        sent: Final = [call.request.headers["Authorization"] for call in chat.calls]
+
+    assert metadata.call_count == 1
+    if metadata.calls.last.response.status_code == 200:
+        assert outcomes == [None] * 24
+        assert sent == [f"Bearer {token}"] * 24
+    else:
+        assert [getattr(outcome, "status_code", None) for outcome in outcomes] == [503] * 24
+        assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_call_an_oidc_google_api_key_may_not_go_to_is_refused_without_a_metadata_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(500)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            await acredential_updates(
+                {
+                    "model": _VLLM_MODEL,
+                    "litellm_credential_name": "vllm-sa",
+                    "api_base": "https://elsewhere.example.test/v1",
+                }
+            )
+
+    assert "only to that credential's own api_base" in excinfo.value.message
+    assert metadata.call_count == 0
 
 
 @pytest.mark.parametrize(

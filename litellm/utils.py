@@ -773,14 +773,6 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
     )
 
 
-def resolve_api_key_secret_reference(
-    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
-) -> str | None:
-    if not isinstance(api_key, AdminApiKeySecretReference):
-        return api_key
-    return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider, upstream=upstream)
-
-
 async def aresolve_api_key_secret_reference(
     api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
 ) -> str | None:
@@ -802,10 +794,40 @@ async def _resolved_off_the_event_loop(resolve: Callable[[OidcResolver], _Resolv
         case str() as token:
             return resolve(lambda _reference: token)
         case None:
-            caller_context: Final = contextvars.copy_context()
-            return await asyncio.get_running_loop().run_in_executor(
-                _OIDC_TOKEN_FETCH_EXECUTOR, lambda: caller_context.run(resolve, resolve_api_key_oidc_reference)
+            _raise_if_the_reference_may_not_be_used(resolve)
+            fetched: Final = await asyncio.shield(
+                _google_token_fetch(asyncio.get_running_loop(), api_key).start_or_join()
             )
+            return resolve(lambda _reference: fetched)
+
+
+def _raise_if_the_reference_may_not_be_used(resolve: Callable[[OidcResolver], object]) -> None:
+    _ = resolve(lambda _reference: "")
+
+
+@dataclass(slots=True)
+class _GoogleTokenFetch:
+    reference: str
+    in_flight: asyncio.Future[str | UnresolvableSecretReference] | None = None
+
+    def start_or_join(self) -> asyncio.Future[str | UnresolvableSecretReference]:
+        if self.in_flight is not None:
+            return self.in_flight
+        caller_context: Final = contextvars.copy_context()
+        fetch: Final = asyncio.get_running_loop().run_in_executor(
+            _OIDC_TOKEN_FETCH_EXECUTOR, lambda: caller_context.run(resolve_api_key_oidc_reference, self.reference)
+        )
+        fetch.add_done_callback(self._land)
+        self.in_flight = fetch
+        return fetch
+
+    def _land(self, _fetch: asyncio.Future[str | UnresolvableSecretReference]) -> None:
+        self.in_flight = None
+
+
+@lru_cache(maxsize=256)
+def _google_token_fetch(loop: asyncio.AbstractEventLoop, reference: str) -> _GoogleTokenFetch:
+    return _GoogleTokenFetch(reference)
 
 
 def _secret_behind_api_key_reference(
