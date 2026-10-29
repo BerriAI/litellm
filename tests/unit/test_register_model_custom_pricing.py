@@ -14,22 +14,22 @@ import itertools
 import json
 import os
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Final, NoReturn
 
 import pytest
 
-
 import litellm
-from litellm._catalog import Catalog, Parsed
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry, adopt_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from tests._support.cost_map_files import reload_from_file
 from litellm.main import _build_custom_pricing_entry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
-def _parsed_map(cost_map: Mapping[str, object]) -> Parsed:
-    parsed: Final = Catalog.parse(json.dumps(cost_map).encode(), etag=None, min_model_count=0, max_shrink_ratio=0.0)
-    assert isinstance(parsed, Parsed)
-    return parsed
+def _reload_from(cost_map: Mapping[str, object], directory: Path) -> object:
+    path: Final = directory / "model_prices.json"
+    path.write_text(json.dumps(cost_map))
+    return reload_from_file(path)
 
 
 def _snapshot_model_cost_entries(keys):
@@ -1027,7 +1027,9 @@ def test_register_model_prices_a_provider_less_azure_ai_key_without_repricing_th
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     catalog_key: Final = "au.anthropic.lit-5853-reloaded-model"
     deployment_key: Final = f"bedrock/{catalog_key}"
     catalog_row: Final = {
@@ -1046,12 +1048,12 @@ def test_register_model_keeps_the_prices_a_reload_adopts_while_it_registers(monk
         catalog_key: {**catalog_row, "input_cost_per_token": reloaded_input_cost},
     }
     real_lookup: Final = litellm.utils.get_model_info
-    reloads: Final[list[int]] = []  # mutable-ok: counts reloads the racing lookup triggered
+    reloads: Final[list[object]] = []  # mutable-ok: counts reloads the racing lookup triggered
 
     def lookup_racing_a_price_data_reload(model: str, custom_llm_provider: str | None = None) -> object:
         info: Final = real_lookup(model=model, custom_llm_provider=custom_llm_provider)
         if not reloads:
-            reloads.append(adopt_model_cost_map(_parsed_map(reloaded_cost_map)))
+            reloads.append(_reload_from(reloaded_cost_map, tmp_path))
         return info
 
     with pytest.MonkeyPatch.context() as lookup_patch:
@@ -1363,9 +1365,9 @@ def test_update_dictionary_merges_nested_dicts_without_aliasing():
     object stays untouched, and the caller's incoming nested dict is never
     inserted by reference into the merged result.
     """
-    from litellm.utils import update_dictionary
-
     from typing import cast
+
+    from litellm.utils import update_dictionary
 
     existing_nested = cast(dict[str, object], {"hours_utc": "01:00-02:00", 1: "existing"})
     existing = {"off_peak_pricing": existing_nested}

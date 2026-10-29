@@ -51,8 +51,8 @@ litellm-llms-types.workspace = true
 litellm-router-types.workspace = true
 litellm-host-python.workspace = true
 litellm-model-catalog.workspace = true
+litellm-model-catalog-refresh.workspace = true
 indexmap = "2.14.0"
-sha1.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 prost.workspace = true

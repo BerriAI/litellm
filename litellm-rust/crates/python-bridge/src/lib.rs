@@ -36,7 +36,9 @@ mod _native {
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
     #[pymodule_export]
-    use crate::model_registry::{CatalogHandle, Installed, Parsed, RowError, Unavailable};
+    use crate::model_registry::{
+        CatalogHandle, Installed, Parsed, Provenance, RowError, Unavailable,
+    };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -159,6 +161,7 @@ mod tests {
                 "Parsed",
                 "Installed",
                 "Unavailable",
+                "Provenance",
                 "RowError",
                 "RowErrorKind",
                 "NativeClickHouseSpendConfig",

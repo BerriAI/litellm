@@ -1,5 +1,6 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from types import ModuleType
 from typing import Literal, Never, final
 
@@ -73,16 +74,28 @@ class Installed:
 @final
 class Unavailable:
     reason: str
+    retry_after: float | None
+    def __new__(cls, reason: str, retry_after: float | None = None) -> Unavailable: ...
+    def fallback(self) -> Parsed: ...
+
+@final
+class Provenance:
+    source: str
+    url: str | None
+    is_env_forced: bool
+    fallback_reason: str | None
+    source_revision: str
+    etag: str | None
+    @property
+    def loaded_at(self) -> datetime: ...
 
 @final
 class Catalog:
     @staticmethod
     def bound_to(module: ModuleType, attr: str) -> Catalog: ...
     def bundled(self) -> Parsed: ...
-    @staticmethod
-    def parse(
-        body: bytes, *, etag: str | None, min_model_count: int, max_shrink_ratio: float
-    ) -> Parsed | Unavailable: ...
+    def load(self, url: str, *, timeout: float, attempts: int) -> Parsed | Unavailable: ...
+    def provenance(self) -> Provenance | None: ...
     def install(self, parsed: Parsed) -> Installed: ...
 
 @final

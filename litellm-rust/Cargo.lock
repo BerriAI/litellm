@@ -3632,6 +3632,7 @@ dependencies = [
  "litellm-cache-testing",
  "litellm-error",
  "litellm-http",
+ "litellm-s3",
  "reqwest",
  "rstest",
  "serde_json",
@@ -4306,14 +4307,23 @@ dependencies = [
 name = "litellm-model-catalog-refresh"
 version = "0.1.0"
 dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-runtime-api",
  "litellm-error",
  "litellm-http",
  "litellm-model-catalog",
+ "litellm-s3",
+ "rand 0.8.7",
  "reqwest",
  "rstest",
+ "serde_json",
+ "sha1 0.10.7",
  "thiserror 2.0.19",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -4347,6 +4357,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
  "litellm-router-types",
  "litellm-secrets",
  "litellm-secrets-aws",
@@ -4365,7 +4376,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "sha1 0.10.7",
  "sqlx",
  "strum",
  "tempfile",
@@ -4439,6 +4449,19 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "litellm-s3"
+version = "0.1.0"
+dependencies = [
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "http 1.4.2",
+ "litellm-http",
+ "reqwest",
 ]
 
 [[package]]
