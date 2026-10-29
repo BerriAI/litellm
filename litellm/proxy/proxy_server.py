@@ -14814,6 +14814,7 @@ async def _try_provider_token_count(
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14841,6 +14842,7 @@ async def _try_provider_token_count(
             output_format=output_format,
             context_management=context_management,
             chat_params=chat_params,
+            count_options=count_options,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -15320,6 +15322,7 @@ async def count_request_tokens(
     responses_request: Mapping[str, object] | None = None,
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -15339,6 +15342,7 @@ async def count_request_tokens(
         request_litellm_params=request_litellm_params,
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
+        count_options=count_options,
     )
     return await logged_token_count(
         _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
@@ -15381,6 +15385,7 @@ async def _count_request_tokens(
     request_litellm_params: Mapping[str, JsonValue],
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
+    count_options: Mapping[str, JsonValue],
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15488,6 +15493,7 @@ async def _count_request_tokens(
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
+                count_options=count_options,
             ),
             model_to_use=model_to_use,
             request_model=request.model,

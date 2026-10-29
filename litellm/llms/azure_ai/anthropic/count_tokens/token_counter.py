@@ -3,7 +3,7 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -11,10 +11,12 @@ from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    messages_count_options,
 )
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
@@ -78,11 +80,10 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         Returns:
             TokenCountResponse with token count, or None if counting fails
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError
-
         if not messages:
             return None
 
+        from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
         from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 
         match translated := await anthropic_count_fields(
@@ -91,24 +92,51 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             case ChatCountTranslationError():
                 return translated.response(request_model, model_to_use, "azure_ai_anthropic_api")
             case AnthropicCountFields():
-                return await self.count_tokens(
+                return await self._count(
                     model_to_use=model_to_use,
-                    messages=[dict(message) for message in translated.messages],
-                    contents=contents,
+                    messages=translated.messages,
                     deployment=deployment,
                     request_model=request_model,
-                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    tools=translated.tools,
                     system=translated.system,
-                    messages_format="anthropic",
-                    output_format=output_format,
-                    context_management=context_management,
                     count_options=translated.options,
                 )
             case None:
                 pass
 
-        deployment = deployment or {}
-        litellm_params: Final = deployment.get("litellm_params", {})
+        match options := await asyncify(messages_count_options)(
+            AzureAnthropicMessagesConfig(),
+            model_to_use,
+            messages,
+            count_options,
+            (deployment or {}).get("litellm_params", {}),
+        ):
+            case ChatCountTranslationError():
+                return options.response(request_model, model_to_use, "azure_ai_anthropic_api")
+            case _:
+                return await self._count(
+                    model_to_use=model_to_use,
+                    messages=messages,
+                    deployment=deployment,
+                    request_model=request_model,
+                    tools=tools,
+                    system=system,
+                    count_options=options,
+                )
+
+    async def _count(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, JsonValue]],
+        deployment: Mapping[str, Any] | None,
+        request_model: str,
+        tools: Sequence[Mapping[str, JsonValue]] | None,
+        system: object | None,
+        count_options: Mapping[str, JsonValue],
+    ) -> TokenCountResponse | None:
+        from litellm.llms.anthropic.common_utils import AnthropicError
+
+        litellm_params: Final = (deployment or {}).get("litellm_params", {})
 
         # Get Azure AI API key from deployment config or environment
         api_key = litellm_params.get("api_key")
@@ -128,11 +156,11 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         try:
             result: Final = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                messages=messages,
+                messages=[dict(message) for message in messages],
                 api_key=api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
-                tools=tools,
+                tools=None if tools is None else [dict(tool) for tool in tools],
                 system=system,
                 optional_params=count_options,
             )

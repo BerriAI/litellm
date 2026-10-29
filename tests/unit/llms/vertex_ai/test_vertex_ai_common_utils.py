@@ -31,7 +31,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
-from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 
 @pytest.mark.asyncio
@@ -1839,9 +1839,9 @@ _PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
 }
 
 
-async def _partner_counted_bodies(
-    model: str, chat_params: dict[str, JsonValue] | None = None
-) -> tuple[dict[str, object], ...]:
+async def _partner_count(
+    model: str, messages: list[dict[str, object]], chat_params: dict[str, JsonValue] | None = None
+) -> tuple[TokenCountResponse | None, tuple[dict[str, object], ...]]:
     from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
 
     class FakeResponse:
@@ -1870,16 +1870,43 @@ async def _partner_counted_bodies(
     ):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use=model,
-            messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+            messages=copy.deepcopy(messages),
             contents=None,
             deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
             tools=[_PARTNER_RESPONSES_TOOL],
             chat_params=chat_params or {},
         )
+    return result, fake_http_client.posted_bodies
 
+
+async def _partner_counted_bodies(
+    model: str, chat_params: dict[str, JsonValue] | None = None
+) -> tuple[dict[str, object], ...]:
+    result, bodies = await _partner_count(model, _PARTNER_CHAT_TOOL_TURNS, chat_params)
     assert result is not None
     assert result.total_tokens == 37
-    return fake_http_client.posted_bodies
+    return bodies
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_rejects_a_tool_call_chat_inference_rejects_without_calling_vertex() -> None:
+    unparseable_arguments: Final = [
+        _PARTNER_CHAT_TOOL_TURNS[0],
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "sunny?"}}
+            ],
+        },
+        _PARTNER_CHAT_TOOL_TURNS[2],
+    ]
+
+    result, bodies = await _partner_count("claude-opus-5-5", unparseable_arguments)
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
 
 
 @pytest.mark.asyncio

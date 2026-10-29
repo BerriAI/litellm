@@ -10142,6 +10142,10 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             return AzureFoundryModelInfo(model=model)
+        elif LlmProviders.DEEPSEEK == provider:
+            from litellm.llms.deepseek.common_utils import DeepSeekModelInfo
+
+            return DeepSeekModelInfo()
         return None
 
     @staticmethod

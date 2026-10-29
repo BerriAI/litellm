@@ -143,6 +143,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         if not messages:
             return None

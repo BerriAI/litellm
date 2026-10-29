@@ -367,6 +367,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -449,6 +450,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1269,6 +1271,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1328,6 +1331,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1387,6 +1391,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         request_litellm_params=None,
         litellm_call_id=None,
         client_oauth_token=None,
+        count_options=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -1631,6 +1636,7 @@ class _ScriptedCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: object = None,
         chat_params: object = None,
+        count_options: object = None,
     ) -> TokenCountResponse | None:
         self.calls.append((model_to_use, messages, tools, system))
         self.regions.append(None if deployment is None else deployment["litellm_params"].get("aws_region_name"))
@@ -4159,3 +4165,242 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+_COUNTED_OPTION_FIELDS: Final = ("thinking", "tool_choice", "output_config")
+_DEEPSEEK_COUNT_ROUTE: Final = "https://api.deepseek.com/anthropic/v1/messages/count_tokens"
+_CUSTOM_READ_FILE_TOOL: Final[dict[str, JsonValue]] = {**_READ_FILE_TOOL, "type": "custom"}
+
+
+def _messages_inference_fields(
+    config: object, model: str, body: Mapping[str, JsonValue], fields: tuple[str, ...]
+) -> dict[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    inference: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=json.loads(json.dumps(body["messages"])),
+        anthropic_messages_optional_request_params={
+            **{key: json.loads(json.dumps(value)) for key, value in body.items() if key not in ("model", "messages")},
+            "max_tokens": 4096,
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    return {field: inference.get(field) for field in fields}
+
+
+async def _count_messages_body(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, JsonValue],
+    body: Mapping[str, JsonValue],
+    count_route: str,
+    provider_reply: httpx.Response,
+) -> tuple[object, respx.Route]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    monkeypatch.delenv("DEEPSEEK_ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "counted", "litellm_params": dict(deployment_params)}]),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(count_route).mock(return_value=provider_reply)
+        response: Final = await anthropic_count_tokens(
+            _json_request({"model": "counted", **body}, "python-httpx/0.28.1"), UserAPIKeyAuth()
+        )
+    return response, route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "options"),
+    (
+        ("claude-sonnet-4-5", {"tool_choice": {"type": "any"}}),
+        ("claude-sonnet-4-5", {"thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        ("claude-haiku-5-5", {"thinking": {"type": "enabled", "budget_tokens": 2048}, "tool_choice": {"type": "auto"}}),
+        ("claude-opus-5-5", {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}),
+    ),
+)
+async def test_messages_count_tokens_counts_the_thinking_tool_choice_and_effort_messages_inference_sends(
+    monkeypatch: pytest.MonkeyPatch, model: str, options: Mapping[str, JsonValue]
+) -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Read the README"}],
+        "tools": [_READ_FILE_TOOL],
+        **options,
+    }
+
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": f"anthropic/{model}", "api_key": "sk-ant-test"},
+        body,
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert response == {"input_tokens": 120, "litellm_count_source": "provider"}
+    assert {field: sent.get(field) for field in _COUNTED_OPTION_FIELDS} == _messages_inference_fields(
+        AnthropicMessagesConfig(), model, body, _COUNTED_OPTION_FIELDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_leaves_out_an_option_the_request_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-test"},
+        {
+            "messages": [{"role": "user", "content": "Read the README"}],
+            "tools": [_READ_FILE_TOOL],
+            "tool_choice": {"type": "any"},
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "additional_drop_params": ["thinking"],
+        },
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert response == {"input_tokens": 120, "litellm_count_source": "provider"}
+    assert (sent["tool_choice"], "thinking" in sent) == ({"type": "any"}, False)
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_answers_400_for_a_thinking_budget_messages_inference_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Read the README"}],
+        "thinking": {"type": "enabled", "budget_tokens": "lots"},
+    }
+    with pytest.raises(BadRequestError) as rejected:
+        _messages_inference_fields(AnthropicMessagesConfig(), "claude-opus-5-5", body, _COUNTED_OPTION_FIELDS)
+
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test"},
+        body,
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert rejected.value.message in json.loads(response.body)["error"]["message"]
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_counts_deepseek_on_its_anthropic_count_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
+
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Read the README"}],
+        "tools": [_CUSTOM_READ_FILE_TOOL],
+        "tool_choice": {"type": "any"},
+        "thinking": {"type": "enabled"},
+        "output_config": {"effort": "max"},
+    }
+
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test"},
+        body,
+        _DEEPSEEK_COUNT_ROUTE,
+        httpx.Response(200, json={"input_tokens": 91}),
+    )
+
+    sent_request: Final = route.calls.last.request
+    sent: Final = json.loads(sent_request.content)
+    inference: Final = _messages_inference_fields(
+        DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro", body, ("tool_choice", "output_config", "tools", "thinking")
+    )
+    assert response == {"input_tokens": 91, "litellm_count_source": "provider"}
+    assert sent_request.headers["x-api-key"] == "sk-deepseek-test"
+    assert (sent["tool_choice"], sent.get("output_config"), sent["tools"], sent["thinking"]["type"]) == (
+        inference["tool_choice"],
+        inference["output_config"],
+        inference["tools"],
+        inference["thinking"]["type"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_on_deepseek_estimates_when_the_count_route_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test", "api_base": "https://gateway.example"},
+        {"messages": [{"role": "user", "content": "Read the README"}]},
+        "https://gateway.example/anthropic/v1/messages/count_tokens",
+        httpx.Response(404, json={"error": "not found"}),
+    )
+
+    assert route.called
+    assert isinstance(response, dict)
+    assert response["litellm_count_source"] == "local_estimate"
+    assert response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reasoning", "expected_options"),
+    (
+        ({}, {}),
+        ({"reasoning": {"effort": "none"}}, {"thinking": {"type": "disabled"}}),
+        ({"reasoning": {"effort": "high"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "high"}}),
+        ({"reasoning": {"effort": "max"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "max"}}),
+    ),
+)
+async def test_responses_count_on_deepseek_maps_reasoning_effort_the_way_deepseek_chat_inference_does(
+    monkeypatch: pytest.MonkeyPatch, reasoning: Mapping[str, JsonValue], expected_options: Mapping[str, JsonValue]
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    monkeypatch.delenv("DEEPSEEK_ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "deepseek-counted",
+                    "litellm_params": {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(return_value=httpx.Response(200, json={"input_tokens": 91}))
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="deepseek-counted", messages=[{"role": "user", "content": "Say hi."}]),
+            call_endpoint=True,
+            responses_request={
+                "model": "deepseek-counted",
+                "input": "Say hi.",
+                "tools": [_WEATHER_TOOL],
+                **reasoning,
+            },
+        )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (result.total_tokens, result.count_source) == (91, "provider")
+    assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
+    assert all("type" not in tool for tool in sent["tools"])

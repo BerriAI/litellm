@@ -148,6 +148,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.

@@ -19,6 +19,7 @@ from litellm.anthropic_interface.exceptions import (
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.tool_fields import first_validation_error
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
@@ -342,6 +343,7 @@ class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
     request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
+    count_options: ReadOnly[Mapping[str, JsonValue]]
 
 
 def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
@@ -351,6 +353,12 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
         "context_management": data.get("context_management"),
         "request_litellm_params": MappingProxyType(
             {"drop_params": True, **sent_params} if auto_drop_params else sent_params
+        ),
+        "count_options": MappingProxyType(
+            without_dropped_paths(
+                {name: data[name] for name in COUNT_TOKEN_OPTION_NAMES if name in data},
+                data.get("additional_drop_params"),
+            )
         ),
     }
 

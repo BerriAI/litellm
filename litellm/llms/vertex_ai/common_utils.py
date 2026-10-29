@@ -7,7 +7,7 @@ from enum import Enum
 from functools import lru_cache
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast, get_type_hints
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -32,6 +32,9 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
+
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountFields
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
     {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset"}
@@ -1395,21 +1398,17 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         return custom_llm_provider == LlmProviders.VERTEX_AI.value
 
-    async def _count_translated_claude_request(
+    async def _translated_claude_request(
         self,
         model_to_use: str,
         messages: Sequence[Mapping[str, object]] | None,
-        deployment: Mapping[str, object],
         request_model: str,
         tools: Sequence[Mapping[str, object]] | None,
         system: object | None,
         messages_format: TokenCountMessagesFormat,
-        output_format: JsonValue,
-        context_management: CountContextManagement | None,
         chat_params: Mapping[str, JsonValue],
-    ) -> TokenCountResponse | None:
+    ) -> "TokenCountResponse | AnthropicCountFields | None":
         from litellm.llms.anthropic.count_tokens.transformation import (
-            AnthropicCountFields,
             ChatCountTranslationError,
             anthropic_count_fields,
         )
@@ -1419,27 +1418,12 @@ class VertexAITokenCounter(BaseTokenCounter):
             return None
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 
-        match translated := await anthropic_count_fields(
+        translated: Final = await anthropic_count_fields(
             model_to_use, messages or [], system, tools, messages_format, VertexAIAnthropicConfig(), chat_params
-        ):
-            case ChatCountTranslationError():
-                return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
-            case AnthropicCountFields():
-                return await self.count_tokens(
-                    model_to_use=model_to_use,
-                    messages=[dict(message) for message in translated.messages],
-                    contents=None,
-                    deployment=dict(deployment),
-                    request_model=request_model,
-                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
-                    system=translated.system,
-                    messages_format="anthropic",
-                    output_format=output_format,
-                    context_management=context_management,
-                    count_options=translated.options,
-                )
-            case None:
-                return None
+        )
+        if isinstance(translated, ChatCountTranslationError):
+            return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
+        return translated
 
     async def count_tokens(
         self,
@@ -1493,20 +1477,17 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
-            translated_count: Final = await self._count_translated_claude_request(
+            translated: Final = await self._translated_claude_request(
                 model_to_use=model_to_use,
                 messages=messages,
-                deployment=deployment,
                 request_model=request_model,
                 tools=tools,
                 system=system,
                 messages_format=messages_format,
-                output_format=output_format,
-                context_management=context_management,
                 chat_params=chat_params,
             )
-            if translated_count is not None:
-                return translated_count
+            if isinstance(translated, TokenCountResponse):
+                return translated
 
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
@@ -1531,14 +1512,22 @@ class VertexAITokenCounter(BaseTokenCounter):
             try:
                 result = await partner_models_handler.count_tokens(
                     model=model_to_use,
-                    messages=messages or [],
+                    messages=(
+                        (messages or []) if translated is None else [dict(message) for message in translated.messages]
+                    ),
                     litellm_params=partner_litellm_params,
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
                     vertex_credentials=vertex_credentials,
-                    system=system,
-                    tools=tools,
-                    count_options=count_options,
+                    system=system if translated is None else translated.system,
+                    tools=(
+                        tools
+                        if translated is None
+                        else None
+                        if translated.tools is None
+                        else [dict(tool) for tool in translated.tools]
+                    ),
+                    count_options=MappingProxyType({}) if translated is None else translated.options,
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code

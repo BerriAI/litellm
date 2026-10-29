@@ -2,7 +2,7 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -11,11 +11,13 @@ from pydantic import JsonValue
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    messages_count_options,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
@@ -64,12 +66,11 @@ class AnthropicTokenCounter(BaseTokenCounter):
         Returns:
             TokenCountResponse with token count, or None if counting fails
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
-
         if not messages:
             return None
 
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
         match translated := await anthropic_count_fields(
             model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
@@ -77,24 +78,51 @@ class AnthropicTokenCounter(BaseTokenCounter):
             case ChatCountTranslationError():
                 return translated.response(request_model, model_to_use, "anthropic_api")
             case AnthropicCountFields():
-                return await self.count_tokens(
+                return await self._count(
                     model_to_use=model_to_use,
-                    messages=[dict(message) for message in translated.messages],
-                    contents=contents,
+                    messages=translated.messages,
                     deployment=deployment,
                     request_model=request_model,
-                    tools=[dict(tool) for tool in translated.tools] if translated.tools is not None else None,
+                    tools=translated.tools,
                     system=translated.system,
-                    messages_format="anthropic",
-                    output_format=output_format,
-                    context_management=context_management,
                     count_options=translated.options,
                 )
             case None:
                 pass
 
-        deployment = deployment or {}
-        litellm_params: Final = deployment.get("litellm_params", {})
+        match options := await asyncify(messages_count_options)(
+            AnthropicMessagesConfig(),
+            model_to_use,
+            messages,
+            count_options,
+            (deployment or {}).get("litellm_params", {}),
+        ):
+            case ChatCountTranslationError():
+                return options.response(request_model, model_to_use, "anthropic_api")
+            case _:
+                return await self._count(
+                    model_to_use=model_to_use,
+                    messages=messages,
+                    deployment=deployment,
+                    request_model=request_model,
+                    tools=tools,
+                    system=system,
+                    count_options=options,
+                )
+
+    async def _count(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, JsonValue]],
+        deployment: Mapping[str, Any] | None,
+        request_model: str,
+        tools: Sequence[Mapping[str, JsonValue]] | None,
+        system: JsonValue,
+        count_options: Mapping[str, JsonValue],
+    ) -> TokenCountResponse | None:
+        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
+
+        litellm_params: Final = (deployment or {}).get("litellm_params", {})
         api_base: Final = litellm_params.get("api_base")
 
         try:
@@ -125,10 +153,10 @@ class AnthropicTokenCounter(BaseTokenCounter):
 
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                messages=messages,
+                messages=[dict(message) for message in messages],
                 auth_header=auth_header,
                 api_base=api_base,
-                tools=tools,
+                tools=None if tools is None else [dict(tool) for tool in tools],
                 system=system,
                 optional_params=count_options,
             )
