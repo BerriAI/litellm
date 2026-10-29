@@ -2197,7 +2197,8 @@ class _FailedTurns:
             self.first = refusal
 
     def add_request(self, failure: Exception, request: Mapping[str, object]) -> None:
-        self.requests = (*self.requests, (failure, request))
+        if not self.requests or failure is self.first:
+            self.requests = (*self.requests, (failure, request))
 
     def billed_on(self, request_data: Mapping[str, object], failure: Exception) -> Mapping[str, object]:
         with_request: Final = self._with_request_of(request_data, failure)

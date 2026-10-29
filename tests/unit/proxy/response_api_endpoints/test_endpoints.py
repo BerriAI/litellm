@@ -2635,6 +2635,26 @@ class TestResponsesWSFirstFrameModelAuth:
         }
         assert connection_request["body"] == {"model": "gpt-4o-mini"}
 
+    def test_close_time_failure_row_keeps_the_request_of_each_failure_it_can_bill(self):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import _FailedTurns
+
+        turn_failure, first_refusal, later_refusal = (
+            RateLimitError(message=word, llm_provider="openai", model="gpt-4o-mini")
+            for word in ("alpha", "beta", "gamma")
+        )
+        failed_turns = _FailedTurns()
+        failed_turns.add_request(turn_failure, {"input": "alpha"})
+        for refusal, word in ((first_refusal, "beta"), (later_refusal, "gamma")):
+            failed_turns.add((), refusal)
+            failed_turns.add_request(refusal, {"input": word})
+        routed = {"proxy_server_request": {"url": "ws://testserver/v1/responses", "body": {"model": "gpt-4o-mini"}}}
+
+        assert [
+            failed_turns.billed_on(routed, failure)["proxy_server_request"]["body"]
+            for failure in (turn_failure, first_refusal, later_refusal)
+        ] == [{"input": "alpha"}, {"input": "beta"}, {"model": "gpt-4o-mini"}]
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "relay_outcome",

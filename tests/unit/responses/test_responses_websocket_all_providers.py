@@ -350,11 +350,17 @@ class TestManagedWebSocketHandlerIntegration:
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
 
-        async def empty_stream():
-            return
-            yield {}
+        async def answered():
+            yield {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_turn1",
+                    "status": "completed",
+                    "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "A"}]}],
+                },
+            }
 
-        aresponses: Final = AsyncMock(side_effect=lambda **kwargs: empty_stream())
+        aresponses: Final = AsyncMock(side_effect=lambda **kwargs: answered())
         monkeypatch.setattr(litellm, "aresponses", aresponses)
         websocket: Final = MagicMock()
         websocket.send_text = AsyncMock()
@@ -374,18 +380,21 @@ class TestManagedWebSocketHandlerIntegration:
             proxy_server_request={"url": "ws://proxy/v1/responses", "body": {"first_message": "warmup"}},
         )
 
-        await handler._process_response_create(json.dumps({"type": "response.create", "input": "first question"}))
+        continued_turn: Final = {"input": "second question", "instructions": "be brief", "previous_response_id": "resp_turn1"}
         await handler._process_response_create(
-            json.dumps({"type": "response.create", "response": {"input": "second question", "instructions": "be brief"}})
+            json.dumps({"type": "response.create", "input": "first question", "user": "end-user-1"})
         )
+        await handler._process_response_create(json.dumps({"type": "response.create", "response": continued_turn}))
 
+        assert [message["role"] for message in aresponses.await_args_list[1].kwargs["input"]] == [
+            "user",
+            "assistant",
+            "user",
+        ]
         stored: Final = [call.kwargs["proxy_server_request"] for call in aresponses.await_args_list]
         assert stored == [
-            {"url": "ws://proxy/v1/responses", "body": {"input": "first question", "store": None, "model": "haiku"}},
-            {
-                "url": "ws://proxy/v1/responses",
-                "body": {"input": "second question", "store": None, "model": "haiku", "instructions": "be brief"},
-            },
+            {"url": "ws://proxy/v1/responses", "body": {"input": "first question"}},
+            {"url": "ws://proxy/v1/responses", "body": continued_turn},
         ]
         assert [call.kwargs["litellm_metadata"]["proxy_server_request"] for call in aresponses.await_args_list] == stored
 
@@ -976,14 +985,14 @@ class TestUpdateProxyRequest:
         }
 
         ManagedResponsesWebSocketHandler._update_proxy_request(
-            call_kwargs, "anthropic/claude-sonnet-4-5"
+            call_kwargs, {"model": "anthropic/claude-sonnet-4-5", "input": "hello"}
         )
 
         assert "litellm_params" not in call_kwargs
-        assert call_kwargs["proxy_server_request"]["body"]["model"] == (
-            "anthropic/claude-sonnet-4-5"
-        )
-        assert call_kwargs["proxy_server_request"]["body"]["input"] == "hello"
+        assert call_kwargs["proxy_server_request"]["body"] == {
+            "model": "anthropic/claude-sonnet-4-5",
+            "input": "hello",
+        }
 
     def test_proxy_server_request_matches_metadata(self):
         from litellm.responses.streaming_iterator import (
@@ -995,7 +1004,7 @@ class TestUpdateProxyRequest:
             "litellm_metadata": {"proxy_server_request": {"body": {}}},
         }
 
-        ManagedResponsesWebSocketHandler._update_proxy_request(call_kwargs, "gpt-4o")
+        ManagedResponsesWebSocketHandler._update_proxy_request(call_kwargs, {"model": "gpt-4o", "input": "hi"})
 
         assert (
             call_kwargs["proxy_server_request"]
@@ -2722,6 +2731,31 @@ class TestNativeWebSocketGuardrailMasking:
         assert json.loads(handler._unmask_response_event(reply))["delta"] == "Sent to alice@example.com"
 
     @pytest.mark.asyncio
+    async def test_a_turn_the_deployment_refuses_stores_its_pii_masked_request(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.exceptions import RateLimitError
+
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        bill_failed_request = MagicMock()
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        handler = _make_streaming(
+            backend_ws=backend_ws,
+            request_data={},
+            guardrail_callbacks=[_FakeWSGuardrail()],
+            frame_guard=_guard_recording(MagicMock(), bill_failed_request),
+        )
+
+        await handler._forward_guarded_frame(
+            json.dumps({"type": "response.create", "input": "email alice@example.com"}),
+            AsyncMock(side_effect=refusal),
+        )
+
+        backend_ws.send.assert_not_awaited()
+        bill_failed_request.assert_called_once_with(refusal, {"input": "email <EMAIL_ADDRESS_1>"})
+
+    @pytest.mark.asyncio
     async def test_mask_response_create_flat_string_input(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
@@ -4283,9 +4317,14 @@ class TestNativeWebSocketEncryptedContentAffinity:
             websocket=websocket, backend_ws=backend_ws, logging_obj=connection_logging, request_data={}
         )
         bill_failed_request = MagicMock()
-        handler._record_client_frame(json.dumps({"type": "response.create", "input": "first question"}))
         handler._record_client_frame(
-            json.dumps({"type": "response.create", "input": "second question"}), (), bill_failed_request
+            json.dumps({"type": "response.create", "input": "first question"}), {"input": "first question"}
+        )
+        handler._record_client_frame(
+            json.dumps({"type": "response.create", "input": "second question"}),
+            {"input": "second question"},
+            (),
+            bill_failed_request,
         )
 
         await handler.backend_to_client()
@@ -4306,27 +4345,24 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert reservations[first_turn] == (reservation, reservation)
         assert reservations[second_turn] == (None, None)
 
-    @pytest.mark.parametrize(
-        "frame, stored_request",
-        [
-            (
-                {"type": "response.create", "model": "gpt-5.4", "input": "hi", "previous_response_id": "resp_0"},
-                {"model": "gpt-5.4", "input": "hi", "previous_response_id": "resp_0"},
-            ),
-            (
-                {"type": "response.create", "response": {"input": "hi", "instructions": "be brief"}},
-                {"input": "hi", "instructions": "be brief"},
-            ),
-        ],
-    )
-    def test_a_turn_stores_its_response_create_as_the_body_of_the_equivalent_http_request(
-        self, frame: dict[str, object], stored_request: dict[str, object]
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    async def test_a_turn_stores_the_response_create_the_client_sent_as_the_body_of_the_equivalent_http_request(
+        self, nested: bool
     ):
         import time
+        from unittest.mock import AsyncMock
 
         from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.types.utils import CallTypes
 
+        wrapped_previous = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="dep-1", response_id="resp_orig"
+        )
+        sent = {"model": "gpt-alias", "input": "hi", "instructions": "be brief", "previous_response_id": wrapped_previous}
+        payload = {**sent, "user": "end-user-1"}
+        frame = {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
         connection_logging = Logging(
             model="gpt-5.4",
             messages=[],
@@ -4339,17 +4375,35 @@ class TestNativeWebSocketEncryptedContentAffinity:
         connection_logging.litellm_params = {
             "proxy_server_request": {"url": "ws://proxy/v1/responses", "body": {"first_message": "warmup"}}
         }
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
         handler = _make_streaming(
-            websocket=MagicMock(), backend_ws=MagicMock(), logging_obj=connection_logging, request_data={}
+            backend_ws=backend_ws, logging_obj=connection_logging, request_data={}, authorized_model="gpt-5.4"
         )
 
-        handler._record_client_frame(json.dumps(frame))
+        await handler._forward_guarded_frame(json.dumps(frame))
 
+        forwarded = json.loads(backend_ws.send.await_args.args[0])
+        forwarded_body = forwarded["response"] if nested else forwarded
+        assert (forwarded_body["model"], forwarded_body["previous_response_id"]) == ("gpt-5.4", "resp_orig")
         (turn,) = handler._open_turns
         assert turn.logging_obj.litellm_params["proxy_server_request"] == {
             "url": "ws://proxy/v1/responses",
-            "body": stored_request,
+            "body": sent,
         }
+
+    @pytest.mark.asyncio
+    async def test_a_frame_that_is_not_a_json_object_reaches_the_provider_unchanged_without_opening_a_turn(self):
+        from unittest.mock import AsyncMock
+
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        handler = _make_streaming(backend_ws=backend_ws, request_data={}, authorized_model="gpt-5.4")
+
+        await handler._forward_guarded_frame("not json")
+
+        backend_ws.send.assert_awaited_once_with("not json")
+        assert handler._open_turns == ()
 
     @pytest.mark.asyncio
     async def test_bidirectional_forward_returns_the_provider_failure(self):
