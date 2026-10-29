@@ -111,6 +111,7 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
     validate_chat_completion_tool_choice,
+    validate_and_fix_openai_messages,
 )
 
 
@@ -8267,6 +8268,34 @@ def test_validate_tool_choice_without_model_is_still_a_400():
     assert exc_info.value.model == ""
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("messages", "index"),
+    [
+        ([{"content": "Say hi in two words."}], 0),
+        ([{"role": "user", "content": "hi"}, {"role": None, "content": "hello"}], 1),
+        ([{"role": "user", "content": "hi"}, {"role": "", "content": "hello"}], 1),
+    ],
+)
+def test_completion_message_without_role_is_a_400(messages, index):
+    """A message with no role is the caller's mistake, rejected before any provider sees it, never sent as assistant."""
+    with pytest.raises(
+        litellm.BadRequestError, match=re.escape(f"Missing required parameter: 'messages[{index}].role'.")
+    ) as exc_info:
+        litellm.completion(model=MODEL, messages=messages, mock_response="Hello there!")
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_completion_role_less_tool_call_turn_is_sent_as_assistant():
+    """Only an assistant turn carries tool calls, so one replayed without a role still goes upstream as assistant."""
+    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    messages: Final = [{"role": "user", "content": "Weather in Paris?"}, {"content": "", "tool_calls": [tool_call]}]
+
+    assert validate_and_fix_openai_messages(messages)[1]["role"] == "assistant"
+
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
@@ -9972,12 +10001,12 @@ def test_dict_to_response_format_helper():
 def test_validate_user_messages_invalid_content_type():
     from litellm.utils import validate_chat_completion_user_messages
 
-    messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
+    messages = [{"role": "user", "content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception, match="Please ensure all messages are valid OpenAI chat completion") as e:
+    with pytest.raises(Exception, match="Please ensure all user messages are valid OpenAI chat completion") as e:
         validate_chat_completion_user_messages(messages)
 
-    assert "Invalid message" in str(e)
+    assert "Invalid user message at index 0" in str(e)
     print(e)
 
 

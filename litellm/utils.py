@@ -9121,18 +9121,18 @@ def convert_list_message_to_dict(
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
-def validate_and_fix_openai_messages(messages: list):
+def validate_and_fix_openai_messages(messages: list, model: str = ""):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
-    Handles missing role for assistant messages.
+    Only an assistant turn carries tool_calls, so one sent without a role gets "assistant" (issue #8661).
     """
     new_messages: Final = []
     for message in messages:
-        if not message.get("role"):
-            message["role"] = "assistant"
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
+            if not message.get("role"):
+                message["role"] = "assistant"
 
         convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
             AllMessageValues,
@@ -9142,7 +9142,7 @@ def validate_and_fix_openai_messages(messages: list):
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
-    return validate_chat_completion_user_messages(messages=new_messages)
+    return validate_chat_completion_user_messages(messages=new_messages, model=model)
 
 
 def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
@@ -9195,21 +9195,29 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     return {k: v for k, v in new_message.items() if v is not None}
 
 
-def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
+def validate_chat_completion_user_messages(messages: list[AllMessageValues], model: str = ""):
     """
     Ensures all user messages are valid OpenAI chat completion messages.
 
     Args:
         messages: List of message dictionaries
+        model: Model named on the error raised for a message without a role
         message_content_type: Type to validate content against
 
     Returns:
         List[dict]: The validated messages
 
     Raises:
+        BadRequestError: If a message has no role
         ValueError: If any message is invalid
     """
     for idx, m in enumerate(messages):
+        if "role" not in m or not m["role"]:
+            raise BadRequestError(
+                message=f"Missing required parameter: 'messages[{idx}].role'.",
+                model=model,
+                llm_provider="",
+            )
         try:
             if m["role"] == "user":
                 user_content = m.get("content")
@@ -9222,10 +9230,6 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
                                 if item.get("type") not in ValidUserMessageContentTypes:
                                     raise Exception(f"invalid content type={item.get('type')}")
         except Exception as e:
-            if isinstance(e, KeyError):
-                raise Exception(
-                    f"Invalid message at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
-                )
             if "invalid content type" in str(e):
                 raise Exception(
                     f"Invalid user message at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
