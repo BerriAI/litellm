@@ -1,6 +1,6 @@
 import itertools
 import json
-from typing import Final, List, Optional
+from typing import Callable, Final, List, Optional
 from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -6389,6 +6389,120 @@ def test_require_managed_files_lists_a_teammates_files_on_the_provider_and_no_ot
 
     assert response.status_code == 200, response.text
     assert [file["id"] for file in response.json()["data"]] == ["unified-teammate", "unified-own"]
+
+
+
+def _router_with_two_teams_sharing_a_public_model_name() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "openai_api_key"},
+                "model_info": {"id": "gpt-3.5-turbo-id"},
+            },
+            *(
+                {
+                    "model_name": f"model_name_{team_id}_4f2a",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": f"{team_id}-key"},
+                    "model_info": {"id": f"{team_id}-gpt-id", "team_id": team_id, "team_public_model_name": "team-gpt"},
+                }
+                for team_id in ("team-a", "team-b")
+            ),
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "headers"),
+    [({"target_model_names": "team-gpt"}, {}), ({}, {"x-litellm-model": "team-gpt"})],
+    ids=["target-model-names", "model-header"],
+)
+def test_require_managed_files_lists_the_callers_files_on_its_team_model_by_public_name(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    params: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        _router_with_two_teams_sharing_a_public_model_name(),
+        [
+            _managed_file_row("unified-team-a", team_id="team-a", model_mappings={"team-a-gpt-id": "f-1"}),
+            _managed_file_row("unified-global", team_id="team-a", model_mappings={"gpt-3.5-turbo-id": "f-2"}),
+            _managed_file_row("unified-team-b", team_id="team-b", model_mappings={"team-b-gpt-id": "f-3"}),
+        ],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user", team_id="team-a"
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user("/v1/files", params, headers)
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-team-a"]
+
+
+
+@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
+@pytest.mark.parametrize(
+    ("litellm_fn", "send"),
+    [
+        (
+            "acreate_file",
+            lambda headers: client.post(
+                "/v1/files",
+                files={"file": ("notes.txt", b"hello", "text/plain")},
+                data={"purpose": "assistants"},
+                headers=headers,
+            ),
+        ),
+        ("afile_retrieve", lambda headers: client.get("/v1/files/file-raw", headers=headers)),
+    ],
+    ids=["upload", "retrieve"],
+)
+def test_a_team_model_public_name_routes_file_calls_with_the_caller_team_credentials(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str,
+    litellm_fn: str,
+    send: Callable[[dict[str, str]], httpx.Response],
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    llm_router: Final = _router_with_two_teams_sharing_a_public_model_name()
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    upstream: Final = mocker.AsyncMock(
+        return_value=OpenAIFileObject(
+            id="file-raw",
+            object="file",
+            bytes=5,
+            created_at=0,
+            filename="notes.txt",
+            purpose="assistants",
+            status="uploaded",
+        )
+    )
+    monkeypatch.setattr(litellm, litellm_fn, upstream)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user", team_id=team_id
+    )
+
+    try:
+        response: Final = send({"Authorization": "Bearer test-key", "x-litellm-model": "team-gpt"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert upstream.await_args.kwargs["api_key"] == f"{team_id}-key"
 
 
 def _router_with_wildcard_and_unprefixed_anthropic_deployments() -> Router:

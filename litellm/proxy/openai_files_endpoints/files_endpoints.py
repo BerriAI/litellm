@@ -1750,11 +1750,14 @@ def _model_mapping_keys(deployments: Iterable[Deployment]) -> frozenset[str]:
     return frozenset(itertools.chain.from_iterable(map(_deployment_model_mapping_keys, deployments)))
 
 
-def _deployments_serving_model(llm_router: Router, model: str) -> tuple[Deployment, ...]:
+def _deployments_serving_model(llm_router: Router, model: str, team_id: str | None) -> tuple[Deployment, ...]:
     deployment: Final = llm_router.get_deployment(model_id=model) if llm_router.has_model_id(model) else None
     if deployment is not None:
         return (deployment,)
-    return tuple(Deployment.model_validate(listed) for listed in llm_router.get_model_list(model_name=model) or ())
+    return tuple(
+        Deployment.model_validate(listed)
+        for listed in llm_router.get_model_list(model_name=model, team_id=team_id) or ()
+    )
 
 
 def _resolved_deployment_provider(deployment: Deployment) -> str | None:
@@ -1825,8 +1828,8 @@ def _files_on_provider(llm_router: Router | None, custom_llm_provider: str) -> _
     )
 
 
-def _files_serving_model(llm_router: Router, model: str) -> _ListedFiles:
-    deployments: Final = _deployments_serving_model(llm_router, model)
+def _files_serving_model(llm_router: Router, model: str, team_id: str | None) -> _ListedFiles:
+    deployments: Final = _deployments_serving_model(llm_router, model, team_id)
     providers: Final = frozenset(map(_resolved_deployment_provider, deployments))
     return _ListedFiles(
         FileListModelScope(_model_mapping_keys(deployments)), next(iter(providers)) if len(providers) == 1 else None
@@ -1841,7 +1844,7 @@ async def _listed_files(
     routed_model: str | None,
 ) -> _ListedFiles | _UnscopedFileList:
     if routed_model is not None and llm_router is not None:
-        return _files_serving_model(llm_router, routed_model)
+        return _files_serving_model(llm_router, routed_model, user_api_key_dict.team_id)
     if target_model_names:
         target_model_name: Final = _single_target_model_name(target_model_names)
         if isinstance(target_model_name, _UnscopedFileList):
@@ -1856,7 +1859,7 @@ async def _listed_files(
             user_api_key_dict=user_api_key_dict,
             operation_context="file list",
         )
-        return _files_serving_model(llm_router, target_model_name)
+        return _files_serving_model(llm_router, target_model_name, user_api_key_dict.team_id)
     if custom_llm_provider is None:
         return _ListedFiles(None, None)
     return _files_on_provider(llm_router, custom_llm_provider)
