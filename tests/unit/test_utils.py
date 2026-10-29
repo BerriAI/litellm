@@ -10922,3 +10922,23 @@ async def test_success_logging_is_enqueued_before_the_worker_is_flushed(deferred
         await asyncio.sleep(0)
         await GLOBAL_LOGGING_WORKER.flush()
         await GLOBAL_LOGGING_WORKER.stop()
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_warnings"),
+    (("streamlake", 1), ("veniceai", 1), ("my-own-llm", 0)),
+)
+def test_custom_provider_named_like_a_built_in_warns_once(
+    provider: str, expected_warnings: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": provider, "custom_handler": litellm.CustomLLM()}])
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", [])
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        litellm.utils.custom_llm_setup()
+        litellm.utils.custom_llm_setup()
+
+    warnings: Final = [r for r in caplog.records if f"provider '{provider}'" in r.getMessage()]
+    assert len(warnings) == expected_warnings
+    assert provider in litellm._custom_providers
