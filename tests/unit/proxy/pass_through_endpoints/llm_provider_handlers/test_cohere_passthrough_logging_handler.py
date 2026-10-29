@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
@@ -181,13 +182,17 @@ COHERE_EMBED_V1_FLOATS_BODY: Final[Mapping[str, object]] = {
 }
 
 
+_CALL_START: Final = datetime(2026, 10, 1, 12, 0, 0)
+_CALL_END: Final = datetime(2026, 10, 1, 12, 0, 1)
+
+
 def _passthrough_logging_obj() -> LiteLLMLoggingObj:
     return LiteLLMLoggingObj(
         model="unknown",
         messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
         stream=False,
         call_type=CallTypes.pass_through.value,
-        start_time=datetime.now(),
+        start_time=_CALL_START,
         litellm_call_id="cohere-embed-passthrough-call",
         function_id="cohere-embed-passthrough-function",
     )
@@ -222,8 +227,8 @@ def test_cohere_embed_passthrough_is_costed_from_billed_units(
         logging_obj=_passthrough_logging_obj(),
         url_route=url_route,
         result="",
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=_CALL_START,
+        end_time=_CALL_END,
         cache_hit=False,
     )
 
@@ -241,8 +246,8 @@ def _normalize_cohere_embed(url_route: str, body: Mapping[str, object], model: s
         logging_obj=_passthrough_logging_obj(),
         url_route=url_route,
         result="",
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=_CALL_START,
+        end_time=_CALL_END,
         cache_hit=False,
     )
 
@@ -280,13 +285,21 @@ def test_cohere_embed_passthrough_rows_keep_their_embedding_type() -> None:
     ]
 
 
-def test_unpriceable_cohere_embed_passthrough_falls_back_to_the_plain_passthrough_row() -> None:
-    logged: Final = _normalize_cohere_embed(
-        "https://api.cohere.com/v2/embed", COHERE_EMBED_V2_TEXT_BODY, "embed-model-missing-from-the-cost-map"
-    )
+def test_unpriceable_cohere_embed_passthrough_falls_back_to_the_plain_passthrough_row(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        logged: Final = _normalize_cohere_embed(
+            "https://api.cohere.com/v2/embed", COHERE_EMBED_V2_TEXT_BODY, "embed-model-missing-from-the-cost-map"
+        )
 
     assert logged["standard_logging_response_object"] is None
     assert "response_cost" not in logged["kwargs"]
+    assert any(
+        "Could not price the Cohere passthrough embed response" in record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+    )
 
 if __name__ == "__main__":
     pytest.main([__file__])

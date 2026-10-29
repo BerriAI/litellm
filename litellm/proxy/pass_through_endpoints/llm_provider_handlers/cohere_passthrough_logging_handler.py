@@ -6,6 +6,7 @@ import httpx
 
 import litellm
 from litellm import stream_chunk_builder
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
@@ -156,7 +157,10 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     "result": litellm_model_response,
                     "kwargs": kwargs,
                 }
-            except Exception:
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Could not price the Cohere passthrough embed response, logging it without a cost: %s", e
+                )
                 return {"result": None, "kwargs": kwargs}
 
         # For non-embed routes (e.g., /v2/chat), fall back to chat handler
