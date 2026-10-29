@@ -21589,7 +21589,13 @@
         ],
         "supports_vision": true,
         "supports_audio_input": true,
-        "supports_video_input": true
+        "supports_video_input": true,
+        "input_cost_per_token_priority": 5.6252e-07,
+        "output_cost_per_token_priority": 3.37498e-06,
+        "cache_read_input_token_cost_priority": 5.628e-08,
+        "cache_creation_input_token_cost_priority": 5.6252e-07,
+        "input_cost_per_audio_token_priority": 1.12497e-06,
+        "cache_read_input_audio_token_cost_priority": 1.1249e-07
     },
     "databricks/databricks-gemini-3-1-flash-image": {
         "cache_creation_input_token_cost": 6.2503e-07,
@@ -21676,7 +21682,14 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 4.50002e-06,
+        "output_cost_per_token_priority": 2.699998e-05,
+        "cache_read_input_token_cost_priority": 4.5003e-07,
+        "cache_creation_input_token_cost_priority": 4.50002e-06,
+        "input_cost_per_token_above_200k_tokens_priority": 8.99997e-06,
+        "output_cost_per_token_above_200k_tokens_priority": 4.049997e-05,
+        "cache_read_input_token_cost_above_200k_tokens_priority": 8.9999e-07
     },
     "databricks/databricks-gemini-3-flash": {
         "cache_creation_input_token_cost": 6.2503e-07,
@@ -21710,7 +21723,13 @@
         ],
         "supports_vision": true,
         "supports_audio_input": true,
-        "supports_video_input": true
+        "supports_video_input": true,
+        "input_cost_per_token_priority": 1.12497e-06,
+        "output_cost_per_token_priority": 6.75003e-06,
+        "cache_read_input_token_cost_priority": 1.1249e-07,
+        "cache_creation_input_token_cost_priority": 1.12497e-06,
+        "input_cost_per_audio_token_priority": 2.25001e-06,
+        "cache_read_input_audio_token_cost_priority": 2.2498e-07
     },
     "databricks/databricks-gemini-3-pro": {
         "cache_creation_input_token_cost": 2.49998e-06,
@@ -21757,7 +21776,11 @@
         "supports_reasoning": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.35002e-06,
+        "output_cost_per_token_priority": 6.75003e-06,
+        "cache_read_input_token_cost_priority": 1.3503e-07,
+        "cache_creation_input_token_cost_priority": 1.35002e-06
     },
     "databricks/databricks-gemini-3-7-flash": {
         "cache_creation_input_token_cost": 7.4998e-07,
@@ -21785,10 +21808,14 @@
         "supports_reasoning": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.35002e-06,
+        "output_cost_per_token_priority": 6.75003e-06,
+        "cache_read_input_token_cost_priority": 1.3503e-07,
+        "cache_creation_input_token_cost_priority": 1.35002e-06
     },
     "databricks/databricks-gemini-3-6-flash": {
-        "cache_creation_input_token_cost": 1.87502e-06,
+        "cache_creation_input_token_cost": 7.4998e-07,
         "cache_read_input_token_cost": 7.497e-08,
         "input_cost_per_token": 7.4998e-07,
         "input_dbu_cost_per_token": 1.0714e-05,
@@ -21816,7 +21843,11 @@
         "supports_reasoning": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.35002e-06,
+        "output_cost_per_token_priority": 6.75003e-06,
+        "cache_read_input_token_cost_priority": 1.3503e-07,
+        "cache_creation_input_token_cost_priority": 1.35002e-06
     },
     "databricks/databricks-gemini-3-5-flash": {
         "cache_creation_input_token_cost": 1.87502e-06,
@@ -21846,7 +21877,11 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 3.37498e-06,
+        "output_cost_per_token_priority": 2.025002e-05,
+        "cache_read_input_token_cost_priority": 3.3747e-07,
+        "cache_creation_input_token_cost_priority": 3.37498e-06
     },
     "databricks/databricks-gemini-3-5-flash-lite": {
         "cache_creation_input_token_cost": 3.7499e-07,
@@ -21878,7 +21913,11 @@
         "supports_response_schema": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 6.7501e-07,
+        "output_cost_per_token_priority": 5.62499e-06,
+        "cache_read_input_token_cost_priority": 6.748e-08,
+        "cache_creation_input_token_cost_priority": 6.7501e-07
     },
     "databricks/databricks-gemma-3-12b": {
         "cache_creation_input_token_cost": 1.5001e-07,
@@ -21921,7 +21960,11 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "input_cost_per_token_priority": 2.45e-06,
+        "output_cost_per_token_priority": 7.7e-06,
+        "cache_read_input_token_cost_priority": 4.55e-07,
+        "cache_creation_input_token_cost_priority": 2.45e-06
     },
     "databricks/databricks-glm-5-3": {
         "cache_creation_input_token_cost": 1.4e-06,
@@ -21951,7 +21994,11 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": false,
-        "thinking_always_on": true
+        "thinking_always_on": true,
+        "input_cost_per_token_priority": 2.45e-06,
+        "output_cost_per_token_priority": 7.7e-06,
+        "cache_read_input_token_cost_priority": 4.55e-07,
+        "cache_creation_input_token_cost_priority": 2.45e-06
     },
     "databricks/databricks-glm-5-3-flash": {
         "cache_creation_input_token_cost": 1.5001e-07,
@@ -21980,7 +22027,11 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "thinking_always_on": true
+        "thinking_always_on": true,
+        "input_cost_per_token_priority": 2.625e-07,
+        "output_cost_per_token_priority": 8.75e-07,
+        "cache_read_input_token_cost_priority": 5.25e-08,
+        "cache_creation_input_token_cost_priority": 2.625e-07
     },
     "databricks/databricks-gpt-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -21999,7 +22050,11 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "input_cost_per_token_priority": 2.49998e-06,
+        "output_cost_per_token_priority": 1.999998e-05,
+        "cache_read_input_token_cost_priority": 2.4997e-07,
+        "cache_creation_input_token_cost_priority": 2.49998e-06
     },
     "databricks/databricks-gpt-5-1": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -22018,7 +22073,11 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "input_cost_per_token_priority": 2.49998e-06,
+        "output_cost_per_token_priority": 1.999998e-05,
+        "cache_read_input_token_cost_priority": 2.4997e-07,
+        "cache_creation_input_token_cost_priority": 2.49998e-06
     },
     "databricks/databricks-gpt-5-2": {
         "cache_creation_input_token_cost": 1.75e-06,
@@ -22037,7 +22096,11 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "input_cost_per_token_priority": 3.5e-06,
+        "output_cost_per_token_priority": 2.8e-05,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "cache_creation_input_token_cost_priority": 3.5e-06
     },
     "databricks/databricks-gpt-5-3-codex": {
         "cache_creation_input_token_cost": 1.75e-06,
@@ -22056,7 +22119,11 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "input_cost_per_token_priority": 3.5e-06,
+        "output_cost_per_token_priority": 2.8e-05,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "cache_creation_input_token_cost_priority": 3.5e-06
     },
     "databricks/databricks-gpt-5-4": {
         "cache_creation_input_token_cost": 2.49998e-06,
@@ -22087,7 +22154,14 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 5.00003e-06,
+        "output_cost_per_token_priority": 2.999997e-05,
+        "cache_read_input_token_cost_priority": 5.0001e-07,
+        "cache_creation_input_token_cost_priority": 5.00003e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 5.00003e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 2.999997e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 5.0001e-07
     },
     "databricks/databricks-gpt-5-4-mini": {
         "cache_creation_input_token_cost": 7.4998e-07,
@@ -22115,7 +22189,11 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.50003e-06,
+        "output_cost_per_token_priority": 8.99997e-06,
+        "cache_read_input_token_cost_priority": 1.5001e-07,
+        "cache_creation_input_token_cost_priority": 1.50003e-06
     },
     "databricks/databricks-gpt-5-4-nano": {
         "cache_creation_input_token_cost": 1.9999e-07,
@@ -22175,7 +22253,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 8.00002e-06,
+        "output_cost_per_token_priority": 4.000003e-05,
+        "cache_read_input_token_cost_priority": 8.0003e-07,
+        "cache_creation_input_token_cost_priority": 9.99999e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 1.599997e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 6.000001e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1.59999e-06,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1.999998e-05
     },
     "databricks/databricks-gpt-5-6-terra": {
         "cache_creation_input_token_cost": 2.49998e-06,
@@ -22207,7 +22293,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 4.00001e-06,
+        "output_cost_per_token_priority": 2.399999e-05,
+        "cache_read_input_token_cost_priority": 3.9998e-07,
+        "cache_creation_input_token_cost_priority": 5.00003e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 8.00002e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 3.600002e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8.0003e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 9.99999e-06
     },
     "databricks/databricks-gpt-5-6-luna": {
         "cache_creation_input_token_cost": 2.4997e-07,
@@ -22239,7 +22333,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 3.9998e-07,
+        "output_cost_per_token_priority": 2.40002e-06,
+        "cache_read_input_token_cost_priority": 3.997e-08,
+        "cache_creation_input_token_cost_priority": 5.0001e-07,
+        "input_cost_per_token_above_272k_tokens_priority": 8.0003e-07,
+        "output_cost_per_token_above_272k_tokens_priority": 3.60003e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8.001e-08,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1.00002e-06
     },
     "databricks/databricks-gpt-5-5": {
         "cache_creation_input_token_cost": 5.00003e-06,
@@ -22270,7 +22372,14 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.249997e-05,
+        "output_cost_per_token_priority": 7.50001e-05,
+        "cache_read_input_token_cost_priority": 1.24999e-06,
+        "cache_creation_input_token_cost_priority": 1.249997e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 1.249997e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 7.50001e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1.24999e-06
     },
     "databricks/databricks-gpt-5-5-pro": {
         "cache_creation_input_token_cost": 2.999997e-05,
@@ -22319,7 +22428,11 @@
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "input_cost_per_token_priority": 4.5003e-07,
+        "output_cost_per_token_priority": 3.60003e-06,
+        "cache_read_input_token_cost_priority": 4.501e-08,
+        "cache_creation_input_token_cost_priority": 4.5003e-07
     },
     "databricks/databricks-gpt-5-nano": {
         "cache_creation_input_token_cost": 4.998e-08,
@@ -22469,7 +22582,11 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 5.25e-06,
+        "output_cost_per_token_priority": 2.625e-05,
+        "cache_read_input_token_cost_priority": 5.25e-07,
+        "cache_creation_input_token_cost_priority": 5.25e-06
     },
     "databricks/system.ai.kimi-k3": {
         "litellm_provider": "databricks",
@@ -22551,7 +22668,11 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": false,
-        "thinking_always_on": true
+        "thinking_always_on": true,
+        "input_cost_per_token_priority": 3.85e-07,
+        "output_cost_per_token_priority": 3.85e-06,
+        "cache_read_input_token_cost_priority": 3.85e-07,
+        "cache_creation_input_token_cost_priority": 3.85e-07
     },
     "databricks/databricks-qwen3-next-80b-a3b-instruct": {
         "cache_creation_input_token_cost": 1.5001e-07,
@@ -28732,6 +28853,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
         "output_cost_per_token_batches": 1.25e-06,
@@ -28789,6 +28911,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
+        "output_cost_per_image_token_batches": 6e-05,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
@@ -28842,12 +28965,13 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
+        "output_cost_per_image_token_batches": 6e-05,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_priority": 2.16e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "output_cost_per_token_batches": 6e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/images/generations",
@@ -28893,6 +29017,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
+        "output_cost_per_image_token_batches": 3e-05,
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
@@ -28938,9 +29063,10 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
+        "output_cost_per_image_token_batches": 3e-05,
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/images/generations",
@@ -28985,6 +29111,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0336,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
         "output_cost_per_token_flex": 7.5e-07,
@@ -29551,10 +29678,12 @@
         },
         "search_free_requests": {"count": 10000, "period": "day", "shared_group": "gemini-2.5-pro"},
         "google_maps_grounding_cost_per_query": 0.025,
+        "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
         "input_cost_per_token_above_200k_tokens_priority": 4.5e-06,
         "input_cost_per_token_batches": 6.25e-07,
         "input_cost_per_token_flex": 6.25e-07,
         "input_cost_per_token_priority": 2.25e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06,
         "output_cost_per_token_above_200k_tokens_priority": 2.7e-05,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_flex": 5e-06,
@@ -29569,6 +29698,7 @@
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_above_200k_tokens_priority": 7.2e-06,
         "input_cost_per_token_batches": 1e-06,
         "input_cost_per_token_flex": 1e-06,
@@ -29580,6 +29710,7 @@
         "output_cost_per_image": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_token_flex": 6e-06,
@@ -30108,6 +30239,7 @@
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_above_200k_tokens_priority": 7.2e-06,
         "input_cost_per_token_batches": 1e-06,
         "input_cost_per_token_flex": 1e-06,
@@ -30119,6 +30251,7 @@
         "output_cost_per_image": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06,
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_token_flex": 6e-06,
@@ -51789,6 +51922,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
         "output_cost_per_token_batches": 1.25e-06,
@@ -51847,6 +51981,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
+        "output_cost_per_image_token_batches": 6e-05,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
@@ -51881,13 +52016,14 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
+        "output_cost_per_image_token_batches": 6e-05,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_priority": 2.16e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_above_200k_tokens_priority": 3.24e-05,
         "output_cost_per_token_batches": 6e-06,
         "supports_reasoning": false,
-        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/images/generations",
@@ -51913,6 +52049,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
+        "output_cost_per_image_token_batches": 3e-05,
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
@@ -51940,10 +52077,11 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
+        "output_cost_per_image_token_batches": 3e-05,
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
         "supports_reasoning": false,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/images/generations",
@@ -51968,6 +52106,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0336,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
         "output_cost_per_token_flex": 7.5e-07,
@@ -61864,6 +62003,39 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": false
+    },
+    "tencent/seedream-image-v5.0-flash": {
+        "litellm_provider": "tencent",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "output_cost_per_image_token": 1.6e-06,
+        "source": "https://cloud.tencent.com/document/product/1823/130055",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "tencent/seedream-image-v5.0-lite": {
+        "litellm_provider": "tencent",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "output_cost_per_image_token": 1.6e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "tencent/seedream-image-v5.0-pro": {
+        "litellm_provider": "tencent",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09,
+        "output_cost_per_image_token": 1.6e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
     },
     "cognition/swe-1.6": {
         "input_cost_per_token": 5e-07,
@@ -74246,6 +74418,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0336,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
@@ -74291,6 +74464,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0336,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
         "output_cost_per_token_priority": 1.35e-05,
@@ -77774,7 +77948,11 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 5.25e-07,
+        "output_cost_per_token_priority": 2.1e-06,
+        "cache_read_input_token_cost_priority": 5.25e-08,
+        "cache_creation_input_token_cost_priority": 5.25e-07
     },
     "databricks/databricks-deepseek-v4-1-flash-1017": {
         "cache_creation_input_token_cost": 3.0002e-07,
@@ -77897,7 +78075,11 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 4.50002e-06,
+        "output_cost_per_token_priority": 2.250003e-05,
+        "cache_read_input_token_cost_priority": 2.2498e-07,
+        "cache_creation_input_token_cost_priority": 4.50002e-06
     },
     "databricks/databricks-gpt-5-4-pro": {
         "cache_creation_input_token_cost": 2.999997e-05,
@@ -77959,7 +78141,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 4.00001e-06,
+        "output_cost_per_token_priority": 1.99997e-05,
+        "cache_read_input_token_cost_priority": 1.9999e-07,
+        "cache_creation_input_token_cost_priority": 5.00003e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 8.00002e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 2.99999e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 3.9998e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 9.99999e-06
     },
     "databricks/databricks-gpt-6-1-terra": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -77991,7 +78181,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.99997e-06,
+        "output_cost_per_token_priority": 9.99999e-06,
+        "cache_read_input_token_cost_priority": 1.0003e-07,
+        "cache_creation_input_token_cost_priority": 2.49998e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 4.00001e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 1.500002e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1.9999e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 5.00003e-06
     },
     "databricks/databricks-gpt-6-astra": {
         "cache_creation_input_token_cost": 1.249997e-05,
@@ -78023,7 +78221,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.999998e-05,
+        "output_cost_per_token_priority": 9.99999e-05,
+        "cache_read_input_token_cost_priority": 1.99997e-06,
+        "cache_creation_input_token_cost_priority": 2.500001e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 4.000003e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 0.0001500002,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 4.00001e-06,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 5.000002e-05
     },
     "databricks/databricks-gpt-6-luna": {
         "cache_creation_input_token_cost": 1.2502e-07,
@@ -78055,7 +78261,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 1.9999e-07,
+        "output_cost_per_token_priority": 1.0003e-06,
+        "cache_read_input_token_cost_priority": 2.002e-08,
+        "cache_creation_input_token_cost_priority": 2.4997e-07,
+        "input_cost_per_token_above_272k_tokens_priority": 3.9998e-07,
+        "output_cost_per_token_above_272k_tokens_priority": 1.5001e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 3.997e-08,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 5.0001e-07
     },
     "databricks/databricks-gpt-6-sol": {
         "cache_creation_input_token_cost": 2.49998e-06,
@@ -78087,7 +78301,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_priority": 4.00001e-06,
+        "output_cost_per_token_priority": 1.99997e-05,
+        "cache_read_input_token_cost_priority": 3.9998e-07,
+        "cache_creation_input_token_cost_priority": 5.00003e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 8.00002e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 2.99999e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8.0003e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 9.99999e-06
     },
     "databricks/databricks-gpt-image-1": {
         "cache_creation_input_token_cost": 5.00003e-06,
