@@ -97,6 +97,8 @@ WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
 _RESPONSE_CONTENT_FIELD: Final = "content"
 
+_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX: Final = "Perform a web search for the query:"
+
 _ResponseT: Final = TypeVar("_ResponseT")
 
 
@@ -363,7 +365,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_last_user_message,
         )
 
-        query: Final = get_last_user_message(cast(list[AllMessageValues], messages))
+        last_user_message: Final = get_last_user_message(cast(list[AllMessageValues], messages)) or ""
+        query: Final = last_user_message.removeprefix(_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX).strip()
         if not query:
             return None
 

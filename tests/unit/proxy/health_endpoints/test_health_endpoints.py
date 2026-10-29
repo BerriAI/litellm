@@ -394,7 +394,7 @@ async def test_test_model_connection_loads_config_from_router():
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
     # Mock _update_litellm_params_for_health_check
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         # Just return params with messages added
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
@@ -545,7 +545,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
@@ -656,7 +656,7 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
     mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
     mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
 
-    def mock_update_params(model_info, litellm_params):
+    def mock_update_params(model_info, litellm_params, deployment_model: str | None = None):
         params = litellm_params.copy()
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
@@ -900,6 +900,47 @@ async def test_test_model_connection_overridden_model_probe_params_follow_the_pr
 
     assert ahealth_check.call_args.kwargs["mode"] == "embedding"
     assert "max_tokens" not in ahealth_check.call_args.kwargs["model_params"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "deployment_model_info"),
+    [
+        ({"model": "azure/my-audio-deployment"}, {"id": "audio-id", "base_model": "azure/gpt-audio-1.5"}),
+        ({"model": "azure/my-audio-deployment", "base_model": "azure/gpt-audio-1.5"}, {"id": "audio-id"}),
+    ],
+    ids=["model_info.base_model", "litellm_params.base_model"],
+)
+@pytest.mark.parametrize(
+    ("request_params", "expects_audio_probe"),
+    [({}, True), ({"model": "azure/my-text-deployment"}, False)],
+    ids=["own model", "swapped model"],
+)
+async def test_test_model_connection_stored_audio_base_model_follows_the_stored_model(
+    deployment_params: Mapping[str, str],
+    deployment_model_info: Mapping[str, str],
+    request_params: Mapping[str, str],
+    expects_audio_probe: bool,
+):
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "custom-name-audio",
+            "litellm_params": {**deployment_params, "api_key": "fake-azure-key", "api_base": "https://x.openai.azure.com"},
+            "model_info": deployment_model_info,
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params=dict(request_params),
+            model_info={"id": "audio-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    probe_params: Final = ahealth_check.call_args.kwargs["model_params"]
+    assert ("modalities" in probe_params) is expects_audio_probe
+    assert probe_params.get("base_model") == deployment_params.get("base_model")
 
 
 @pytest.mark.asyncio
@@ -5437,6 +5478,15 @@ async def test_health_services_endpoint_langfuse_missing_keys_errors(monkeypatch
     with pytest.raises(ProxyException, match="auth_check failed") as raised:
         await health_services_endpoint(service="langfuse")
     assert "connection refused by lf.internal.example" in str(raised.value.message)
+
+
+@pytest.mark.asyncio
+async def test_health_services_reports_an_unknown_service_as_a_request_error_not_an_auth_error() -> None:
+    with pytest.raises(ProxyException) as exc_info:
+        await health_services_endpoint(service="totally_unknown_service_xyz")
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
 
 
 @pytest.mark.asyncio
