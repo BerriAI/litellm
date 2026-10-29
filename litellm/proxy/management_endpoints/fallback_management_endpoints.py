@@ -62,10 +62,31 @@ async def _stored_router_settings(prisma_client: PrismaClient) -> Mapping[str, J
     return _STORED_ROUTER_SETTINGS.validate_python(row.param_value)
 
 
-def _reject_config_owned_rules(proxy_config: "ProxyConfig", fallback_key: str, rules: Sequence[StoredFallback]) -> None:
+def _editable_rules(
+    proxy_config: "ProxyConfig", stored_settings: Mapping[str, JsonValue], fallback_key: str
+) -> list[StoredFallback]:
+    file_settings: Final = proxy_config.router_settings
+    rules: Final = (
+        file_settings.config_value(fallback_key)
+        if file_settings.owned_by_config(fallback_key)
+        else stored_settings.get(fallback_key)
+    )
+    return _STORED_FALLBACKS.validate_python(rules or [])
+
+
+async def _write_rules(
+    prisma_client: PrismaClient,
+    proxy_config: "ProxyConfig",
+    stored_settings: Mapping[str, JsonValue],
+    fallback_key: str,
+    rules: Sequence[StoredFallback],
+) -> None:
     proxy_config.reject_config_owned_writes(
         section_name=ROUTER_SETTINGS_PARAM, changed_keys={fallback_key: _JSON_RULES.validate_python(rules)}
     )
+    if proxy_config.router_settings.owned_by_config(fallback_key):
+        return
+    await _persist_router_settings(prisma_client, {**stored_settings, fallback_key: rules})
 
 
 async def _persist_router_settings(prisma_client: PrismaClient, router_settings: Mapping[str, object]) -> None:
@@ -174,7 +195,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key) or [])
+        existing_fallbacks: Final = _editable_rules(proxy_config, router_settings, fallback_key)
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -189,9 +210,7 @@ async def create_fallback(
             # Add new fallback
             existing_fallbacks.append({data.model: data.fallback_models})
 
-        _reject_config_owned_rules(proxy_config, fallback_key, existing_fallbacks)
-
-        await _persist_router_settings(prisma_client, {**router_settings, fallback_key: existing_fallbacks})
+        await _write_rules(prisma_client, proxy_config, router_settings, fallback_key, existing_fallbacks)
 
         # Update the in-memory router configuration
         setattr(llm_router, fallback_key, existing_fallbacks)
@@ -329,7 +348,7 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key) or [])
+        existing_fallbacks: Final = _editable_rules(proxy_config, router_settings, fallback_key)
 
         updated_fallbacks: Final = [rule for rule in existing_fallbacks if not _rule_covers(rule, model)]
 
@@ -339,9 +358,7 @@ async def delete_fallback(
                 detail={"error": f"No {fallback_type} fallbacks configured for model '{model}'"},
             )
 
-        _reject_config_owned_rules(proxy_config, fallback_key, updated_fallbacks)
-
-        await _persist_router_settings(prisma_client, {**router_settings, fallback_key: updated_fallbacks})
+        await _write_rules(prisma_client, proxy_config, router_settings, fallback_key, updated_fallbacks)
 
         # Update the in-memory router configuration
         setattr(llm_router, fallback_key, updated_fallbacks)
