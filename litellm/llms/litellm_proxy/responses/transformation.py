@@ -8,7 +8,6 @@ This config enables pass-through behavior to the proxy's /v1/responses endpoint.
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 
@@ -47,6 +46,3 @@ class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         """LiteLLM Proxy does not support native WebSocket for Responses API"""
         return False
-
-    def compact_dropped_params(self, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
-        return frozenset()

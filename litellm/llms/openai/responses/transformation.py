@@ -86,6 +86,9 @@ _COMPACT_REJECTED_PARAMS: Final = frozenset(
         "truncation",
     }
 )
+_PROVIDERS_WITH_STRICT_COMPACT_PARAMS: Final = frozenset(
+    {LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI}
+)
 _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
 
@@ -1207,6 +1210,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return str(parsed_url.copy_with(path=parsed_url.path.rstrip("/") + "/compact"))
 
     def compact_dropped_params(self, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+        if self.custom_llm_provider not in _PROVIDERS_WITH_STRICT_COMPACT_PARAMS:
+            return frozenset()
         if _drops_params(litellm_params):
             return _COMPACT_TRACKING_PARAMS | _COMPACT_REJECTED_PARAMS
         return _COMPACT_TRACKING_PARAMS

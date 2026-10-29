@@ -12,8 +12,11 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
@@ -4286,6 +4289,7 @@ _COMPACT_CONFIGS: Final = (
         "https://x.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
         id="azure",
     ),
+    pytest.param(AzureAIResponsesAPIConfig(), "https://x.services.ai.azure.com/openai/v1/responses", id="azure_ai"),
 )
 
 
@@ -4347,6 +4351,33 @@ def test_compact_request_drops_params_compact_rejects_under_drop_params(
         "reasoning": {"effort": "low"},
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "text"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "api_base"),
+    (
+        pytest.param(XAIResponsesAPIConfig(), "https://api.x.ai/v1/responses", id="xai"),
+        pytest.param(HostedVLLMResponsesAPIConfig(), "http://vllm.example.com/v1/responses", id="hosted_vllm"),
+    ),
+)
+def test_compact_request_forwards_every_param_for_providers_not_known_to_reject_them(
+    config: OpenAIResponsesAPIConfig, api_base: str
+) -> None:
+    _, data = config.transform_compact_response_api_request(
+        model="some-model",
+        input="hi",
+        response_api_optional_request_params={"metadata": {"ticket": "qa-1"}, "user": "end-user-1", "temperature": 0.2},
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "some-model",
+        "metadata": {"ticket": "qa-1"},
+        "user": "end-user-1",
+        "temperature": 0.2,
     }
 
 
