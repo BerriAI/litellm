@@ -120,13 +120,6 @@ def _streams_response_ids(request_route: str | None) -> bool:
 _NO_HELD_IDS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-def _issued_to(user_id: str | None, team_id: str | None, user_api_key_dict: "UserAPIKeyAuth") -> bool:
-    caller_user_id: Final = user_api_key_dict.user_id or ""
-    if (user_id or "") != caller_user_id:
-        return False
-    return caller_user_id != "" or (team_id or "") == (user_api_key_dict.team_id or "")
-
-
 class ResponsesIDSecurity(CustomLogger):
     def __init__(
         self,
@@ -338,7 +331,7 @@ class ResponsesIDSecurity(CustomLogger):
         if encrypt is None:
             return None
         logging_obj: Final = request_data.get("litellm_logging_obj")
-        held_ids: Final = self._ids_the_caller_holds(request_data.get(ADDRESSED_RESPONSE_ID_FIELD), user_api_key_dict)
+        held_ids: Final = self._ids_the_caller_holds(request_data.get(ADDRESSED_RESPONSE_ID_FIELD))
 
         def advertise(original_id: str) -> str:
             logged_id: Final = encrypt(original_id)
@@ -348,12 +341,10 @@ class ResponsesIDSecurity(CustomLogger):
 
         return advertise
 
-    def _ids_the_caller_holds(self, addressed_id: object, user_api_key_dict: "UserAPIKeyAuth") -> Mapping[str, str]:
+    def _ids_the_caller_holds(self, addressed_id: object) -> Mapping[str, str]:
         if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
             return _NO_HELD_IDS
-        original_response_id, user_id, team_id = self._decrypt_response_id(addressed_id)
-        if not _issued_to(user_id, team_id, user_api_key_dict):
-            return _NO_HELD_IDS
+        original_response_id, _, _ = self._decrypt_response_id(addressed_id)
         return MappingProxyType({original_response_id: addressed_id})
 
     def _advertised_response(
@@ -362,9 +353,7 @@ class ResponsesIDSecurity(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         request_data: Mapping[str, object],
     ) -> BaseLiteLLMOpenAIResponseObject:
-        held_id: Final = self._ids_the_caller_holds(
-            request_data.get(ADDRESSED_RESPONSE_ID_FIELD), user_api_key_dict
-        ).get(response.id)
+        held_id: Final = self._ids_the_caller_holds(request_data.get(ADDRESSED_RESPONSE_ID_FIELD)).get(response.id)
         logged_response: Final = self._encrypt_response_id(response, user_api_key_dict, request_cache=None)
         return logged_response if held_id is None else logged_response.model_copy(update={"id": held_id})
 

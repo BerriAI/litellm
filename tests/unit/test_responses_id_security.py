@@ -1126,10 +1126,20 @@ class TestReadsAnswerWithTheIdTheClientHolds:
             (_auth(), _auth()),
             (_auth(team_id=None), _auth(team_id="another-team")),
             (_auth(user_id=None), _auth(user_id=None)),
+            (_auth(user_id=None), _auth(user_id="teammate-user")),
+            (_auth(), _admin()),
+            (_auth(user_id=None), _auth(user_id=None, team_id="admin-team", user_role=_admin().user_role)),
         ],
-        ids=["same-key", "same-user-new-team", "same-team-no-user"],
+        ids=[
+            "same-key",
+            "same-user-new-team",
+            "same-team-no-user",
+            "teammate-reading-a-team-key-id",
+            "admin-user",
+            "admin-without-user",
+        ],
     )
-    async def test_the_owner_gets_back_the_exact_id_they_sent(
+    async def test_a_caller_with_access_gets_back_the_exact_id_they_sent(
         self, mock_cache, salt_key_env, call_type, issuer, reader
     ):
         hook = _hook()
@@ -1143,36 +1153,6 @@ class TestReadsAnswerWithTheIdTheClientHolds:
         )
 
         assert result.id == issued_id
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
-    @pytest.mark.parametrize(
-        "issuer, admin",
-        [
-            (_auth(), _admin()),
-            (_auth(user_id=None), _auth(user_id=None, team_id="admin-team", user_role=_admin().user_role)),
-        ],
-        ids=["admin-user", "admin-without-user"],
-    )
-    async def test_an_admin_reading_someone_elses_response_gets_an_id_of_their_own(
-        self, mock_cache, salt_key_env, call_type, issuer, admin
-    ):
-        hook = _hook()
-        issued_id = _issue_managed_id(hook, issuer)
-        data = await hook.async_pre_call_hook(
-            user_api_key_dict=admin, cache=mock_cache, data={"response_id": issued_id}, call_type=call_type
-        )
-
-        result = await hook.async_post_call_success_hook(
-            data=data, user_api_key_dict=admin, response=_provider_answer(data["response_id"])
-        )
-
-        assert result.id != issued_id
-        assert hook._decrypt_response_id(result.id) == (
-            _FABRICATED_PROVIDER_RESPONSE_ID,
-            admin.user_id or "",
-            "admin-team",
-        )
 
     @pytest.mark.asyncio
     async def test_a_follow_up_gets_an_id_for_its_own_response_never_the_previous_one(self, mock_cache, salt_key_env):
@@ -1365,7 +1345,7 @@ class TestStreamedReadAnswersWithTheIdTheClientHolds:
         )
 
     @pytest.mark.asyncio
-    async def test_an_admin_streamed_read_of_someone_elses_response_gets_and_logs_an_id_of_their_own(
+    async def test_an_admin_streamed_read_of_someone_elses_response_sees_the_id_sent_and_logs_one_of_its_own(
         self, mock_cache, salt_key_env
     ):
         hook = _hook()
@@ -1379,9 +1359,14 @@ class TestStreamedReadAnswersWithTheIdTheClientHolds:
             hook, f"/v1/responses/{issued_id}", _native_logged_result(), caller=admin, request_data=data
         )
 
-        assert hook._decrypt_response_id(client_id) == (_LOGGED_MANAGED_ID, "admin-user", "admin-team")
-        assert recorder.spend_row_ids == [client_id]
-        assert recorder.standard_logging_ids == [client_id]
+        assert client_id == issued_id
+        assert recorder.spend_row_ids == recorder.standard_logging_ids
+        assert len(recorder.standard_logging_ids) == 1
+        assert hook._decrypt_response_id(recorder.standard_logging_ids[0]) == (
+            _LOGGED_MANAGED_ID,
+            "admin-user",
+            "admin-team",
+        )
 
 
 async def _read_logged_by_callbacks(hook, caller, issued_id, call_type, cache):
@@ -1415,14 +1400,14 @@ async def _read_logged_by_callbacks(hook, caller, issued_id, call_type, cache):
 class TestEveryReadLogsAnIdOfItsOwn:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses"])
+    @pytest.mark.parametrize("reader", [_auth(), _admin()], ids=["owner", "admin"])
     async def test_callbacks_and_the_spend_row_log_a_new_id_per_read_never_the_one_the_client_holds(
-        self, mock_cache, salt_key_env, call_type
+        self, mock_cache, salt_key_env, call_type, reader
     ):
         hook = _hook()
-        owner = _auth()
-        issued_id = _issue_managed_id(hook, owner)
+        issued_id = _issue_managed_id(hook, _auth())
 
-        reads = [await _read_logged_by_callbacks(hook, owner, issued_id, call_type, mock_cache) for _ in range(2)]
+        reads = [await _read_logged_by_callbacks(hook, reader, issued_id, call_type, mock_cache) for _ in range(2)]
 
         assert [client_id for client_id, _ in reads] == [issued_id, issued_id]
         logged_ids = [id_ for _, recorder in reads for id_ in recorder.standard_logging_ids]
@@ -1430,5 +1415,5 @@ class TestEveryReadLogsAnIdOfItsOwn:
         assert len(set(logged_ids)) == 2
         assert issued_id not in logged_ids
         assert {hook._decrypt_response_id(logged_id) for logged_id in logged_ids} == {
-            (_FABRICATED_PROVIDER_RESPONSE_ID, "owner-user", "owner-team")
+            (_FABRICATED_PROVIDER_RESPONSE_ID, reader.user_id, reader.team_id)
         }

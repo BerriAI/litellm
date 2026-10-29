@@ -300,6 +300,53 @@ def test_a_follow_up_through_the_id_a_retrieve_returned_replays_the_first_turn_o
         ], replayed
 
 
+def _replayed_turns(wire_body: bytes) -> list[tuple[JsonValue, JsonValue]]:
+    replayed: Final = _JSON_LIST.validate_python(JSON_OBJECT.validate_json(wire_body)["messages"])
+    return [(message["role"], message["content"]) for message in replayed]
+
+
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("reader", ["proxy-admin", "master-key"])
+def test_a_reader_other_than_the_creator_continues_through_the_id_its_retrieve_returned(
+    gateway: Gateway, tmp_path: Path, reader: str
+) -> None:
+    first_prompt: Final = f"first turn {uuid4().hex}"
+    with (
+        wire_server(_respond) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storing_config(tmp_path)) as storing,
+        storing.scenario() as scenario,
+    ):
+        native: Final = scenario.model(model=_NATIVE_MODEL, api_base=f"{wire.url}/v1", api_key="synthetic-key")
+        bridged: Final = scenario.model(model=_BRIDGED_MODEL, api_base=f"{wire.url}/v1", api_key="synthetic-key")
+        creator: Final = scenario.key(user_id=scenario.user(), models=[native, bridged])
+        reader_key: Final = (
+            scenario.key(user_id=scenario.user(user_role="proxy_admin"), models=[native, bridged])
+            if reader == "proxy-admin"
+            else storing.key
+        )
+        first_id: Final = _terminal_response_id(
+            storing, creator, {"model": native, "input": first_prompt, "stream": True}
+        )
+        assert _request_ids_for_key(storing, creator, 1) == [first_id]
+
+        retrieved: Final = storing.request("GET", f"/v1/responses/{first_id}", key=reader_key)
+
+        assert retrieved.status_code == 200, retrieved.text
+        retrieved_id: Final = string_value(JSON_OBJECT.validate_json(retrieved.content)["id"])
+        wire.drain()
+        _terminal_response_id(
+            storing,
+            reader_key,
+            {"model": bridged, "input": "second turn", "previous_response_id": retrieved_id, "stream": True},
+        )
+        assert _replayed_turns(wire.drain()[-1].body) == [
+            ("user", first_prompt),
+            ("assistant", _ANSWER),
+            ("user", "second turn"),
+        ]
+        assert retrieved_id == first_id
+
+
 @pytest.mark.timeout(180)
 def test_each_read_and_cancel_reaches_callbacks_and_spend_logs_under_an_id_of_its_own(
     gateway: Gateway, tmp_path: Path
