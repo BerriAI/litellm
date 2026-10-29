@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final, TypeVar
 
@@ -48,7 +49,14 @@ class CopilotCachedEndpoints(BaseModel):
 
 ApiKeyFileView = TypeVar("ApiKeyFileView", CopilotCachedKey, CopilotCachedEndpoints)
 
-_UNSAVED_API_KEYS: Final[dict[str, CopilotCachedKey]] = {}  # mutable-ok: refreshed keys api-key.json could not hold
+
+@dataclass(frozen=True, slots=True)
+class _UnsavedApiKey:
+    access_token: str
+    key: CopilotCachedKey
+
+
+_UNSAVED_API_KEYS: Final[dict[str, _UnsavedApiKey]] = {}  # mutable-ok: refreshed keys api-key.json could not hold
 
 
 def _read_token_file(path: str) -> str:
@@ -166,12 +174,12 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
-        cached: Final = self._read_api_key_file(CopilotCachedKey)
-        if cached is not None and cached.expires_at > datetime.now().timestamp():
-            return cached.token
         unsaved: Final = self._unsaved_api_key()
         if unsaved is not None:
             return unsaved.token
+        cached: Final = self._read_api_key_file(CopilotCachedKey)
+        if cached is not None and cached.expires_at > datetime.now().timestamp():
+            return cached.token
         if cached is not None:
             verbose_logger.warning("API key expired, refreshing")
 
@@ -221,29 +229,28 @@ class Authenticator:
             verbose_logger.warning("Ignoring %s, not a Copilot API key file: %s", self.api_key_file, e)
             return None
 
-    def _unsaved_api_key_cache_key(self) -> str | None:
+    def _stored_access_token(self) -> str | None:
         try:
             access_token: Final = _read_token_file(self.access_token_file).strip()
         except (OSError, ValueError):
             return None
-        return f"{self.api_key_file}:{access_token}" if access_token else None
+        return access_token or None
 
     def _unsaved_api_key(self) -> CopilotCachedKey | None:
-        cache_key: Final = self._unsaved_api_key_cache_key()
-        if cache_key is None:
+        unsaved: Final = _UNSAVED_API_KEYS.get(self.api_key_file)
+        if unsaved is None or unsaved.key.expires_at <= time.time():
             return None
-        unsaved: Final = _UNSAVED_API_KEYS.get(cache_key)
-        return unsaved if unsaved is not None and unsaved.expires_at > time.time() else None
+        return unsaved.key if unsaved.access_token == self._stored_access_token() else None
 
     def _keep_unsaved_api_key(self, serialized: str) -> None:
-        cache_key: Final = self._unsaved_api_key_cache_key()
-        if cache_key is None:
+        access_token: Final = self._stored_access_token()
+        if access_token is None:
             return
         try:
-            unsaved: Final = CopilotCachedKey.model_validate_json(serialized)
+            key: Final = CopilotCachedKey.model_validate_json(serialized)
         except ValueError:
             return
-        _UNSAVED_API_KEYS[cache_key] = unsaved
+        _UNSAVED_API_KEYS[self.api_key_file] = _UnsavedApiKey(access_token=access_token, key=key)
 
     def _refresh_api_key(self) -> dict[str, Any]:
         """

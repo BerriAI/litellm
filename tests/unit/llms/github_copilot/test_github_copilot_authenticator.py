@@ -23,6 +23,7 @@ from litellm.llms.github_copilot.common_utils import (
 API_KEY_URL: Final = "https://copilot-key.test/copilot_internal/v2/token"
 REFRESHED_KEY: Final = MappingProxyType({"token": "new-api-key", "expires_at": 4102444800})
 TENANT_API: Final = "https://api.tenant.githubcopilot.com"
+REPAIRED_API: Final = "https://api.repaired.githubcopilot.com"
 TRUNCATED_UTF_16: Final = b"\xff\xfe\x00\xd8"
 
 
@@ -268,6 +269,24 @@ class TestGitHubCopilotAuthenticator:
 
         assert served == ("expired-api-key",) * 2
         assert route.call_count == 2
+
+    def test_kept_key_and_its_endpoint_stay_paired_after_the_key_file_is_repaired(self, logged_in_token_dir):
+        key_file: Final = logged_in_token_dir / "api-key.json"
+        key_file.mkdir()
+        auth: Final = Authenticator()
+
+        with respx.mock(assert_all_called=True) as router:
+            router.get(API_KEY_URL).respond(json={**REFRESHED_KEY, "endpoints": {"api": TENANT_API}})
+            auth.get_api_key()
+        key_file.rmdir()
+        key_file.write_text(
+            json.dumps({"token": "repaired-api-key", "expires_at": 9999999999, "endpoints": {"api": REPAIRED_API}})
+        )
+
+        assert (auth.get_api_key(), auth.get_api_base()) in (
+            ("new-api-key", TENANT_API),
+            ("repaired-api-key", REPAIRED_API),
+        )
 
     def test_unsaved_key_is_not_reused_after_the_access_token_changes(self, logged_in_token_dir):
         (logged_in_token_dir / "api-key.json").mkdir()
