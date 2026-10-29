@@ -392,11 +392,12 @@ def _routes_to_model(
     return lambda listed_id, model: routed_models is None or model in routed_models(listed_id, team_id)
 
 
-def _deployment_pattern_naming_listed_ids(wildcard_suffix: str, litellm_params: LiteLLM_Params | None) -> str | None:
+def _deployment_pattern_naming_listed_ids(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> str | None:
     if litellm_params is None or "/" not in litellm_params.model or not _check_wildcard_routing(litellm_params.model):
         return None
+    name_suffix: Final = wildcard_model.split("/", 1)[-1]
     deployment_suffix: Final = litellm_params.model.partition("/")[2]
-    return litellm_params.model if wildcard_suffix != "*" or deployment_suffix != "*" else None
+    return litellm_params.model if name_suffix != "*" or deployment_suffix != "*" else None
 
 
 def get_known_models_from_wildcard(
@@ -412,11 +413,10 @@ def get_known_models_from_wildcard(
         and "/" in litellm_params.model
         else wildcard_model
     )
-    try:
-        wildcard_provider_prefix, wildcard_suffix = wildcard_model_to_expand.split("/", 1)
-    except ValueError:  # safely fail
+    deployment_pattern_naming_listed_ids: Final = _deployment_pattern_naming_listed_ids(wildcard_model, litellm_params)
+    wildcard_provider_prefix, has_provider_prefix, wildcard_suffix = wildcard_model_to_expand.partition("/")
+    if not has_provider_prefix and deployment_pattern_naming_listed_ids is None:
         return []
-    deployment_pattern_naming_listed_ids: Final = _deployment_pattern_naming_listed_ids(wildcard_suffix, litellm_params)
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
     # (e.g., "openai" from "openai/*" - needed for BYOK where wildcard isn't in router)
@@ -494,18 +494,7 @@ def expand_wildcard_deployments_for_model_info(
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
         litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
-        litellm_model = str(litellm_params_dict.get("model") or "")
-
-        # Determine the wildcard pattern to expand.
-        # Branch order matters: only fall to litellm_model when model_name is
-        # also a wildcard, so a concrete model_name is never overwritten.
-        if _check_wildcard_routing(model_name) and ("/" in model_name or model_name == "*"):
-            wildcard_pattern = model_name
-        elif _check_wildcard_routing(model_name) and _check_wildcard_routing(litellm_model):
-            wildcard_pattern = litellm_model
-        elif _check_wildcard_routing(model_name):
-            wildcard_pattern = model_name
-        else:
+        if not _check_wildcard_routing(model_name):
             expanded.append(deployment)
             continue
 
@@ -515,7 +504,7 @@ def expand_wildcard_deployments_for_model_info(
             expanded.append(deployment)
             continue
         expanded_names = get_known_models_from_wildcard(
-            wildcard_model=wildcard_pattern,
+            wildcard_model=model_name,
             litellm_params=litellm_params,
             routes_to_model=_routes_to_model(routed_models, _deployment_team_id(deployment)),
         )

@@ -1350,6 +1350,20 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         pytest.param(
             "*", "openai/*", "openai/gpt-partial-route-9*", set(), id="provider-prefixed-key-filter-over-catch-all"
         ),
+        pytest.param(
+            "gpt-partial-route-*",
+            "openai/gpt-partial-route-*",
+            None,
+            {f"openai/{_ROUTE_OPENAI_ID}"},
+            id="slashless-name-repeating-the-deployment-partial-word",
+        ),
+        pytest.param("team-*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="slashless-alias-over-partial-deployment"),
+        pytest.param(
+            "team-*", "openai/*", None, {f"openai/{_ROUTE_OPENAI_ID}"}, id="slashless-alias-over-provider-catch-all"
+        ),
+        pytest.param(
+            "team-*", "cloudflare/@cf/*/*", None, set(), id="slashless-alias-with-fewer-wildcards-than-its-deployment"
+        ),
         pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
         pytest.param("*", "gemini/gemini-partial-route-9*", None, set(), id="catch-all-over-mid-word-deployment"),
         pytest.param("*", "openai/responses/gpt-partial-route-9*", None, set(), id="catch-all-over-mid-word-route"),
