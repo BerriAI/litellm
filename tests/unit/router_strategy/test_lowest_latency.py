@@ -17,8 +17,10 @@ from pydantic import ValidationError
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.router import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler, RoutingArgs
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 DEPLOYMENT_ID = "9876"
 KWARGS = {
@@ -43,7 +45,7 @@ def _embedding_response() -> litellm.EmbeddingResponse:
 
 def _recorded_latencies(cache: DualCache):
     cached = cache.get_cache(key="gemini-embedding-001_map") or {}
-    return cached.get(DEPLOYMENT_ID, {}).get("latency", [])
+    return cached.get(DEPLOYMENT_ID, {}).get("latency_normalized", [])
 
 
 def test_sync_embedding_latency_is_json_serializable():
@@ -69,7 +71,7 @@ def test_sync_embedding_latency_is_json_serializable():
     )
     assert latencies[-1] == pytest.approx(2.0)
     # the exact failure mode from production: redis cache sync json.dumps
-    json.dumps({"latency": latencies})
+    json.dumps({"latency_normalized": latencies})
 
 
 @pytest.mark.asyncio
@@ -94,7 +96,7 @@ async def test_async_embedding_latency_is_json_serializable():
         f"raw timedelta leaked into latency list: {latencies}"
     )
     assert latencies[-1] == pytest.approx(3.0)
-    json.dumps({"latency": latencies})
+    json.dumps({"latency_normalized": latencies})
 
 
 def _chat_response(completion_tokens: int) -> litellm.ModelResponse:
@@ -131,7 +133,7 @@ async def test_async_chat_latency_normalized_per_token():
 
     latencies = _recorded_latencies(cache)
     assert latencies and latencies[-1] == pytest.approx(0.5)  # 2s / 4 tokens
-    json.dumps({"latency": latencies})
+    json.dumps({"latency_normalized": latencies})
 
 
 @pytest.mark.asyncio
@@ -151,7 +153,7 @@ async def test_async_chat_zero_completion_tokens_falls_back_to_seconds():
     latencies = _recorded_latencies(cache)
     assert latencies and latencies[-1] == pytest.approx(3.0)
     assert not isinstance(latencies[-1], timedelta)
-    json.dumps({"latency": latencies})
+    json.dumps({"latency_normalized": latencies})
 
 
 def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
@@ -168,12 +170,14 @@ def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
     latencies = _recorded_latencies(cache)
     assert latencies and latencies[-1] == pytest.approx(2.0)
     assert not isinstance(latencies[-1], timedelta)
-    json.dumps({"latency": latencies})
+    json.dumps({"latency_normalized": latencies})
 
 
 MODEL_GROUP = "gpt-4o-mini"
 FAST_TTFT_ID = "fast-ttft-short-output"
 SLOW_TTFT_ID = "slow-ttft-long-output"
+FAST_API_BASE = "https://fast.example.test/v1"
+SLOW_API_BASE = "https://slow.example.test/v1"
 STREAMING_DEPLOYMENTS = [
     {"model_info": {"id": FAST_TTFT_ID}, "litellm_params": {}},
     {"model_info": {"id": SLOW_TTFT_ID}, "litellm_params": {}},
@@ -362,8 +366,8 @@ async def test_ttft_percentile_does_not_change_non_streaming_routing():
     cache.set_cache(
         key=f"{MODEL_GROUP}_map",
         value={
-            FAST_TTFT_ID: {"latency": [1.0], "time_to_first_token_seconds": [0.1]},
-            SLOW_TTFT_ID: {"latency": [0.2], "time_to_first_token_seconds": [1.5]},
+            FAST_TTFT_ID: {"latency_normalized": [1.0], "time_to_first_token_seconds": [0.1]},
+            SLOW_TTFT_ID: {"latency_normalized": [0.2], "time_to_first_token_seconds": [1.5]},
         },
     )
 
@@ -380,7 +384,7 @@ async def test_ttft_percentile_does_not_change_non_streaming_routing():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "cached_entry",
-    [{"latency": []}, {"2026-09-05-15-39": {"tpm": 28, "rpm": 1}}],
+    [{"latency_normalized": []}, {"2026-09-05-15-39": {"tpm": 28, "rpm": 1}}],
     ids=["empty_latency_list", "minute_bucket_only_as_cost_based_routing_writes"],
 )
 async def test_async_get_available_deployments_treats_missing_samples_as_zero_latency(cached_entry):
@@ -388,7 +392,7 @@ async def test_async_get_available_deployments_treats_missing_samples_as_zero_la
     handler = LowestLatencyLoggingHandler(router_cache=cache)
     cache.set_cache(
         key="gemini-embedding-001_map",
-        value={DEPLOYMENT_ID: cached_entry, "slower": {"latency": [0.5]}},
+        value={DEPLOYMENT_ID: cached_entry, "slower": {"latency_normalized": [0.5]}},
     )
     healthy_deployments = [
         {"model_info": {"id": DEPLOYMENT_ID}, "litellm_params": {}},
@@ -403,6 +407,69 @@ async def test_async_get_available_deployments_treats_missing_samples_as_zero_la
 
     assert picked is not None
     assert picked["model_info"]["id"] == DEPLOYMENT_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ttft_samples", "expected_latency"),
+    [([-602.0], 0.0), ([10.0, 10.0, -40.0], 10.0), ([float("nan"), 2.0], 2.0)],
+    ids=["negative", "negative_average", "nan"],
+)
+async def test_unusable_ttft_samples_do_not_leave_the_buffer_window_empty(
+    ttft_samples: list[float], expected_latency: float
+):
+    """``completion_start_time - start_time`` can be negative or NaN. With a non-zero
+    ``lowest_latency_buffer`` a negative average pushes ``lowest_latency + buffer``
+    below every candidate, so the group must still route instead of raising
+    IndexError from ``random.choice``, and the bad samples must not reach the ranking."""
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"lowest_latency_buffer": 5})
+    cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={FAST_TTFT_ID: {"time_to_first_token_seconds": ttft_samples}},
+    )
+    metadata: Final[dict[str, object]] = {}
+    request_kwargs: Final[dict[str, object]] = {"stream": True, "metadata": metadata}
+
+    picked = await handler.async_get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[{"model_info": {"id": FAST_TTFT_ID}, "litellm_params": {"api_base": FAST_API_BASE}}],
+        request_kwargs=request_kwargs,
+    )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == FAST_TTFT_ID
+    assert metadata["_latency_per_deployment"] == {FAST_API_BASE: expected_latency}
+
+
+@pytest.mark.asyncio
+async def test_unusable_ttft_samples_fall_back_to_recorded_latency():
+    """A deployment whose TTFT samples are all unusable is ranked by its recorded
+    latency, so dirty samples cannot make it look like the fastest deployment."""
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"lowest_latency_buffer": 5})
+    cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"latency_normalized": [0.1], "time_to_first_token_seconds": [-600.0]},
+            SLOW_TTFT_ID: {"latency_normalized": [5.0], "time_to_first_token_seconds": [-300.0]},
+        },
+    )
+    metadata: Final[dict[str, object]] = {}
+    request_kwargs: Final[dict[str, object]] = {"stream": True, "metadata": metadata}
+
+    picked = await handler.async_get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[
+            {"model_info": {"id": FAST_TTFT_ID}, "litellm_params": {"api_base": FAST_API_BASE}},
+            {"model_info": {"id": SLOW_TTFT_ID}, "litellm_params": {"api_base": SLOW_API_BASE}},
+        ],
+        request_kwargs=request_kwargs,
+    )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == FAST_TTFT_ID
+    assert metadata["_latency_per_deployment"] == {FAST_API_BASE: 0.1, SLOW_API_BASE: 5.0}
 
 
 def _latency_router(routing_strategy_args: dict) -> Router:
@@ -605,7 +672,7 @@ def test_latency_updated():
         end_time=end_time,
     )
     latency_key = f"{model_group}_map"
-    assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
+    assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id]["latency_normalized"][0]
 
 
 @pytest.mark.usefixtures("frozen_latency_clock")
@@ -1002,7 +1069,7 @@ def test_latency_list_trimming_discards_oldest_entry():
 
     latency_key = f"{model_group}_map"
     cached_data = test_cache.get_cache(key=latency_key)
-    latency_list = cached_data[deployment_id]["latency"]
+    latency_list = cached_data[deployment_id]["latency_normalized"]
 
     assert len(latency_list) == max_size, f"Expected {max_size} entries, got {len(latency_list)}"
 
@@ -1062,7 +1129,7 @@ async def test_latency_list_trimming_discards_oldest_entry_async():
 
     latency_key = f"{model_group}_map"
     cached_data = await test_cache.async_get_cache(key=latency_key)
-    latency_list = cached_data[deployment_id]["latency"]
+    latency_list = cached_data[deployment_id]["latency_normalized"]
 
     assert len(latency_list) == max_size
 
@@ -1129,7 +1196,7 @@ async def test_timeout_penalty_discards_oldest_entry():
 
     latency_key = f"{model_group}_map"
     cached_data = await test_cache.async_get_cache(key=latency_key)
-    latency_list = cached_data[deployment_id]["latency"]
+    latency_list = cached_data[deployment_id]["latency_normalized"]
 
     assert len(latency_list) == max_size
 
@@ -1181,7 +1248,7 @@ def test_list_order_preserved_after_multiple_trims():
 
     latency_key = f"{model_group}_map"
     cached_data = test_cache.get_cache(key=latency_key)
-    latency_list = cached_data[deployment_id]["latency"]
+    latency_list = cached_data[deployment_id]["latency_normalized"]
 
     assert len(latency_list) == max_size
 
@@ -1423,7 +1490,7 @@ def test_latency_cache_honors_custom_ttl() -> None:
     latency_key: Final = "ttl-group_map"
     cached: Final = cache.get_cache(key=latency_key)
     assert isinstance(cached, dict)
-    assert cached["deployment"]["latency"] == [1.0]
+    assert cached["deployment"]["latency_normalized"] == [1.0]
     assert cache.in_memory_cache.ttl_dict[latency_key] == 103.0
 
     clock.return_value = 104.0
@@ -1461,3 +1528,191 @@ async def test_router_model_group_usage_increases_by_logged_tokens() -> None:
     updated_usage: Final = await router.get_model_group_usage(model_group=model_group)
 
     assert updated_usage[0] == initial_usage[0] + 15
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_callback", [False, True])
+@pytest.mark.parametrize("normalized_usage", [False, True])
+@pytest.mark.parametrize("native_seconds", [2, 3])
+async def test_responses_and_chat_latency_use_comparable_token_units(
+    async_callback: bool, normalized_usage: bool, native_seconds: int
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    usage: Final = ResponseAPIUsage(input_tokens=10, output_tokens=100, total_tokens=110)
+    native: Final = ResponsesAPIResponse(id="resp-latency", created_at=0, output=[], usage=usage)
+    logged_native: Final = (
+        native.model_copy(update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)})
+        if normalized_usage
+        else native
+    )
+    original_usage: Final = logged_native.usage
+    assert original_usage is not None
+    original_fields: Final = original_usage.model_dump()
+    start: Final = datetime(2026, 1, 1)
+    for deployment_id, response, seconds in (
+        ("native", logged_native, native_seconds),
+        ("bridge", _chat_response(100), 3),
+    ):
+        kwargs: Final = {
+            "call_type": "aresponses",
+            "litellm_params": {"metadata": {"model_group": "mixed"}, "model_info": {"id": deployment_id}},
+        }
+        if async_callback:
+            await handler.async_log_success_event(kwargs, response, start, start + timedelta(seconds=seconds))
+        else:
+            handler.log_success_event(kwargs, response, start, start + timedelta(seconds=seconds))
+    recorded: Final = cache.get_cache(key="mixed_map")
+    assert recorded["native"]["latency_normalized"] == pytest.approx([native_seconds / 100])
+    assert recorded["bridge"]["latency_normalized"] == pytest.approx([3 / 100])
+    assert logged_native.usage is original_usage
+    assert logged_native.usage.model_dump() == original_fields
+    assert native.usage is usage
+    deployments: Final = [
+        {"model_name": "mixed", "model_info": {"id": name}, "litellm_params": {}} for name in ("native", "bridge")
+    ]
+    picked: Final = handler.get_available_deployments(
+        model_group="mixed", healthy_deployments=deployments, request_kwargs={"stream": False, "metadata": {}}
+    )
+    assert picked["model_info"]["id"] in ({"native"} if native_seconds < 3 else {"native", "bridge"})
+    native_counts: Final = tuple(value for key, value in recorded["native"].items() if key != "latency_normalized")
+    assert native_counts == ({"tpm": 0, "rpm": 1},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_callback", [False, True])
+@pytest.mark.parametrize(
+    "response",
+    [
+        litellm.ModelResponse(),
+        ResponsesAPIResponse(id="resp-missing", created_at=0, output=[], usage=None),
+        ResponsesAPIResponse(
+            id="resp-zero", created_at=0, output=[],
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=0, total_tokens=10),
+        ),
+    ],
+)
+async def test_responses_without_output_tokens_keep_elapsed_seconds(
+    async_callback: bool, response: litellm.ModelResponse | ResponsesAPIResponse
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    original_usage: Final = getattr(response, "usage", None)
+    if async_callback:
+        await handler.async_log_success_event(KWARGS, response, 1.0, 3.0)
+    else:
+        handler.log_success_event(KWARGS, response, 1.0, 3.0)
+    assert _recorded_latencies(cache) == [2.0]
+    assert getattr(response, "usage", None) is original_usage
+
+
+@pytest.mark.usefixtures("frozen_latency_clock")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("preserve_new_samples", [False, True])
+async def test_legacy_latency_does_not_starve_deployments_after_upgrade(
+    async_mode: bool, preserve_new_samples: bool
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    minute: Final = FROZEN_NOW.strftime("%Y-%m-%d-%H-%M")
+    legacy: Final = {
+        "native": {"latency": [2.0], "time_to_first_token_seconds": [0.1], minute: {"tpm": 0, "rpm": 1}},
+        "bridge": {"latency": [0.03], "time_to_first_token_seconds": [0.2], minute: {"tpm": 110, "rpm": 1}},
+    }
+    cache.set_cache(key="mixed_map", value=copy.deepcopy(legacy))
+    deployments: Final = [
+        {"model_name": "mixed", "model_info": {"id": name}, "litellm_params": {}} for name in ("native", "bridge")
+    ]
+    native: Final = ResponsesAPIResponse(
+        id="resp-upgrade", created_at=0, output=[],
+        usage=ResponseAPIUsage(input_tokens=10, output_tokens=100, total_tokens=110),
+    )
+    for iteration in range(2):
+        bridge_kwargs: Final = {
+            "litellm_params": {"metadata": {"model_group": "mixed"}, "model_info": {"id": "bridge"}},
+        }
+        if async_mode:
+            await handler.async_log_success_event(bridge_kwargs, _chat_response(100), 0.0, 3.0)
+        else:
+            handler.log_success_event(bridge_kwargs, _chat_response(100), 0.0, 3.0)
+        selected: Final = (
+            await handler.async_get_available_deployments(model_group="mixed", healthy_deployments=deployments)
+            if async_mode
+            else handler.get_available_deployments(model_group="mixed", healthy_deployments=deployments)
+        )
+        assert selected["model_info"]["id"] == "native"
+        native_kwargs: Final = {
+            "litellm_params": {"metadata": {"model_group": "mixed"}, "model_info": {"id": "native"}},
+        }
+        if async_mode:
+            await handler.async_log_success_event(native_kwargs, native, 0.0, 2.0)
+        else:
+            handler.log_success_event(native_kwargs, native, 0.0, 2.0)
+        recorded: Final = copy.deepcopy(cache.get_cache(key="mixed_map"))
+        assert recorded["native"]["latency_normalized"] == pytest.approx(
+            [0.02] * (iteration + 1 if preserve_new_samples else 1)
+        )
+        assert recorded["native"]["latency"] == [2.0]
+        assert recorded["native"]["time_to_first_token_seconds"] == [0.1]
+        assert recorded["bridge"]["time_to_first_token_seconds"] == [0.2]
+        assert recorded["native"][minute] == {"tpm": 0, "rpm": iteration + 2}
+        assert recorded["bridge"][minute] == {"tpm": 110 + (iteration + 1) * 110, "rpm": iteration + 2}
+        streaming: Final = handler.get_available_deployments(
+            model_group="mixed", healthy_deployments=deployments, request_kwargs={"stream": True}
+        )
+        assert streaming["model_info"]["id"] == "native"
+        cache.set_cache(
+            key="mixed_map",
+            value={
+                name: {**(recorded[name] if preserve_new_samples else legacy[name]), minute: recorded[name][minute]}
+                for name in ("native", "bridge")
+            },
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_normalized_latency_window_evicts_samples_without_changing_legacy_data(async_mode: bool) -> None:
+    cache: Final = DualCache()
+    cache.set_cache(key="gemini-embedding-001_map", value={DEPLOYMENT_ID: {"latency": [2.0]}})
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"max_latency_list_size": 2})
+    for elapsed, expected in ((2.0, [0.02]), (3.0, [0.02, 0.03]), (4.0, [0.03, 0.04])):
+        if async_mode:
+            await handler.async_log_success_event(KWARGS, _chat_response(100), 0.0, elapsed)
+        else:
+            handler.log_success_event(KWARGS, _chat_response(100), 0.0, elapsed)
+        recorded: Final = cache.get_cache(key="gemini-embedding-001_map")[DEPLOYMENT_ID]
+        assert recorded["latency_normalized"] == pytest.approx(expected)
+        assert recorded["latency"] == [2.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_samples", [(), (0.02, 0.03)])
+async def test_timeout_penalty_updates_normalized_latency_and_avoids_failed_deployment(
+    existing_samples: tuple[float, ...],
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"max_latency_list_size": 2})
+    cache.set_cache(
+        key="mixed_map",
+        value={
+            "native": {"latency": [0.001], "latency_normalized": list(existing_samples)},
+            "bridge": {"latency": [2.0], "latency_normalized": [0.04]},
+        },
+    )
+    await handler.async_log_failure_event(
+        kwargs={
+            "exception": litellm.Timeout(message="request timed out", model="test", llm_provider="openai"),
+            "litellm_params": {"metadata": {"model_group": "mixed"}, "model_info": {"id": "native"}},
+        },
+        response_obj=None, start_time=0.0, end_time=3.0,
+    )
+    recorded: Final = cache.get_cache(key="mixed_map")["native"]
+    assert recorded["latency_normalized"] == [*existing_samples[-1:], 1000.0]
+    assert recorded["latency"] == [0.001]
+    selected: Final = await handler.async_get_available_deployments(
+        model_group="mixed",
+        healthy_deployments=[{"model_info": {"id": name}, "litellm_params": {}} for name in ("native", "bridge")],
+    )
+    assert selected["model_info"]["id"] == "bridge"

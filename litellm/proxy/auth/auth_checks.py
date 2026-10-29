@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -45,8 +46,14 @@ from litellm.constants import (
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.base_llm.managed_resources.utils import (
+    extract_provider_resource_id_from_unified_id,
+    is_base64_encoded_unified_id,
+)
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
+    MODEL_LIST_ROUTES,
     RBAC_ROLES,
     UI_TEAM_ID,
     CallInfo,
@@ -163,6 +170,7 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import listed_vector_store_ids, vector_store_ids_in_tool
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -393,7 +401,7 @@ def _member_allowed_models(membership: _TeamMembershipModelScope) -> Sequence[st
 
 
 class _RawCacheRead(Protocol):
-    async def async_get_cache(self, *, key: str) -> object: ...
+    async def async_get_cache(self, *, key: str, local_only: bool = ...) -> object: ...
 
 
 def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
@@ -910,8 +918,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
         and not skip_budget_checks
         and global_proxy_spend is not None
         and RouteChecks.is_llm_api_route(route=route)
-        and route != "/v1/models"
-        and route != "/models"
+        and route not in MODEL_LIST_ROUTES
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
             raise litellm.BudgetExceededError(
@@ -1028,8 +1035,7 @@ async def check_tools_allowlist(
 # budget cannot reach side-effectful routes like /health/services (Slack/email/webhook). See #27923.
 MODEL_DISCOVERY_ROUTES: Final = frozenset(
     {
-        "/v1/models",
-        "/models",
+        *MODEL_LIST_ROUTES,
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -1061,6 +1067,15 @@ def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> 
         return False
     method: Final = request_body.get("method")
     return isinstance(method, str) and method in MCP_ZERO_SPEND_JSONRPC_METHODS
+
+
+class ModelMaxBudgetHolder(Protocol):
+    @property
+    def model_max_budget(self) -> Mapping[str, object] | None: ...
+
+
+def model_max_budget_of(holder: ModelMaxBudgetHolder) -> Mapping[str, object] | None:
+    return holder.model_max_budget
 
 
 def route_skips_budget_checks(route: str) -> bool:
@@ -1505,6 +1520,7 @@ async def common_checks(
             valid_token=valid_token,
             user_object=user_object,
             deny_by_default=_vector_store_deny_by_default(_typed_request_body(general_settings)),
+            llm_router=llm_router,
         )
 
     # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
@@ -1798,6 +1814,20 @@ async def get_team_member_default_budget(
     )
 
     return budget
+
+
+def resolve_effective_team_member_budget(
+    member_budget: LiteLLM_BudgetTable | None,
+    team_default_budget: LiteLLM_BudgetTable | None,
+    now: datetime,
+) -> float | None:
+    if member_budget is not None and member_budget.max_budget is not None:
+        return member_budget.effective_max_budget(now)
+    if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
+        return None
+    return team_default_budget.max_budget + (
+        member_budget.active_temp_budget_increase(now) if member_budget is not None else 0.0
+    )
 
 
 async def resolve_default_end_user_budget(
@@ -2712,7 +2742,7 @@ async def get_team_membership(
             use_writer=True,
         )
 
-    l1_cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key, local_only=True)
+    l1_cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=_key, local_only=True)
     l1_membership: Final = _membership_from_cached_payload(l1_cached)
     if not isinstance(l1_membership, _TeamMembershipCacheMiss):
         return l1_membership
@@ -6447,8 +6477,29 @@ def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool
         return True
 
 
+def _is_dashboard_session(valid_token: UserAPIKeyAuth | None) -> bool:
+    return valid_token is not None and valid_token.team_id == UI_TEAM_ID
+
+
+def _is_search_tool_strict_identity(valid_token: UserAPIKeyAuth) -> bool:
+    if not _is_dashboard_session(valid_token):
+        return _is_strict_grant_identity(valid_token)
+    return valid_token.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+
+def _search_tool_strict_layers(
+    valid_token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable | None
+) -> frozenset[GrantLayer]:
+    if _is_dashboard_session(valid_token):
+        return frozenset(("user",))
+    return _strict_grant_layers(True, valid_token, team_object)
+
+
 def is_search_tool_deny_by_default_applied(valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]) -> bool:
-    return _search_tool_deny_by_default(general_settings) and _is_strict_grant_identity(valid_token)
+    return _search_tool_deny_by_default(general_settings) and _is_search_tool_strict_identity(valid_token)
 
 
 def _search_tool_denied(object_type: GrantLayer, message: str) -> ProxyException:
@@ -6492,12 +6543,12 @@ async def resolve_search_tool_grants(
     load_team_object: TeamObjectLoader,
 ) -> SearchToolGrants:
     """
-    Without `general_settings.search_tool_deny_by_default`, or for the master key and dashboard sessions,
+    Without `general_settings.search_tool_deny_by_default`, or for the master key and admin dashboard sessions,
     the key and team lists only restrict when nonempty. With it, the identities `_strict_grant_layers` names
     must each list the tool, and a missing record, `null`, `[]`, or a team or user that fails to load grants nothing
     """
     if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
-        team_object: Final = await load_team_object()
+        team_object: Final = await load_team_object() if not _is_dashboard_session(valid_token) else None
         return SearchToolGrants(
             grants=MappingProxyType(
                 {"key": valid_token.object_permission, "team": team_object.object_permission if team_object else None}
@@ -6507,8 +6558,10 @@ async def resolve_search_tool_grants(
 
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
-    strict_team_object: Final = await _strict_team_object(load_team_object)
-    strict_layers: Final = _strict_grant_layers(True, valid_token, strict_team_object)
+    strict_team_object: Final = (
+        await _strict_team_object(load_team_object) if not _is_dashboard_session(valid_token) else None
+    )
+    strict_layers: Final = _search_tool_strict_layers(valid_token, strict_team_object)
     if prisma_client is None:
         return SearchToolGrants(grants=MappingProxyType({}), strict_layers=strict_layers)
     user_object: Final = (
@@ -6593,7 +6646,7 @@ def check_unregistered_search_fallback(
     """The unregistered provider fallback names no search tool that a grant could list, so deny-by-default denies it"""
     if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
         return True
-    layer: Final = min(_strict_grant_layers(True, valid_token, None), key=("key", "team", "user").index)
+    layer: Final = min(_search_tool_strict_layers(valid_token, None), key=("key", "team", "user").index)
     raise _search_tool_denied(
         layer,
         "No registered search tool is available and search_tool_deny_by_default is enabled",
@@ -7035,29 +7088,24 @@ async def _check_team_member_budget(
 
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
-        team_member_budget: float | None = None
         member_budget_row: Final = loaded_membership.litellm_budget_table if loaded_membership is not None else None
         now: Final = get_utc_datetime()
-        if member_budget_row is not None and member_budget_row.max_budget is not None:
-            team_member_budget = member_budget_row.effective_max_budget(now=now)
-        else:
-            default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
-            if isinstance(default_budget_id, str):
-                default_budget: Final = await get_team_member_default_budget(
-                    budget_id=default_budget_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
-                # Treat 0 on the team default as "no cap".
-                # Per-member rows still respect 0 as an explicit admin disable.
-                if (
-                    default_budget is not None
-                    and default_budget.max_budget is not None
-                    and default_budget.max_budget > 0
-                ):
-                    team_member_budget = default_budget.max_budget + (
-                        member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
-                    )
+        default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
+        team_default_budget: Final = (
+            await get_team_member_default_budget(
+                budget_id=default_budget_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if (member_budget_row is None or member_budget_row.max_budget is None)
+            and isinstance(default_budget_id, str)
+            else None
+        )
+        team_member_budget: Final = resolve_effective_team_member_budget(
+            member_budget=member_budget_row,
+            team_default_budget=team_default_budget,
+            now=now,
+        )
 
         if team_member_budget is not None:
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
@@ -7944,6 +7992,57 @@ def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tu
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _UnreadableVectorStoreIds:
+    pass
+
+
+def _top_level_vector_store_ids(
+    vector_store_ids: object, drop_policies: Callable[[], tuple[DropPolicy, ...]]
+) -> tuple[str, ...] | _UnreadableVectorStoreIds:
+    listed: Final = listed_vector_store_ids(vector_store_ids)
+    if vector_store_ids is None or vector_store_ids == [*listed]:
+        return listed
+    if any(policy.drops("vector_store_ids") for policy in drop_policies()):
+        return listed
+    if isinstance(vector_store_ids, str):
+        return (vector_store_ids,)
+    return _UnreadableVectorStoreIds()
+
+
+def _legacy_requested_vector_store_ids(
+    request_body: Mapping[str, object], drop_policies: Callable[[], tuple[DropPolicy, ...]]
+) -> tuple[str, ...] | _UnreadableVectorStoreIds:
+    """
+    Reads tools the way VectorStoreRegistry does and leaves a malformed tool to the proxy's tool
+    validation. A top-level vector_store_ids string names one store, since a query parameter always
+    arrives as a string. Any other value that is not a list of strings names no readable stores unless a
+    drop policy the request can resolve to drops it, and then only the string entries of a list name
+    stores, as in registry retrieval.
+    """
+    top_level: Final = _top_level_vector_store_ids(request_body.get("vector_store_ids"), drop_policies)
+    if isinstance(top_level, _UnreadableVectorStoreIds):
+        return top_level
+    return tuple(
+        chain(
+            top_level,
+            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
+def _restricts_vector_stores(grants: Sequence[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None]]) -> bool:
+    return any(grant is not None and bool(grant.vector_stores) for _, grant in grants)
+
+
+def _request_drop_policies(
+    request_body: Mapping[str, object], llm_router: Router | None, valid_token: UserAPIKeyAuth | None
+) -> tuple[DropPolicy, ...]:
+    from litellm.proxy.common_request_processing import counted_drop_policies
+
+    return counted_drop_policies(request_body, llm_router, valid_token.team_id if valid_token is not None else None)
+
+
 def _require_vector_store_grant(
     object_type: GrantLayer,
     vector_store_ids_to_run: Sequence[str],
@@ -7991,6 +8090,7 @@ async def vector_store_access_check(
     *,
     user_object: LiteLLM_UserTable | None = None,
     deny_by_default: bool = False,
+    llm_router: Router | None = None,
 ):
     """
     Checks whether the caller may use every vector store the request names.
@@ -7999,11 +8099,19 @@ async def vector_store_access_check(
     `retrieval_config.vector_store_id`. Grants come from each identity's
     `object_permission.vector_stores`.
 
-    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
-    nonempty, and stores are only read from the request when a vector store registry is loaded.
+    Both modes read the same request fields, with or without a vector store registry, and answer 400
+    when the top-level `vector_store_ids` is not a list of strings, which legacy mode does only when the
+    key or team has an allowlist and the value is not a string, which it checks as one store id. A
+    LiteLLM-managed store id is compared by the provider store id it decodes to, on both sides. Legacy mode skips that value instead when the request, `litellm_settings`, the router defaults or a deployment of the requested
+    model drops it (`drop_params`, or `additional_drop_params` naming it), the same settings the proxy's
+    tool validation reads, and reads tools the way the registry does, where strict mode answers 400 on a
+    malformed one.
 
-    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), stores are read
-    even without a registry, and a missing record, `null` or `[]` grants nothing:
+    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
+    nonempty.
+
+    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), a missing record,
+    `null` or `[]` grants nothing:
 
     - virtual key: the key must grant every store, and so must its team when it has one, even if
       the team failed to load
@@ -8015,8 +8123,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store, and with the flag on, ProxyException (400,
-    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
+    that does not grant a requested store, and ProxyException (400, `invalid_request_error`) on a
+    malformed `vector_store_ids` the request does not drop and, in legacy mode, an allowlist applies to.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -8027,23 +8135,24 @@ async def vector_store_access_check(
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
 
-    registry_ids: Final = (
-        _strict_requested_vector_store_ids(_typed_request_body(request_body))
+    typed_request_body: Final = _typed_request_body(request_body)
+    requested_ids: Final = (
+        _strict_requested_vector_store_ids(typed_request_body)
         if deny_by_default
-        else (
-            litellm.vector_store_registry.get_vector_store_ids_to_run(
-                non_default_params=request_body, tools=request_body.get("tools", None)
-            )
-            if litellm.vector_store_registry is not None
-            else None
+        else _legacy_requested_vector_store_ids(
+            typed_request_body, lambda: _request_drop_policies(typed_request_body, llm_router, valid_token)
         )
-        or ()
     )
-    rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
+    if isinstance(requested_ids, _UnreadableVectorStoreIds):
+        if _restricts_vector_stores(
+            await _identity_grants(valid_token, team_object, None, prisma_client, user_api_key_cache)
+        ):
+            raise _malformed_vector_store_ids()
+        return True
+    rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
-    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
+    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))
     if not vector_store_ids_to_run:
-        verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
         return True
 
     #########################################################
@@ -8069,6 +8178,12 @@ async def vector_store_access_check(
     return True
 
 
+def _provider_vector_store_id(vector_store_id: str) -> str:
+    if not is_base64_encoded_unified_id(vector_store_id):
+        return vector_store_id
+    return extract_provider_resource_id_from_unified_id(vector_store_id) or vector_store_id
+
+
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org", "user"],
     vector_store_ids_to_run: Sequence[str],
@@ -8087,8 +8202,9 @@ def _can_object_call_vector_stores(
     if len(object_permissions.vector_stores) == 0:
         return True
 
+    allowed_stores: Final = frozenset(map(_provider_vector_store_id, object_permissions.vector_stores))
     for vector_store_id in vector_store_ids_to_run:
-        if vector_store_id not in object_permissions.vector_stores:
+        if _provider_vector_store_id(vector_store_id) not in allowed_stores:
             raise ProxyException(
                 message=f"User not allowed to access vector store. Tried to access {vector_store_id}. Only allowed to access {object_permissions.vector_stores}",
                 type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),

@@ -3,7 +3,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
@@ -49,7 +51,7 @@ def completion(
         )
     model = model
 
-    completion_url = completion_url + "/v1/chat/completions"
+    completion_url = join_api_base(completion_url, "v1/chat/completions")
     data: Final = oobabooga_config.transform_request(
         model=model,
         messages=messages,
@@ -73,7 +75,7 @@ def completion(
         stream=optional_params["stream"] if "stream" in optional_params else False,
     )
     if "stream" in optional_params and optional_params["stream"] is True:
-        return response.iter_lines()
+        return iter_sse_lines(response.iter_text())
     else:
         return oobabooga_config.transform_response(
             model=model,
@@ -103,7 +105,7 @@ def embedding(
     if model.startswith(("http://", "https://")):
         embeddings_url = model
     elif api_base:
-        embeddings_url = f"{api_base}/v1/embeddings"
+        embeddings_url = join_api_base(api_base, "v1/embeddings")
     else:
         raise OobaboogaError(
             status_code=404,

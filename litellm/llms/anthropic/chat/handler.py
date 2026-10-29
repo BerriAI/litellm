@@ -38,6 +38,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -233,7 +234,7 @@ async def make_call(
         raise AnthropicError(status_code=500, message=str(e))
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.aiter_lines(),
+        streaming_response=aiter_sse_lines(response.aiter_text()),
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
@@ -304,7 +305,7 @@ def make_sync_call(
         )
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.iter_lines(),
+        streaming_response=iter_sse_lines(response.iter_text()),
         sync_stream=True,
         json_mode=json_mode,
         speed=speed,
@@ -856,11 +857,21 @@ class ModelResponseIterator:
                 if reasoning_content is None:
                     reasoning_content = ""
         elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
-            # Handle compaction delta
+            compaction_delta: Final = content_block["delta"]["content"]
             provider_specific_fields["compaction_delta"] = {
                 "type": "compaction_delta",
-                "content": content_block["delta"]["content"],
+                "content": compaction_delta,
             }
+            if self.compaction_blocks and isinstance(compaction_delta, str):
+                streamed_summary: Final = self.compaction_blocks[-1].get("content")
+                self.compaction_blocks = [
+                    *self.compaction_blocks[:-1],
+                    {
+                        **self.compaction_blocks[-1],
+                        "content": (streamed_summary if isinstance(streamed_summary, str) else "") + compaction_delta,
+                    },
+                ]
+                provider_specific_fields["compaction_blocks"] = self.compaction_blocks
 
         return (
             text,
