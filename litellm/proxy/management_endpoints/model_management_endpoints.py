@@ -3397,7 +3397,9 @@ async def update_model(
                 {**base_update, "model_name": renamed_to} if renamed_to is not None else base_update
             )
             discovered_model_info: Final[Mapping[str, int]] = (
-                llm_router.get_discovered_model_info(_model_id) if llm_router is not None else MappingProxyType({})
+                llm_router.registry().discovered_model_info(_model_id)
+                if llm_router is not None
+                else MappingProxyType({})
             )
             requested_model_info: Final = _legacy_update_model_info_writes(
                 deployment, _model_info, discovered_model_info, member_marker
