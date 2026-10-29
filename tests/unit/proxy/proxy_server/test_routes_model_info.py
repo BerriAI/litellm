@@ -578,6 +578,203 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
     assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
 
 
+def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route_to(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """A catch-all over Fireworks lists ``acme-chat``, which also names a DeepSeek entry, and a
+    prefixed OpenAI wildcard lists ``my-openai/gpt-acme``, which names no entry at all. Each row must
+    show the provider and price its calls are billed at."""
+    from litellm.proxy.auth import model_checks
+
+    catalog: Final = {
+        "fireworks_ai/accounts/fireworks/models/acme-chat": {
+            "input_cost_per_token": 1e-07,
+            "output_cost_per_token": 2e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "acme-chat": {
+            "input_cost_per_token": 9e-07,
+            "output_cost_per_token": 9e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "gpt-acme": {
+            "input_cost_per_token": 3e-07,
+            "output_cost_per_token": 4e-07,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: {
+            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-chat"],
+            "openai": ["gpt-acme"],
+        }.get(provider, []),
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+                "model_info": {"id": "fireworks-wildcard"},
+            },
+            {
+                "model_name": "my-openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "x"},
+                "model_info": {"id": "openai-wildcard"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    listed: Final = {
+        row["model_name"]: (
+            row["litellm_params"]["model"],
+            row["model_info"].get("litellm_provider"),
+            row["model_info"].get("input_cost_per_token"),
+            row["model_info"].get("output_cost_per_token"),
+        )
+        for row in response.json()["data"]
+    }
+    assert listed == {
+        "acme-chat": ("acme-chat", "fireworks_ai", 1e-07, 2e-07),
+        "my-openai/gpt-acme": ("my-openai/gpt-acme", "openai", 3e-07, 4e-07),
+    }
+    calls: Final = {
+        model_name: router.completion(
+            model=model_name, messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+        )
+        for model_name in listed
+    }
+    assert {model_name: call._hidden_params["response_cost"] for model_name, call in calls.items()} == pytest.approx(
+        {
+            model_name: listed[model_name][2] * call.usage.prompt_tokens
+            + listed[model_name][3] * call.usage.completion_tokens
+            for model_name, call in calls.items()
+        }
+    )
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """``acme-lite`` has a deployment of its own and ``my-openai/gpt-acme-*`` is a narrower wildcard,
+    so calls to those names never reach the catch-all or ``my-openai/*``, which still list them. Such a
+    row may go unpriced, but any price a row shows must be the one its calls are billed at."""
+    from litellm.proxy.auth import model_checks
+
+    catalog: Final = {
+        "fireworks_ai/accounts/fireworks/models/acme-lite": {
+            "input_cost_per_token": 5e-07,
+            "output_cost_per_token": 6e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "gpt-acme-lite": {
+            "input_cost_per_token": 3e-07,
+            "output_cost_per_token": 4e-07,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: {
+            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-lite"],
+            "openai": ["gpt-acme-lite"],
+        }.get(provider, []),
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+                "model_info": {"id": "fireworks-wildcard"},
+            },
+            {
+                "model_name": "acme-lite",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "deepseek-acme-lite"},
+            },
+            {
+                "model_name": "my-openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "x"},
+                "model_info": {"id": "openai-wildcard"},
+            },
+            {
+                "model_name": "my-openai/gpt-acme-*",
+                "litellm_params": {"model": "deepseek/acme-*", "api_key": "x"},
+                "model_info": {"id": "deepseek-wildcard"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    listed: Final = {
+        (row["model_info"]["id"], row["model_name"]): (
+            row["model_info"].get("input_cost_per_token"),
+            row["model_info"].get("output_cost_per_token"),
+        )
+        for row in response.json()["data"]
+        if "*" not in row["model_name"]
+    }
+    assert sorted(listed) == [
+        ("deepseek-acme-lite", "acme-lite"),
+        ("fireworks-wildcard", "acme-lite"),
+        ("openai-wildcard", "my-openai/gpt-acme-lite"),
+    ]
+    assert listed[("deepseek-acme-lite", "acme-lite")] == (7e-07, 8e-07)
+    calls: Final = {
+        model_name: router.completion(
+            model=model_name, messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+        )
+        for _, model_name in listed
+    }
+    priced_rows: Final = {key: prices for key, prices in listed.items() if prices[0] is not None}
+    assert {
+        key: calls[key[1]]._hidden_params["response_cost"] for key in priced_rows
+    } == pytest.approx(
+        {
+            key: input_cost * calls[key[1]].usage.prompt_tokens + output_cost * calls[key[1]].usage.completion_tokens
+            for key, (input_cost, output_cost) in priced_rows.items()
+        }
+    )
+    _invalidate_model_cost_lowercase_map()
+
+
 # ---------------------------------------------------------------------------
 # GET /model/info — team BYOK scoping (issue #30983)
 # ---------------------------------------------------------------------------

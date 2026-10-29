@@ -7,6 +7,8 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -26,6 +28,8 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
+
+_ROUTER_DEPLOYMENT: Final = TypeAdapter(object)
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -532,6 +536,57 @@ def expand_wildcard_deployments_for_model_info(
             expanded.append(row)
 
     return expanded
+
+
+def _litellm_model(deployment: Mapping[str, object]) -> object:
+    litellm_params: Final = deployment.get("litellm_params")
+    return litellm_params.get("model") if is_str_keyed_mapping(litellm_params) else None
+
+
+def _router_deployment(llm_router: Router | None, model_id: object) -> Mapping[str, object] | None:
+    if llm_router is None or not isinstance(model_id, str):
+        return None
+    deployment: Final = _ROUTER_DEPLOYMENT.validate_python(
+        llm_router.get_model_info(id=model_id)  # pyright: ignore[reportUnknownMemberType]  # narrowed below
+    )
+    return deployment if is_str_keyed_mapping(deployment) else None
+
+
+def wildcard_filled_model(model_name_pattern: str, litellm_model: str, listed_name: str) -> str | None:
+    listed_name_match: Final = re.match(PatternMatchRouter().pattern_to_regex(model_name_pattern), listed_name)
+    return (
+        None
+        if listed_name_match is None
+        else PatternMatchRouter.set_deployment_model_name(
+            matched_pattern=listed_name_match, litellm_deployment_litellm_model=litellm_model
+        )
+    )
+
+
+def _deployment_routed_model(source: Mapping[str, object], listed_name: str) -> str | None:
+    source_pattern: Final = source.get("model_name")
+    source_model: Final = _litellm_model(source)
+    return (
+        wildcard_filled_model(source_pattern, source_model, listed_name)
+        if isinstance(source_pattern, str) and isinstance(source_model, str)
+        else None
+    )
+
+
+def wildcard_routed_model(row: Mapping[str, object], llm_router: Router | None) -> str | None:
+    source: Final = _router_deployment(llm_router, _model_info_field(row, "id"))
+    listed_name: Final = row.get("model_name")
+    if llm_router is None or source is None or not isinstance(listed_name, str):
+        return None
+    if _litellm_model(row) == _litellm_model(source) or listed_name in llm_router.model_names:
+        return None
+    routed_model: Final = _deployment_routed_model(source, listed_name)
+    return (
+        routed_model
+        if routed_model is not None
+        and routed_model in llm_router.wildcard_routed_models(listed_name, _deployment_team_id(row))
+        else None
+    )
 
 
 def _get_wildcard_models(

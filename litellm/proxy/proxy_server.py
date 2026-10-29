@@ -441,6 +441,7 @@ from litellm.proxy.auth.model_checks import (
     get_key_models,
     get_mcp_server_ids,
     get_team_models,
+    wildcard_routed_model,
 )
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
@@ -16083,12 +16084,18 @@ def _enrich_model_info_with_litellm_data(
 
     # read litellm model_prices_and_context_window.json to get the following:
     # input_cost_per_token, output_cost_per_token, max_tokens
-    litellm_model_info = get_litellm_model_info(model=model)
+    routed_model: Final = wildcard_routed_model(model, llm_router)
+    priced_model: Final = (
+        model
+        if routed_model is None
+        else {**model, "litellm_params": {**model["litellm_params"], "model": routed_model}}
+    )
+    litellm_model_info = get_litellm_model_info(model=priced_model)
 
     # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
     if litellm_model_info == {}:
         # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
+        litellm_params = priced_model.get("litellm_params", {})
         litellm_model = litellm_params.get("model", None)
         try:
             litellm_model_info = litellm.get_model_info(model=litellm_model)
@@ -16097,7 +16104,7 @@ def _enrich_model_info_with_litellm_data(
     # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
     if litellm_model_info == {}:
         # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
+        litellm_params = priced_model.get("litellm_params", {})
         litellm_model = litellm_params.get("model", None)
         if litellm_model:
             split_model: Final = litellm_model.split("/")

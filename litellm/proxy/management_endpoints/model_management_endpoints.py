@@ -61,6 +61,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
+from litellm.proxy.auth.model_checks import wildcard_filled_model
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -1264,9 +1265,18 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
-def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
+def _live_cost_map_model(db_model: Deployment, listed_name: str | None) -> str | None:
+    stored_model: Final = _decrypted_model(db_model.litellm_params.model)
+    if stored_model is None or listed_name is None:
+        return stored_model
+    return wildcard_filled_model(db_model.model_name, stored_model, listed_name) or stored_model
+
+
+def _cost_map_entry(
+    db_model: Deployment, incoming_model_info: Mapping[str, object], listed_name: str | None
+) -> Mapping[str, object]:
     base_model: Final = incoming_model_info.get("base_model")
-    lookup: Final = base_model if isinstance(base_model, str) else _decrypted_model(db_model.litellm_params.model)
+    lookup: Final = base_model if isinstance(base_model, str) else _live_cost_map_model(db_model, listed_name)
     if lookup is None:
         return MappingProxyType({})
     with suppress(Exception):
@@ -1325,7 +1335,7 @@ def update_db_model(
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
-            _cost_map_entry(db_model, incoming_model_info),
+            _cost_map_entry(db_model, incoming_model_info, updated_patch.model_name),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
