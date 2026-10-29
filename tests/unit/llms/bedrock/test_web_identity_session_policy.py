@@ -422,7 +422,7 @@ def _s3_vectors_ingestion() -> S3VectorsRAGIngestion:
 
 _CALLER_ROUTE_ACTIONS: Final = MappingProxyType(
     {
-        "bedrock async invoke": (BedrockEmbedding, ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke")),
+        "bedrock async invoke": (BedrockEmbedding, ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke", "s3:PutObject")),
         "bedrock batches": (
             BedrockBatchesConfig,
             (
@@ -544,6 +544,15 @@ class TestEachCallerGetsItsOwnCeiling:
         assert granting
         assert all(
             stmt["Condition"].get("StringEquals") == {"iam:PassedToService": "bedrock.amazonaws.com"}
+            for stmt in granting
+        )
+
+    def test_async_invoke_output_write_is_only_granted_through_bedrock(self):
+        (policy,) = _policies_sent_to_sts((BedrockEmbedding(),), session_name="async-output")
+        granting: Final = tuple(stmt for stmt in policy["Statement"] if "s3:PutObject" in stmt["Action"])
+        assert granting
+        assert all(
+            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"}
             for stmt in granting
         )
 

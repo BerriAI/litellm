@@ -6,7 +6,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 _SecureTransportBool: Final = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
 
 _CalledViaLastEquals: Final = TypedDict(
-    "_CalledViaLastEquals", {"aws:CalledViaLast": ReadOnly[Literal["aws-external-anthropic.amazonaws.com"]]}
+    "_CalledViaLastEquals",
+    {"aws:CalledViaLast": ReadOnly[Literal["aws-external-anthropic.amazonaws.com", "bedrock.amazonaws.com"]]},
 )
 
 _PassedToServiceEquals: Final = TypedDict(
@@ -102,6 +103,14 @@ BEDROCK_SESSION_POLICY: Final = _policy(
 
 BEDROCK_EMBEDDING_SESSION_POLICY: Final = _policy(
     _allow("BedrockEmbeddingLiteLLM", ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke")),
+    _allow(
+        "BedrockAsyncInvokeOutputLiteLLM",
+        ("s3:PutObject",),
+        _SessionPolicyCondition(
+            Bool=_SECURE_TRANSPORT,
+            StringEquals=_CalledViaLastEquals({"aws:CalledViaLast": "bedrock.amazonaws.com"}),
+        ),
+    ),
 )
 
 BEDROCK_BATCHES_SESSION_POLICY: Final = _policy(
