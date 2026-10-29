@@ -4,8 +4,9 @@ use litellm_config::Config;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 use litellm_model_catalog::Catalog;
 use litellm_router::{Deployment, Router};
-use rstest::rstest;
+use rstest::{fixture, rstest};
 
+#[fixture]
 fn catalog() -> Catalog {
     Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
         .unwrap()
@@ -18,12 +19,12 @@ fn catalog() -> Catalog {
     "api_key: test-key\n      api_base: https://provider.example/v1\n      custom_llm_provider: test-provider"
 )]
 #[case::secret_reference("api_key: os.environ/ROUTER_TEST_API_KEY")]
-fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
+fn configuration_preserves_deployment_parameters(catalog: Catalog, #[case] parameters: &str) {
     let config = Config::from_yaml(&format!(
         "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      {parameters}"
     ))
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None, &catalog());
+    let router = Router::from_config(&config, &|_: &str| None, &catalog);
     let deployment = router.get(&config.model_list[0].model_name).unwrap();
     let params = &config.model_list[0].litellm_params;
 
@@ -40,7 +41,7 @@ fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
 }
 
 #[rstest]
-fn configuration_types_the_provider_params_of_a_deployment() {
+fn configuration_types_the_provider_params_of_a_deployment(catalog: Catalog) {
     let config = Config::from_yaml(
         "model_list:
   - model_name: public-model
@@ -51,7 +52,7 @@ fn configuration_types_the_provider_params_of_a_deployment() {
       azure_ad_token: ignored-by-every-group",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None, &catalog());
+    let router = Router::from_config(&config, &|_: &str| None, &catalog);
     let params = &router.get("public-model").unwrap().litellm_params;
 
     assert_eq!(
@@ -70,7 +71,7 @@ fn configuration_types_the_provider_params_of_a_deployment() {
 #[case::unknown("missing", None)]
 #[case::provider_name_is_not_an_alias("provider/a", None)]
 #[case::case_sensitive("PUBLIC-A", None)]
-fn lookup_uses_public_names(#[case] name: &str, #[case] expected: Option<&str>) {
+fn lookup_uses_public_names(catalog: Catalog, #[case] name: &str, #[case] expected: Option<&str>) {
     let config = Config::from_yaml(
         "model_list:
   - model_name: public-a
@@ -81,17 +82,17 @@ fn lookup_uses_public_names(#[case] name: &str, #[case] expected: Option<&str>) 
       model: provider/b",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None, &catalog());
+    let router = Router::from_config(&config, &|_: &str| None, &catalog);
 
     assert_eq!(router.get(name).map(|entry| entry.model.as_str()), expected);
 }
 
 #[rstest]
-fn empty_configuration_has_no_deployment() {
+fn empty_configuration_has_no_deployment(catalog: Catalog) {
     let config = Config::from_yaml("model_list: []").unwrap();
 
     assert!(
-        Router::from_config(&config, &|_: &str| None, &catalog())
+        Router::from_config(&config, &|_: &str| None, &catalog)
             .get("")
             .is_none()
     );

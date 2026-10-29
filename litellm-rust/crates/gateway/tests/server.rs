@@ -326,6 +326,7 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn forwards_speed_to_a_model_the_catalog_marks_fast() {
     let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;

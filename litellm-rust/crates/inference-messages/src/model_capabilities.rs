@@ -42,7 +42,7 @@ pub fn anthropic_model_capabilities(
         });
     let probe = Probe {
         catalog,
-        model,
+        fallbacks: backstop_candidates(model),
         info: catalog.model_info(
             &candidate_names(name, provider)
                 .each_ref()
@@ -57,13 +57,17 @@ pub fn anthropic_model_capabilities(
         thinking_always_on: probe.supports("thinking_always_on"),
         supports_legacy_thinking: probe.supports("supports_legacy_thinking"),
         supports_output_config: probe.supports("supports_output_config"),
-        supports_sampling_params: backstop(catalog, name, "supports_sampling_params")
-            .unwrap_or_else(|| {
-                let lowered = name.to_lowercase();
-                !SAMPLING_RESTRICTED_NAMES
-                    .iter()
-                    .any(|restricted| lowered.contains(restricted))
-            }),
+        supports_sampling_params: backstop(
+            catalog,
+            &backstop_candidates(name),
+            "supports_sampling_params",
+        )
+        .unwrap_or_else(|| {
+            let lowered = name.to_lowercase();
+            !SAMPLING_RESTRICTED_NAMES
+                .iter()
+                .any(|restricted| lowered.contains(restricted))
+        }),
         supports_speed: provider == "anthropic"
             && flag(exact(catalog, name), "supports_speed") == Some(true),
         supports_mid_conversation_system: probe.supports("supports_mid_conversation_system"),
@@ -80,7 +84,7 @@ pub fn anthropic_model_capabilities(
 
 struct Probe<'a> {
     catalog: &'a Catalog,
-    model: &'a str,
+    fallbacks: Vec<String>,
     info: Option<Fields>,
     bare: Option<&'a Fields>,
 }
@@ -93,7 +97,7 @@ impl Probe<'_> {
         if self.info.is_some() && flag(self.bare, capability) == Some(true) {
             return true;
         }
-        backstop(self.catalog, self.model, capability) == Some(true)
+        backstop(self.catalog, &self.fallbacks, capability) == Some(true)
     }
 }
 
@@ -112,30 +116,50 @@ fn is_bedrock(provider: &str) -> bool {
     matches!(provider, "bedrock" | "bedrock_converse")
 }
 
-fn candidate_names(model: &str, provider: &str) -> [String; 5] {
-    let stripped = stripped_model(model, provider);
+fn candidate_names(model: &str, provider: &str) -> [String; 6] {
+    let split = split_model(model, provider);
+    let combined = format!("{provider}/{model}");
+    let (region_free_combined, combined_stripped) = if provider == "bedrock_mantle" {
+        (
+            format!("{provider}/{split}"),
+            format!("{provider}/{}", stripped_model(split, provider)),
+        )
+    } else {
+        (
+            combined.clone(),
+            format!("{provider}/{}", stripped_model(model, provider)),
+        )
+    };
     [
-        format!("{provider}/{model}"),
+        combined,
         model.to_owned(),
-        split_model(model, provider).to_owned(),
-        format!("{provider}/{stripped}"),
-        stripped,
+        region_free_combined,
+        split.to_owned(),
+        combined_stripped,
+        stripped_model(model, provider),
     ]
 }
 
 fn split_model<'a>(model: &'a str, provider: &str) -> &'a str {
+    if provider == "bedrock_mantle" {
+        return without_region(model);
+    }
     if !is_bedrock(provider) {
         return model;
     }
     let routed = without_routing_prefixes(model);
-    let region_free = match routed.split_once('/') {
-        Some((region, rest)) if is_bedrock_region(region) => rest,
-        _ => routed,
-    };
+    let region_free = without_region(routed);
     if !region_free.starts_with("arn:") {
         return routed;
     }
     region_free.rsplit('/').next().unwrap_or(region_free)
+}
+
+fn without_region(model: &str) -> &str {
+    match model.split_once('/') {
+        Some((region, rest)) if is_bedrock_region(region) => rest,
+        _ => model,
+    }
 }
 
 fn stripped_model(model: &str, provider: &str) -> String {
@@ -146,8 +170,8 @@ fn stripped_model(model: &str, provider: &str) -> String {
     }
 }
 
-fn backstop(catalog: &Catalog, model: &str, capability: &str) -> Option<bool> {
-    backstop_candidates(model)
+fn backstop(catalog: &Catalog, candidates: &[String], capability: &str) -> Option<bool> {
+    candidates
         .iter()
         .find_map(|name| flag(exact(catalog, name), capability))
 }
@@ -203,12 +227,26 @@ mod tests {
             "supports_xhigh_reasoning_effort": true,
             "aliases": ["claude-test-5-latest"]
         },
-        "claude-slow-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_reasoning": false},
+        "claude-slow-5": {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_reasoning": false,
+            "supports_adaptive_thinking": false
+        },
+        "claude-embed-5": {"litellm_provider": "anthropic", "mode": "embedding"},
+        "anthropic/claude-split-5": {"litellm_provider": "anthropic", "mode": "chat"},
+        "claude-split-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_reasoning": true},
         "anthropic.claude-test-5-v1:0": {
             "litellm_provider": "bedrock_converse",
             "mode": "chat",
             "supports_reasoning": true,
             "supports_speed": true
+        },
+        "bedrock_mantle/anthropic.claude-mantle-5": {
+            "litellm_provider": "bedrock_mantle",
+            "mode": "chat",
+            "supports_reasoning": true,
+            "supports_adaptive_thinking": true
         },
         "vertex_ai/claude-test-5": {
             "litellm_provider": "vertex_ai-anthropic_models",
@@ -218,7 +256,8 @@ mod tests {
         },
         "fallback_generalizations": {
             "rules": [
-                {"name": "routing", "pattern": "claude", "model_info": {"litellm_provider": "anthropic", "supports_speed": true}},
+                {"name": "routing", "pattern": "claude", "model_info": {"litellm_provider": "anthropic", "supports_reasoning": true}},
+                {"name": "derived", "pattern": "claude", "extends": "fill", "model_info": {"supports_reasoning": true}},
                 {"name": "new-family", "pattern": "claude-(?=newfamily)", "model_info": {"supports_reasoning": true}},
                 {
                     "name": "fill",
@@ -241,10 +280,15 @@ mod tests {
     #[case::bare_name("claude-test-5", None, (true, true, true, true))]
     #[case::configured_provider("claude-test-5", Some("anthropic"), (true, true, true, true))]
     #[case::other_casing("anthropic/Claude-Test-5", None, (true, true, false, true))]
-    #[case::filled_row("anthropic/claude-slow-5", None, (false, true, false, true))]
+    #[case::row_over_fill("anthropic/claude-slow-5", None, (false, false, false, true))]
+    #[case::fill_skips_other_modes("anthropic/claude-embed-5", None, (false, false, false, true))]
+    #[case::bare_row_under_prefixed_row("anthropic/claude-split-5", None, (true, true, false, true))]
+    #[case::other_provider_row("azure_ai/claude-test-5", None, (false, false, false, true))]
     #[case::unknown_family("anthropic/claude-newfamily-6", None, (true, true, false, true))]
+    #[case::unknown_model_skips_routing_and_extends_rules("anthropic/claude-other-7", None, (false, true, false, true))]
     #[case::cross_region_bedrock("bedrock/us.anthropic.claude-test-5-v1:0", None, (true, false, false, true))]
     #[case::region_path_bedrock("bedrock/us-east-1/anthropic.claude-test-5-v1:0", None, (true, false, false, true))]
+    #[case::region_path_mantle("bedrock_mantle/us-east-1/anthropic.claude-mantle-5", None, (true, true, false, true))]
     #[case::converse_bedrock("bedrock/converse/anthropic.claude-test-5-v1:0", None, (true, false, false, true))]
     #[case::vertex_version("vertex_ai/claude-test-5@20261001", None, (true, true, false, true))]
     #[case::sampling_restricted_name("anthropic/claude-fable-test", None, (false, true, false, false))]
