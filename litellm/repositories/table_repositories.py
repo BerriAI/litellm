@@ -270,5 +270,11 @@ class BackgroundInteractionSettlementRepository(
     table_name = "litellm_backgroundinteractionsettlement"
 
 
+class BackgroundResponseSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundResponseSettlement"]
+):
+    table_name = "litellm_backgroundresponsesettlement"
+
+
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
     table_name = "litellm_retiredagent"

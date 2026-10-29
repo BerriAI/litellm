@@ -392,6 +392,13 @@ class PassThroughStreamingHandler:
                     **tinyfish_payload["kwargs"],
                 )
                 return
+            background_response_settled_before: Final = (
+                endpoint_type == EndpointType.OPENAI
+                and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+                and await passthrough_success_handler_obj.background_response_settled_before(
+                    await asyncify(PassThroughStreamingHandler._background_response_settled_by_stream)(raw_bytes)
+                )
+            )
             (
                 standard_logging_response_object,
                 kwargs,
@@ -405,6 +412,7 @@ class PassThroughStreamingHandler:
                 raw_bytes=raw_bytes,
                 end_time=end_time,
                 model=model,
+                background_response_settled_before=background_response_settled_before,
             )
             # Always reached from an async context (anthropic_messages,
             # google_genai, and proxy pass-through stream tasks). prefer_async_handlers
@@ -424,6 +432,12 @@ class PassThroughStreamingHandler:
     _route_streaming_logging_to_handler = route_streaming_logging_to_handler
 
     @staticmethod
+    def _background_response_settled_by_stream(raw_bytes: Sequence[bytes]) -> str | None:
+        return OpenAIPassthroughLoggingHandler.background_response_settled_by_stream(
+            PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+        )
+
+    @staticmethod
     def _build_passthrough_logging_result(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
@@ -434,6 +448,7 @@ class PassThroughStreamingHandler:
         raw_bytes: Sequence[bytes],
         end_time: datetime,
         model: str | None,
+        background_response_settled_before: bool = False,
     ) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
         """
         Synchronous, CPU-bound reconstruction of the standard logging payload
@@ -507,6 +522,7 @@ class PassThroughStreamingHandler:
                     start_time=start_time,
                     all_chunks=all_chunks,
                     end_time=end_time,
+                    background_response_settled_before=background_response_settled_before,
                 )
             )
             standard_logging_response_object = openai_passthrough_logging_handler_result["result"]

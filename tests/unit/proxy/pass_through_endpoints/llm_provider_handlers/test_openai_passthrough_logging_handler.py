@@ -4,15 +4,18 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict
 
 
 import litellm
+from litellm.proxy import proxy_server
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
@@ -21,11 +24,16 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrou
     count_relayed_prompt_tokens,
 )
 from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.pass_through_endpoints.background_response_settlement import (
+    PrismaBackgroundResponseSettlementStore,
+)
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -2149,6 +2157,35 @@ class _SpendRowRecorder(CustomLogger):
         )
 
 
+class _SettlementTable:
+    def __init__(self) -> None:
+        self.settled_response_ids: Final[set[str]] = set()
+
+    async def create(self, *, data: Mapping[str, str]) -> Mapping[str, str]:
+        if data["response_id"] in self.settled_response_ids:
+            raise UniqueViolationError({"user_facing_error": {"error_code": "P2002"}})
+        self.settled_response_ids.add(data["response_id"])
+        return data
+
+
+class _UnreachableSettlementTable:
+    async def create(self, *, data: Mapping[str, str]) -> Mapping[str, str]:
+        raise ConnectionResetError("server closed the connection unexpectedly")
+
+
+def _settling_passthrough_logging(
+    table: _SettlementTable | _UnreachableSettlementTable | None,
+) -> PassThroughEndpointLogging:
+    return PassThroughEndpointLogging(
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: table)
+    )
+
+
+def _completed_stream_bytes(response: Mapping[str, object]) -> list[bytes]:
+    completed: Final = {"type": "response.completed", "sequence_number": 9, "response": response}
+    return [f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode()]
+
+
 class TestOpenAIPassthroughResponsesSubRouteBilling:
     def _dispatch(
         self,
@@ -2296,16 +2333,7 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert not dispatched["kwargs"].get("response_cost")
         assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
-    async def _logged_call(
-        self,
-        method: str,
-        sub_route: str,
-        request_body: dict[str, object],
-        response_body: dict[str, object],
-        litellm_call_id: str,
-    ) -> _LoggedCall:
-        url_route: Final = f"{RESPONSES_URL}{sub_route}"
-        recorder: Final = _SpendRowRecorder()
+    def _recorded_logging_obj(self, recorder: _SpendRowRecorder, litellm_call_id: str) -> LiteLLMLoggingObj:
         logging_obj: Final = LiteLLMLoggingObj(
             model="unknown",
             messages=[],
@@ -2319,8 +2347,22 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         logging_obj.update_environment_variables(
             model="unknown", user="unknown", optional_params={}, litellm_params={}, call_type="pass_through_endpoint"
         )
+        return logging_obj
 
-        await PassThroughEndpointLogging().pass_through_async_success_handler(
+    async def _logged_call(
+        self,
+        method: str,
+        sub_route: str,
+        request_body: dict[str, object],
+        response_body: dict[str, object],
+        litellm_call_id: str,
+        passthrough_logging: PassThroughEndpointLogging | None = None,
+    ) -> _LoggedCall:
+        url_route: Final = f"{RESPONSES_URL}{sub_route}"
+        recorder: Final = _SpendRowRecorder()
+        logging_obj: Final = self._recorded_logging_obj(recorder, litellm_call_id)
+
+        await (passthrough_logging or PassThroughEndpointLogging()).pass_through_async_success_handler(
             httpx_response=httpx.Response(200, json=response_body, request=httpx.Request(method, url_route)),
             response_body=response_body,
             logging_obj=logging_obj,
@@ -2336,6 +2378,169 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             custom_llm_provider="openai",
         )
         return await asyncio.wait_for(recorder.call, timeout=5)
+
+    async def _streamed_call(
+        self,
+        sub_route: str,
+        request_body: dict[str, object],
+        raw_bytes: list[bytes],
+        litellm_call_id: str,
+        passthrough_logging: PassThroughEndpointLogging,
+    ) -> _LoggedCall:
+        recorder: Final = _SpendRowRecorder()
+        logging_obj: Final = self._recorded_logging_obj(recorder, litellm_call_id)
+        logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=passthrough_logging,
+            url_route=f"{RESPONSES_URL}{sub_route}",
+            request_body=request_body,
+            endpoint_type=EndpointType.OPENAI,
+            start_time=DISPATCH_TIME,
+            raw_bytes=raw_bytes,
+            end_time=DISPATCH_TIME,
+        )
+        return await asyncio.wait_for(recorder.call, timeout=5)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "sub_route", "response_body"),
+        [
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}",
+                _stored_response("completed", True, RESPONSES_USAGE),
+                id="retrieve_then_retrieve",
+            ),
+            pytest.param(
+                "POST",
+                f"/{STORED_RESPONSE_ID}/cancel",
+                _stored_response("cancelled", True, RESPONSES_USAGE),
+                id="retrieve_then_cancel",
+            ),
+        ],
+    )
+    async def test_a_background_response_read_twice_bills_only_the_first_read(
+        self, local_model_cost_map, method: str, sub_route: str, response_body: dict[str, object]
+    ):
+        passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
+        later_call_id: Final = "e4a1c7b2-3d58-4f9e-8b06-91c2d7f3a5e8"
+
+        first: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            _stored_response("completed", True, RESPONSES_USAGE),
+            "2f9d6b13-8c4e-4a71-b5d0-3e7a1c9f2b64",
+            passthrough_logging,
+        )
+        later: Final = await self._logged_call(method, sub_route, {}, response_body, later_call_id, passthrough_logging)
+
+        assert first.spend_row["spend"] > 0
+        assert first.spend_row["request_id"].startswith(STORED_RESPONSE_ID)
+        assert not later.spend_row["spend"]
+        assert later.spend_row["request_id"] == later_call_id
+
+    @pytest.mark.asyncio
+    async def test_the_proxy_database_keeps_a_background_response_billed_once(self, local_model_cost_map, monkeypatch):
+        settlement_table: Final = _SettlementTable()
+        monkeypatch.setattr(
+            proxy_server,
+            "prisma_client",
+            SimpleNamespace(db=SimpleNamespace(litellm_backgroundresponsesettlement=settlement_table)),
+        )
+        passthrough_logging: Final = PassThroughEndpointLogging()
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+
+        first: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "5a9c2e71-3f4b-4d86-a1e7-c8b6d3f05e92", passthrough_logging
+        )
+        second: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "b2d7f4a8-6e1c-4a39-8f5b-0c9e3a7d1b64", passthrough_logging
+        )
+
+        assert first.spend_row["spend"] > 0
+        assert not second.spend_row["spend"]
+        assert settlement_table.settled_response_ids == {STORED_RESPONSE_ID}
+
+    @pytest.mark.asyncio
+    async def test_a_streamed_background_create_bills_once_and_its_later_retrieve_does_not(self, local_model_cost_map):
+        passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+
+        streamed_create: Final = await self._streamed_call(
+            "",
+            {**CREATE_REQUEST, "background": True, "stream": True},
+            _completed_stream_bytes(finished),
+            "8d2f4a61-7b3c-4e95-a0d8-c5e1f9b7234a",
+            passthrough_logging,
+        )
+        retrieve: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "4b7e9c25-1a6d-4f38-9e02-d8c3a5f1b760", passthrough_logging
+        )
+
+        assert streamed_create.spend_row["spend"] > 0
+        assert not retrieve.spend_row["spend"]
+
+    @pytest.mark.asyncio
+    async def test_a_streamed_foreground_create_bills_without_recording_a_settlement(self, local_model_cost_map):
+        settlement_table: Final = _SettlementTable()
+
+        streamed_create: Final = await self._streamed_call(
+            "",
+            {**CREATE_REQUEST, "stream": True},
+            _completed_stream_bytes(_stored_response("completed", False, RESPONSES_USAGE)),
+            "3e8b1f57-6c2a-4d94-b7e0-9a5c4f2d816b",
+            _settling_passthrough_logging(settlement_table),
+        )
+
+        assert streamed_create.spend_row["spend"] > 0
+        assert not settlement_table.settled_response_ids
+
+    @pytest.mark.asyncio
+    async def test_a_resumed_stream_after_a_billed_retrieve_does_not_bill_again(self, local_model_cost_map):
+        passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+
+        retrieve: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "6c3a8e14-5f2b-4d97-b1e6-a7d4c2f9e853", passthrough_logging
+        )
+        resumed_stream: Final = await self._streamed_call(
+            f"/{STORED_RESPONSE_ID}?stream=true",
+            {},
+            _completed_stream_bytes(finished),
+            "a9e5d3c7-2b8f-4146-8d0a-f3b6e1c4d295",
+            passthrough_logging,
+        )
+
+        assert retrieve.spend_row["spend"] > 0
+        assert not resumed_stream.spend_row["spend"]
+        assert resumed_stream.spend_row["request_id"] != retrieve.spend_row["request_id"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "table",
+        [
+            pytest.param(None, id="no_database"),
+            pytest.param(_UnreachableSettlementTable(), id="database_error"),
+        ],
+    )
+    async def test_finished_reads_bill_as_before_when_their_settlement_cannot_be_recorded(
+        self, local_model_cost_map, table: _UnreachableSettlementTable | None
+    ):
+        passthrough_logging: Final = _settling_passthrough_logging(table)
+        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
+
+        first: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "1d6b4f82-9e3a-4c75-a2d8-b5f7e0c3a916", passthrough_logging
+        )
+        second: Final = await self._logged_call(
+            "GET", f"/{STORED_RESPONSE_ID}", {}, finished, "7f2c9a35-4e1d-4b68-9c07-e6a3d8b5f142", passthrough_logging
+        )
+
+        assert first.spend_row["spend"] > 0
+        assert second.spend_row["spend"] == pytest.approx(first.spend_row["spend"])
 
     @pytest.mark.asyncio
     async def test_unbilled_retrieve_spend_log_keeps_the_response_model(self, local_model_cost_map):

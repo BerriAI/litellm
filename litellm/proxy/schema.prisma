@@ -1985,6 +1985,11 @@ model LiteLLM_BackgroundInteractionSettlement {
   @@index([settled_at], map: "idx_background_interaction_settlement_settled_at")
 }
 
+model LiteLLM_BackgroundResponseSettlement {
+  response_id String   @id
+  settled_at  DateTime @default(now())
+}
+
 model LiteLLM_Lens {
   reviews LiteLLM_LensReview[]
   id      String @id

@@ -961,7 +961,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return None
 
     @staticmethod
-    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+    def parse_terminal_response_from_stream_chunks(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:
         terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks)
         return None if terminal_event is None else terminal_event.response
 

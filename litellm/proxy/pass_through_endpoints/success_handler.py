@@ -5,6 +5,7 @@ from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -14,6 +15,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import StandardPassThroughResponseObject
 
+from .background_response_settlement import BackgroundResponseSettlementStore, PrismaBackgroundResponseSettlementStore
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -50,6 +52,7 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
+_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
 
 
 def _safe_response_text(httpx_response: httpx.Response) -> str:
@@ -69,11 +72,17 @@ class PassThroughEndpointLogging:
         self,
         transcribe_handler: TranscribePassthroughLoggingHandler | None = None,
         log_dispatch: PassThroughLogDispatch | None = None,
+        background_response_settlement: BackgroundResponseSettlementStore | None = None,
     ):
         self.transcribe_passthrough_logging_handler: Final = (
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
         self._injected_log_dispatch: Final = log_dispatch
+        self.background_response_settlement: Final[BackgroundResponseSettlementStore] = (
+            background_response_settlement
+            if background_response_settlement is not None
+            else PrismaBackgroundResponseSettlementStore()
+        )
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -150,6 +159,11 @@ class PassThroughEndpointLogging:
 
     _handle_logging = handle_logging
 
+    async def background_response_settled_before(self, settled_response_id: str | None) -> bool:
+        if settled_response_id is None:
+            return False
+        return not await self.background_response_settlement.claim(settled_response_id)
+
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
@@ -162,6 +176,7 @@ class PassThroughEndpointLogging:
         end_time: datetime,
         cache_hit: bool,
         custom_llm_provider: str | None = None,
+        background_response_settled_before: bool = False,
         **kwargs,
     ):
         return_dict: Final = {
@@ -247,6 +262,7 @@ class PassThroughEndpointLogging:
                 end_time=end_time,
                 cache_hit=cache_hit,
                 request_body=request_body,
+                background_response_settled_before=background_response_settled_before,
                 **kwargs,
             )
             standard_logging_response_object = openai_passthrough_logging_handler_result["result"]
@@ -483,6 +499,21 @@ class PassThroughEndpointLogging:
             )
             return
         else:
+            from .llm_provider_handlers.openai_passthrough_logging_handler import (
+                OpenAIPassthroughLoggingHandler,
+            )
+
+            settled_response_id: Final = (
+                OpenAIPassthroughLoggingHandler.background_response_settled_by_call(
+                    httpx_response.request.method, url_route, _RESPONSE_BODY.validate_python(response_body)
+                )
+                if isinstance(response_body, dict)
+                and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+                else None
+            )
+            background_response_settled_before: Final = await self.background_response_settled_before(
+                settled_response_id
+            )
             normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
                 httpx_response=httpx_response,
                 response_body=response_body,
@@ -494,6 +525,7 @@ class PassThroughEndpointLogging:
                 end_time=end_time,
                 cache_hit=cache_hit,
                 custom_llm_provider=custom_llm_provider,
+                background_response_settled_before=background_response_settled_before,
                 **kwargs,
             )
             standard_logging_response_object = normalized_llm_passthrough_logging_payload[
