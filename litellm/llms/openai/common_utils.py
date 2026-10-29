@@ -135,6 +135,10 @@ class OpenAIError(BaseLLMException):
         )
 
 
+def upstream_error_response(error: Exception) -> httpx.Response | None:
+    return error.response if isinstance(error, openai.APIStatusError) else None
+
+
 _DECODED_JSON: Final = TypeAdapter(object)
 
 

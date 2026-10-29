@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
 import httpx
+import openai
 import pytest
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -11682,6 +11683,58 @@ async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_r
     assert exc_info.value.code == "400"
     assert "max_tokens is too large: 999999999." in exc_info.value.message
     assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
+
+
+_UPSTREAM_REJECTION_BODY: Final = b'{"error":{"message":"upstream said no","type":"invalid_request_error"}}'
+_UPSTREAM_REJECTION_HEADERS: Final = {
+    "x-request-id": "req_upstream",
+    "x-upstream-trace": "trace-7",
+    "content-type": "application/json",
+    "content-length": str(len(_UPSTREAM_REJECTION_BODY)),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "mapped_error"),
+    ((400, litellm.BadRequestError), (429, litellm.RateLimitError)),
+)
+async def test_handle_llm_api_exception_forwards_exactly_the_upstream_headers_of_a_mapped_openai_error(
+    status_code: int, mapped_error: type[Exception]
+) -> None:
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            status_code, content=_UPSTREAM_REJECTION_BODY, headers=_UPSTREAM_REJECTION_HEADERS
+        )
+    )
+    with pytest.raises(mapped_error) as mapped:
+        await litellm.acompletion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=0,
+            client=openai.AsyncOpenAI(
+                api_key="transport-only",
+                base_url="https://upstream.example/v1",
+                max_retries=0,
+                http_client=httpx.AsyncClient(transport=transport),
+            ),
+        )
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as forwarded:
+        await ProxyBaseLLMRequestProcessing(data={}).handle_llm_api_exception(
+            e=mapped.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert forwarded.value.code == str(status_code)
+    assert "upstream said no" in forwarded.value.message
+    assert {name: value for name, value in forwarded.value.headers.items() if name.startswith("llm_provider-")} == {
+        f"llm_provider-{name}": value for name, value in _UPSTREAM_REJECTION_HEADERS.items()
+    }
 
 
 @pytest.mark.asyncio

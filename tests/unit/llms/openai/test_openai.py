@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
@@ -372,6 +372,99 @@ async def test_acompletion_preserves_public_errors_for_both_http_clients(
                 max_retries=0,
             )
         assert not http_client.is_closed
+
+
+_UPSTREAM_ERROR_BODY: Final = (
+    '{"error":{"message":"upstream rejected the request","type":"invalid_request_error",'
+    '"param":"response_format.type","code":"invalid_value"}}'
+)
+_UPSTREAM_BASE: Final = "https://upstream.example/v1"
+_UPSTREAM_TRANSPORT: Final = httpx.MockTransport(
+    lambda _request: httpx.Response(
+        400,
+        content=_UPSTREAM_ERROR_BODY,
+        headers={"x-request-id": "req_upstream_400", "x-upstream-trace": "trace-7", "content-type": "application/json"},
+    )
+)
+_MESSAGES: Final = [{"role": "user", "content": "hi"}]
+
+
+def _rejecting_client() -> OpenAI:
+    return OpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=httpx.Client(transport=_UPSTREAM_TRANSPORT),
+    )
+
+
+def _rejecting_async_client() -> AsyncOpenAI:
+    return AsyncOpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=_UPSTREAM_TRANSPORT),
+    )
+
+
+def _upstream(provider: str, model: str) -> dict[str, object]:
+    return {"model": f"{provider}/{model}", "api_base": _UPSTREAM_BASE, "api_key": "transport-only", "num_retries": 0}
+
+
+async def _completion(provider: str) -> None:
+    litellm.completion(messages=_MESSAGES, client=_rejecting_client(), **_upstream(provider, "gpt-5.6"))
+
+
+async def _completion_stream(provider: str) -> None:
+    stream: Final = litellm.completion(
+        messages=_MESSAGES, client=_rejecting_client(), stream=True, **_upstream(provider, "gpt-5.6")
+    )
+    list(stream)
+
+
+async def _acompletion(provider: str) -> None:
+    await litellm.acompletion(messages=_MESSAGES, client=_rejecting_async_client(), **_upstream(provider, "gpt-5.6"))
+
+
+async def _acompletion_stream(provider: str) -> None:
+    stream: Final = await litellm.acompletion(
+        messages=_MESSAGES, client=_rejecting_async_client(), stream=True, **_upstream(provider, "gpt-5.6")
+    )
+    async for _ in stream:
+        pass
+
+
+async def _embedding(provider: str) -> None:
+    litellm.embedding(input=["hi"], client=_rejecting_client(), **_upstream(provider, "text-embedding-3-large"))
+
+
+async def _aembedding(provider: str) -> None:
+    await litellm.aembedding(
+        input=["hi"], client=_rejecting_async_client(), **_upstream(provider, "text-embedding-3-large")
+    )
+
+
+async def _image_generation(provider: str) -> None:
+    litellm.image_generation(prompt="a cat", client=_rejecting_client(), **_upstream(provider, "gpt-image-2"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize(
+    "route",
+    (_completion, _completion_stream, _acompletion, _acompletion_stream, _embedding, _aembedding, _image_generation),
+    ids=lambda route: route.__name__.lstrip("_"),
+)
+async def test_mapped_error_carries_the_upstream_error_response(
+    provider: str, route: Callable[[str], Awaitable[None]]
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await route(provider)
+
+    assert raised.value.response.text == _UPSTREAM_ERROR_BODY
+    assert raised.value.response.json() == json.loads(_UPSTREAM_ERROR_BODY)
+    assert raised.value.response.headers["x-request-id"] == "req_upstream_400"
+    assert raised.value.response.headers["x-upstream-trace"] == "trace-7"
 
 
 @pytest.mark.asyncio
