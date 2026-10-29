@@ -8542,6 +8542,33 @@ async def test_vertex_live_route_releases_the_budget_it_reserved_to_authorize_an
 
 
 @pytest.mark.asyncio
+async def test_vertex_live_setup_group_the_key_may_call_but_fails_budget_is_not_opened_under_its_bare_model_id():
+    """
+    A setup frame naming a group runs that group's deployment whichever name the key holds, so when the key may call
+    the group its budget and pricing checks decide, and the group's bare model id cannot open the session instead
+    """
+    group_denial: Final = ProxyException(
+        message=f"Budget has been exceeded for model {VERTEX_LIVE_GROUP}.",
+        type=ProxyErrorTypes.budget_exceeded,
+        param="model",
+        code=400,
+    )
+    valid_token: Final = UserAPIKeyAuth(token="hashed")
+
+    async def authorize_model(model: str) -> UserAPIKeyAuth:
+        if model == VERTEX_LIVE_GROUP:
+            raise group_denial
+        return valid_token
+
+    websocket, upstream_ws = await _run_vertex_live_gated_passthrough(
+        [_setup_frame(VERTEX_LIVE_GROUP)], valid_token, authorize_model=authorize_model
+    )
+
+    upstream_ws.send.assert_not_awaited()
+    assert _policy_close_reason(websocket) == group_denial.message
+
+
+@pytest.mark.asyncio
 async def test_vertex_live_route_keeps_the_key_allowlist_out_of_the_close_reason_and_in_the_proxy_log(caplog):
     """The client learns which model was refused, while only the proxy log names the models the key may reach"""
     with caplog.at_level("WARNING", logger="LiteLLM Proxy"):

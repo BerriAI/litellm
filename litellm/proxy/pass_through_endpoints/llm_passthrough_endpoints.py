@@ -4095,23 +4095,17 @@ async def _first_model_denial(
     authorize_model: VertexLiveModelAuthorizer,
 ) -> ClientFrameRefusal | None:
     """
-    The first name the key may call that also passes re-authorization opens the session, and no later name is
-    checked. Otherwise the refusal is the first re-authorization denial, which says more than an access denial
+    Every name runs the same deployment, so the first name the key may call is re-authorized and that answer
+    stands, budget and pricing checks included. Only a key that may call none of them gets the first access denial
     """
     name: Final = model_names[0]
-    denial: Final = await _model_access_denial(name, valid_token, llm_router) or await _model_reauthorization_denial(
-        name, authorize_model
-    )
-    if denial is None or len(model_names) == 1:
-        return denial
+    access_denial: Final = await _model_access_denial(name, valid_token, llm_router)
+    if access_denial is None:
+        return await _model_reauthorization_denial(name, authorize_model)
+    if len(model_names) == 1:
+        return access_denial
     later_denial: Final = await _first_model_denial(model_names[1:], valid_token, llm_router, authorize_model)
-    if later_denial is None:
-        return None
-    return (
-        later_denial
-        if isinstance(later_denial, LoggedClientFrameRefusal) and isinstance(denial, ProxyException)
-        else denial
-    )
+    return access_denial if isinstance(later_denial, ProxyException) else later_denial
 
 
 async def _vertex_live_model_denial(
