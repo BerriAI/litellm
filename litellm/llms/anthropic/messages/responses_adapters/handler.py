@@ -13,6 +13,7 @@ import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
+    targets_openai_api,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
@@ -29,6 +30,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import request_safeguards_evaluator
@@ -56,13 +58,21 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
     return extra_kwargs or {}
 
 
+def _resolved_provider(model: str, custom_llm_provider: object) -> str:
+    return custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
+
+
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
-    provider: Final = (
-        custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
-    )
+    provider: Final = _resolved_provider(model, custom_llm_provider)
     provider_model: Final = local_model_name(model, provider)
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
+
+
+def _maps_tool_search(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
+    return _resolved_provider(model, forwarded_kwargs.get("custom_llm_provider")) == LlmProviders.OPENAI.value and (
+        targets_openai_api(forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"))
+    )
 
 
 def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
@@ -193,6 +203,7 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        maps_tool_search=_maps_tool_search(model, forwarded_kwargs),
     )
 
     # Normalize reasoning effort based on model capabilities

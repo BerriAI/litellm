@@ -1,8 +1,9 @@
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, TypeAlias
 
+from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.anthropic.messages.utils import json_copy_or_original
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
@@ -211,10 +212,9 @@ def _tool_search(name: str, tool: Mapping[str, object]) -> ResponsesTool:
     return ResponsesTool(name=name, payload=dict(tool), choice=None)
 
 
-def _custom_function(name: str, tool: Mapping[str, object], keeps_deferral: bool) -> ResponsesTool:
+def _custom_function(name: str, tool: Mapping[str, object]) -> ResponsesTool:
     description: Final = tool.get("description")
     input_schema: Final = tool.get("input_schema")
-    defer_loading: Final = tool.get("defer_loading")
     return ResponsesTool(
         name=name,
         payload={
@@ -223,7 +223,6 @@ def _custom_function(name: str, tool: Mapping[str, object], keeps_deferral: bool
             "strict": bool(tool.get("strict")),
             **({"description": description} if "description" in tool else {}),
             **({"parameters": json_copy_or_original(input_schema)} if "input_schema" in tool else {}),
-            **({"defer_loading": defer_loading} if keeps_deferral and isinstance(defer_loading, bool) else {}),
         },
         choice={"type": "function", "name": name},
     )
@@ -233,15 +232,28 @@ def is_tool_search(tool: Mapping[str, object]) -> bool:
     return tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
-def responses_tool(tool: Mapping[str, object], *, keeps_deferral: bool = False) -> TranslatedTool:
+def _with_deferral(translated: TranslatedTool, defer_loading: object) -> TranslatedTool:
+    match translated:
+        case ResponsesTool(payload=payload) if payload.get("type") == "function" and isinstance(defer_loading, bool):
+            return replace(translated, payload={**payload, "defer_loading": defer_loading})
+        case _:
+            return translated
+
+
+def responses_tool(tool: Mapping[str, object], *, runs_tool_search: bool = False) -> TranslatedTool:
+    translated: Final = _translated_tool(tool, runs_tool_search)
+    return _with_deferral(translated, tool.get("defer_loading")) if runs_tool_search else translated
+
+
+def _translated_tool(tool: Mapping[str, object], runs_tool_search: bool) -> TranslatedTool:
     tool_type: Final = tool.get("type")
     tool_name: Final = tool.get("name")
     name: Final = tool_name if isinstance(tool_name, str) else ""
     type_name: Final = tool_type if isinstance(tool_type, str) else ""
     family, version = _family_and_version(type_name)
-    if type_name.startswith("web_search") or (name == "web_search" and "input_schema" not in tool):
+    if type_name.startswith("web_search") or name == "web_search":
         return _hosted(name, {"type": "web_search_preview"})
-    if is_tool_search(tool):
+    if runs_tool_search and is_tool_search(tool):
         return _tool_search(name, tool)
     match family:
         case "bash":
@@ -255,15 +267,35 @@ def responses_tool(tool: Mapping[str, object], *, keeps_deferral: bool = False) 
         case _ if version or family in _UNVERSIONED_SERVER_TOOL_TYPES:
             return UntranslatableTool(name=name, type=type_name)
         case _:
-            return _custom_function(name, tool, keeps_deferral)
+            return _custom_function(name, tool)
+
+
+_DROP_PARAMS_HOW_TO: Final = (
+    "set `drop_params: true` in the model's `litellm_params` or under `litellm_settings` on the proxy, or "
+    "`litellm.drop_params=True` in the SDK"
+)
+
+
+def _tool_types(tools: Sequence[UntranslatableTool]) -> str:
+    return ", ".join(dict.fromkeys(tool.type for tool in tools))
 
 
 def untranslatable_tools_error(tools: Sequence[UntranslatableTool]) -> UnsupportedParamsError:
-    types: Final = ", ".join(dict.fromkeys(tool.type for tool in tools))
     return UnsupportedParamsError(
         message=(
-            f"LiteLLM does not translate these Anthropic tools to the Responses API: {types}. To drop them, set "
-            "`drop_params: true` in the model's `litellm_params` or under `litellm_settings` on the proxy, or "
-            "`litellm.drop_params=True` in the SDK"
+            f"LiteLLM does not translate these Anthropic tools to the Responses API: {_tool_types(tools)}. "
+            f"To drop them, {_DROP_PARAMS_HOW_TO}"
         )
+    )
+
+
+def log_dropped_tools(tools: Sequence[UntranslatableTool]) -> None:
+    verbose_logger.warning(
+        "Dropping Anthropic tools the Responses API cannot run under drop_params: %s", _tool_types(tools)
+    )
+
+
+def unforceable_tool_choice_error(name: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(
+        message=f"OpenAI cannot force the tool search tool {name} through `tool_choice`. To drop it, {_DROP_PARAMS_HOW_TO}"
     )
