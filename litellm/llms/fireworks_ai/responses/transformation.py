@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # the base signature leaves the params bag untyped
 from urllib.parse import unquote
 
 import httpx
@@ -16,8 +16,9 @@ from litellm.llms.fireworks_ai.common_utils import (
     without_caller_user,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -57,9 +58,11 @@ def _role(item: ResponseInputItemParam) -> str | None:
 
 
 def _developer_item_as_system(item: ResponseInputItemParam) -> ResponseInputItemParam:
-    if "role" not in item or item["role"] != "developer":
-        return item
-    return EasyInputMessageParam(role="system", content=item["content"], type="message")
+    match item:
+        case {"role": "developer", "content": content}:
+            return EasyInputMessageParam(role="system", content=content, type="message")
+        case _:
+            return item
 
 
 def _developer_items_as_system(input: str | ResponseInputParam) -> str | ResponseInputParam:
@@ -162,19 +165,28 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: overrides the base class signature
     ) -> dict:  # mutable-ok: overrides the base class signature
-        instructions_param: Final[object] = response_api_optional_request_params.get("instructions")
+        optional_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
+            "Mapping[str, object]", response_api_optional_request_params
+        )
+        instructions_param: Final = optional_params.get("instructions")
         validated_input: Final = self._validate_input_param(input)
+        tools_param: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
+            "Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None", optional_params.get("tools")
+        )
+        hoisted: Final = hoist_additional_tools(validated_input, tools_param)
         instructions, folded_input = (
-            _with_instruction_items_folded(validated_input, instructions_param)
+            _with_instruction_items_folded(hoisted.input, instructions_param)
             if isinstance(instructions_param, str | None)
-            else (instructions_param, _developer_items_as_system(validated_input))
+            else (instructions_param, _developer_items_as_system(hoisted.input))
         )
         instruction_entries: Final = () if instructions is None else (("instructions", instructions),)
+        tool_entries: Final = (("tools", list(hoisted.tools)),) if hoisted.hoisted else ()
         folded_params: Final = {
             key: value
             for key, value in (
-                *((key, value) for key, value in response_api_optional_request_params.items() if key != "instructions"),
+                *((key, value) for key, value in optional_params.items() if key != "instructions"),
                 *instruction_entries,
+                *tool_entries,
             )
         }
         request: Final = super().transform_responses_api_request(
