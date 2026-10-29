@@ -55,9 +55,6 @@ _KEEPALIVE: Final = '{"type":"keepalive"}'
 _END_STREAM: Final = ""
 _HEALTH_CHECK_SILENCE: Final = bytes(DEFAULT_SAMPLE_RATE // 5)
 _CONTROL_FRAMES: Final = frozenset((_FINALIZE, _KEEPALIVE, _END_STREAM))
-_CLIENT_CONTROL_FRAMES: Final = MappingProxyType(
-    {"input_audio_buffer.commit": _FINALIZE, "input_audio_buffer.end": _END_STREAM}
-)
 SESSION_STARTED_FRAME: Final = '{"type":"litellm.soniox.session_started"}'
 _ENDPOINT_TOKEN: Final = "<end>"
 _FINALIZED_TOKEN: Final = "<fin>"
@@ -147,13 +144,18 @@ def _sample_rate(update: TranscriptionSessionUpdate | None) -> int:
 
 
 def _language_hints(language: str | None, configured: tuple[str, ...] | None) -> tuple[str, ...] | None:
-    if language is None:
+    if not language:
         return configured
     return (language, *(hint for hint in configured or () if hint != language))
 
 
 def _uses_endpoint_detection(update: TranscriptionSessionUpdate, drop_params: bool) -> bool:
     return uses_server_vad(update, "Soniox realtime", drop_params, SonioxProtocolError)
+
+
+def _ignored_settings(update: TranscriptionSessionUpdate) -> tuple[str, ...]:
+    vad_tuning: Final = (f"turn_detection.{key}" for key in sorted(update.turn_detection or {}) if key != "type")
+    return (*update.unsupported_transcription_keys, *vad_tuning)
 
 
 def build_start_request(
@@ -249,10 +251,11 @@ def _soniox_error(response: _SonioxResponse) -> SonioxException | None:
 
 
 class SonioxEventTransformer:
-    def __init__(self, *, translated_only: bool) -> None:
-        self._translated_only: Final = translated_only
+    def __init__(self, *, drops_originals: bool) -> None:
+        self._drops_originals: Final = drops_originals
         self._item_id: str | None = None
         self._final_tokens: Final[list[_SonioxToken]] = []  # mutable-ok: a turn's tokens append in O(1) each
+        self._finalizes: tuple[bool, ...] = ()
         self._processed_ms: int = 0
         self._billed_ms: int = 0
         self._refusal: SonioxException | None = None
@@ -272,6 +275,12 @@ class SonioxEventTransformer:
             return (self._report(error),)
         return tuple(chain.from_iterable(self._token_events(token) for token in response.tokens))
 
+    def queue_finalize(self, *, discards_turn: bool) -> None:
+        if discards_turn and not self._finalizes:
+            self._item_id = None
+            self._final_tokens.clear()
+        self._finalizes = (*self._finalizes, discards_turn)
+
     def take_unbilled_usage(self, stream_ms: int = 0) -> RealtimeInputAudioTranscriptionUsage | None:
         billable_ms: Final = max(self._processed_ms, stream_ms)
         unbilled_ms: Final = billable_ms - self._billed_ms
@@ -290,13 +299,26 @@ class SonioxEventTransformer:
             self._processed_ms = total_audio_proc_ms
 
     def _token_events(self, token: _SonioxToken) -> tuple[OpenAIRealtimeEvents, ...]:
-        if token.text in (_ENDPOINT_TOKEN, _FINALIZED_TOKEN):
-            return self._complete(speech_stopped=token.text == _ENDPOINT_TOKEN)
+        if token.text == _FINALIZED_TOKEN:
+            return self._finalized()
+        if self._discarding:
+            return ()
+        if token.text == _ENDPOINT_TOKEN:
+            return self._complete(speech_stopped=True)
         started: Final = self._start()
-        if not token.is_final or (self._translated_only and token.translation_status != "translation"):
+        if not token.is_final or (self._drops_originals and token.translation_status == "original"):
             return started
         self._final_tokens.append(token)
         return (*started, _delta(self._current_item_id(), token))
+
+    @property
+    def _discarding(self) -> bool:
+        return self._finalizes[:1] == (True,)
+
+    def _finalized(self) -> tuple[OpenAIRealtimeEvents, ...]:
+        discarded: Final = self._discarding
+        self._finalizes = self._finalizes[1:]
+        return () if discarded else self._complete(speech_stopped=False)
 
     def _start(self) -> tuple[OpenAIRealtimeEvents, ...]:
         if self._item_id is not None:
@@ -411,7 +433,7 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         self._drop_params: Final = drop_params
         self._wrap: Final = wrap
         self._clock: Final = clock
-        self._transformer: Final = SonioxEventTransformer(translated_only=self._options.translation is not None)
+        self._transformer: Final = SonioxEventTransformer(drops_originals=self._options.translation is not None)
         self._start_request: SonioxStartRequest | None = None
         self._session_id: str = f"sess_{uuid.uuid4().hex}"
         self._started_at: float | None = None
@@ -458,15 +480,27 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         request: Final = json_object(message, SonioxProtocolError)
         event_type: Final = request.get("type")
         if event_type in SESSION_UPDATE_EVENT_TYPES:
-            return self._start(model, parse_transcription_session_update(message, SonioxProtocolError))
+            update: Final = parse_transcription_session_update(message, SonioxProtocolError)
+            ignored: Final = _ignored_settings(update)
+            if ignored:
+                verbose_logger.warning("Soniox realtime: ignoring unsupported session settings %s", ignored)
+            return self._start(model, update)
         if event_type == "input_audio_buffer.append":
             audio: Final = decode_pcm16_append(request.get("audio"), error=SonioxProtocolError)
             return (*self._start(model, None), audio)
-        control_frame: Final = _CLIENT_CONTROL_FRAMES.get(event_type) if isinstance(event_type, str) else None
-        if control_frame is None:
-            verbose_logger.debug("Soniox realtime: dropping unsupported client event %s", event_type)
-            return ()
-        return (*self._start(model, None), control_frame)
+        if event_type == "input_audio_buffer.commit":
+            return self._finalize(model, discards_turn=False)
+        if event_type == "input_audio_buffer.clear":
+            return () if self._start_request is None else self._finalize(model, discards_turn=True)
+        if event_type == "input_audio_buffer.end":
+            return (*self._start(model, None), _END_STREAM)
+        verbose_logger.debug("Soniox realtime: dropping unsupported client event %s", event_type)
+        return ()
+
+    def _finalize(self, model: str, *, discards_turn: bool) -> tuple[str, ...]:
+        start: Final = self._start(model, None)
+        self._transformer.queue_finalize(discards_turn=discards_turn)
+        return (*start, _FINALIZE)
 
     def session_refusal(self) -> Exception | None:
         return self._transformer.refusal

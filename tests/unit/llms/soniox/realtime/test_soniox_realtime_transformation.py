@@ -90,6 +90,14 @@ def test_session_update_starts_the_stream_with_client_audio_and_deployment_optio
     }
 
 
+def test_an_empty_transcription_language_keeps_the_deployment_language_hints():
+    config = SonioxRealtimeConfig(options=SonioxRealtimeOptions(language_hints=("fa",)))
+
+    frames = config.transform_realtime_request(_session_update({"transcription": {"language": ""}}), MODEL)
+
+    assert _start_request(frames)["language_hints"] == ["fa"]
+
+
 def test_audio_before_session_update_starts_a_default_stream_once_and_rejects_a_later_change():
     config = SonioxRealtimeConfig()
 
@@ -121,10 +129,48 @@ def test_buffer_control_events_map_to_soniox_control_frames(event_type: str, con
     assert config.transform_realtime_request(_event(event_type), MODEL) == (control_frame,)
 
 
-def test_unsupported_client_events_are_dropped():
+@pytest.mark.parametrize("event_type", ["response.create", "input_audio_buffer.clear"])
+def test_events_with_nothing_to_send_upstream_are_dropped_without_starting_the_stream(event_type: str):
     config = SonioxRealtimeConfig()
 
-    assert config.transform_realtime_request(_event("input_audio_buffer.clear"), MODEL) == ()
+    assert config.transform_realtime_request(_event(event_type), MODEL) == ()
+    assert _start_request(config.transform_realtime_request(_append(), MODEL))["model"] == MODEL
+
+
+def _events(config: SonioxRealtimeConfig, tokens: list[dict[str, object]]) -> tuple[OpenAIRealtimeEvents, ...]:
+    return tuple(
+        config.transform_realtime_response(_response(tokens), MODEL, MagicMock(), EMPTY_TRANSFORM_INPUT)["response"]
+    )
+
+
+def test_clear_discards_the_open_turn_and_everything_soniox_finalizes_for_it():
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(_append(), MODEL)
+    _events(config, [_token("Hel")])
+
+    assert config.transform_realtime_request(_event("input_audio_buffer.clear"), MODEL) == ('{"type":"finalize"}',)
+    cleared = _events(config, [_token("lo"), _token("<end>"), _token("<fin>")])
+    config.transform_realtime_request(_event("input_audio_buffer.commit"), MODEL)
+    kept = _events(config, [_token("Bye"), _token("<fin>")])
+
+    assert cleared == ()
+    assert kept[-1]["transcript"] == "Bye"
+
+
+def test_clear_after_a_commit_keeps_the_committed_turn_and_drops_only_audio_sent_after_it():
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(_append(), MODEL)
+    _events(config, [_token("One")])
+    config.transform_realtime_request(_event("input_audio_buffer.commit"), MODEL)
+    config.transform_realtime_request(_event("input_audio_buffer.clear"), MODEL)
+
+    committed = _events(config, [_token("<fin>")])
+    cleared = _events(config, [_token(" two"), _token("<fin>")])
+    later = _events(config, [_token("Three"), _token("<end>")])
+
+    assert committed[-1]["transcript"] == "One"
+    assert cleared == ()
+    assert later[-1]["transcript"] == "Three"
 
 
 @pytest.mark.parametrize(
@@ -185,7 +231,7 @@ def test_get_complete_url_defaults_to_soniox_and_opens_a_websocket_for_http_base
 
 
 def test_endpoint_detection_emits_one_openai_turn_billed_by_processed_audio():
-    transformer = SonioxEventTransformer(translated_only=False)
+    transformer = SonioxEventTransformer(drops_originals=False)
 
     provisional = transformer.transform(_response([_token("Hel", is_final=False)], total_audio_proc_ms=500))
     finals = transformer.transform(
@@ -212,7 +258,7 @@ def test_endpoint_detection_emits_one_openai_turn_billed_by_processed_audio():
 
 
 def test_manual_finalization_completes_the_turn_without_speech_stopped_and_starts_a_new_item():
-    transformer = SonioxEventTransformer(translated_only=False)
+    transformer = SonioxEventTransformer(drops_originals=False)
 
     first = transformer.transform(_response([_token("One"), _token("<fin>")]))
     second = transformer.transform(_response([_token("Two"), _token("<fin>")]))
@@ -229,13 +275,13 @@ def test_manual_finalization_completes_the_turn_without_speech_stopped_and_start
 
 
 def test_finalization_without_speech_emits_nothing():
-    transformer = SonioxEventTransformer(translated_only=False)
+    transformer = SonioxEventTransformer(drops_originals=False)
 
     assert transformer.transform(_response([_token("<fin>")])) == ()
 
 
 def test_translation_sessions_transcribe_only_the_translated_tokens():
-    transformer = SonioxEventTransformer(translated_only=True)
+    transformer = SonioxEventTransformer(drops_originals=True)
 
     events = transformer.transform(
         _response(
@@ -251,8 +297,20 @@ def test_translation_sessions_transcribe_only_the_translated_tokens():
     assert events[-1]["transcript"] == "Hello"
 
 
+def test_translation_sessions_keep_speech_soniox_leaves_untranslated():
+    transformer = SonioxEventTransformer(drops_originals=True)
+
+    events = transformer.transform(
+        _response(
+            [_token("Hola", translation_status="none"), _token(" amigos", translation_status="none"), _token("<end>")]
+        )
+    )
+
+    assert events[-1]["transcript"] == "Hola amigos"
+
+
 def test_diarized_tokens_label_each_delta_and_split_the_completed_turn_into_speaker_segments():
-    transformer = SonioxEventTransformer(translated_only=False)
+    transformer = SonioxEventTransformer(drops_originals=False)
 
     events = transformer.transform(
         _response(
@@ -281,7 +339,7 @@ def test_diarized_tokens_label_each_delta_and_split_the_completed_turn_into_spea
 
 
 def test_translation_sessions_announce_speech_on_the_first_spoken_token_before_any_translation():
-    transformer = SonioxEventTransformer(translated_only=True)
+    transformer = SonioxEventTransformer(drops_originals=True)
 
     events = transformer.transform(_response([_token("Hol", is_final=False, translation_status="original")]))
 
@@ -289,7 +347,7 @@ def test_translation_sessions_announce_speech_on_the_first_spoken_token_before_a
 
 
 def test_provider_errors_surface_as_openai_error_events():
-    transformer = SonioxEventTransformer(translated_only=False)
+    transformer = SonioxEventTransformer(drops_originals=False)
 
     events = transformer.transform(json.dumps({"error_code": 401, "error_message": "Invalid API key."}))
 
@@ -300,7 +358,7 @@ def test_provider_errors_surface_as_openai_error_events():
 
 def test_malformed_provider_frames_are_rejected():
     with pytest.raises(SonioxProtocolError):
-        SonioxEventTransformer(translated_only=False).transform('{"tokens": "nope"}')
+        SonioxEventTransformer(drops_originals=False).transform('{"tokens": "nope"}')
 
 
 def test_audio_processed_after_the_last_turn_is_billed_on_session_close():
