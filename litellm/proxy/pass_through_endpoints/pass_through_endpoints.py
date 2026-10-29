@@ -1263,8 +1263,11 @@ async def pass_through_request(
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             _strip_client_pricing_overrides(client_body)
         eu_jev_client_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
-        client_body.update(_eu_jev_scoped_model_override(eu_jev_client_body))
-        _parsed_body = client_body
+        scoped_client_body: Final = {
+            **client_body,
+            **_eu_jev_scoped_model_override(eu_jev_client_body),
+        }
+        _parsed_body = scoped_client_body
         if custom_llm_provider in ("laya", "bespoke"):
             decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
             checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
