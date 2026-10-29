@@ -7145,6 +7145,7 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
                 headers=headers,
+                timeout=timeout,
             )
         elif custom_llm_provider == "bedrock":
             if isinstance(input, str):
