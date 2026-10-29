@@ -1317,3 +1317,148 @@ async def test_signature_only_thinking_chunk_before_text_leaks_no_signature(is_a
     assert "signature" not in text_starts[0]
     assert _text_deltas(events) == ["Hello"]
     _assert_deltas_match_their_block_type(events)
+
+
+def _signed_thinking_chunk(thinking: str, index: Optional[int] = None, signature: str = "mistral") -> MagicMock:
+    block = {"type": "thinking", "thinking": thinking, "signature": signature}
+    if index is not None:
+        block["index"] = index
+    return _make_chunk(Delta(content=None, reasoning_content=thinking, thinking_blocks=[block]))
+
+
+_SIGNED_THINKING_STREAMS = {
+    "unsigned-text-then-signed-new-text": [
+        _thinking_chunk("The user "),
+        _signed_thinking_chunk("wants 2+2. "),
+        _signed_thinking_chunk("That is 4."),
+        _make_chunk(Delta(content="4")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ],
+    "then-text": [
+        _signed_thinking_chunk("The user "),
+        _signed_thinking_chunk("wants 2+2. "),
+        _signed_thinking_chunk("That is 4."),
+        _make_chunk(Delta(content="4")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ],
+    "last-thought-shares-the-answer-chunk": [
+        _signed_thinking_chunk("The user "),
+        _signed_thinking_chunk("wants 2+2. "),
+        _make_chunk(
+            Delta(
+                content="4",
+                reasoning_content="That is 4.",
+                thinking_blocks=[{"type": "thinking", "thinking": "That is 4.", "signature": "mistral"}],
+            )
+        ),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ],
+    "blank-chunk-mid-thought": [
+        _signed_thinking_chunk("The user "),
+        _make_chunk(Delta(content="")),
+        _signed_thinking_chunk("wants 2+2. "),
+        _signed_thinking_chunk("That is 4."),
+        _make_chunk(Delta(content="4")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ],
+    "then-tool-call": [
+        _signed_thinking_chunk("The user "),
+        _signed_thinking_chunk("wants 2+2. "),
+        _signed_thinking_chunk("That is 4."),
+        _tool_chunk("call_add", "add", '{"a": 2, "b": 2}'),
+        _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+    ],
+    "thought-ends-with-finish": [
+        _signed_thinking_chunk("The user "),
+        _signed_thinking_chunk("wants 2+2. "),
+        _make_chunk(
+            Delta(
+                content=None,
+                reasoning_content="That is 4.",
+                thinking_blocks=[{"type": "thinking", "thinking": "That is 4.", "signature": "mistral"}],
+            ),
+            finish_reason="stop",
+        ),
+    ],
+    "stream-ends-mid-thought": [
+        _signed_thinking_chunk("The user "),
+        _signed_thinking_chunk("wants 2+2. "),
+        _signed_thinking_chunk("That is 4."),
+    ],
+}
+
+
+def _thinking_blocks_as_accumulated(events: List[dict]) -> List[dict]:
+    """Rebuild each thinking block the way Anthropic SDK accumulators do."""
+    blocks = {}
+    for event in events:
+        if event.get("type") == "content_block_start" and event["content_block"]["type"] == "thinking":
+            body = event["content_block"]
+            blocks[event["index"]] = {"thinking": body.get("thinking") or "", "signature": body.get("signature") or ""}
+        elif event.get("type") == "content_block_delta" and event["index"] in blocks:
+            delta = event["delta"]
+            if delta["type"] == "thinking_delta":
+                blocks[event["index"]]["thinking"] += delta["thinking"]
+            elif delta["type"] == "signature_delta":
+                blocks[event["index"]]["signature"] = delta["signature"]
+    return [blocks[index] for index in sorted(blocks)]
+
+
+def _last_delta_types_per_thinking_block(events: List[dict]) -> List[str]:
+    thinking_indexes = {
+        event["index"]
+        for event in events
+        if event.get("type") == "content_block_start" and event["content_block"]["type"] == "thinking"
+    }
+    last_delta = {
+        event["index"]: event["delta"]["type"]
+        for event in events
+        if event.get("type") == "content_block_delta" and event["index"] in thinking_indexes
+    }
+    return [last_delta[index] for index in sorted(thinking_indexes)]
+
+
+async def _events_for(chunks: List[MagicMock], is_async: bool) -> List[dict]:
+    if is_async:
+        return await _drain_async(AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="mistral-x"))
+    return _drain_sync(AnthropicStreamWrapper(completion_stream=iter(chunks), model="mistral-x"))
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("stream", list(_SIGNED_THINKING_STREAMS), ids=list(_SIGNED_THINKING_STREAMS))
+@pytest.mark.asyncio
+async def test_signed_thinking_chunks_keep_all_text(is_async: bool, stream: str):
+    """Mistral signs every thinking chunk while each still carries new text. Every signed chunk
+    used to become a bare signature_delta, so the client lost all of that text. The whole thought
+    must reach the client once, signed once, with the signature last."""
+    events = await _events_for(_SIGNED_THINKING_STREAMS[stream], is_async)
+
+    blocks = _thinking_blocks_as_accumulated(events)
+    assert "".join(block["thinking"] for block in blocks) == "The user wants 2+2. That is 4."
+    assert [block["signature"] for block in blocks] == ["mistral"] * len(blocks)
+    assert len(_signature_deltas(events)) == len(blocks)
+    assert _last_delta_types_per_thinking_block(events) == ["signature_delta"] * len(blocks)
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_signed_thinking_blocks_keep_their_own_text_and_signature(is_async: bool):
+    chunks = [
+        _signed_thinking_chunk("First ", index=0, signature="sig-0"),
+        _signed_thinking_chunk("thought.", index=0, signature="sig-0"),
+        _signed_thinking_chunk("Second ", index=1, signature="sig-1"),
+        _signed_thinking_chunk("thought.", index=1, signature="sig-1"),
+        _make_chunk(Delta(content="Done")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+
+    events = await _events_for(chunks, is_async)
+
+    assert _thinking_blocks_as_accumulated(events) == [
+        {"thinking": "First thought.", "signature": "sig-0"},
+        {"thinking": "Second thought.", "signature": "sig-1"},
+    ]
+    assert _last_delta_types_per_thinking_block(events) == ["signature_delta", "signature_delta"]
+    assert _text_deltas(events) == ["Done"]
+    _assert_deltas_match_their_block_type(events)
