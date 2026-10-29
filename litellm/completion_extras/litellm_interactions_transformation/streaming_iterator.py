@@ -109,6 +109,7 @@ class InteractionsChatStreamingIterator:
         self.http_response: httpx.Response | None = http_response
         self._stream_id: str = f"chatcmpl-{uuid.uuid4()}"
         self._pending_thought_signature: str | None = None
+        self._thought_slots: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> thought-slot state
         self._tool_slots_by_step: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> tool-slot state
         self._buffer: Final[deque[ModelResponseStream]] = deque()  # mutable-ok: per-stream output FIFO queue
         self._done: bool = False
@@ -141,6 +142,14 @@ class InteractionsChatStreamingIterator:
             usage=usage,
         )
 
+    def _allocate_thought_slot(self, step_index: int) -> int:
+        existing: Final = self._thought_slots.get(step_index)
+        if existing is not None:
+            return existing
+        slot: Final = len(self._thought_slots)
+        self._thought_slots[step_index] = slot
+        return slot
+
     def _allocate_tool_slot(self, step_index: int) -> int:
         existing: Final = self._tool_slots_by_step.get(step_index)
         if existing is not None:
@@ -158,6 +167,7 @@ class InteractionsChatStreamingIterator:
 
         match raw_step.get("type"):
             case "thought":
+                thought_slot: Final = self._allocate_thought_slot(step_index)
                 sig_raw: Final = raw_step.get("signature")
                 sig_str: Final = sig_raw if isinstance(sig_raw, str) and sig_raw else None
                 summary: Final = _text_from_blocks(raw_step.get("summary"))
@@ -169,7 +179,7 @@ class InteractionsChatStreamingIterator:
                     type="thinking",
                     thinking=summary,
                     signature=sig_str,
-                    index=0,
+                    index=thought_slot,
                 )
                 return (
                     self._build_chunk(
@@ -186,7 +196,8 @@ class InteractionsChatStreamingIterator:
                 fn_name: Final = str(raw_step.get("name") or "")
                 step_sig_raw: Final = raw_step.get("signature")
                 step_sig: Final = step_sig_raw if isinstance(step_sig_raw, str) and step_sig_raw else None
-                effective_sig: Final = step_sig or (self._pending_thought_signature if slot == 0 else None)
+                effective_sig: Final = step_sig or self._pending_thought_signature
+                self._pending_thought_signature = None
                 encoded_id: Final = encode_tool_call_id_with_signature(raw_id, effective_sig)
                 tc_chunk: Final = ChatCompletionToolCallChunk(
                     index=slot,
@@ -226,10 +237,11 @@ class InteractionsChatStreamingIterator:
                 thought_piece: Final = _thought_summary_delta_text(raw_delta)
                 if not thought_piece:
                     return ()
+                summary_slot: Final = self._allocate_thought_slot(step_index)
                 summary_block: Final = ChatCompletionThinkingBlock(
                     type="thinking",
                     thinking=thought_piece,
-                    index=0,
+                    index=summary_slot,
                 )
                 return (
                     self._build_chunk(
@@ -244,11 +256,12 @@ class InteractionsChatStreamingIterator:
                 if not isinstance(sig_val, str) or not sig_val:
                     return ()
                 self._pending_thought_signature = sig_val
+                sig_slot: Final = self._allocate_thought_slot(step_index)
                 sig_block: Final = ChatCompletionThinkingBlock(
                     type="thinking",
                     thinking="",
                     signature=sig_val,
-                    index=0,
+                    index=sig_slot,
                 )
                 return (self._build_chunk(Delta(thinking_blocks=[sig_block])),)
             case "arguments_delta" | "arguments" | "function_call":

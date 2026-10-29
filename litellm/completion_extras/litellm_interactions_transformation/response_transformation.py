@@ -169,11 +169,27 @@ def _serialize_arguments(raw_args: JsonValue) -> str:
     return "{}"
 
 
-def _step_thought_signature(prev_sig: str, step: str | JsonMapping) -> str:
-    if isinstance(step, str) or step.get("type") != "thought":
-        return prev_sig
-    sig_val: Final = step.get("signature")
-    return sig_val if isinstance(sig_val, str) and sig_val else prev_sig
+@dataclass(frozen=True, slots=True)
+class _SigScanState:
+    pending_thought_sig: str | None = None
+    call_sig: str | None = None
+
+
+def _advance_sig_scan(state: _SigScanState, step: _SigScanState | JsonMapping) -> _SigScanState:
+    if isinstance(step, _SigScanState):
+        return step
+    match step.get("type"):
+        case "thought":
+            sig_val: Final = step.get("signature")
+            next_pending: Final = sig_val if isinstance(sig_val, str) and sig_val else state.pending_thought_sig
+            return _SigScanState(pending_thought_sig=next_pending, call_sig=None)
+        case "function_call":
+            step_sig_raw: Final = step.get("signature")
+            step_sig: Final = step_sig_raw if isinstance(step_sig_raw, str) and step_sig_raw else None
+            effective: Final = step_sig or state.pending_thought_sig
+            return _SigScanState(pending_thought_sig=None, call_sig=effective)
+        case _:
+            return _SigScanState(pending_thought_sig=state.pending_thought_sig, call_sig=None)
 
 
 def _thinking_block_from_step(step: JsonMapping) -> ChatCompletionThinkingBlock | None:
@@ -192,13 +208,10 @@ def _thinking_block_from_step(step: JsonMapping) -> ChatCompletionThinkingBlock 
 def _tool_call_from_step(
     tool_idx: int,
     step: JsonMapping,
-    preceding_thought_sig: str | None,
+    effective_sig: str | None,
 ) -> ChatCompletionMessageToolCall:
     raw_id: Final = str(step.get("id") or f"call_{tool_idx}")
     fn_name: Final = str(step.get("name") or "")
-    step_sig_raw: Final = step.get("signature")
-    step_sig: Final = step_sig_raw if isinstance(step_sig_raw, str) and step_sig_raw else None
-    effective_sig: Final = step_sig or (preceding_thought_sig if tool_idx == 0 else None)
     encoded_id: Final = encode_tool_call_id_with_signature(raw_id, effective_sig)
     fn_obj: Final = Function(
         name=fn_name,
@@ -219,8 +232,8 @@ def _output_blocks_from_step(step: JsonMapping) -> _ParsedOutputBlocks | None:
 
 def _extract_steps(steps: Sequence[JsonValue]) -> _ExtractedSteps:
     dict_steps: Final = tuple(step for step in steps if isinstance(step, dict))
-    seeded_steps: Final[tuple[str | JsonMapping, ...]] = ("", *dict_steps)
-    sigs_before_each: Final = tuple(accumulate(seeded_steps, _step_thought_signature))
+    seeded_steps: Final[tuple[_SigScanState | JsonMapping, ...]] = (_SigScanState(), *dict_steps)
+    scan_states: Final = tuple(accumulate(seeded_steps, _advance_sig_scan))
 
     thought_steps: Final = tuple(step for step in dict_steps if step.get("type") == "thought")
     reasoning_parts: Final = tuple(_summary_text(step.get("summary")) for step in thought_steps)
@@ -228,12 +241,12 @@ def _extract_steps(steps: Sequence[JsonValue]) -> _ExtractedSteps:
     thinking_blocks: Final = tuple(b for b in raw_thinking_blocks if b is not None)
 
     fc_with_sigs: Final = tuple(
-        (step, prev_sig or None)
-        for step, prev_sig in zip(dict_steps, sigs_before_each)
+        (step, state.call_sig)
+        for step, state in zip(dict_steps, scan_states[1:])
         if step.get("type") == "function_call"
     )
     tool_calls: Final = tuple(
-        _tool_call_from_step(idx, step, prev_sig) for idx, (step, prev_sig) in enumerate(fc_with_sigs)
+        _tool_call_from_step(idx, step, call_sig) for idx, (step, call_sig) in enumerate(fc_with_sigs)
     )
 
     raw_outputs: Final = tuple(

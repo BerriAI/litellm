@@ -107,12 +107,12 @@ def test_stateless_tool_loop_replays_signature_and_resolves_tool_name() -> None:
 
     assert prepared.input_steps == [
         {"type": "user_input", "content": [{"type": "text", "text": "Weather in Tokyo?"}]},
+        {"type": "thought", "signature": "sig_base64_xyz"},
         {
             "type": "function_call",
             "id": "call_weather_1",
             "name": "get_weather",
             "arguments": {"city": "Tokyo"},
-            "signature": "sig_base64_xyz",
         },
         {
             "type": "function_result",
@@ -325,3 +325,145 @@ def test_iterative_normalization_rejects_excessive_nesting_depth() -> None:
             optional_params={"extra_body": deeply_nested},
             litellm_params={},
         )
+
+
+def test_unsigned_assistant_preamble_and_tool_calls_order_model_output_before_function_call() -> None:
+    assistant_msg: Final = {
+        "role": "assistant",
+        "content": "Let me inspect both files first.",
+        "tool_calls": [
+            {
+                "id": "call_ls",
+                "type": "function",
+                "function": {"name": "bash", "arguments": '{"cmd": "ls"}'},
+            },
+            {
+                "id": "call_pwd",
+                "type": "function",
+                "function": {"name": "bash", "arguments": '{"cmd": "pwd"}'},
+            },
+        ],
+    }
+
+    gemini4_prepared: Final = transform_chat_to_interactions_request(
+        messages=[
+            {"role": "user", "content": "Check workspace"},
+            assistant_msg,
+            {"role": "tool", "tool_call_id": "call_ls", "content": "a.py\n"},
+            {"role": "tool", "tool_call_id": "call_pwd", "content": "/repo\n"},
+        ],
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+    )
+    gemini25_prepared: Final = transform_chat_to_interactions_request(
+        messages=[
+            {"role": "user", "content": "Check workspace"},
+            assistant_msg,
+            {"role": "tool", "tool_call_id": "call_ls", "content": "a.py\n"},
+            {"role": "tool", "tool_call_id": "call_pwd", "content": "/repo\n"},
+        ],
+        model="gemini-2.5-flash",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert gemini4_prepared.input_steps == [
+        {"type": "user_input", "content": [{"type": "text", "text": "Check workspace"}]},
+        {"type": "thought", "signature": "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I="},
+        {"type": "model_output", "content": [{"type": "text", "text": "Let me inspect both files first."}]},
+        {"type": "function_call", "id": "call_ls", "name": "bash", "arguments": {"cmd": "ls"}},
+        {"type": "function_call", "id": "call_pwd", "name": "bash", "arguments": {"cmd": "pwd"}},
+        {
+            "type": "function_result",
+            "call_id": "call_ls",
+            "name": "bash",
+            "result": [{"type": "text", "text": "a.py\n"}],
+        },
+        {
+            "type": "function_result",
+            "call_id": "call_pwd",
+            "name": "bash",
+            "result": [{"type": "text", "text": "/repo\n"}],
+        },
+    ]
+    assert gemini25_prepared.input_steps == [
+        {"type": "user_input", "content": [{"type": "text", "text": "Check workspace"}]},
+        {"type": "model_output", "content": [{"type": "text", "text": "Let me inspect both files first."}]},
+        {"type": "function_call", "id": "call_ls", "name": "bash", "arguments": {"cmd": "ls"}},
+        {"type": "function_call", "id": "call_pwd", "name": "bash", "arguments": {"cmd": "pwd"}},
+        {
+            "type": "function_result",
+            "call_id": "call_ls",
+            "name": "bash",
+            "result": [{"type": "text", "text": "a.py\n"}],
+        },
+        {
+            "type": "function_result",
+            "call_id": "call_pwd",
+            "name": "bash",
+            "result": [{"type": "text", "text": "/repo\n"}],
+        },
+    ]
+
+
+def test_unsigned_thinking_summary_and_provider_thought_signatures_merge_onto_thought_step() -> None:
+    encoded_id: Final = encode_tool_call_id_with_signature("call_grep", "sig_from_tool_id")
+    merged_prepared: Final = transform_chat_to_interactions_request(
+        messages=[
+            {"role": "user", "content": "Search for main"},
+            {
+                "role": "assistant",
+                "content": "Searching now.",
+                "thinking_blocks": [{"type": "thinking", "thinking": "need ripgrep"}],
+                "tool_calls": [
+                    {
+                        "id": encoded_id,
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": '{"cmd": "rg main"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": encoded_id, "content": "main.py:1\n"},
+        ],
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+    )
+    psf_prepared: Final = transform_chat_to_interactions_request(
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": "Hello there.",
+                "provider_specific_fields": {"thought_signatures": ["sig_from_msg_psf"]},
+            },
+            {"role": "user", "content": "Next?"},
+        ],
+        model="gemini-4-argon",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert merged_prepared.input_steps == [
+        {"type": "user_input", "content": [{"type": "text", "text": "Search for main"}]},
+        {
+            "type": "thought",
+            "signature": "sig_from_tool_id",
+            "summary": [{"type": "text", "text": "need ripgrep"}],
+        },
+        {"type": "model_output", "content": [{"type": "text", "text": "Searching now."}]},
+        {"type": "function_call", "id": "call_grep", "name": "bash", "arguments": {"cmd": "rg main"}},
+        {
+            "type": "function_result",
+            "call_id": "call_grep",
+            "name": "bash",
+            "result": [{"type": "text", "text": "main.py:1\n"}],
+        },
+    ]
+    assert psf_prepared.input_steps == [
+        {"type": "user_input", "content": [{"type": "text", "text": "Hi"}]},
+        {"type": "thought", "signature": "sig_from_msg_psf"},
+        {"type": "model_output", "content": [{"type": "text", "text": "Hello there."}]},
+        {"type": "user_input", "content": [{"type": "text", "text": "Next?"}]},
+    ]

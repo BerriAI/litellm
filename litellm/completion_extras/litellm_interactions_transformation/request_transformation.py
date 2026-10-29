@@ -3,7 +3,8 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from functools import partial
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -355,28 +356,77 @@ def _extract_text_parts(content: JsonValue) -> str:
     return "\n".join(text for text in texts if text)
 
 
-def _thought_step_from_block(block: JsonMapping) -> JsonValue:
+@dataclass(frozen=True, slots=True)
+class _ParsedThoughtBlock:
+    signature: str | None
+    summary: str | None
+
+    def to_step(self, *, override_signature: str | None = None) -> JsonValue:
+        effective_sig: Final = override_signature or self.signature
+        if effective_sig is None and self.summary is None:
+            return None
+        return {
+            "type": "thought",
+            **({"signature": effective_sig} if effective_sig else {}),
+            **({"summary": [{"type": "text", "text": self.summary}]} if self.summary else {}),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedToolCall:
+    step: JsonValue
+    signature: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CallEmitState:
+    seen_sigs: frozenset[str]
+    emitted: tuple[JsonValue, ...] = ()
+
+
+def _parse_thought_block(block: JsonMapping) -> _ParsedThoughtBlock | None:
     sig: Final = block.get("signature")
     thinking_text: Final = block.get("thinking")
     signature_str: Final = sig if isinstance(sig, str) and sig else None
     summary_str: Final = thinking_text if isinstance(thinking_text, str) and thinking_text else None
     if signature_str is None and summary_str is None:
         return None
-    return {
-        "type": "thought",
-        **({"signature": signature_str} if signature_str else {}),
-        **({"summary": [{"type": "text", "text": summary_str}]} if summary_str else {}),
-    }
+    return _ParsedThoughtBlock(signature=signature_str, summary=summary_str)
 
 
-def _assistant_thought_steps(msg: JsonMapping) -> tuple[tuple[JsonValue, ...], bool]:
+def _assistant_thought_blocks(msg: JsonMapping) -> tuple[_ParsedThoughtBlock, ...]:
     raw_blocks: Final = msg.get("thinking_blocks")
     if not isinstance(raw_blocks, list):
-        return (), False
-    candidates: Final = tuple(_thought_step_from_block(block) for block in raw_blocks if isinstance(block, dict))
-    valid_steps: Final = tuple(step for step in candidates if step is not None)
-    has_sig: Final = any(isinstance(step, dict) and bool(step.get("signature")) for step in valid_steps)
-    return valid_steps, has_sig
+        return ()
+    candidates: Final = tuple(_parse_thought_block(block) for block in raw_blocks if isinstance(block, dict))
+    return tuple(block for block in candidates if block is not None)
+
+
+def _message_provider_thought_signatures(msg: JsonMapping) -> tuple[str, ...]:
+    psf: Final = msg.get("provider_specific_fields")
+    if not isinstance(psf, dict):
+        return ()
+    raw_sigs: Final = psf.get("thought_signatures")
+    if not isinstance(raw_sigs, list):
+        return ()
+    return tuple(sig for sig in raw_sigs if isinstance(sig, str) and sig)
+
+
+def _step_signature(step: JsonValue) -> str | None:
+    if not isinstance(step, dict):
+        return None
+    sig: Final = step.get("signature")
+    return sig if isinstance(sig, str) and sig else None
+
+
+def _deferred_thought_pair(
+    block: _ParsedThoughtBlock,
+    later_sigs: frozenset[str],
+) -> tuple[str, _ParsedThoughtBlock] | None:
+    sig: Final = block.signature
+    if sig is not None and sig in later_sigs:
+        return sig, block
+    return None
 
 
 def _parse_tool_arguments(raw_args: JsonValue) -> JsonMapping:
@@ -419,13 +469,7 @@ def _index_tool_call_names(messages: JsonSequence) -> Mapping[str, str]:
     return MappingProxyType(dict(chain.from_iterable(groups)))
 
 
-def _convert_single_tool_call(
-    idx: int,
-    tc: JsonValue,
-    *,
-    needs_gemini3_signature: bool,
-    thought_has_signature: bool,
-) -> JsonValue:
+def _parse_single_tool_call(idx: int, tc: JsonValue) -> _ParsedToolCall | None:
     if not isinstance(tc, dict):
         return None
     fn: Final = tc.get("function")
@@ -434,18 +478,49 @@ def _convert_single_tool_call(
     raw_id: Final = str(tc.get("id") or f"call_{idx}")
     clean_id: Final = _strip_signature_suffix(raw_id)
     extracted_sig: Final = get_thought_signature_from_tool(tc)
-    effective_sig: Final = (
-        extracted_sig
-        if extracted_sig
-        else (_DUMMY_THOUGHT_SIGNATURE if idx == 0 and needs_gemini3_signature and not thought_has_signature else None)
-    )
-    return {
+    step: Final[JsonValue] = {
         "type": "function_call",
         "id": clean_id,
         "name": fn_name,
         "arguments": dict(_parse_tool_arguments(raw_args)),
-        **({"signature": effective_sig} if effective_sig else {}),
     }
+    return _ParsedToolCall(step=step, signature=extracted_sig or None)
+
+
+def _build_leading_thought_steps(
+    leading_blocks: tuple[_ParsedThoughtBlock, ...],
+    fallback_sig: str | None,
+) -> tuple[JsonValue, ...]:
+    if any(b.signature is not None for b in leading_blocks):
+        raw_steps: Final = tuple(b.to_step() for b in leading_blocks)
+        return tuple(step for step in raw_steps if step is not None)
+    if fallback_sig is None:
+        unsigned_steps: Final = tuple(b.to_step() for b in leading_blocks)
+        return tuple(step for step in unsigned_steps if step is not None)
+    if leading_blocks:
+        merged_first: Final = leading_blocks[0].to_step(override_signature=fallback_sig)
+        rest_steps: Final = tuple(b.to_step() for b in leading_blocks[1:])
+        combined: Final = (merged_first, *rest_steps)
+        return tuple(step for step in combined if step is not None)
+    return ({"type": "thought", "signature": fallback_sig},)
+
+
+def _advance_call_emit(
+    deferred_by_sig: Mapping[str, _ParsedThoughtBlock],
+    state: _CallEmitState,
+    item: _CallEmitState | _ParsedToolCall,
+) -> _CallEmitState:
+    if isinstance(item, _CallEmitState):
+        return item
+    sig: Final = item.signature
+    if sig is not None and sig not in state.seen_sigs:
+        deferred: Final = deferred_by_sig.get(sig)
+        thought_step: Final[JsonValue] = (
+            deferred.to_step() if deferred is not None else {"type": "thought", "signature": sig}
+        )
+        steps: Final[tuple[JsonValue, ...]] = (thought_step, item.step) if thought_step is not None else (item.step,)
+        return _CallEmitState(seen_sigs=state.seen_sigs | {sig}, emitted=steps)
+    return _CallEmitState(seen_sigs=state.seen_sigs, emitted=(item.step,))
 
 
 def _build_assistant_steps(
@@ -454,28 +529,49 @@ def _build_assistant_steps(
     custom_llm_provider: str,
     media_fetcher: MediaFetcher,
 ) -> tuple[JsonValue, ...]:
-    thought_steps, thought_has_signature = _assistant_thought_steps(msg)
+    thought_blocks: Final = _assistant_thought_blocks(msg)
+    msg_sigs: Final = _message_provider_thought_signatures(msg)
     raw_tool_calls: Final = msg.get("tool_calls")
-    needs_gemini3_signature: Final = VertexGeminiConfig.is_gemini_3_or_newer(model)
     built_calls: Final = (
-        tuple(
-            _convert_single_tool_call(
-                idx,
-                tc,
-                needs_gemini3_signature=needs_gemini3_signature,
-                thought_has_signature=thought_has_signature,
-            )
-            for idx, tc in enumerate(raw_tool_calls)
-        )
+        tuple(_parse_single_tool_call(idx, tc) for idx, tc in enumerate(raw_tool_calls))
         if isinstance(raw_tool_calls, list)
         else ()
     )
-    fc_steps: Final = tuple(step for step in built_calls if step is not None)
+    parsed_calls: Final = tuple(call for call in built_calls if call is not None)
+
+    first_call_sig: Final = parsed_calls[0].signature if parsed_calls else None
+    later_raw_sigs: Final = tuple(call.signature for call in parsed_calls[1:])
+    later_distinct_sigs: Final = frozenset(sig for sig in later_raw_sigs if sig is not None and sig != first_call_sig)
+    raw_deferred_pairs: Final = tuple(_deferred_thought_pair(b, later_distinct_sigs) for b in thought_blocks[1:])
+    deferred_pairs: Final = tuple(pair for pair in raw_deferred_pairs if pair is not None)
+    deferred_by_sig: Final[Mapping[str, _ParsedThoughtBlock]] = MappingProxyType(dict(deferred_pairs))
+    leading_blocks: Final = (
+        (*thought_blocks[:1], *(b for b in thought_blocks[1:] if b.signature not in deferred_by_sig))
+        if deferred_by_sig
+        else thought_blocks
+    )
+
+    needs_gemini3_signature: Final = VertexGeminiConfig.is_gemini_3_or_newer(model)
+    fallback_sig: Final = (
+        (msg_sigs[0] if msg_sigs else None)
+        or first_call_sig
+        or (_DUMMY_THOUGHT_SIGNATURE if parsed_calls and needs_gemini3_signature else None)
+    )
+    leading_thought_steps: Final = _build_leading_thought_steps(leading_blocks, fallback_sig)
+
     output_blocks: Final = _convert_content_blocks(msg.get("content"), model, custom_llm_provider, media_fetcher)
     output_steps: Final[tuple[JsonValue, ...]] = (
         ({"type": "model_output", "content": output_blocks},) if output_blocks else ()
     )
-    return (*thought_steps, *fc_steps, *output_steps)
+
+    raw_leading_sigs: Final = tuple(_step_signature(step) for step in leading_thought_steps)
+    leading_emitted_sigs: Final = frozenset(sig for sig in raw_leading_sigs if sig is not None)
+    initial_emit_state: Final = _CallEmitState(seen_sigs=leading_emitted_sigs)
+    seeded_calls: Final[tuple[_CallEmitState | _ParsedToolCall, ...]] = (initial_emit_state, *parsed_calls)
+    emit_states: Final = tuple(accumulate(seeded_calls, partial(_advance_call_emit, deferred_by_sig)))
+    fc_steps: Final = tuple(chain.from_iterable(s.emitted for s in emit_states[1:]))
+
+    return (*leading_thought_steps, *output_steps, *fc_steps)
 
 
 def _build_tool_result_step(
