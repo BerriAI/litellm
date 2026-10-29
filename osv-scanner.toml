@@ -66,17 +66,17 @@ reason = "filelock SoftFileLock removes a live holder's marker when another user
 [[IgnoredVulns]]
 id = "GHSA-pcg2-g6cj-q92c"
 ignoreUntil = 2026-11-27
-reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm never imports tornado, and semantic-router and aurelio-sdk, which pull it in, only declare it, so tornado's HTTP header parsing is never reached; remove this entry once 3.10 is dropped"
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's HTTP header parsing is never reached; remove this entry once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-pw9p-v7r6-gx4p"
 ignoreUntil = 2026-11-27
-reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm never imports tornado, and semantic-router and aurelio-sdk, which pull it in, only declare it, so tornado's RedirectHandler is never reached; remove this entry once 3.10 is dropped"
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's RedirectHandler is never reached; remove this entry once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-r4j5-9xpp-3985"
 ignoreUntil = 2026-11-27
-reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm never imports tornado, and semantic-router and aurelio-sdk, which pull it in, only declare it, so tornado's chunked body reading is never reached; remove this entry once 3.10 is dropped"
+reason = "tornado 6.6 (published 2026-10-21) is the only fix and requires Python >= 3.11, so the Python 3.10 resolution stays on 6.5.10 while 3.11+ locks 6.6; litellm starts no tornado server or client, since semantic-router and aurelio-sdk only declare it and tenacity and sentry-sdk import it only to wrap tornado code when it is present, so tornado's chunked body reading is never reached; remove this entry once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-w8v5-vhqr-4h9v"
