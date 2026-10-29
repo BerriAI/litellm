@@ -220,6 +220,54 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
     assert math.isclose(after, before * 1000)
 
 
+def _priced_group_router(extra_prices: dict[str, float], mode: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "priced-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-fake",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    **extra_prices,
+                },
+                "model_info": {"id": "priced-deployment", "mode": mode},
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "extra_prices, mode, route, body",
+    [
+        (
+            {"output_cost_per_reasoning_token": 1e-04},
+            "chat",
+            "/chat/completions",
+            {"model": "priced-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        ),
+        (
+            {"output_cost_per_image": 0.5},
+            "image_generation",
+            "/images/generations",
+            {"model": "priced-group", "prompt": "a cat", "n": 4},
+        ),
+    ],
+)
+def test_prices_a_group_lists_leave_its_budget_reservation_unchanged(
+    extra_prices: dict[str, float], mode: str, route: str, body: dict[str, object]
+) -> None:
+    without_extra: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=_priced_group_router({}, mode)
+    )
+    with_extra: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=_priced_group_router(extra_prices, mode)
+    )
+
+    assert with_extra == without_extra
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "expiry_offset, expected_max_budget",

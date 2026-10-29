@@ -97,7 +97,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import CallTypes, CredentialItem, Usage
+from litellm.types.utils import CallTypes, CredentialItem, ModelResponse, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -2670,6 +2670,59 @@ def test_model_group_info_never_takes_prices_from_a_cost_map_entry_named_like_th
     reported: Final = info.model_dump()
     assert reported["input_cost_per_token"] == 1e-07
     assert reported.keys().isdisjoint({"input_cost_per_token_priority", "output_cost_per_token_batches"})
+
+
+def test_model_group_info_lists_a_custom_priced_deployment_only_at_the_rates_it_bills(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "made-up-long-context-model": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 2e-06,
+                "output_cost_per_token": 8e-06,
+                "input_cost_per_token_above_200k_tokens": 4e-06,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "custom-priced-group",
+                "litellm_params": {
+                    "model": "openai/made-up-long-context-model",
+                    "api_key": "fake",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 3e-06,
+                },
+                "model_info": {"id": "custom-priced-deployment"},
+            }
+        ]
+    )
+    long_prompt_tokens: Final = 300_000
+
+    response: Final = router.completion(
+        model="custom-priced-group",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response=ModelResponse(
+            model="made-up-long-context-model",
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop", "index": 0}],
+            usage=Usage(prompt_tokens=long_prompt_tokens, completion_tokens=0, total_tokens=long_prompt_tokens),
+        ),
+    )
+    info: Final = router.get_model_group_info(model_group="custom-priced-group")
+
+    assert info is not None
+    listed: Final = info.model_dump()
+    assert response._hidden_params["response_cost"] == pytest.approx(long_prompt_tokens * listed["input_cost_per_token"])
+    assert "input_cost_per_token_above_200k_tokens" not in listed
 
 
 def test_model_group_info_still_validates_from_attributes():

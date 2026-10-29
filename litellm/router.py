@@ -143,6 +143,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -450,6 +451,7 @@ from litellm.types.router import (
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
     holds_secret_pointer,
+    is_usd_price_key,
     model_info_prices,
     price_as_float,
 )
@@ -543,12 +545,6 @@ RouterStrategySelector: TypeAlias = (
     | LowestTPMLoggingHandler
     | LowestTPMLoggingHandler_v2
 )
-
-
-def _deployment_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
-    cost_map_key: Final = model_info.get("key")
-    entry: Final = raw_cost_map_entry(cost_map_key) if isinstance(cost_map_key, str) else None
-    return model_info_prices(model_info if entry is None else {**entry, **model_info})
 
 
 def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
@@ -717,6 +713,28 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
+def _billed_pricing_entry(deployment: Mapping[str, object], model_info: Mapping[str, object]) -> Mapping[str, object]:
+    configured_info: Final = _configured_model_info(deployment)
+    model_id: Final = configured_info.get("id")
+    custom_priced: Final = use_custom_pricing_for_model(
+        {
+            **_LITELLM_PARAMS_ADAPTER.validate_python(deployment.get("litellm_params") or {}),
+            "metadata": {"model_info": dict(configured_info)},
+        }
+    )
+    registered_entry: Final = raw_cost_map_entry(model_id) if custom_priced and isinstance(model_id, str) else None
+    if registered_entry is not None:
+        return registered_entry
+    cost_map_key: Final = model_info.get("key")
+    catalog_entry: Final = raw_cost_map_entry(cost_map_key) if isinstance(cost_map_key, str) else None
+    return model_info if catalog_entry is None else {**catalog_entry, **model_info}
+
+
+def _deployment_prices(deployment: Mapping[str, object], model_info: Mapping[str, object]) -> Mapping[str, float]:
+    token_prices: Final = {key: model_info.get(key) for key in ("input_cost_per_token", "output_cost_per_token")}
+    return model_info_prices({**_billed_pricing_entry(deployment, model_info), **token_prices})
 
 
 def _every_deployment_refused(
@@ -12702,7 +12720,7 @@ class Router:
             deployment_prices = (
                 model_info_prices(_configured_model_info(model))
                 if model_info is None
-                else _deployment_prices(model_info)
+                else _deployment_prices(model, model_info)
             )
 
             # get llm provider
@@ -12740,7 +12758,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         "description": model_group_description,
-                        **model_info,
+                        **{key: value for key, value in model_info.items() if not is_usd_price_key(key)},
                         **deployment_prices,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,

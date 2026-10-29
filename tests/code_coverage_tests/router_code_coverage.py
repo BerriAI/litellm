@@ -176,6 +176,7 @@ ignored_function_names = [
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
     "_deployment_prices",  # Read by _set_model_group_info, tested through the cost map model group info test in test_router.py
+    "_billed_pricing_entry",  # Read by _deployment_prices, tested through the custom-priced model group info test in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
     "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
     "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py

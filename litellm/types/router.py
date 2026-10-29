@@ -7,6 +7,7 @@ import enum
 import math
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -1000,12 +1001,17 @@ def _outprices(price: float, listed: object) -> bool:
     return listed_price is None or price > listed_price
 
 
-def _is_billed_price_field(key: str) -> bool:
-    return key in _GetModelCostMap.loaded_model_cost_map_fields() or _is_server_derived_pricing_key(key)
+@lru_cache(maxsize=4096)
+def _is_usd_price_key_in(key: str, catalog_fields: frozenset[str]) -> bool:
+    return (
+        ("cost_per_" in key or "token_cost" in key)
+        and "_dbu_" not in key
+        and (key in catalog_fields or _is_server_derived_pricing_key(key))
+    )
 
 
 def is_usd_price_key(key: str) -> bool:
-    return ("cost_per_" in key or "token_cost" in key) and "_dbu_" not in key and _is_billed_price_field(key)
+    return _is_usd_price_key_in(key, _GetModelCostMap.loaded_model_cost_map_fields())
 
 
 def model_info_prices(model_info: Mapping[str, object]) -> Mapping[str, float]:
