@@ -170,7 +170,7 @@ async def test_preview_and_serving_share_default_model_resolution(
     explicit_default: str | None,
     expected: str,
 ):
-    from litellm.router_utils.auto_router_model_naming import validate_complexity_router_config_write
+    from litellm.router_strategy.auto_router.auto_router_model_naming import validate_complexity_router_config_write
     from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
 
     config: Final = {
@@ -1240,7 +1240,7 @@ class TestAutoRouterBenchmarks:
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
         from typing import get_args, get_type_hints
 
-        from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
+        from litellm.router_strategy.auto_router.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
         readonly_router_type: Final = get_type_hints(StandardLoggingRoutingDecision, include_extras=True)["router_type"]
