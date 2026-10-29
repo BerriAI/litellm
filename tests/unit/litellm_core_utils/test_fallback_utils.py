@@ -444,3 +444,91 @@ def test_completion_fallbacks_sync(
 
     assert response.choices[0].message.content == "sync fallback answer"
     assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("first", "second")
+
+
+CACHE_POINTS: Final = ({"location": "message", "role": "system"},)
+CACHED_MESSAGES: Final = (
+    {"role": "system", "content": "You are a careful assistant."},
+    {"role": "user", "content": "hello"},
+)
+OPENAI_ANSWER: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-6.1-sol",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+ANTHROPIC_ANSWER: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+def _cached_request(**kwargs: object) -> dict[str, object]:
+    return {
+        "messages": [dict(message) for message in CACHED_MESSAGES],
+        "cache_control_injection_points": [dict(point) for point in CACHE_POINTS],
+        **kwargs,
+    }
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallback_sends_the_fallback_model_the_request_a_direct_call_sends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    openai_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            401,
+            json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
+        )
+    )
+    anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+    )
+
+    await python_acompletion(**_cached_request(model="anthropic/claude-haiku-4-5", api_key="anthropic-key"))
+    await python_acompletion(
+        **_cached_request(
+            model="openai/gpt-6.1-sol",
+            api_key="openai-key",
+            fallbacks=[{"model": "anthropic/claude-haiku-4-5", "api_key": "anthropic-key"}],
+        )
+    )
+
+    assert "prompt_cache_options" in json.loads(openai_route.calls[0].request.content)
+    direct_body, fallback_body = (json.loads(call.request.content) for call in anthropic_route.calls)
+    assert fallback_body == direct_body
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_cache_dialect_follows_base_url_over_an_api_base_the_call_does_not_use(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=OPENAI_ANSWER)
+    )
+
+    async def send(**kwargs: object) -> None:
+        request: Final = _cached_request(
+            model="openai/gpt-6.1-sol", api_key="openai-key", base_url="https://api.openai.com/v1", **kwargs
+        )
+        if is_async:
+            await python_acompletion(**request)
+        else:
+            python_completion(**request)
+
+    await send()
+    await send(api_base="https://unused-gateway.example.com/v1")
+
+    base_url_only, with_unused_api_base = (json.loads(call.request.content) for call in route.calls)
+    assert with_unused_api_base == base_url_only

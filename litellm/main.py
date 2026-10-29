@@ -570,6 +570,10 @@ async def acompletion(
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     _ = _resolve_control_options(kwargs, model)
+    caller_request: Final = cast(  # cast-ok: acompletion types messages and tools as bare Lists
+        "Mapping[str, object]", {"model": model, "messages": messages, "tools": tools}
+    )
+    caller_kwargs: Final = cast("Mapping[str, object]", {**kwargs})  # cast-ok: acompletion takes untyped kwargs
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -588,7 +592,7 @@ async def acompletion(
         custom_llm_provider=cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
-        api_base=kwargs.get("api_base") or base_url,
+        api_base=base_url or kwargs.get("api_base"),
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -701,7 +705,9 @@ async def acompletion(
 
     fallbacks = fallbacks or litellm.model_fallbacks
     if fallbacks is not None:
-        response = await async_completion_with_fallbacks(**completion_kwargs, kwargs={"fallbacks": fallbacks, **kwargs})
+        response = await async_completion_with_fallbacks(
+            **{**completion_kwargs, **caller_request}, kwargs={"fallbacks": fallbacks, **caller_kwargs}
+        )
         if response is None:
             raise Exception(
                 "No response from fallbacks. Got none. Turn on `litellm.set_verbose=True` to see more details."
@@ -5631,7 +5637,7 @@ def completion(
         custom_llm_provider=cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
-        api_base=kwargs.get("api_base") or base_url,
+        api_base=base_url or kwargs.get("api_base"),
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
