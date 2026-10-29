@@ -6978,6 +6978,7 @@ class ProxyConfig:
                     for name in (
                         "vector_store_deny_by_default",
                         "search_tool_deny_by_default",
+                        "claude_code_marketplace_auth_required",
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                     )
