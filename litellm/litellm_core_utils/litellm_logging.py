@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import asyncio
 import copy
 import datetime
 import functools
@@ -96,6 +97,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
 )
+from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
@@ -813,6 +815,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
+        self.finalized_cost: FinalizedCost | None = None
+        self.prepared_cost: PreparedCost | None = None
+        self.cost_allowance_discount: float | None = None
+        self.cost_finalization_lock = asyncio.Lock()
+        self.deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None = None
         self.billed_token_rates: BilledTokenRates | None = None
         self._provider_reported_cost: float | None = None
 
@@ -874,6 +881,11 @@ class Logging(LiteLLMLoggingBaseClass):
             "current_attempt_api_call_start_time": None,
             "litellm_params": litellm_params,
         }
+        new_call.finalized_cost = None
+        new_call.prepared_cost = None
+        new_call.cost_allowance_discount = None
+        new_call.cost_finalization_lock = asyncio.Lock()
+        new_call.deferred_success_result = None
         new_call.streaming_chunks = []
         new_call.sync_streaming_chunks = []
         return new_call
@@ -2462,6 +2474,55 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
+    def prepare_response_cost(self, response: object, now: datetime.datetime) -> PreparedCost | None:
+        if self.prepared_cost is not None:
+            return self.prepared_cost
+        recorded_cache_hit: Final[object] = self.model_call_details.get("cache_hit")
+        deferred: Final = self.deferred_success_result
+        prepared: Final = self.prepare_success_logging(
+            result=deferred[0] if deferred is not None else response,
+            start_time=deferred[1] if deferred is not None else self.start_time,
+            end_time=deferred[2] if deferred is not None else now.replace(tzinfo=None),
+            cache_hit=recorded_cache_hit if isinstance(recorded_cache_hit, bool) else None,
+            standard_logging_object=None,
+            build_logging_payload=True,
+            publish_logging_payload=False,
+        )
+        payload: Final = prepared[3]
+        raw_cost: Final[object] = self.model_call_details.get("response_cost")
+        if payload is None or not isinstance(raw_cost, (int, float)):
+            return None
+        recorded_usage: Final[object] = self.model_call_details.get("combined_usage_object")
+        response_usage: Final[object] = getattr(prepared[2], "usage", None)
+        normalized_usage: Final = (
+            recorded_usage
+            if isinstance(recorded_usage, Usage)
+            else response_usage
+            if isinstance(response_usage, Usage)
+            else None
+        )
+        usage: Final = StandardLoggingPayloadSetup.get_usage_from_response_obj(
+            _extract_response_obj_and_hidden_params(prepared[2], None)[0],
+            combined_usage_object=normalized_usage,
+        ).model_copy(deep=True)
+        self.prepared_cost = PreparedCost(
+            raw_cost,
+            {
+                **payload,
+                "response": None,
+                "messages": None,
+                "model_map_information": copy.deepcopy(payload["model_map_information"]),
+                "cost_breakdown": copy.deepcopy(payload["cost_breakdown"]),
+            },
+            usage,
+        )
+        self.record_partial_usage_for_failure(usage, raw_cost)
+        return self.prepared_cost
+
+    def record_finalized_cost(self, finalized: FinalizedCost) -> None:
+        self.finalized_cost = finalized
+        self.model_call_details["response_cost"] = finalized.amount
+
     def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
@@ -2812,12 +2873,16 @@ class Logging(LiteLLMLoggingBaseClass):
                     logging_result, "_hidden_params", {}
                 )
 
-        if self.model_call_details.get("cache_hit") is True:
+        if self.finalized_cost is not None:
+            self.model_call_details["response_cost"] = self.finalized_cost.amount
+        elif self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
-        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
+        elif (existing_cost := self.model_call_details.get("response_cost")) is not None and (
+            existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+        ):
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
             # Do not preserve 0 from failure_handler on intermediate router retries.
@@ -2936,7 +3001,7 @@ class Logging(LiteLLMLoggingBaseClass):
         standard_logging_object: StandardLoggingPayload | None = None,
         build_logging_payload: bool = True,
     ) -> tuple[datetime.datetime, datetime.datetime, object]:
-        prepared: Final = self._prepare_success_logging(
+        prepared: Final = self.prepare_success_logging(
             result=result,
             start_time=start_time,
             end_time=end_time,
@@ -2947,7 +3012,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return prepared[0], prepared[1], prepared[2]
 
-    def _prepare_success_logging(
+    def prepare_success_logging(
         self,
         result: object,
         start_time: datetime.datetime | None,
@@ -2968,7 +3033,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
-            self.model_call_details["cache_hit"] = cache_hit
+            self.model_call_details["cache_hit"] = (
+                self.prepared_cost.payload["cache_hit"]
+                if cache_hit is None and self.prepared_cost is not None
+                else cache_hit
+            )
 
             if self.call_type == CallTypes.anthropic_messages.value:
                 result = self._anthropic_messages_logged_response(result=result)
@@ -3007,6 +3076,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             if (
                 litellm.max_budget
+                and publish_logging_payload
                 and self.stream is False
                 and result is not None
                 and isinstance(result, dict)
@@ -3037,10 +3107,17 @@ class Logging(LiteLLMLoggingBaseClass):
         publish_logging_payload: bool,
     ) -> StandardLoggingPayload | None:
         if standard_logging_object is not None:
+            effective_payload: Final = (
+                self.finalized_cost.logging_payload(standard_logging_object)
+                if self.finalized_cost is not None
+                else standard_logging_object
+            )
+            if self.finalized_cost is not None:
+                self.model_call_details["response_cost"] = self.finalized_cost.amount
             if not publish_logging_payload:
-                return standard_logging_object.copy()
-            self.model_call_details["standard_logging_object"] = standard_logging_object
-            return standard_logging_object
+                return effective_payload.copy()
+            self.model_call_details["standard_logging_object"] = effective_payload
+            return effective_payload
         if result is None or self.stream is True:
             # Streaming reaches here before its cost is known, so the cost
             # is seeded to None, but only when nothing has already
@@ -3281,7 +3358,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
-        start_time, end_time, result, request_logging_payload = self._prepare_success_logging(
+        start_time, end_time, result, request_logging_payload = self.prepare_success_logging(
             start_time=start_time,
             end_time=end_time,
             result=result,
@@ -4204,7 +4281,9 @@ class Logging(LiteLLMLoggingBaseClass):
         # chunks already delivered; the router stashes that recovered usage as
         # ``combined_usage_object`` and pre-computes its cost, so preserve it
         # here instead of zeroing the spend on an otherwise-failed request.
-        if self.model_call_details.get("combined_usage_object") is None:
+        if self.finalized_cost is not None:
+            self.model_call_details["response_cost"] = self.finalized_cost.amount
+        elif self.model_call_details.get("combined_usage_object") is None:
             self.model_call_details["response_cost"] = 0
 
         if hasattr(exception, "headers") and isinstance(exception.headers, dict):
@@ -7367,6 +7446,12 @@ def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
     )
 
 
+def _finalized_cost_of(logging_obj: object) -> FinalizedCost | None:
+    """Duck-typed logging objects (and test doubles) carry no finalized cost."""
+    finalized: Final = getattr(logging_obj, "finalized_cost", None)
+    return finalized if isinstance(finalized, FinalizedCost) else None
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: object,
@@ -7470,7 +7555,10 @@ def get_standard_logging_object_payload(
         raw_response_cost: Final = kwargs.get("response_cost")
         llm_response_cost: Final[float] = raw_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
-        response_cost: Final[float] = llm_response_cost + guardrail_cost
+        finalized_cost: Final = _finalized_cost_of(logging_obj)
+        response_cost: Final[float] = (
+            finalized_cost.amount if finalized_cost is not None else llm_response_cost + guardrail_cost
+        )
 
         # clean up litellm hidden params
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
@@ -7537,13 +7625,17 @@ def get_standard_logging_object_payload(
         ):
             model_name = response_model_name
 
-        request_cost_breakdown: Final = cost_breakdown_with_guardrail(
-            (
-                _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
-                if uncached_price is not None
-                else logging_obj.cost_breakdown
-            ),
-            guardrail_cost,
+        request_cost_breakdown: Final = (
+            finalized_cost.logging_breakdown()
+            if finalized_cost is not None
+            else cost_breakdown_with_guardrail(
+                (
+                    _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
+                    if uncached_price is not None
+                    else logging_obj.cost_breakdown
+                ),
+                guardrail_cost,
+            )
         )
         captured_baseline: Final = logging_obj.baseline_observation
         autorouter_savings: Final = (
@@ -7600,6 +7692,7 @@ def get_standard_logging_object_payload(
             model=model_name,
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
+            cost_finalized=finalized_cost is not None,
             response_cost=response_cost,
             cost_breakdown=request_cost_breakdown,
             autorouter_savings=autorouter_savings,
