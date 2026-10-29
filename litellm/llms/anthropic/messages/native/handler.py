@@ -44,7 +44,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
@@ -92,6 +92,13 @@ def _responses_mode_is_lost_by_prefix_strip(
     return _bridges_to_responses_api(
         requested_model, custom_llm_provider, deployment_model_info
     ) and not _bridges_to_responses_api(resolved_model, custom_llm_provider, deployment_model_info)
+
+
+def _bridge_model(requested_model: str, resolved_model: str, custom_llm_provider: str) -> str:
+    requested_provider: Final = requested_model.partition("/")[0]
+    if requested_provider == custom_llm_provider or requested_provider not in LlmProvidersSet:
+        return requested_model
+    return f"{custom_llm_provider}/{resolved_model}"
 
 
 def _should_route_to_responses_api(
@@ -698,7 +705,7 @@ def anthropic_messages_handler(
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
-                model=original_model,
+                model=_bridge_model(original_model, model, custom_llm_provider),
                 metadata=metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
@@ -728,7 +735,7 @@ def anthropic_messages_handler(
         return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
-            model=original_model,
+            model=_bridge_model(original_model, model, custom_llm_provider),
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,

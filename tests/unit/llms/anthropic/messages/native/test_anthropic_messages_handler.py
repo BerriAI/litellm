@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, Final, List
 
 import httpx
+import openai
 import responses
 import respx
 import pytest
@@ -1129,6 +1130,49 @@ async def test_messages_strips_provider_prefix_exactly_once(requested_model, exp
 
     assert captured["body"]["model"] == expected_wire_model
     assert captured["url"] == expected_url
+
+
+_GET_WEATHER_TOOL: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools, expected_path",
+    [
+        ([_GET_WEATHER_TOOL], "/openai/v1/responses"),
+        (None, "/openai/deployments/gpt-6-luna/chat/completions"),
+    ],
+    ids=["function_tool_bridged_to_responses", "no_tools_on_chat"],
+)
+async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_deployment(tools, expected_path):
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["body"] = json.loads(request.content)
+        captured["url"] = request.url
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(openai.APIError),
+    ):
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "What is the weather in Berlin?"}],
+            model="azure_ai/gpt-6-luna",
+            api_base="https://qa-resource.cognitiveservices.azure.com",
+            api_key="test-api-key",
+            stream=True,
+            tools=tools,
+        )
+
+    assert captured["url"].path == expected_path
+    assert captured["body"]["model"] == "gpt-6-luna"
+    assert captured["body"]["stream"] is True
 
 
 @pytest.mark.asyncio
