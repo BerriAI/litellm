@@ -1364,9 +1364,11 @@ def test_a_mixed_group_skips_its_restricted_embedding_deployment(rig: _Rig) -> N
 
 @pytest.mark.parametrize(
     "fallbacks, expected_status",
-    [(("embedding_only",), 429), (("missing",), 429), (("missing", "chat_target"), 200)],
+    [(("embedding_only",), 429), (("embedding_only", "chat_target"), 200), (("missing",), 400)],
 )
-def test_local_rate_limit_skips_unusable_fallbacks(rig: _Rig, fallbacks: tuple[str, ...], expected_status: int) -> None:
+def test_local_rate_limit_skips_restricted_fallbacks_and_still_tries_unloaded_ones(
+    rig: _Rig, fallbacks: tuple[str, ...], expected_status: int
+) -> None:
     limited: Final = rig.names["chat_rate_limited"]
     targets: Final = tuple(rig.names[name] if name != "missing" else _marker() for name in fallbacks)
     with rig.gateway.scenario() as scenario:
@@ -1385,10 +1387,32 @@ def test_local_rate_limit_skips_unusable_fallbacks(rig: _Rig, fallbacks: tuple[s
         assert rig.upstream.calls(marker) == ()
 
 
-def test_responses_websocket_uses_a_chat_fallback_without_calling_the_embedding_provider(
+def _websocket_fallback_config(directory: Path, primary: tuple[str, str], fallback: tuple[str, str]) -> Path:
+    shared: Final = _CONFIG.validate_python(yaml.safe_load((_TESTS_ROOT / "integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **shared,
+        "model_list": [
+            _routed_entry(primary[0], primary[1], f"openai/{_EMBEDDING_MODEL}", _EMBED_ONLY),
+            _routed_entry(fallback[0], fallback[1], f"openai/{_CHAT_MODEL}", {"mode": "chat"}),
+        ],
+        "router_settings": {
+            **object_value(shared["router_settings"]),
+            "num_retries": 0,
+            "fallbacks": [{primary[0]: [fallback[0]]}],
+        },
+    }
+    path: Final = directory / "gate-websocket-fallback.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
+
+
+def test_responses_websocket_uses_a_configured_chat_fallback_without_calling_the_embedding_provider(
     rig: _Rig, tmp_path: Path
 ) -> None:
     marker: Final = _marker()
+    suffix: Final = uuid.uuid4().hex[:12]
+    primary: Final = f"gate-ws-embed-{suffix}"
+    fallback: Final = f"gate-ws-chat-{suffix}"
     certificate: Final = write_self_signed_cert(tmp_path)
     with (
         responses_ws_peer.responses_peer(
@@ -1398,17 +1422,13 @@ def test_responses_websocket_uses_a_chat_fallback_without_calling_the_embedding_
             rig.gateway,
             tmp_path,
             {"SSL_CERT_FILE": str(certificate[0])},
+            config=_websocket_fallback_config(tmp_path, (primary, f"{rig.api_base}/{marker}"), (fallback, peer.url)),
             workers=2,
             state=OwnedState.SHARED_WITH_WORKER,
         ) as owned,
         owned.gateway.scenario() as scenario,
     ):
-        fallback, fallback_ids = _deploy(scenario, peer.url, "ws-chat", _single({"mode": "chat"}))
-        primary, primary_ids = _deploy(
-            scenario, f"{rig.api_base}/{marker}", "ws-embed", _single(_EMBED_ONLY, f"openai/{_EMBEDDING_MODEL}")
-        )
-        _served_by_every_worker(owned.gateway, frozenset((*primary_ids, *fallback_ids)))
-        key: Final = scenario.key(router_settings={"fallbacks": [{primary: [fallback]}]})
+        key: Final = scenario.key()
         (received,) = asyncio.run(
             responses_ws_peer.session(str(owned.gateway.client.base_url), key, primary, (marker,))
         )
