@@ -1305,7 +1305,9 @@ class AmazonConverseConfig(BaseConfig):
 
         request_params: Final = REQUEST_PARAMS.validate_python(non_default_params)
         native_schema: Final = (
-            self._native_output_schema(model, json_schema, self.is_thinking_requested(request_params), model_info)
+            self._native_output_schema(
+                model, json_schema, AnthropicModelInfo.will_think(model, "bedrock", request_params), model_info
+            )
             if json_schema is not None
             else None
         )
@@ -2093,8 +2095,8 @@ class AmazonConverseConfig(BaseConfig):
         }
         if additional_request_params:
             data["additionalModelRequestFields"] = additional_request_params
-            if "thinking" in additional_request_params:
-                data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
+        if "thinking" in additional_request_params or AnthropicModelInfo.thinks_by_default(model, "bedrock"):
+            data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks
 

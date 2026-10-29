@@ -560,19 +560,27 @@ def _invoke_params_for_schema(
 
 
 @pytest.mark.parametrize(
-    ("native_key", "thinking_params", "native"),
+    ("model", "native_key", "thinking_params", "native"),
     [
-        ("legacy", {}, True),
-        ("bedrock", {}, False),
-        ("bedrock", {"thinking": {"type": "adaptive"}}, True),
-        ("bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
     ],
-    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-effort"],
+    ids=[
+        "legacy-key",
+        "bedrock-key-thinking-by-default",
+        "bedrock-key-thinking-off-by-default",
+        "bedrock-key-adaptive",
+        "bedrock-key-effort",
+        "bedrock-key-thinking-disabled",
+    ],
 )
-def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
-    set_native_structured_output, native_key, thinking_params, native
+def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
+    set_native_structured_output, model, native_key, thinking_params, native
 ):
-    model = "us.anthropic.claude-haiku-5-5"
     set_native_structured_output(model, native_key)
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
 

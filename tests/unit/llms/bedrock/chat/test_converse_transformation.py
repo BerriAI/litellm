@@ -1346,18 +1346,27 @@ def test_thinking_request_adds_output_tokens_details_response_path():
     assert result["additionalModelResponseFieldPaths"] == ("/usage/output_tokens_details",)
 
 
-def test_request_without_thinking_omits_response_field_paths():
-    config = AmazonConverseConfig()
-
-    result = config._transform_request(
-        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+@pytest.mark.parametrize(
+    ("model", "thinks_by_default"),
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", False),
+        ("bedrock/converse/us.anthropic.claude-opus-5", True),
+        ("us.anthropic.claude-haiku-5-5", True),
+    ],
+    ids=["opus-4-7-thinking-off-by-default", "opus-5-thinking-on-by-default", "haiku-5-5-thinking-on-by-default"],
+)
+def test_request_without_thinking_asks_for_thinking_tokens_only_when_the_model_thinks_by_default(
+    local_model_cost_map: None, model: str, thinks_by_default: bool
+):
+    result = AmazonConverseConfig()._transform_request(
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params={"maxTokens": 256},
         litellm_params={},
         headers={},
     )
 
-    assert "additionalModelResponseFieldPaths" not in result
+    assert (result.get("additionalModelResponseFieldPaths") == ("/usage/output_tokens_details",)) is thinks_by_default
 
 
 def test_transform_usage_prefers_provider_reasoning_tokens():
@@ -4994,19 +5003,21 @@ def test_json_tool_is_forced_only_when_the_model_will_not_think(
 
 
 @pytest.mark.parametrize(
-    ("native_key", "thinking_params", "native"),
+    ("model", "native_key", "thinking_params", "native"),
     [
-        ("legacy", {}, True),
-        ("bedrock", {}, False),
-        ("bedrock", {"thinking": ADAPTIVE_THINKING}, True),
-        ("bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
-        ("bedrock", {"reasoning_effort": "low"}, True),
-        ("bedrock", {"reasoning_effort": "none"}, False),
-        ("bedrock", {"thinking": {"type": "disabled"}}, False),
+        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": ADAPTIVE_THINKING}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"reasoning_effort": "none"}, False),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
     ],
     ids=[
         "legacy-key",
-        "bedrock-key-no-thinking",
+        "bedrock-key-thinking-by-default",
+        "bedrock-key-thinking-off-by-default",
         "bedrock-key-adaptive",
         "bedrock-key-enabled",
         "bedrock-key-effort",
@@ -5014,10 +5025,9 @@ def test_json_tool_is_forced_only_when_the_model_will_not_think(
         "bedrock-key-thinking-disabled",
     ],
 )
-def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
-    set_native_structured_output, native_key, thinking_params, native
+def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
+    set_native_structured_output, model, native_key, thinking_params, native
 ):
-    model: Final = "us.anthropic.claude-haiku-5-5"
     set_native_structured_output(model, native_key)
 
     _, request = _converse_request_for_json_schema(model, False, thinking_params)

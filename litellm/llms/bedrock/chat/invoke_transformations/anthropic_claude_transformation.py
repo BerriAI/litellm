@@ -103,7 +103,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         request_params: Mapping[str, object],
     ) -> bool:
         return bedrock_chat_uses_native_structured_output(
-            model, self.is_thinking_requested(request_params), model_info=self._deployment_model_info
+            model, self.will_think(model, "bedrock", request_params), model_info=self._deployment_model_info
         ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
 
     def uses_opt_in_native_output(
