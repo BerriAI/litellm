@@ -243,16 +243,45 @@ class TestGitHubCopilotAuthenticator:
 
         assert api_key_file.read_bytes() == malformed
 
-    def test_refreshed_key_is_used_when_the_key_file_cannot_be_written(self, logged_in_token_dir):
+    def test_refreshed_key_that_cannot_be_saved_is_reused_with_its_endpoint(self, logged_in_token_dir):
         unwritable_key_file: Final = logged_in_token_dir / "api-key.json"
         unwritable_key_file.mkdir()
+        first: Final = Authenticator()
+        second: Final = Authenticator()
+
+        with respx.mock(assert_all_called=True) as router:
+            route: Final = router.get(API_KEY_URL).respond(json={**REFRESHED_KEY, "endpoints": {"api": TENANT_API}})
+            served: Final = (first.get_api_key(), second.get_api_key(), first.get_api_key())
+
+        assert served == ("new-api-key",) * 3
+        assert (first.get_api_base(), second.get_api_base()) == (TENANT_API, TENANT_API)
+        assert route.call_count == 1
+        assert unwritable_key_file.is_dir()
+
+    def test_refreshed_key_that_cannot_be_saved_and_has_expired_is_refreshed_again(self, logged_in_token_dir):
+        (logged_in_token_dir / "api-key.json").mkdir()
+        auth: Final = Authenticator()
+
+        with respx.mock(assert_all_called=True) as router:
+            route: Final = router.get(API_KEY_URL).respond(json={"token": "expired-api-key", "expires_at": 1})
+            served: Final = (auth.get_api_key(), auth.get_api_key())
+
+        assert served == ("expired-api-key",) * 2
+        assert route.call_count == 2
+
+    def test_unsaved_key_is_not_reused_after_the_access_token_changes(self, logged_in_token_dir):
+        (logged_in_token_dir / "api-key.json").mkdir()
 
         with respx.mock(assert_all_called=True) as router:
             route: Final = router.get(API_KEY_URL).respond(json=dict(REFRESHED_KEY))
-            assert Authenticator().get_api_key() == "new-api-key"
+            Authenticator().get_api_key()
+            (logged_in_token_dir / "access-token").write_text("gho_logged_in_again")
+            Authenticator().get_api_key()
 
-        assert route.call_count == 1
-        assert unwritable_key_file.is_dir()
+        assert [call.request.headers["authorization"] for call in route.calls] == [
+            "token gho_logged_in",
+            "token gho_logged_in_again",
+        ]
 
     @pytest.mark.parametrize(
         "malformed",

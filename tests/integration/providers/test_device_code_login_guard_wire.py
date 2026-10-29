@@ -595,6 +595,27 @@ def test_copilot_api_key_is_minted_once_from_the_stored_access_token(scene: _Sce
     assert json.loads((scene.rig.copilot_dir / "api-key.json").read_text())["token"] == dl.COPILOT_MINTED_KEY
 
 
+def test_copilot_api_key_that_cannot_be_saved_is_minted_at_most_once_per_worker(scene: _Scene) -> None:
+    dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_UNSAVED_KEY_ACCESS)
+    unwritable_key_file: Final = scene.rig.copilot_dir / "api-key.json"
+    unwritable_key_file.mkdir()
+    first: Final = scene.call(_Cell("copilot", "chat", False, "httpx"))
+    first_served: Final = _serve(first)
+    assert first_served.status == 200, first_served.text
+    (minted,) = scene.rig.peers.auth.drain()
+    assert minted.headers.get("authorization") == f"token {dl.COPILOT_UNSAVED_KEY_ACCESS}"
+    later: Final = tuple(scene.call(_Cell("copilot", "chat", False, "httpx")) for _ in range(3))
+    later_served: Final = tuple(_serve(call) for call in later)
+    assert [served.status for served in later_served] == [200, 200, 200], [served.text for served in later_served]
+    assert len(scene.rig.peers.auth.drain()) <= 1
+    received: Final = scene.rig.peers.api.drain()
+    forwarded: Final = tuple(_carrying(received, call.marker) for call in (first, *later))
+    assert [tuple(dl.bearer(request) for request in requests) for requests in forwarded] == [
+        (dl.COPILOT_MINTED_KEY,)
+    ] * 4, _describe(received)
+    assert unwritable_key_file.is_dir()
+
+
 def test_copilot_access_token_github_rejects_fails_the_request_without_a_device_login(scene: _Scene) -> None:
     dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_REJECTED_ACCESS)
     served: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))

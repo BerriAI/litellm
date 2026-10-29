@@ -48,6 +48,8 @@ class CopilotCachedEndpoints(BaseModel):
 
 ApiKeyFileView = TypeVar("ApiKeyFileView", CopilotCachedKey, CopilotCachedEndpoints)
 
+_UNSAVED_API_KEYS: Final[dict[str, CopilotCachedKey]] = {}  # mutable-ok: refreshed keys api-key.json could not hold
+
 
 def _read_token_file(path: str) -> str:
     with open(path, "rb") as f:
@@ -167,6 +169,9 @@ class Authenticator:
         cached: Final = self._read_api_key_file(CopilotCachedKey)
         if cached is not None and cached.expires_at > datetime.now().timestamp():
             return cached.token
+        unsaved: Final = self._unsaved_api_key()
+        if unsaved is not None:
+            return unsaved.token
         if cached is not None:
             verbose_logger.warning("API key expired, refreshing")
 
@@ -177,13 +182,15 @@ class Authenticator:
                 message=f"Failed to refresh API key: {e}",
                 status_code=401,
             ) from e
+        serialized: Final = json.dumps(api_key_info)
         try:
             with open(self.api_key_file, "w") as f:
-                json.dump(api_key_info, f)
+                f.write(serialized)
         except OSError as e:
             verbose_logger.warning(
-                "Using the refreshed API key without saving it, %s is not writable: %s", self.api_key_file, e
+                "Keeping the refreshed API key in memory, it could not be saved to %s: %s", self.api_key_file, e
             )
+            self._keep_unsaved_api_key(serialized)
         token: Final = api_key_info.get("token")
         if not token:
             raise GetAPIKeyError(
@@ -194,12 +201,12 @@ class Authenticator:
 
     def get_api_base(self) -> str | None:
         """
-        Get the API endpoint from the api-key.json file.
+        Get the API endpoint of the current API key.
 
         Returns:
             Optional[str]: The GitHub Copilot API endpoint, or None if not found.
         """
-        cached: Final = self._read_api_key_file(CopilotCachedEndpoints)
+        cached: Final = self._unsaved_api_key() or self._read_api_key_file(CopilotCachedEndpoints)
         if cached is None or cached.endpoints is None:
             return None
         return cached.endpoints.api
@@ -213,6 +220,30 @@ class Authenticator:
         except ValueError as e:
             verbose_logger.warning("Ignoring %s, not a Copilot API key file: %s", self.api_key_file, e)
             return None
+
+    def _unsaved_api_key_cache_key(self) -> str | None:
+        try:
+            access_token: Final = _read_token_file(self.access_token_file).strip()
+        except (OSError, ValueError):
+            return None
+        return f"{self.api_key_file}:{access_token}" if access_token else None
+
+    def _unsaved_api_key(self) -> CopilotCachedKey | None:
+        cache_key: Final = self._unsaved_api_key_cache_key()
+        if cache_key is None:
+            return None
+        unsaved: Final = _UNSAVED_API_KEYS.get(cache_key)
+        return unsaved if unsaved is not None and unsaved.expires_at > time.time() else None
+
+    def _keep_unsaved_api_key(self, serialized: str) -> None:
+        cache_key: Final = self._unsaved_api_key_cache_key()
+        if cache_key is None:
+            return
+        try:
+            unsaved: Final = CopilotCachedKey.model_validate_json(serialized)
+        except ValueError:
+            return
+        _UNSAVED_API_KEYS[cache_key] = unsaved
 
     def _refresh_api_key(self) -> dict[str, Any]:
         """
