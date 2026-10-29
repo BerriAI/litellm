@@ -276,18 +276,19 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def run_migration_data_check(use_migrate: bool) -> int:
-        """`--check_migrations_against_existing_data`: the pre-migration row check against DATABASE_URL, nothing applied.
-        0 when the pending schema changes fit the rows, 2 with the refusal when they do not."""
+        """`--check_migrations_against_existing_data`: the pending migrations applied to DATABASE_URL inside one
+        transaction that is rolled back, so Postgres reports what the upgrade would hit. 0 when they all apply,
+        2 with Postgres's error when one does not."""
         if os.getenv("DATABASE_URL") is None:
             raise click.UsageError("--check_migrations_against_existing_data requires DATABASE_URL")
         from litellm.proxy.db.prisma_client import PrismaManager
 
-        refusal: Final[str | None] = PrismaManager.migration_data_check_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
-        if refusal is None:
-            print("LiteLLM Proxy: the pending migrations and indexes can be applied to the rows this database has.")
+        ok, summary = PrismaManager.migration_dry_run_summary(use_migrate=use_migrate)
+        if ok:
+            print(f"LiteLLM Proxy: {summary}")
             return 0
         print(
-            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {refusal}\033[0m", file=sys.stderr, flush=True
+            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {summary}\033[0m", file=sys.stderr, flush=True
         )
         return 2
 
@@ -1059,8 +1060,9 @@ class ProxyInitializationHelpers:
     "--check_migrations_against_existing_data",
     is_flag=True,
     default=False,
-    help="Check, read-only, that the rows in DATABASE_URL can take this version's pending migrations and indexes, "
-    "print what would block them, then exit without applying anything. Exit code 2 when something blocks.",
+    help="Dry-run this version's pending migrations on DATABASE_URL: the real SQL inside one transaction that is "
+    "rolled back, so Postgres reports the row or schema that would make the upgrade fail, then exit. Holds the same "
+    "locks the upgrade will. Exit code 2 when a migration fails.",
 )
 @click.option(
     "--keepalive_timeout",
