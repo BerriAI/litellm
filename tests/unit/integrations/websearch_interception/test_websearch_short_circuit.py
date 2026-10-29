@@ -5,8 +5,8 @@ Tests the short-circuit path that detects web-search-only /v1/messages requests
 and executes the search directly without routing through the backend LLM.
 """
 
+import datetime
 import json
-import time
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -554,7 +554,7 @@ class TestShortCircuitThroughMessagesEntryPoint:
             messages=[{"role": "user", "content": "latest python release"}],
             stream=False,
             call_type="anthropic_messages",
-            start_time=time.time(),
+            start_time=datetime.datetime.now(),
             litellm_call_id="short-circuit-cost",
             function_id="short-circuit-cost",
         )
