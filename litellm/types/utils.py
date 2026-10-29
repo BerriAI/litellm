@@ -2879,7 +2879,7 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: TranscriptionUsageInputTokenDetailsObject
+    input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
 class TranscriptionResponse(OpenAIObject):
@@ -4595,6 +4595,7 @@ class LlmProviders(str, Enum):
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
+    STREAMLAKE = "streamlake"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
