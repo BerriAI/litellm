@@ -376,7 +376,7 @@ class RequestBody(TypedDict, total=False):
 class CachedContentRequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
-    tools: Tools
+    tools: Tools | None
     toolConfig: ToolConfig
     model: Required[str]  # Format: models/{model}
     ttl: str  # ending in 's' - Example: "3.5s".
