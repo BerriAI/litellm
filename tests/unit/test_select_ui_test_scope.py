@@ -124,7 +124,7 @@ def _run_step(
     _stub(bin_dir, "npm", 'printf "%s\\n" "$@" >>"$NPM_LOG"; printf "\\0" >>"$NPM_LOG"')
 
     step_script, step_env = _step_script_and_env(pull_request)
-    script = tmp_path / "step.sh"
+    script: Final = tmp_path / "step.sh"
     script.write_text(step_script)
 
     env: Final = {
