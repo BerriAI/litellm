@@ -12619,3 +12619,104 @@ async def test_stream_failure_retains_error_status_without_debug_logging(
     else:
         assert any("PRIVATE_STREAM_FAILURE_42896" in message for message in messages)
         assert all("event=request_failed" not in message for message in messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+async def test_nonstream_response_keeps_content_with_private_ready_diagnostic(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, privacy: bool
+) -> None:
+    import logging
+
+    import respx
+
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.proxy_server import ProxyConfig as ServerProxyConfig
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(verbose_proxy_logger, "level", logging.DEBUG)
+    ProxyLogging._callback_capabilities_cache.clear()
+    content: Final = "PRIVATE_NONSTREAM_RESPONSE_42896"
+    processor: Final = ProxyBaseLLMRequestProcessing(
+        data={
+            "model": "openai/gpt-4o-mini",
+            "api_base": "https://example.com/v1",
+            "api_key": "test-key",
+            "messages": [{"role": "user", "content": "PRIVATE_NONSTREAM_INPUT_42896"}],
+        }
+    )
+    with respx.mock() as upstream:
+        upstream.post("https://example.com/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-example",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+        response: Final = await processor.base_process_llm_request(
+            request=Request(
+                {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": [], "query_string": b""}
+            ),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            route_type="acompletion",
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            general_settings={},
+            proxy_config=ServerProxyConfig(),
+        )
+    assert isinstance(response, litellm.ModelResponse)
+    assert isinstance(response.choices[0], litellm.Choices)
+    assert response.choices[0].message.content == content
+    assert response.choices[0].finish_reason == "stop"
+    messages: Final = tuple(
+        record.getMessage() for record in caplog.records if record.name == verbose_proxy_logger.name
+    )
+    if privacy:
+        assert any("event=response_ready status=200 elapsed_seconds=" in message for message in messages)
+        assert all("PRIVATE_NONSTREAM_" not in message for message in messages)
+    else:
+        assert all("event=response_ready" not in message for message in messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+async def test_nonstream_failure_preserves_client_error_and_safe_status_without_debug(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, privacy: bool
+) -> None:
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", privacy)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(verbose_proxy_logger, "level", logging.ERROR)
+    ProxyLogging._callback_capabilities_cache.clear()
+    processor: Final = ProxyBaseLLMRequestProcessing(data={"model": "example-model"})
+    failure: Final = HTTPException(status_code=429, detail="PRIVATE_NONSTREAM_FAILURE_42896")
+    with pytest.raises(ProxyException) as raised:
+        await processor.handle_llm_api_exception(
+            e=failure,
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert raised.value.code == "429"
+    assert raised.value.message == "PRIVATE_NONSTREAM_FAILURE_42896"
+    messages: Final = tuple(
+        record.getMessage() for record in caplog.records if record.name == verbose_proxy_logger.name
+    )
+    if privacy:
+        assert any("event=request_failed status=429" in message for message in messages)
+        assert all("PRIVATE_NONSTREAM_FAILURE_42896" not in message for message in messages)
+    else:
+        assert any("PRIVATE_NONSTREAM_FAILURE_42896" in message for message in messages)
+        assert all("event=request_failed" not in message for message in messages)

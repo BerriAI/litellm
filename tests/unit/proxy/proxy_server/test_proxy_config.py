@@ -6271,3 +6271,109 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy", [False, True])
+async def test_proxy_config_load_applies_diagnostic_privacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, privacy: bool
+) -> None:
+    config_file: Final = tmp_path / "privacy.yaml"
+    config_file.write_text(
+        "model_list: []\nlitellm_settings:\n  redact_messages_in_debug_logs: " + str(privacy).lower() + "\n"
+    )
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", not privacy)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert litellm.redact_messages_in_debug_logs is privacy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_privacy", [None, False, True])
+@pytest.mark.parametrize("db_privacy", [False, True, "invalid-boolean"])
+@pytest.mark.parametrize("env_reference", [False, True])
+async def test_proxy_config_privacy_precedes_database_settings_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    file_privacy: bool | None,
+    db_privacy: bool | str,
+    env_reference: bool,
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy import utils as proxy_utils
+
+    monkeypatch.setenv("LITELLM_QA_DB_PRIVACY", str(db_privacy).lower())
+    monkeypatch.setenv("LITELLM_QA_FILE_PRIVACY", str(file_privacy).lower())
+    file_value: Final = "os.environ/LITELLM_QA_FILE_PRIVACY" if env_reference else file_privacy
+    remote_module: Final = "s3://example-bucket/PRIVATE_DB_CONTENT.py"
+    stored: Final = {
+        "general_settings": {
+            "alerting": ["PRIVATE_DB_CONTENT"],
+            "custom_auth": remote_module,
+            "litellm_jwtauth": {"custom_validate": remote_module},
+            "pass_through_endpoints": [{"path": "/PRIVATE_DB_CONTENT", "target": remote_module}],
+            "PRIVATE_DB_SETTING": "database-value",
+        },
+        "router_settings": {"model_group_alias": {"PRIVATE_DB_CONTENT": "qa-model"}},
+        "litellm_settings": {
+            "redact_messages_in_debug_logs": "os.environ/LITELLM_QA_DB_PRIVACY" if env_reference else db_privacy,
+            "model_alias_map": {"PRIVATE_DB_CONTENT": "qa-model"},
+            "callbacks": [remote_module, "prometheus"],
+            "custom_provider_map": [{"provider": "qa", "custom_handler": remote_module}],
+            "guardrails": [{"qa": {"callbacks": [remote_module], "guardrail": remote_module}}],
+        },
+    }
+
+    async def get_generic_data(key: str, value: str, table_name: str) -> SimpleNamespace | None:
+        assert (key, table_name) == ("param_name", "config")
+        row: Final = stored.get(value)
+        return SimpleNamespace(param_name=value, param_value=row) if row is not None else None
+
+    monkeypatch.setattr(litellm, "redact_messages_in_debug_logs", False)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(get_generic_data=get_generic_data))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    config_file: Final = tmp_path / "db-privacy.yaml"
+    config_file.write_text(
+        json.dumps(
+            {
+                "litellm_settings": {} if file_privacy is None else {"redact_messages_in_debug_logs": file_value},
+                "general_settings": {"PRIVATE_DB_SETTING": "file-value"},
+            }
+        )
+    )
+
+    enabled: Final = db_privacy if file_privacy is None else file_privacy
+    if isinstance(enabled, str):
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"), pytest.raises(ValidationError):
+            await ProxyConfig().get_config(str(config_file))
+        assert "PRIVATE_DB_CONTENT" not in caplog.text
+        assert litellm.redact_messages_in_debug_logs is False
+        return
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        loaded: Final = await ProxyConfig().get_config(str(config_file))
+
+    assert ("PRIVATE_DB_CONTENT" in caplog.text) is not enabled
+    assert litellm.redact_messages_in_debug_logs is enabled
+    assert loaded["litellm_settings"]["redact_messages_in_debug_logs"] is enabled
+    assert loaded["litellm_settings"]["model_alias_map"] == {"PRIVATE_DB_CONTENT": "qa-model"}
+    assert loaded["general_settings"] == {
+        "alerting": ["PRIVATE_DB_CONTENT"],
+        "litellm_jwtauth": {"custom_validate": None},
+        "pass_through_endpoints": [{"path": "/PRIVATE_DB_CONTENT", "target": None}],
+        "PRIVATE_DB_SETTING": "file-value",
+    }
+    assert loaded["litellm_settings"]["callbacks"] == ["prometheus"]
+    assert loaded["litellm_settings"]["custom_provider_map"] == [{"provider": "qa", "custom_handler": None}]
+    assert loaded["litellm_settings"]["guardrails"] == [{"qa": {"callbacks": [], "guardrail": None}}]
+    assert stored["general_settings"]["custom_auth"] == remote_module
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+    assert loaded["router_settings"] == stored["router_settings"]

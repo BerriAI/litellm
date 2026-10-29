@@ -954,7 +954,8 @@ async def _async_streaming(response, model, custom_llm_provider, args):
         if asyncio.iscoroutine(response):
             response = await response
         async for line in response:
-            print_verbose(f"line in async streaming: {line}")
+            if not litellm.redact_messages_in_debug_logs:
+                print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
