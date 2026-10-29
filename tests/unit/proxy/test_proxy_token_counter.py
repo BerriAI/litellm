@@ -3989,6 +3989,9 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
 
 
+_MULTILINGUAL_TEXT: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+
+
 @pytest.mark.asyncio
 async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base_models_tokenizer(
     monkeypatch: pytest.MonkeyPatch,
@@ -4007,10 +4010,95 @@ async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base
             ]
         ),
     )
-    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
 
     named: Final = await token_counter(request=TokenCountRequest(model="named", messages=messages))
     served: Final = await token_counter(request=TokenCountRequest(model="served", messages=messages))
+
+    assert named.total_tokens == served.total_tokens
+
+
+_LOOKUP_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_order",
+            "description": "Look up an order by its id",
+            "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+        },
+    }
+)
+
+
+_FLASH_BASE_MODEL: Final = "azure_ai/deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("served_model", "named_params", "named_model_info", "tools"),
+    [
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash"},
+            {"base_model": _FLASH_BASE_MODEL},
+            [dict(_LOOKUP_TOOL)],
+            id="model_info base_model, tool template",
+        ),
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash"},
+            {"base_model": _FLASH_BASE_MODEL},
+            None,
+            id="model_info base_model, tokenizer",
+        ),
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash", "base_model": _FLASH_BASE_MODEL},
+            {},
+            [dict(_LOOKUP_TOOL)],
+            id="litellm_params base_model",
+        ),
+        pytest.param(
+            "azure_ai/Qwen3.5-397B-A17B",
+            {"model": "azure_ai/my-qwen"},
+            {"base_model": "azure_ai/qwen3.5-397b-a17b"},
+            [dict(_LOOKUP_TOOL)],
+            id="qwen3.5 base_model, tool template",
+        ),
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            {"model": "anthropic/my-opus"},
+            {"base_model": "anthropic/claude-opus-5-5"},
+            None,
+            id="provider-prefixed claude base_model, tokenizer",
+        ),
+    ],
+)
+async def test_token_counter_counts_a_custom_named_deployment_like_the_base_model_it_declares(
+    monkeypatch: pytest.MonkeyPatch,
+    served_model: str,
+    named_params: Mapping[str, str],
+    named_model_info: Mapping[str, str],
+    tools: list[dict[str, JsonValue]] | None,
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "https://example.services.ai.azure.com"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "named",
+                    "litellm_params": {**named_params, **credentials},
+                    "model_info": dict(named_model_info),
+                },
+                {"model_name": "served", "litellm_params": {"model": served_model, **credentials}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    named: Final = await token_counter(request=TokenCountRequest(model="named", messages=messages, tools=tools))
+    served: Final = await token_counter(request=TokenCountRequest(model="served", messages=messages, tools=tools))
 
     assert named.total_tokens == served.total_tokens
 

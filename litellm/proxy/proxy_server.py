@@ -15185,12 +15185,22 @@ def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
     )
 
 
+def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
+    return _non_empty_str(deployment.get("model_info", {}).get("base_model")) or _non_empty_str(
+        deployment.get("litellm_params", {}).get("base_model")
+    )
+
+
+def _unprefixed_base_model(deployment: _TokenCountDeployment) -> str | None:
+    base_model: Final = _deployment_base_model(deployment)
+    return None if base_model is None else base_model.split("/", 1)[-1]
+
+
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
-    model_info: Final = deployment.get("model_info", {})
-    params: Final = deployment.get("litellm_params", {})
-    base_model: Final = _non_empty_str(model_info.get("base_model")) or _non_empty_str(params.get("base_model"))
+    base_model: Final = _deployment_base_model(deployment)
     if base_model is not None:
         return base_model, None
+    params: Final = deployment.get("litellm_params", {})
     model: Final = _non_empty_str(params.get("model"))
     if model is None:
         return request_model, None
@@ -15546,7 +15556,7 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=deployment_openai_model(deployment_view) or model_to_use,
+        model=deployment_openai_model(deployment_view) or _unprefixed_base_model(deployment_view) or model_to_use,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
