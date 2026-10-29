@@ -5187,12 +5187,6 @@ def test_bedrock_converse_pdf_only_user_message_gets_text_block():
     ],
 )
 def test_anthropic_messages_pt_user_pdf_data_uri_becomes_document_block(model, llm_provider):
-    """
-    Regression for LIT-6778: an OpenAI client attaches a PDF as an image_url part
-    whose url is a pdf data URI. Every Anthropic-shaped API rejects
-    `{"type": "image", "media_type": "application/pdf"}`, so the user content must
-    carry a document block, with the block's cache breakpoint intact.
-    """
     messages = [
         {
             "role": "user",
@@ -5241,13 +5235,6 @@ _LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b6
     ids=["image_url", "file", "image_url_charset", "file_charset", "file_latin1"],
 )
 def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block, expected_text):
-    """
-    Anthropic's base64 document source only takes application/pdf; a text/plain
-    document has to travel as a `text` source carrying the decoded text, or the
-    API answers 400 on every Anthropic-shaped provider. The data URI may carry a
-    charset parameter, which must neither hide the text/plain type nor be ignored
-    when decoding the bytes.
-    """
     messages = [{"role": "user", "content": [{"type": "text", "text": "What is the code word?"}, block]}]
 
     result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
@@ -8900,11 +8887,6 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
 
 
 def test_anthropic_messages_pt_keeps_assistant_tool_use_content_block():
-    """
-    A conversation replayed from an Anthropic-shaped client carries the tool call
-    as a `tool_use` block inside the assistant content list. Dropping it orphans
-    the `tool_result` that answers it, and the API rejects the whole request.
-    """
     messages = [
         {"role": "user", "content": "what is the weather in paris"},
         {
@@ -8927,11 +8909,6 @@ def test_anthropic_messages_pt_keeps_assistant_tool_use_content_block():
 
 
 def test_anthropic_messages_pt_does_not_duplicate_a_tool_use_present_in_both_shapes():
-    """
-    The same call can arrive as a `tool_use` block and as a `tool_calls` entry.
-    Both shapes sanitize the id the same way, so the deduplication has to compare
-    the sanitized ids, not the raw ones.
-    """
     messages = [
         {"role": "user", "content": "what is the weather in paris"},
         {
@@ -8958,12 +8935,6 @@ def test_anthropic_messages_pt_does_not_duplicate_a_tool_use_present_in_both_sha
 
 
 def test_anthropic_messages_pt_sanitizes_a_native_tool_use_id_like_its_tool_result():
-    """
-    Anthropic only accepts tool ids matching ^[a-zA-Z0-9_-]+$, and the `tool_result`
-    side already sanitizes. A replayed `tool_use` block whose id came from another
-    client (`functions.Bash:0`) has to get the same treatment, or the two ids stop
-    matching and the request is rejected.
-    """
     messages = [
         {"role": "user", "content": "what is the weather in paris"},
         {
@@ -8986,11 +8957,6 @@ def test_anthropic_messages_pt_sanitizes_a_native_tool_use_id_like_its_tool_resu
 
 
 def test_anthropic_messages_pt_normalizes_a_native_tool_use_block():
-    """
-    A block accumulated from a stream carries a streaming `index` key and can hold
-    the arguments as a JSON string. Anthropic rejects both, so the block is rebuilt
-    from its id, name, and parsed input, keeping any cache_control the caller set.
-    """
     messages = [
         {"role": "user", "content": "what is the weather in paris"},
         {
@@ -9047,12 +9013,6 @@ def test_anthropic_messages_pt_normalizes_a_native_tool_use_block():
     ids=["png_bytes_under_a_pdf_uri_declared_png", "png_uri_declared_pdf", "pdf_bytes_declared_png"],
 )
 def test_anthropic_messages_pt_honours_an_explicit_format_over_the_data_uri(url, format_override, expected):
-    """
-    `format` is how a caller corrects a media type the data URI got wrong, so the
-    routing between image and document blocks has to read it before the URI's own
-    declared type. Bytes that are a PDF stay a document whatever the labels say,
-    since Anthropic rejects a PDF sent as an image.
-    """
     messages = [
         {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url, "format": format_override}}]}
     ]
@@ -9063,11 +9023,6 @@ def test_anthropic_messages_pt_honours_an_explicit_format_over_the_data_uri(url,
 
 
 def test_anthropic_messages_pt_collapses_native_tool_use_blocks_sharing_an_id():
-    """
-    A replayed history can carry the same call twice, once with the raw id and once
-    with the sanitized one, and both land on the same `tool_use_id`. Anthropic 400s
-    a request whose tool ids repeat, so only the first block may survive.
-    """
     messages = [
         {"role": "user", "content": "what is the weather in paris"},
         {
@@ -9093,12 +9048,6 @@ def test_anthropic_messages_pt_collapses_native_tool_use_blocks_sharing_an_id():
     ids=["no-format", "declared-png"],
 )
 def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block(image_url):
-    """
-    A tool can answer with a PDF it just fetched, which arrives as an `image_url`
-    entry inside the tool message's content list. Anthropic only accepts a PDF in a
-    document block, so the tool_result has to route it the same way user content does,
-    whatever image format the tool labelled it with.
-    """
     messages = [
         {"role": "user", "content": "fetch the invoice"},
         {
@@ -9133,11 +9082,6 @@ def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block
 
 
 def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri():
-    """
-    `format` is meant to name the media type when the data URI is vague, so naming
-    the type the URI already declares must not throw away its `charset`. Decoding
-    latin-1 bytes as utf-8 raises before the request ever leaves litellm.
-    """
     latin1_data_uri: Final = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
         "café".encode("iso-8859-1")
     ).decode()
@@ -9156,10 +9100,6 @@ def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri
 
 
 def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redaction():
-    """
-    A guardrail replaces tool input with the redaction sentinel, which is not JSON.
-    Rejecting it would turn every redacted replay into a 400.
-    """
     messages = [
         {"role": "user", "content": "hi"},
         {
@@ -9175,12 +9115,6 @@ def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redactio
 
 
 def test_anthropic_messages_pt_drops_a_native_tool_use_nobody_answered():
-    """
-    A stored conversation can leave a tool call without its result, the user moving
-    on with a plain message instead. Anthropic rejects a `tool_use` with no
-    `tool_result` right after it, and these replays were answered before native
-    blocks were kept, so an unanswered one is still left out.
-    """
     messages = [
         {"role": "user", "content": "what is the weather"},
         {
@@ -9217,11 +9151,6 @@ def _answered_native_tool_use(tool_use: dict[str, object]) -> list[dict[str, obj
     ids=["json-array-string", "list", "missing", "unparseable"],
 )
 def test_anthropic_messages_pt_native_tool_use_input_that_is_not_an_object_follows_drop_params(tool_use):
-    """
-    Anthropic only takes an object as tool input. Sending `{}` in place of what the
-    caller wrote changes the conversation, so that is only done when the caller asked
-    for unsupported values to be dropped, and is a client error otherwise.
-    """
     messages: Final = _answered_native_tool_use(tool_use)
 
     with pytest.raises(ValueError, match="get_weather"):
@@ -9234,10 +9163,6 @@ def test_anthropic_messages_pt_native_tool_use_input_that_is_not_an_object_follo
 
 
 def test_anthropic_messages_pt_unparseable_tool_call_arguments_follow_drop_params():
-    """
-    Broken `tool_calls` arguments are a client error, unless the caller asked for
-    unsupported values to be dropped, in which case the call goes out with no input.
-    """
     messages: Final = [
         {"role": "user", "content": "what is the weather"},
         {
@@ -9271,10 +9196,6 @@ _NAMED_PDF_DATA_URI = "data:application/pdf;name=report.pdf;base64," + base64.b6
     ids=["image_url", "file"],
 )
 def test_anthropic_messages_pt_sends_a_named_pdf_under_its_bare_media_type(block):
-    """
-    A data URI built from a file picker carries the file name in its media type, and
-    Anthropic's document media_type only takes `application/pdf` itself.
-    """
     result = anthropic_messages_pt(
         messages=[{"role": "user", "content": [block]}], model="claude-sonnet-5", llm_provider="anthropic"
     )
@@ -9292,11 +9213,6 @@ def test_anthropic_messages_pt_sends_a_named_pdf_under_its_bare_media_type(block
 
 
 def test_anthropic_messages_pt_keeps_a_pdf_a_document_when_the_format_is_generic():
-    """
-    A browser reports `application/octet-stream` for any file it cannot identify, so
-    that `format` says nothing about the bytes. Letting it override the data URI's own
-    `application/pdf` routes a real PDF into an image block Anthropic rejects.
-    """
     messages = [
         {"role": "user", "content": "fetch the invoice"},
         {
@@ -9336,11 +9252,6 @@ def test_anthropic_messages_pt_keeps_a_pdf_a_document_when_the_format_is_generic
 
 
 def test_anthropic_messages_pt_drops_data_uri_parameters_the_format_replaces():
-    """
-    A data URI built from a file picker carries the file name in its media type, which
-    Anthropic's media_type enum rejects. Naming the type in `format` is how a caller
-    cleans that up, so only the charset of a text attachment may survive it.
-    """
     png_data_uri: Final = "data:image/png;name=diagram.png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
     messages = [
         {
@@ -9360,11 +9271,6 @@ def test_anthropic_messages_pt_drops_data_uri_parameters_the_format_replaces():
 
 
 def test_anthropic_messages_pt_rejects_a_text_attachment_it_cannot_decode():
-    """
-    A text file a browser turned into a data URI names no charset, so bytes that are
-    not utf-8 cannot be read. The caller has to get a client error naming the problem,
-    never a decode failure carrying the whole attachment back in its message.
-    """
     undeclared_latin1: Final = "data:text/plain;base64," + base64.b64encode(
         "the secret code word is caf\xe9".encode("iso-8859-1") * 200
     ).decode()
@@ -9496,3 +9402,140 @@ def test_anthropic_messages_pt_cost_grows_linearly_with_parallel_native_tool_use
     growth: Final = _parallel_native_tool_use_seconds(1600) / _parallel_native_tool_use_seconds(400)
 
     assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool uses"
+
+
+_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _PNG_BASE64}},
+        {"type": "search_result", "source": "https://example.com", "title": "t", "content": [{"type": "text", "text": "abc"}]},
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "hello"}},
+    ],
+    ids=["image", "search_result", "document"],
+)
+@pytest.mark.parametrize("llm_provider", ["anthropic", "bedrock", "vertex_ai", "snowflake"])
+def test_anthropic_messages_pt_forwards_native_anthropic_user_blocks(block, llm_provider):
+    messages = [{"role": "user", "content": [{"type": "text", "text": "read this"}, block]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider=llm_provider)
+
+    assert result[0]["content"] == [{"type": "text", "text": "read this"}, block]
+
+
+def test_anthropic_messages_pt_inlines_a_native_url_image_for_a_base64_only_dialect(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
+
+    mock_client = MagicMock()
+    mock_client.get.return_value = httpx.Response(
+        200, content=base64.b64decode(_PNG_BASE64), headers={"Content-Type": "image/png"}
+    )
+    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
+    in_memory_cache.flush_cache()
+    block = {
+        "type": "image",
+        "source": {"type": "url", "url": "https://example.com/cat.png"},
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    result = anthropic_messages_pt(
+        messages=[{"role": "user", "content": [block]}], model="claude-sonnet-5", llm_provider="vertex_ai"
+    )
+
+    assert result[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": _PNG_BASE64},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize("llm_provider", ["anthropic", "snowflake"])
+def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_native_tool_result(
+    monkeypatch, modify_params, llm_provider
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "checking"},
+                {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {"city": "Paris"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "sunny"}],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider=llm_provider)
+
+    assert result[1:] == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "checking"},
+                {"type": "tool_use", "id": "functions_get_weather_0", "name": "get_weather", "input": {"city": "Paris"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_get_weather_0", "content": "sunny"}]},
+    ]
+
+
+def test_anthropic_messages_pt_keeps_a_native_tool_use_answered_by_a_tool_message_under_modify_params(monkeypatch):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages = [
+        {"role": "user", "content": "what is the weather"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]},
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1:] == [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}]},
+    ]
+
+
+def test_anthropic_messages_pt_drops_a_native_tool_result_the_previous_turn_never_called():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_missing", "content": "sunny"},
+                {"type": "text", "text": "and now?"},
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[2] == {"role": "user", "content": [{"type": "text", "text": "and now?"}]}
+
+
+def test_create_anthropic_image_param_sends_a_downloaded_pdf_as_a_document(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
+
+    pdf_bytes = b"%PDF-1.4\n1 0 obj\n"
+    mock_client = MagicMock()
+    mock_client.get.return_value = httpx.Response(200, content=pdf_bytes, headers={"Content-Type": "application/pdf"})
+    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
+    in_memory_cache.flush_cache()
+
+    block = create_anthropic_image_param("https://example.com/report.pdf", is_bedrock_invoke=True)
+
+    assert block == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()},
+    }

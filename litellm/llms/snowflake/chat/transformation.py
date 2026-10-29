@@ -207,7 +207,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     ) -> tuple[list[AnthropicSystemMessageContent] | None, list[AllAnthropicPassThroughMessageValues]]:
         """Cortex's /messages endpoint speaks Anthropic's dialect, so the shared translators own the shape."""
         conversation_messages: Final = list(messages)
-        system: Final = AnthropicConfig().translate_system_message(messages=conversation_messages)
+        system: Final = [
+            part
+            for part in AnthropicConfig().translate_system_message(messages=conversation_messages)
+            if part.get("type") == "text"
+        ]
         try:
             conversation: Final = anthropic_messages_pt(
                 messages=conversation_messages,

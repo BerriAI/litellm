@@ -683,9 +683,6 @@ class TestSnowflakeCortexClaudeFixes:
         }
 
     def test_assistant_tool_use_content_block_survives_the_transform(self):
-        """A client replaying an Anthropic-shaped history sends the tool call as a
-        tool_use block inside assistant content; dropping it orphans the tool_result
-        that answers it and Cortex rejects the request."""
         body = self._transform(
             [
                 {"role": "user", "content": "what is the weather in paris"},
@@ -708,9 +705,6 @@ class TestSnowflakeCortexClaudeFixes:
         ]
 
     def test_native_tool_use_id_is_sanitized_like_its_tool_result(self):
-        """Cortex takes Anthropic's id pattern, and the tool_result side already sanitizes,
-        so a replayed id like functions.Bash:0 has to be sanitized on both sides or the two
-        stop matching."""
         body = self._transform(
             [
                 {"role": "user", "content": "what is the weather in paris"},
@@ -735,9 +729,22 @@ class TestSnowflakeCortexClaudeFixes:
             {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "sunny"}
         ]
 
+    def test_system_prompt_keeps_only_its_text_parts(self):
+        body = self._transform(
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "be terse"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        assert body["system"] == [{"type": "text", "text": "be terse"}]
+
     def test_unknown_charset_on_a_text_attachment_is_a_400(self):
-        """An unknown encoding label is a client mistake, so it has to come back as a 400
-        naming the encoding instead of a 500 from the decode."""
         with pytest.raises(SnowflakeException) as exc_info:
             self._transform(
                 [

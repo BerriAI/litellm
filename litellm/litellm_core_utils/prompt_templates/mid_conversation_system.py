@@ -58,7 +58,9 @@ CONVERTED_SYSTEM_NOTE: Final = (
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _NO_IDS: Final[frozenset[str]] = frozenset()
-_RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
+_RENDERED_PART_TYPES: Final = frozenset(
+    {"text", "image_url", "document", "file", "image", "search_result", "tool_result"}
+)
 _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
@@ -325,6 +327,16 @@ def _tool_result_ids(answers: Iterable[object]) -> Iterator[str]:
             yield sanitize_anthropic_tool_use_id(tool_call_id)
 
 
+def _native_tool_result_ids(messages: Iterable[object]) -> Iterator[str]:
+    for message in messages:
+        for part in parts_of(message_field(message, "content")):
+            if message_field(part, "type") == "tool_result" and isinstance(
+                tool_use_id := message_field(part, "tool_use_id"), str
+            ):
+                yield tool_use_id
+                yield sanitize_anthropic_tool_use_id(tool_use_id)
+
+
 def answered_tool_call_ids(messages: Sequence[object], assistant_index: int) -> frozenset[str]:
     from_assistant: Final = (messages[index] for index in range(assistant_index, len(messages)))
     following: Final = dropwhile(lambda message: message_field(message, "role") == "assistant", from_assistant)
@@ -343,8 +355,9 @@ def _answered_by_assistant_index(
     groups: Sequence[tuple[str, tuple[tuple[int, object], ...]]], group_index: int
 ) -> Iterator[tuple[int, frozenset[str]]]:
     following: Final = groups[group_index + 1] if group_index + 1 < len(groups) else ("other", ())
-    answered: Final = (
-        frozenset(_tool_result_ids(message for _, message in following[1])) if following[0] == "tool" else _NO_IDS
+    following_messages: Final = tuple(message for _, message in following[1])
+    answered: Final = frozenset(
+        _tool_result_ids(following_messages) if following[0] == "tool" else _native_tool_result_ids(following_messages)
     )
     return ((index, answered) for index, _ in groups[group_index][1])
 
