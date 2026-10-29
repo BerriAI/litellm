@@ -14,6 +14,8 @@ Tests cover:
 - security screening: a ``sanitized_fallback``, or an engaged block that
   screening quarantined, is applied even where an ordinary selection would be
   declined, because declining would forward the flagged spans.
+- /v1/responses: a function_call_output is selected and written back through
+  LiteLLM's Responses translation.
 """
 
 import asyncio
@@ -122,6 +124,16 @@ async def _run(guardrail: NeedlepathGuardrail, post_mock, messages=None) -> Gene
             request_data={"model": "gpt-4o"},
             input_type="request",
         )
+
+
+async def _run_expect_unchanged(guardrail: NeedlepathGuardrail, post_mock, messages=None) -> None:
+    """A decline hands back the exact inputs object, with every message byte-identical."""
+    msgs = AGENT_MESSAGES if messages is None else messages
+    inputs = _apply_inputs(msgs)
+    with patch.object(guardrail.async_handler, "post", post_mock):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={"model": "gpt-4o"}, input_type="request")
+    assert result is inputs
+    assert result["structured_messages"] == msgs
 
 
 def _assert_byte_identical(result: GenericGuardrailAPIInputs, messages=None) -> None:
@@ -331,15 +343,13 @@ async def test_fail_open_zero_tokens_after(guardrail: NeedlepathGuardrail):
 @pytest.mark.asyncio
 async def test_fail_open_blank_rendered_context(guardrail: NeedlepathGuardrail):
     post = AsyncMock(return_value=_select_response(rendered_context="   "))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
 
 
 @pytest.mark.asyncio
 async def test_fail_open_missing_rendered_context(guardrail: NeedlepathGuardrail):
     post = AsyncMock(return_value=_select_response(omit_rendered_context=True))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
 
 
 @pytest.mark.asyncio
@@ -377,30 +387,38 @@ async def test_fail_open_http_error_status(guardrail: NeedlepathGuardrail, statu
     request = httpx.Request("POST", f"{FAKE_API_BASE}/v1/context/select")
     response = httpx.Response(status_code, request=request, text="upstream detail")
     post = AsyncMock(side_effect=httpx.HTTPStatusError("boom", request=request, response=response))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
 
 
 @pytest.mark.asyncio
 async def test_fail_open_non_2xx_without_raise_for_status(guardrail: NeedlepathGuardrail):
     """A handler configured not to raise still yields a non-2xx response object."""
     post = AsyncMock(return_value=_select_response(status=429))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
 
 
 @pytest.mark.asyncio
 async def test_fail_open_timeout(guardrail: NeedlepathGuardrail):
     post = AsyncMock(side_effect=httpx.ReadTimeout("timed out"))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
 
 
 @pytest.mark.asyncio
 async def test_fail_open_transport_error(guardrail: NeedlepathGuardrail):
     post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
+
+
+@pytest.mark.asyncio
+async def test_fail_open_unexpected_client_exception(guardrail: NeedlepathGuardrail):
+    """An exception outside httpx's hierarchy is still a decline, not a 500."""
+    await _run_expect_unchanged(guardrail, AsyncMock(side_effect=RuntimeError("client closed")))
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_not_swallowed(guardrail: NeedlepathGuardrail):
+    with pytest.raises(asyncio.CancelledError):
+        await _run(guardrail, AsyncMock(side_effect=asyncio.CancelledError()))
 
 
 @pytest.mark.asyncio
@@ -409,8 +427,7 @@ async def test_fail_open_malformed_json(guardrail: NeedlepathGuardrail):
     mock.status_code = 200
     mock.json.side_effect = ValueError("not json")
     mock.text = "<html>gateway error</html>"
-    result = await _run(guardrail, AsyncMock(return_value=mock))
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, AsyncMock(return_value=mock))
 
 
 @pytest.mark.asyncio
@@ -420,16 +437,14 @@ async def test_fail_open_unexpected_schema(guardrail: NeedlepathGuardrail):
     mock.status_code = 200
     mock.json.return_value = ["not", "an", "object"]
     mock.text = ""
-    result = await _run(guardrail, AsyncMock(return_value=mock))
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, AsyncMock(return_value=mock))
 
 
 @pytest.mark.asyncio
 async def test_fail_open_selection_not_smaller(guardrail: NeedlepathGuardrail):
     """A block that is not shorter than the original could only add tokens."""
     post = AsyncMock(return_value=_select_response(rendered_context=TOOL_OUTPUT + " and more"))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
 
 
 # ── security screening outcomes ───────────────────────────────────────
@@ -545,8 +560,7 @@ async def test_fail_open_blocked(guardrail: NeedlepathGuardrail):
 async def test_fail_open_blocked_even_with_selected_records(guardrail: NeedlepathGuardrail):
     """The outcome decides, not the counters next to it."""
     post = AsyncMock(return_value=_select_response(outcome="blocked"))
-    result = await _run(guardrail, post)
-    _assert_byte_identical(result)
+    await _run_expect_unchanged(guardrail, post)
 
 
 @pytest.mark.asyncio
@@ -631,3 +645,39 @@ async def test_concurrent_selections_are_bounded(guardrail: NeedlepathGuardrail)
 
     assert high_water <= _MAX_CONCURRENT_SELECTIONS
     assert all(m["content"] == SELECTED_BLOCK for m in result["structured_messages"][1:])
+
+
+# ── /v1/responses ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_responses_api_function_call_output_is_selected_and_written_back(
+    guardrail: NeedlepathGuardrail,
+):
+    """Through LiteLLM's Responses translation, a function_call_output is
+    selected against its call's intent and the block is written back."""
+    from litellm.llms.openai.responses.guardrail_translation.handler import (
+        OpenAIResponsesHandler,
+    )
+
+    data = {
+        "model": "gpt-4o",
+        "input": [
+            {"role": "user", "content": USER_QUESTION},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "edgar_search",
+                "arguments": '{"cik": "0000320193"}',
+            },
+            {"type": "function_call_output", "call_id": "call_1", "output": TOOL_OUTPUT},
+        ],
+    }
+    post = AsyncMock(return_value=_select_response())
+    with patch.object(guardrail.async_handler, "post", post):
+        out = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert post.call_count == 1
+    assert post.call_args.kwargs["json"]["task"]["prompt"] == 'edgar_search: {"cik": "0000320193"}'
+    assert out["input"][2]["output"] == SELECTED_BLOCK
+    assert out["input"][0] == {"role": "user", "content": USER_QUESTION}

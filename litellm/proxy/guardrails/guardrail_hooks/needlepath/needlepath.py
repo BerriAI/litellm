@@ -440,6 +440,11 @@ class NeedlepathGuardrail(CustomGuardrail):
             # problem from escaping as a 500.
             self._decline("transport", {"detail": str(e)})
             return None
+        except Exception as e:  # noqa: BLE001  # fail-open: any client error is a decline
+            # Anything else the shared client raises is still a decline. A
+            # selection problem must never become a failed LLM request.
+            self._decline("unexpected_error", {"error_type": type(e).__name__, "detail": str(e)})
+            return None
 
     async def _selected_text(self, text: str, query: str, title: str | None, source: object, kind: str) -> str | None:
         """The selected block for one message, or None to keep the original.
