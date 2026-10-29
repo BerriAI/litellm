@@ -44,6 +44,8 @@ from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import Final
 
+import httpx
+
 from litellm.constants import (
     EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS,
     EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING,
@@ -101,7 +103,7 @@ def _mounted_transports(holder: object) -> tuple[object, ...]:
     return tuple(
         mounted
         for mounted in mounts.values()  # pyright: ignore[reportUnknownVariableType]  # untyped httpx mount map
-        if mounted is not None
+        if isinstance(mounted, (httpx.AsyncBaseTransport, httpx.BaseTransport))
     )
 
 
