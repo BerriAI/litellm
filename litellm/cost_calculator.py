@@ -3643,23 +3643,43 @@ def handle_realtime_transcription_cost_calculation(
       - {"type": "duration", "seconds": <float>}  → priced via input_cost_per_second
       - {"type": "tokens", "input_tokens": ...}    → priced via input/audio token cost
     """
-    completed_events: Final = [
-        cast(dict, result) for result in results if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
-    ]
+    completed_events: Final = tuple(
+        _REALTIME_TRANSCRIPTION_OBJECT.validate_python(result)
+        for result in results
+        if result.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE
+    )
     if not completed_events:
         return 0.0
 
     model_name: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
-    model_info: Final = _get_model_info_or_none(model_name, custom_llm_provider)
     override_info: Final = (
         _get_model_info_or_none(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
 
-    total_cost = 0.0
-    for event in completed_events:
-        usage = event.get("usage") or {}
-        total_cost += _transcription_usage_cost(usage, model_info, override_info)
-    return total_cost
+    return sum(
+        _realtime_transcription_event_cost(event, model_name, litellm_model_name, custom_llm_provider, override_info)
+        for event in completed_events
+    )
+
+
+def _realtime_transcription_event_cost(
+    event: Mapping[str, object],
+    default_model: str,
+    routed_model: str,
+    custom_llm_provider: str,
+    override_info: ModelInfo | None,
+) -> float:
+    reported_model: Final = event.get("litellm_transcription_model")
+    event_model: Final = reported_model if isinstance(reported_model, str) else default_model
+    model_info: Final = _get_model_info_or_none(event_model, custom_llm_provider)
+    event_override: Final = (
+        override_info if not isinstance(reported_model, str) or event_model == routed_model else None
+    )
+    usage: Final = _REALTIME_TRANSCRIPTION_OBJECT.validate_python(event.get("usage") or {})
+    return _transcription_usage_cost(usage, model_info, event_override)
+
+
+_REALTIME_TRANSCRIPTION_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 def _get_transcription_model_name_from_results(
