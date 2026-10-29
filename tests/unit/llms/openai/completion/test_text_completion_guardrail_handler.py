@@ -510,3 +510,16 @@ class TestStreamingOutputProcessing:
             ("", "content_filter"),
         ]
         assert frames[-1]["usage"]["total_tokens"] == 8
+
+    @pytest.mark.asyncio
+    async def test_flat_stream_passthrough_block_reports_no_usage_the_upstream_never_sent(self):
+        guardrail = _PassthroughReplaceGuardrail(
+            guardrail_name="passthrough", event_hook=GuardrailEventHooks.post_call, default_on=True
+        )
+        chunks = [_text_chunk(0, "A kum"), _text_chunk(0, "quat tart"), _text_chunk(0, "", "stop")]
+
+        delivered = await _drive_flat_stream(guardrail, [chunk.model_copy(update={"usage": None}) for chunk in chunks])
+
+        frames = [json.loads(item.decode().removeprefix("data: ")) for item in delivered if isinstance(item, bytes)]
+        assert frames[-1]["choices"][0]["finish_reason"] == "content_filter"
+        assert [frame for frame in frames if "usage" in frame] == []

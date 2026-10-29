@@ -270,26 +270,20 @@ class OpenAITextCompletionHandler(BaseTranslation):
     ) -> Sequence[bytes]:
         streamed: Final = _text_completion_chunks(responses_so_far or ())
         source: Final = streamed[0] if streamed else TextCompletionResponse(model=exc.model)
-        prompt_tokens, completion_tokens = blocked_chat_stream_usage(exc.original_response)
         message_chunk: Final = TextCompletionResponse(
             id=source.id,
             created=source.created,
             model=source.model or exc.model,
             object="text_completion",
             choices=[TextChoices(index=0, text=exc.message)],
-        )
+        ).model_copy(update={"usage": None})
         final_chunk: Final = TextCompletionResponse(
             id=source.id,
             created=source.created,
             model=source.model or exc.model,
             object="text_completion",
             choices=[TextChoices(index=0, text="", finish_reason="content_filter")],
-            usage=Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
-        )
+        ).model_copy(update={"usage": _blocked_stream_usage(exc.original_response)})
         return tuple(
             f"data: {chunk.model_dump_json(exclude_none=True)}\n\n".encode() for chunk in (message_chunk, final_chunk)
         )
@@ -345,6 +339,17 @@ class OpenAITextCompletionHandler(BaseTranslation):
         for choice in tail:
             if isinstance(stream_item_field(choice, "text"), str):
                 choice.text = ""
+
+
+def _blocked_stream_usage(original_response: object) -> Usage | None:
+    prompt_tokens, completion_tokens = blocked_chat_stream_usage(original_response)
+    if isinstance(original_response, list) and prompt_tokens == completion_tokens == 0:
+        return None
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
 
 
 def _text_completion_chunks(responses_so_far: Sequence[object]) -> tuple[TextCompletionResponse, ...]:

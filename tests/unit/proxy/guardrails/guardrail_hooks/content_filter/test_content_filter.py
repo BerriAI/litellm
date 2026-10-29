@@ -30,7 +30,15 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterCategoryConfig,
     ContentFilterDetection,
 )
-from litellm.types.utils import StandardLoggingGuardrailInformation, TextChoices, TextCompletionResponse
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    StandardLoggingGuardrailInformation,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 
 class TestContentFilterGuardrail:
@@ -3561,6 +3569,65 @@ async def test_streaming_hook_masks_a_word_split_across_text_completion_chunks()
 
     assert "".join(chunk.choices[0].text or "" for chunk in delivered) == "A [KEYWORD_REDACTED] tart"
     assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_status"] == "success"
+
+
+_LONG_TAIL: Final = "the quick brown fox jumps over the lazy dog and then eats a ripe persimmon"
+
+
+async def _text_completion_n2_stream_without_choice_1_finish():
+    for index, text, finish_reason in (
+        (0, "A short answer", None),
+        (1, _LONG_TAIL[:30], None),
+        (1, _LONG_TAIL[30:], None),
+        (0, None, "stop"),
+    ):
+        yield TextCompletionResponse(
+            id="cmpl-stream",
+            model="gpt-3.5-turbo-instruct",
+            object="text_completion",
+            choices=[TextChoices(index=index, text=text, finish_reason=finish_reason)],
+        )
+
+
+async def _chat_n2_stream_without_choice_1_finish():
+    for index, content, finish_reason in (
+        (0, "A short answer", None),
+        (1, _LONG_TAIL[:30], None),
+        (1, _LONG_TAIL[30:], None),
+        (0, None, "stop"),
+    ):
+        yield ModelResponseStream(
+            id="chatcmpl-stream",
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason)],
+        )
+
+
+def _streamed_text(chunk: ModelResponseStream | TextCompletionResponse, index: int) -> str:
+    return "".join(_choice_text(choice) for choice in chunk.choices if choice.index == index)
+
+
+def _choice_text(choice: TextChoices | StreamingChoices) -> str:
+    content: Final = stream_item_field(choice, "text") if isinstance(choice, TextChoices) else choice.delta.content
+    return content if isinstance(content, str) else ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream", [_text_completion_n2_stream_without_choice_1_finish, _chat_n2_stream_without_choice_1_finish]
+)
+async def test_streaming_hook_releases_the_held_tail_of_a_choice_the_stream_never_finished(stream):
+    delivered: Final = [
+        chunk
+        async for chunk in _fruit_word_filter().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(), response=stream(), request_data={}
+        )
+    ]
+
+    assert "".join(_streamed_text(chunk, 0) for chunk in delivered) == "A short answer"
+    assert "".join(_streamed_text(chunk, 1) for chunk in delivered) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )
 
 
 @pytest.mark.asyncio
