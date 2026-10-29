@@ -124,6 +124,8 @@ _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     }
 )
 
+_UNBILLED_CALL_TYPES: Final[frozenset[str]] = frozenset({"_arealtime", CallTypes.afile_delete.value})
+
 # Both spellings, because call_type reaches the callback as str(...) of either the
 # enum member or its value.
 _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
@@ -730,9 +732,9 @@ class _ProxyDBLogger(CustomLogger):
                     )
                     return
                 await _release_budget_reservation(budget_reservation=budget_reservation)
-                # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
-                # Use .get() for "stream" to avoid KeyError on health checks.
-                if sl_object is None and (not kwargs.get("model") or kwargs.get("call_type") == "_arealtime"):
+                # Health checks and file deletes have no standard_logging_object, and a file delete routed
+                # to a deployment still carries its model. Use .get() for "stream" to avoid KeyError on health checks.
+                if sl_object is None and (not kwargs.get("model") or kwargs.get("call_type") in _UNBILLED_CALL_TYPES):
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object for call_type=%s",
                         kwargs.get("call_type", "unknown"),

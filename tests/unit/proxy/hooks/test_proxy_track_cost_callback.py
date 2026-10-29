@@ -1442,11 +1442,20 @@ class _FailedTrackingAlerts:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("call_type", "alerted"), [("_aresponses_websocket", True), ("_arealtime", False)])
-async def test_track_cost_callback_alerts_on_a_websocket_turn_with_no_logging_object(call_type: str, alerted: bool):
+@pytest.mark.parametrize(
+    ("call_type", "model", "alerted"),
+    [
+        ("_aresponses_websocket", "gpt-5-mini", True),
+        ("_arealtime", "gpt-5-mini", False),
+        ("afile_delete", "openai/*", False),
+    ],
+)
+async def test_track_cost_callback_alerts_only_on_a_billable_call_with_no_logging_object(
+    call_type: str, model: str, alerted: bool
+):
     kwargs: Final = {
         "call_type": call_type,
-        "model": "gpt-5-mini",
+        "model": model,
         "litellm_call_id": "turn-call-id",
         "litellm_params": {},
         "stream": False,
