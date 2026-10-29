@@ -146,3 +146,46 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     assert response["id"] == MESSAGES_RESPONSE["id"]
     body, _ = sent(server)
     assert (body["metadata"], body["system"], body["temperature"]) == (args[3], args[6], args[7])
+
+
+def _user_text(*texts: object) -> tuple[dict[str, object], ...]:
+    return ({"role": "user", "content": [{"type": "text", "text": text} for text in texts]},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "error"),
+    (
+        (_user_text("hi", None), r"messages\.0\.content\.1\.text: Input should be a valid string"),
+        (_user_text("hi", 42), r"messages\.0\.content\.1\.text: Input should be a valid string"),
+    ),
+)
+async def test_sync_call_rejects_non_string_user_text_before_io_without_drop_params(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, messages: tuple[dict[str, object], ...], error: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match=error):
+        await call(server, asynchronous=False, messages=messages)
+
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", (None, 42))
+async def test_sync_call_drops_non_string_user_text_with_drop_params(server: RecordingServer, malformed: object) -> None:
+    await call(server, asynchronous=False, messages=_user_text("hi", malformed), drop_params=True)
+
+    body, _ = sent(server)
+    assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+
+
+@pytest.mark.asyncio
+async def test_sync_call_rejects_messages_emptied_by_drop_params(server: RecordingServer) -> None:
+    server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match="no message has content left"):
+        await call(server, asynchronous=False, messages=_user_text(None), drop_params=True)
+
+    assert server.requests == []

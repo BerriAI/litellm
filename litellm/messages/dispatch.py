@@ -1,10 +1,19 @@
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+from pydantic import TypeAdapter
+
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.anthropic.messages.convertible_blocks import (
+    drop_non_string_texts,
+    malformed_text_error,
+    reject_emptied_messages,
+    reject_malformed_text,
+)
 from litellm.llms.anthropic.messages.native import handler as main
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
@@ -13,6 +22,7 @@ from litellm.rust_bridge.messages import detectors as route_detectors
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
+    NativeMessages,
 )
 from litellm.rust_bridge.public_call import (
     AsyncFlag,
@@ -52,6 +62,7 @@ _MESSAGES: Final = signature(_PYTHON_MESSAGES)
 _FLAG: Final = AsyncFlag("is_async", sync=_MESSAGES, is_set=bool)
 _PYTHON_AMESSAGES: Final = _python_amessages()
 _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
+_MESSAGE_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _native_kwargs(fields: Mapping[str, object], kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -112,7 +123,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
         Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
         Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
-        Feature.MALFORMED_TEXT: route_detectors.malformed_text,
     }
 )
 
@@ -122,6 +132,7 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
+        Feature.MALFORMED_TEXT: route_detectors.malformed_text,
     }
 )
 
@@ -151,6 +162,25 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+def _without_malformed_text(call: NativeCall) -> NativeCall:
+    request: Final = call.resolved
+    messages: Final = optional_sequence(request.get("messages")) or ()
+    if malformed_text_error(messages) is None:
+        return call
+    model: Final = str(request["model"])
+    reject_malformed_text(messages, model, request)
+    sent: Final = _MESSAGE_LIST.validate_python(messages)
+    kept: Final = drop_non_string_texts(sent, request.get("drop_params"))
+    reject_emptied_messages(sent, kept, model, optional_str(request.get("custom_llm_provider")))
+    return replace(call, kwargs={**call.kwargs, "messages": kept})
+
+
+def _native_messages(
+    hook: NativeMessages, call: NativeCall, _args: tuple[object, ...], _kwargs: Mapping[str, object]
+) -> AnthropicMessagesResponse | Iterator[bytes]:
+    return hook(_without_malformed_text(call))
+
+
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
@@ -163,7 +193,7 @@ def anthropic_messages_handler(
         _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_MESSAGES,
-        native=native_call_hook,
+        native=_native_messages,
     )
 
 

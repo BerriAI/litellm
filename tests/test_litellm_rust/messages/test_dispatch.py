@@ -485,12 +485,6 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
             {"stream": True},
             {"include_cost_in_streaming_usage": True},
         ),
-        (
-            Feature.MALFORMED_TEXT,
-            "anthropic/claude-sonnet-4-5",
-            {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": None}]}]},
-            {},
-        ),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(
@@ -544,6 +538,12 @@ ASYNC_ONLY_FEATURES: Final = (
         {},
         id="messages-interceptor",
     ),
+    pytest.param(
+        Feature.MALFORMED_TEXT,
+        {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": None}]}]},
+        {},
+        id="malformed-text",
+    ),
 )
 
 
@@ -559,7 +559,8 @@ async def test_handler_hooks_the_sync_entry_never_runs_keep_only_async_calls_on_
     python_result: Final = response()
     native_result: Final = response()
     model: Final = str(kwargs.get("model", "anthropic/claude-sonnet-4-5"))
-    call_kwargs: Final = {name: value for name, value in kwargs.items() if name != "model"}
+    messages: Final = kwargs.get("messages", MESSAGES)
+    call_kwargs: Final = {name: value for name, value in kwargs.items() if name not in {"model", "messages"}}
 
     async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
         return python_result
@@ -571,7 +572,7 @@ async def test_handler_hooks_the_sync_entry_never_runs_keep_only_async_calls_on_
     for name, value in settings.items():
         monkeypatch.setattr(litellm, name, value)
     served_async: Final = await _ADISPATCH.arun(
-        (16, MESSAGES, model),
+        (16, messages, model),
         call_kwargs,
         python=python,
         binding=amessages_binding(native),
@@ -579,7 +580,7 @@ async def test_handler_hooks_the_sync_entry_never_runs_keep_only_async_calls_on_
         rules=rules,
     )
     served_sync: Final = _DISPATCH.run(
-        (16, MESSAGES, model),
+        (16, messages, model),
         call_kwargs,
         python=lambda *call_args, **python_kwargs: python_result,
         binding=messages_binding(lambda request: native_result),

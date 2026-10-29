@@ -371,9 +371,7 @@ def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
             return drops_unsupported_params(None)
 
 
-def reject_malformed_text(
-    messages: Iterable[Mapping[str, object]], model: str, forwarded_kwargs: Mapping[str, object]
-) -> None:
+def reject_malformed_text(messages: Iterable[object], model: str, forwarded_kwargs: Mapping[str, object]) -> None:
     if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
         return
     error: Final = malformed_text_error(messages)
