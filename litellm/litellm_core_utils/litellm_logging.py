@@ -564,6 +564,11 @@ def _resolve_mantle_region_for_cost(
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _REDACTED_RESULT: Final = TypeAdapter(object)
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+
+
+def _without_guardrail_information(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in metadata.items() if key != _GUARDRAIL_INFORMATION_KEY}
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -2493,6 +2498,23 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt: Final = copy.copy(self)
         attempt.model_call_details = dict(self.model_call_details)
         return attempt
+
+    def guardrail_scoped_copy(self) -> "Logging":
+        request_params: Final = _LITELLM_PARAMS.validate_python(
+            self.litellm_params or {}  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+        )
+        litellm_params: Final = {
+            **request_params,
+            **{
+                key: _without_guardrail_information(_METADATA_MAPPING.validate_python(value))
+                for key, value in request_params.items()
+                if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
+            },
+        }
+        scoped: Final = copy.copy(self)
+        scoped.litellm_params = litellm_params
+        scoped.model_call_details = {**self.model_call_details, "litellm_params": litellm_params}
+        return scoped
 
     def dispatch_attempt_failure_handlers(
         self, exception: Exception, traceback_exception: str

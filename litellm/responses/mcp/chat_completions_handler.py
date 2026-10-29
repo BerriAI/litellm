@@ -273,6 +273,18 @@ async def acompletion_with_mcp(
                 if isinstance(round_billing, ChatStreamRoundBilling):
                     round_billing.release_abandoned()
 
+            def bill_in_flight_round_on_disconnect(self) -> None:
+                follow_up: Final[object] = self.follow_up_stream
+                if (
+                    self._round_billing is None
+                    or self.follow_up_exhausted
+                    or not isinstance(follow_up, CustomStreamWrapper)
+                ):
+                    return
+                partial: Final = follow_up.partial_response()
+                if isinstance(partial, ModelResponse):
+                    self._round_billing.bill_partial_follow_up(partial)
+
             def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_list_tools to the first chunk."""
                 from litellm.types.utils import (
@@ -597,6 +609,9 @@ async def acompletion_with_mcp(
             async def aclose(self) -> None:
                 self._custom_iterator.release_abandoned()
                 await super().aclose()
+
+            def bill_in_flight_round_on_disconnect(self) -> None:
+                self._custom_iterator.bill_in_flight_round_on_disconnect()
 
             def __iter__(self):
                 # For synchronous iteration, create a sync wrapper

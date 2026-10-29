@@ -104,11 +104,12 @@ def gateway(_llm_gateway: tuple[Gateway, Mapping[str, str]]) -> Iterator[Gateway
 
 
 ROUND_USAGE_GUARDRAIL: Final = "mcp-llm-round-usage"
+CONTENT_FILTER: Final = f"mcp-llm-content-filter-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture(scope="module")
 def _guarded_llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Mapping[str, str]]]:
-    guardrail: Final[Mapping[str, JsonValue]] = {
+    round_usage: Final[Mapping[str, JsonValue]] = {
         "guardrail_name": ROUND_USAGE_GUARDRAIL,
         "litellm_params": {
             "guardrail": "integration._support.hook_count_probe.UsageRecordingPostCallGuardrail",
@@ -116,7 +117,17 @@ def _guarded_llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[t
             "default_on": True,
         },
     }
-    with _private_gateway(tmp_path_factory.mktemp("mcp-llm-guarded-gateway"), (guardrail,)) as served:
+    content_filter: Final[Mapping[str, JsonValue]] = {
+        "guardrail_name": CONTENT_FILTER,
+        "litellm_params": {
+            "guardrail": "litellm_content_filter",
+            "mode": "post_call",
+            "default_on": False,
+            "blocked_words": [{"keyword": "forbidden-keeper", "action": "BLOCK"}],
+        },
+    }
+    guardrails: Final = (round_usage, content_filter)
+    with _private_gateway(tmp_path_factory.mktemp("mcp-llm-guarded-gateway"), guardrails) as served:
         yield served
 
 
@@ -1153,6 +1164,59 @@ def test_streaming_chat_auto_execute_whose_follow_up_fails_runs_the_post_call_gu
         ]
 
 
+def _chat_rows(call_id: str, statuses: Sequence[str]) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s AND call_type=%s',
+            (call_id, "acompletion"),
+        ),
+        lambda found: _statuses(found) == sorted(statuses),
+        seconds=70,
+    )
+
+
+def _entries_of(guardrail_name: str, row: Mapping[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(
+        entry
+        for entry in _guardrail_information(row["metadata"])
+        if isinstance(entry, dict) and entry.get("guardrail_name") == guardrail_name
+    )
+
+
+def test_streaming_chat_auto_execute_whose_follow_up_fails_counts_its_post_call_content_filter_once(
+    guarded_gateway: Gateway,
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_fails=True)
+    with _rig(guarded_gateway, "chat", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(
+            _granted_key(rig),
+            [AUTO],
+            stream=True,
+            stream_options={"include_usage": True},
+            guardrails=[CONTENT_FILTER],
+        )
+        assert FOLLOW_UP_OUTAGE in response.text, response.text
+        rows: Final = _chat_rows(response.headers["x-litellm-call-id"], ("success", "failure"))
+        filtered: Final = tuple(
+            (row["status"], entry.get("guardrail_status")) for row in rows for entry in _entries_of(CONTENT_FILTER, row)
+        )
+        assert filtered == (("failure", "guardrail_failed_to_respond"),), rows
+        (guardrail_id,) = frozenset(
+            str(entry.get("guardrail_id") or CONTENT_FILTER)
+            for row in rows
+            for entry in _entries_of(CONTENT_FILTER, row)
+        )
+        counted: Final = eventually(
+            lambda: read_rows(
+                'SELECT requests_evaluated, flagged_count FROM "LiteLLM_DailyGuardrailMetrics" WHERE guardrail_id=%s',
+                (guardrail_id,),
+            ),
+            lambda found: bool(found),
+            seconds=70,
+        )
+        assert counted == [{"requests_evaluated": 1, "flagged_count": 1}], counted
+
+
 @pytest.mark.parametrize("include_usage", (True, False), ids=("include-usage", "no-usage"))
 def test_streaming_chat_auto_execute_answered_in_one_round_ends_with_the_usage_it_billed(
     gateway: Gateway, include_usage: bool
@@ -1428,6 +1492,27 @@ def test_streaming_responses_follow_up_broken_mid_stream_bills_round_one_once_an
         assert min(failed_round) > 0, rows
         assert reported_usage in (None, failed_round), rows
         assert float(str(failure["spend"])) == pytest.approx(_price(failed_round)), rows
+
+
+def test_streaming_chat_follow_up_broken_mid_answer_bills_round_one_and_its_partial_answer_with_one_fixed_margin(
+    gateway: Gateway,
+) -> None:
+    billing: Final = Billing(FIRST_ROUND, FOLLOW_UP_ROUND, follow_up_breaks=True)
+    with _rig(gateway, "chat", upstream="messages_bridge", billing=billing, prices=PRICES) as rig:
+        response: Final = rig.send(_granted_key(rig), [AUTO], stream=True, stream_options={"include_usage": True})
+        assert "the sum" in response.text, response.text
+        assert ANSWER not in response.text, response.text
+        assert len(rig.upstream_tools()) == 2
+        round_one: Final = _price(FIRST_ROUND) + FIXED_MARGIN
+        rows: Final = _model_rows(response.headers["x-litellm-call-id"], _logs_a_failure_billing(round_one))
+        assert _statuses(rows) == ["failure", "success"], rows
+        (success,) = (row for row in rows if row["status"] == "success")
+        (failure,) = (row for row in rows if row["status"] == "failure")
+        assert (success["prompt_tokens"], success["completion_tokens"]) == FIRST_ROUND, rows
+        assert float(str(success["spend"])) == pytest.approx(round_one), rows
+        partial_answer: Final = (int(str(failure["prompt_tokens"])), int(str(failure["completion_tokens"])))
+        assert min(partial_answer) > 0, rows
+        assert float(str(failure["spend"])) == pytest.approx(_price(partial_answer)), rows
 
 
 @pytest.mark.parametrize("upstream", STREAMED_UPSTREAMS, ids=STREAMED_IDS)

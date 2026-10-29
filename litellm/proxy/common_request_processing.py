@@ -137,6 +137,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
+from litellm.responses.mcp.parked_stream_dispatch import parked_success
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
 from litellm.router import Router
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
@@ -525,6 +526,20 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
+
+
+@runtime_checkable
+class _BillsInFlightRoundOnDisconnect(Protocol):
+    def bill_in_flight_round_on_disconnect(self) -> None: ...
+
+
+def _bill_in_flight_round_on_disconnect(response: object) -> None:
+    if not isinstance(response, _BillsInFlightRoundOnDisconnect):
+        return
+    try:
+        response.bill_in_flight_round_on_disconnect()
+    except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to bill the in-flight round after client disconnect: %s", e)
 
 
 async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, partial_response: object) -> bool:
@@ -2050,6 +2065,13 @@ class _ClientStreamFailureReport:
             verbose_proxy_logger.warning(
                 "Stream failure hook raised: %s(%s)", type(hook_failure).__name__, sanitize_for_log(hook_failure)
             )
+
+
+def _metadata_logged_on(logged_on: LiteLLMLoggingObj) -> Mapping[str, object]:
+    logged_params: Final = object_mapping(logged_on.model_call_details.get("litellm_params")) or MappingProxyType({})
+    return MappingProxyType(
+        {key: logged_params[key] for key in ("metadata", "litellm_metadata") if key in logged_params}
+    )
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -4065,7 +4087,15 @@ class ProxyBaseLLMRequestProcessing:
                 assembled_response: object, cache_hit: object, logged_on: LiteLLMLoggingObj | None = None
             ) -> None:
                 await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
-                    captured_data=_captured_data,
+                    captured_data=_captured_data
+                    if logged_on is None
+                    else {
+                        **_captured_data,
+                        **{
+                            key: value for key, value in _metadata_logged_on(logged_on).items() if key in _captured_data
+                        },
+                        "litellm_logging_obj": logged_on,
+                    },
                     captured_user_api_key_dict=_captured_user_api_key_dict,
                     captured_logging_obj=_captured_logging_obj if logged_on is None else logged_on,
                     assembled_response=assembled_response,
@@ -4088,14 +4118,8 @@ class ProxyBaseLLMRequestProcessing:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
                 case (logging_coroutine,) if asyncio.iscoroutine(logging_coroutine):
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
-                case (assembled_response, cache_hit):
-                    await _as_success_dispatcher(_captured_native_logging_obj).dispatch_success_handlers(
-                        assembled_response,
-                        cache_hit=cache_hit,
-                        start_time=None,
-                        end_time=None,
-                        prefer_async_handlers=True,
-                    )
+                case _ if (success := parked_success(args)) is not None:
+                    await success.dispatch(_captured_native_logging_obj)
                 case _:
                     verbose_proxy_logger.error(
                         "Deferred stream logging dropped: unexpected stored args shape %s",
@@ -4423,6 +4447,7 @@ class ProxyBaseLLMRequestProcessing:
                     client_disconnected,
                 )
             if recorded_client_disconnect:
+                _bill_in_flight_round_on_disconnect(response)
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging.fire_deferred_stream_logging(request_data)
                 # A disconnect-time success event (the deferred-guardrail flush

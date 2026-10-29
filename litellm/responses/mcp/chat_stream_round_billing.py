@@ -1,39 +1,26 @@
 import asyncio
-from collections.abc import Callable, Coroutine, Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias
+from typing import Final, TypeAlias
 
 from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.mcp.parked_stream_dispatch import (
+    DISPATCH_RELEASE,
+    PARKED_DISPATCH,
+    SERVED_FROM_CACHE,
+    DeferredStreamRelease,
+    parked_success,
+)
 from litellm.responses.mcp.round_billing import billed_for_every_round, merged_chat_usage, summed_cost_breakdown
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 Parked: TypeAlias = tuple[object, ...]
-_Release: TypeAlias = Callable[..., Coroutine[object, object, None]]
-
-_PARKED_DISPATCH: Final = "_deferred_stream_complete_args"
-_DISPATCH_RELEASE: Final = "_on_deferred_stream_complete"
-_SERVED_FROM_CACHE: Final = UncachedPrice(cost=0.0, cost_breakdown=None)
-
-
-class _DispatchesSuccessHandlers(Protocol):
-    async def dispatch_success_handlers(
-        self,
-        result: object = None,
-        start_time: object = None,
-        end_time: object = None,
-        cache_hit: object = None,
-        prefer_async_handlers: bool = False,
-    ) -> None: ...
-
-
-def _success_dispatcher(logger: LiteLLMLoggingObj) -> _DispatchesSuccessHandlers:
-    return logger
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,8 +60,13 @@ class _FirstRound:
     def client_usage_chunk(self, billed: ModelResponse | None) -> ModelResponseStream | None:
         if self.usage_chunk is None:
             return None
-        merged: Final = merged_chat_usage(self.priced.usage, self.usage_chunk.usage)
-        usage: Final = merged if billed is None else merged.model_copy(update=MappingProxyType({"cost": _cost(billed)}))
+        usage: Final = (
+            self.priced.usage.model_copy(update=MappingProxyType({"cost": self.priced.price.cost}))
+            if billed is None
+            else merged_chat_usage(self.priced.usage, self.usage_chunk.usage).model_copy(
+                update=MappingProxyType({"cost": _cost(billed)})
+            )
+        )
         return self.usage_chunk.chunk.model_copy(update=MappingProxyType({"usage": usage}))
 
 
@@ -99,12 +91,14 @@ class ChatStreamRoundBilling:
     def __init__(self, logging_obj: LiteLLMLoggingObj) -> None:
         self._logging_obj: Final = logging_obj
         self._first: _FirstRound | None = None
+        self._reading_loop: asyncio.AbstractEventLoop | None = None
 
     @contextmanager
     def armed_while_reading(self) -> Generator[None]:
-        armed: Final = getattr(self._logging_obj, _DISPATCH_RELEASE, None) is None
+        armed: Final = getattr(self._logging_obj, DISPATCH_RELEASE, None) is None
         if armed:
-            setattr(self._logging_obj, _DISPATCH_RELEASE, self._log_success)
+            setattr(self._logging_obj, DISPATCH_RELEASE, self._log_success)
+        self._reading_loop = asyncio.get_running_loop()
         try:
             yield
         finally:
@@ -135,20 +129,30 @@ class ChatStreamRoundBilling:
     def fail(self) -> None:
         self._bank_apart_from_the_follow_up()
         first: Final = self._first
-        if first is None or first.banked is None or self._peek_parked() is not first.parked:
+        if first is None or first.banked is None or not self._holds_round_one_alone(first):
             self.finish()
             return
         self._first = None
-        setattr(self._logging_obj, _PARKED_DISPATCH, None)
-        self._log_through_the_release((*first.parked, first.banked))
+        setattr(self._logging_obj, PARKED_DISPATCH, None)
+        self._log_through_the_release((*first.parked, first.banked.guardrail_scoped_copy()))
+
+    def bill_partial_follow_up(self, partial: ModelResponse) -> None:
+        first: Final = self._first
+        final_round: Final = _assembled_round((partial, False))
+        if first is None or final_round is None or not self._holds_round_one_alone(first):
+            return
+        self._first = None
+        setattr(
+            self._logging_obj, PARKED_DISPATCH, self._billed_for_both_rounds(first.priced, self._priced(final_round))
+        )
 
     def release_abandoned(self) -> None:
         if not self._owns_release():
             return
-        if is_event_loop_running():
+        if is_event_loop_running() or self._idle_reading_loop() is not None:
             self.finish()
             return
-        setattr(self._logging_obj, _PARKED_DISPATCH, None)
+        setattr(self._logging_obj, PARKED_DISPATCH, None)
         self._first = None
         self._disarm()
 
@@ -162,7 +166,7 @@ class ChatStreamRoundBilling:
             return
         logged_alone: Final = (*first.parked, banked)
         self._first = replace(first, logged_alone=logged_alone, banked=banked)
-        setattr(self._logging_obj, _PARKED_DISPATCH, logged_alone)
+        setattr(self._logging_obj, PARKED_DISPATCH, logged_alone)
 
     def _release_rounds(self) -> ModelResponse | None:
         parked: Final = self._take_parked()
@@ -196,7 +200,7 @@ class ChatStreamRoundBilling:
 
     def _priced(self, assembled: _AssembledRound) -> _PricedRound:
         served: Final = assembled.cache_hit or served_from_cache(assembled.response)
-        price: Final = _SERVED_FROM_CACHE if served else self._logging_obj.uncached_price(assembled.response)
+        price: Final = SERVED_FROM_CACHE if served else self._logging_obj.uncached_price(assembled.response)
         priced: Final = assembled.response.model_copy()
         set_hidden_params(
             priced,
@@ -205,36 +209,47 @@ class ChatStreamRoundBilling:
         return _PricedRound(priced, assembled.usage, price, served)
 
     def _peek_parked(self) -> Parked | None:
-        parked: Final[Parked | None] = getattr(self._logging_obj, _PARKED_DISPATCH, None)
+        parked: Final[Parked | None] = getattr(self._logging_obj, PARKED_DISPATCH, None)
         return parked if isinstance(parked, tuple) else None
 
     def _take_parked(self) -> Parked | None:
         parked: Final = self._peek_parked()
-        setattr(self._logging_obj, _PARKED_DISPATCH, None)
+        setattr(self._logging_obj, PARKED_DISPATCH, None)
         return parked
 
+    def _holds_round_one_alone(self, first: _FirstRound) -> bool:
+        parked: Final = self._peek_parked()
+        return parked is first.parked or parked is first.logged_alone
+
     def _owns_release(self) -> bool:
-        release: Final[object] = getattr(self._logging_obj, _DISPATCH_RELEASE, None)
+        release: Final[object] = getattr(self._logging_obj, DISPATCH_RELEASE, None)
         return release == self._log_success
 
     def _release(self, parked: Parked) -> None:
-        if getattr(self._logging_obj, _DISPATCH_RELEASE, None) is not None and not self._owns_release():
-            setattr(self._logging_obj, _PARKED_DISPATCH, parked)
+        if getattr(self._logging_obj, DISPATCH_RELEASE, None) is not None and not self._owns_release():
+            setattr(self._logging_obj, PARKED_DISPATCH, parked)
             return
         self._log_through_the_release(parked)
 
     def _log_through_the_release(self, parked: Parked) -> None:
-        armed: Final[_Release | None] = getattr(self._logging_obj, _DISPATCH_RELEASE, None)
-        setattr(self._logging_obj, _DISPATCH_RELEASE, None)
+        armed: Final[DeferredStreamRelease | None] = getattr(self._logging_obj, DISPATCH_RELEASE, None)
+        setattr(self._logging_obj, DISPATCH_RELEASE, None)
         logged: Final = (self._log_success if armed is None else armed)(*parked)
+        idle_reading_loop: Final = None if is_event_loop_running() else self._idle_reading_loop()
+        if idle_reading_loop is not None:
+            idle_reading_loop.run_until_complete(logged)
+            return
         spawn_logging_task(asyncio.get_running_loop(), logged, task_name="Chat completions MCP stream success log")
+
+    def _idle_reading_loop(self) -> asyncio.AbstractEventLoop | None:
+        loop: Final = self._reading_loop
+        return loop if loop is not None and not loop.is_closed() and not loop.is_running() else None
 
     def _disarm(self) -> None:
         if self._owns_release():
-            setattr(self._logging_obj, _DISPATCH_RELEASE, None)
+            setattr(self._logging_obj, DISPATCH_RELEASE, None)
 
-    async def _log_success(self, assembled: object, cache_hit: object, banked: object = None) -> None:
-        logger: Final = banked if isinstance(banked, LiteLLMLoggingObj) else self._logging_obj
-        await _success_dispatcher(logger).dispatch_success_handlers(
-            assembled, cache_hit=cache_hit, start_time=None, end_time=None, prefer_async_handlers=True
-        )
+    async def _log_success(self, *parked: object) -> None:
+        success: Final = parked_success(parked)
+        if success is not None:
+            await success.dispatch(self._logging_obj)
