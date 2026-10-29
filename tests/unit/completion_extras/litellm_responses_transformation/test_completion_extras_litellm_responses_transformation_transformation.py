@@ -1,7 +1,9 @@
+import asyncio
 import copy
 import datetime
 import json
 import os
+import queue
 import unittest
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
@@ -24,7 +26,9 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -189,6 +193,87 @@ def test_auto_summary_sends_the_level_the_target_accepts(
 
     request_body: Final = json.loads(upstream.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "low", "summary": expected_summary}
+
+
+class _LoggedCallTypes(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final[queue.SimpleQueue[tuple[str, str]]] = queue.SimpleQueue()
+
+    def _record(self, kwargs: Mapping[str, object]) -> None:
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.seen.put((str(kwargs["call_type"]), payload["call_type"]))
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.parametrize(
+    ("model", "url", "provider_kwargs"),
+    [
+        ("openai/gpt-5.3-codex", "https://api.openai.com/v1/responses", {}),
+        (
+            "azure/gpt-6-sol",
+            "https://example.invalid/openai/responses",
+            {"api_base": "https://example.invalid", "api_version": "2025-04-01-preview"},
+        ),
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, {"aws_region_name": "us-east-1"}),
+    ],
+    ids=["openai-responses-only", "azure-tools", "bedrock-mantle-tools"],
+)
+@pytest.mark.asyncio
+async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
+    monkeypatch: pytest.MonkeyPatch, caller: str, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _LoggedCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    response_body: Final = {
+        "id": "resp_logged_call_type",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_logged_call_type",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "tools": [_GET_WEATHER_TOOL],
+        "api_key": "test-key",
+        "cache": {"no-cache": True},
+        **provider_kwargs,
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith=url).mock(return_value=httpx.Response(200, json=response_body))
+        if caller == "acompletion":
+            await litellm.acompletion(**request)
+        else:
+            litellm.completion(**request)
+        logged: Final = await asyncio.to_thread(recorder.seen.get, timeout=10)
+
+    assert logged == (caller, caller)
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
