@@ -8532,7 +8532,7 @@ def _cached_or_listed_provider_models(
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
         return models
     except httpx.TimeoutException as e:
-        verbose_logger.warning("Timed out getting valid models: %s", e)
+        verbose_logger.warning("Error getting valid models: %s", e)
         _model_cache.set_failed_model_listing(
             custom_llm_provider, litellm_params, ttl_seconds=_FAILED_PROVIDER_LISTING_TTL_SECONDS
         )
