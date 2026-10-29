@@ -98,7 +98,7 @@ existing_files() {
 litellm_py_pattern='^litellm/.*\.py$'
 e2e_py_pattern='^tests/e2e(_harness)?/.*\.py$'
 test_tree_pattern='^(tests/.*\.py|ruff-tests\.toml|scripts/(check_test_quality|test_quality_gate)\.py)$'
-spec_pattern='^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
+spec_pattern='^(litellm/.*|enterprise/.*|pyproject\.toml|uv\.lock|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
 ui_prettier_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
 ui_eslint_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
 
@@ -110,9 +110,10 @@ e2e_py_files=$(scope_match "$e2e_py_pattern")
 test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
-# test-linting.yml triggers on any file under litellm/proxy or litellm/types
-# (Prisma schema and configs included, not just Python) plus the generator and its
-# lockfiles, so match that whole trigger set rather than a Python subset.
+# test-linting.yml triggers on any file under litellm/ or enterprise/ (Prisma
+# schema and configs included, not just Python), the Python dependency pins, and
+# the generator and its lockfiles, so match that whole trigger set rather than a
+# Python subset.
 spec_files=$(scope_match "$spec_pattern")
 # CI's ui job runs prettier over a wider extension set than eslint; keep that
 # split so this flags exactly what the job would.
@@ -337,7 +338,7 @@ summary_item "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_fi
 summary_item "test-tree lint (ruff-tests.toml + test-quality gate)" "$test_tree_files" \
     "no tests/ Python files or test-tree lint inputs in scope"
 summary_item "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_changed$ui_eslint_changed" "no dashboard files in scope"
-summary_item "dashboard API-type sync (npm run gen:api)" "$spec_files" "no litellm/proxy, litellm/types, or generator files in scope"
+summary_item "dashboard API-type sync (npm run gen:api)" "$spec_files" "no litellm/, enterprise/, dependency, or generator files in scope"
 
 if [ -z "$litellm_py_files$e2e_py_files$test_tree_files$ui_prettier_changed$ui_eslint_changed$spec_files" ]; then
     echo "check: NOTE - no gating lint check matches the files in scope, so nothing ran:" >&2
