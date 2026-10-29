@@ -272,6 +272,11 @@ class LLMCallEvent:
     trace: TraceControls
     session_id: str | None
 
+    @property
+    def reached_a_provider(self) -> bool:
+        """Whether the call was handed to a provider or answered from the response cache."""
+        return not self.is_no_upstream_call and self.payload is not None and (self.upstream_started or self.cache_hit)
+
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
         raw_payload: Final = kwargs.get("standard_logging_object")

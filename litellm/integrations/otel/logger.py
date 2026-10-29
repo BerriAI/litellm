@@ -541,9 +541,7 @@ class OpenTelemetryV2(CustomLogger):
         # gate rejection carries ``is_no_upstream_call`` and gets no span. A cache
         # hit never hands off to a provider, so ``cache_hit`` substitutes for the
         # upstream stamp, since the payload proves the call completed.
-        if carrier is None and (
-            call.is_no_upstream_call or call.payload is None or (not call.upstream_started and not call.cache_hit)
-        ):
+        if carrier is None and not call.reached_a_provider:
             return None
         try:
             return self._finish_carrier(carrier, call, start_time, end_time)
