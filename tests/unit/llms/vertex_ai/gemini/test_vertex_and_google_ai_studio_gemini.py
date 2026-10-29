@@ -10721,6 +10721,26 @@ def test_gemini_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monk
     assert "tool_choice" not in mapped
 
 
+@pytest.mark.parametrize(("config_class", "route"), _GEMINI_ROUTES)
+def test_gemini_keeps_tool_choice_none_for_legacy_functions_after_dropping_every_hosted_mcp_tool(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={
+            "tools": [_HOSTED_MCP_TOOL],
+            "functions": [_WEATHER_FUNCTION_TOOL["function"]],
+            "tool_choice": "none",
+        },
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+    assert "deepwiki" not in json.dumps(mapped)
+    assert "get_weather" in json.dumps(mapped["tools"])
+    assert mapped["tool_choice"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+
 @pytest.mark.parametrize("chunk_indices", [[0, 1], [2, 1, 0]])
 def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) -> None:
     metadata: Final = {

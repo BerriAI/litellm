@@ -222,6 +222,7 @@ def tool_params_without_hosted_mcp(params: _ParamsT, model: str, route: str, dro
     if kept_tools:
         kept_params["tools"] = list(kept_tools)
         return kept_params
-    for key in _TOOL_SELECTION_PARAMS:
+    dropped_keys: Final = ("tools",) if params.get("functions") else _TOOL_SELECTION_PARAMS
+    for key in dropped_keys:
         _ = kept_params.pop(key, None)
     return kept_params
