@@ -3,13 +3,14 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterator, Mapping
-from typing import Final
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Final, cast
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import ModelResponse, Router, completion
@@ -23,12 +24,13 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponseStream
 
 
 def test_transform_usage():
@@ -6792,6 +6794,66 @@ def test_bedrock_json_mode_preserves_nonblank_text_before_json_tool_call():
     message: Final = result.choices[0].message
     assert message.content == '{"answer": 42}'
     assert message.provider_specific_fields["json_mode_preamble_text"] == preamble
+
+
+def test_bedrock_json_mode_fake_stream_preserves_preamble_in_chunks() -> None:
+    preamble: Final = "Let me calculate the usable items. "
+    response_json: Final = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"text": preamble},
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_json_001",
+                            "name": "json_tool_call",
+                            "input": {"answer": 42},
+                        }
+                    },
+                ],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {"inputTokens": 50, "outputTokens": 20, "totalTokens": 70},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response_json, request=request)
+
+    model: Final = "bedrock/us.anthropic.claude-opus-5-5"
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    stream: Final = completion(
+        model=model,
+        messages=[{"role": "user", "content": "How many usable items are there?"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "integer"}},
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        stream=True,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+    chunks: Final = list(cast(Iterable[ModelResponseStream], stream))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == '{"answer": 42}'
+    provider_fields_adapter: Final = TypeAdapter(Mapping[str, object])
+    provider_fields: Final = tuple(
+        provider_fields_adapter.validate_python(chunk.choices[0].delta.provider_specific_fields or {})
+        for chunk in chunks
+        if chunk.choices
+    )
+    assert any(fields.get("json_mode_preamble_text") == preamble for fields in provider_fields)
 
 
 def test_bedrock_json_mode_omits_whitespace_only_preamble():
