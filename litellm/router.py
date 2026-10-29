@@ -124,6 +124,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
+    max_retries_per_request_hit,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
@@ -9123,6 +9124,12 @@ class Router:
         ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
         _metadata["attempted_retries"] = 0
         _metadata["max_retries"] = num_retries  # Updated after overrides in exception handler
+        budget_request_kwargs: Final[Mapping[str, object]] = cast(  # cast-ok: kwargs keys are request parameter names
+            Mapping[str, object], kwargs
+        )
+        initial_budget_exhausted: Final = max_retries_per_request_hit(
+            budget_request_kwargs, litellm.num_retries_per_request
+        )
         try:
             self._handle_mock_testing_rate_limit_error(model_group=model_group, kwargs=kwargs)
             # if the function call is successful, no exception will be raised and we'll break out of the loop
@@ -9206,6 +9213,9 @@ class Router:
             else:
                 raise
 
+            if initial_budget_exhausted:
+                raise original_exception
+
             verbose_router_logger.debug("Retrying request with num_retries: %s", num_retries)
             # decides how long to sleep before retry
             retry_after: Final = self._time_to_sleep_before_retry(
@@ -9216,9 +9226,13 @@ class Router:
                 all_deployments=_all_deployments,
             )
 
-            await asyncio.sleep(retry_after)
+            if not max_retries_per_request_hit(budget_request_kwargs, litellm.num_retries_per_request):
+                await asyncio.sleep(retry_after)
 
             for current_attempt in range(num_retries):
+                budget_exhausted_before_call: bool = max_retries_per_request_hit(
+                    budget_request_kwargs, litellm.num_retries_per_request
+                )
                 try:
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
@@ -9282,8 +9296,11 @@ class Router:
                     )
                     if skipped_ids:
                         kwargs["_retry_skipped_deployment_ids"] = skipped_ids  # rebind-ok: the next attempt reads it
-                    if isinstance(e, litellm.UnsupportedEndpointError) and _every_deployment_refused(
-                        _DEPLOYMENTS_ADAPTER.validate_python(_healthy_deployments), skipped_ids
+                    if budget_exhausted_before_call or (
+                        isinstance(e, litellm.UnsupportedEndpointError)
+                        and _every_deployment_refused(
+                            _DEPLOYMENTS_ADAPTER.validate_python(_healthy_deployments), skipped_ids
+                        )
                     ):
                         raise
                     _timeout = self._time_to_sleep_before_retry(
@@ -9293,7 +9310,8 @@ class Router:
                         healthy_deployments=_healthy_deployments,
                         all_deployments=_all_deployments,
                     )
-                    await asyncio.sleep(_timeout)
+                    if not max_retries_per_request_hit(budget_request_kwargs, litellm.num_retries_per_request):
+                        await asyncio.sleep(_timeout)
 
             if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
                 setattr(original_exception, "max_retries", num_retries)

@@ -16172,13 +16172,40 @@ async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypa
 
     records = await _fail_one_proxy_shaped_request(router, "request-1", expected_error=litellm.APIConnectionError)
 
-    assert [record["attempted_retries"] for record in records] == [3, 4, 5, 6]
+    assert [record["attempted_retries"] for record in records] == [2, 3, 4, 5]
     assert ["Max retries per request hit!" in record["exception_string"] for record in records] == [
         False,
         False,
-        True,
+        False,
         True,
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cap", [0, 2])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_exhausted_request_retry_budget_stops_router_backoff(
+    monkeypatch: pytest.MonkeyPatch, cap: int, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    router = _always_failing_router(num_retries=15)
+    metadata: dict = {}
+    with patch("litellm.router.asyncio.sleep", new_callable=AsyncMock) as sleep:
+        with pytest.raises(litellm.APIConnectionError, match="Max retries per request hit!"):
+            await router.acompletion(
+                model="broken-group",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata=metadata,
+                stream=stream,
+            )
+
+    assert len(sleep.await_args_list) == max(cap - 1, 0)
+    cap_refusals = [
+        record
+        for record in metadata["previous_models"]
+        if "Max retries per request hit!" in record["exception_string"]
+    ]
+    assert len(cap_refusals) == 1
 
 
 def _failing_group_with_healthy_fallback_router(num_retries: int) -> litellm.Router:
@@ -16238,7 +16265,7 @@ async def test_num_retries_per_request_counts_retries_across_fallback_hops(
         for record in recorder.breadcrumbs_per_target[0]
         if record["model_group"] == "healthy-group" and "Max retries per request hit!" in record["exception_string"]
     ]
-    assert hop_refusals == [0, 1]
+    assert hop_refusals == [0]
 
 
 @pytest.mark.asyncio
@@ -22341,6 +22368,33 @@ async def test_router_tries_each_deployment_that_cannot_transcribe_once_then_ans
     assert raised.value.status_code == 400
     assert router.fail_calls["transcriber"] == deployment_count
     assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_router_stops_after_retry_reaches_only_unsupported_transcription_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(simple_shuffle.random, "choice", lambda deployments: deployments[0])
+    router: Final = litellm.Router(
+        model_list=[
+            _transcription_deployment("transcriber", "rejecting", "openai/gpt-transcribe", weight=1),
+            _transcription_deployment("transcriber", "unsupported", "anthropic/claude-sonnet-5-5", weight=0),
+        ],
+        num_retries=3,
+        retry_policy=RetryPolicy(BadRequestErrorRetries=3),
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        rejecting: Final = respx_mock.post(f"{_TRANSCRIPTION_API_BASE}/audio/transcriptions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.UnsupportedEndpointError):
+            await router.atranscription(model="transcriber", file=_TRANSCRIPTION_AUDIO)
+
+    assert rejecting.call_count == 1
+    assert router.fail_calls["transcriber"] == 2
 
 
 @pytest.mark.asyncio
