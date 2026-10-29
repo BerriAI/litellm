@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator, Mapping
+from itertools import groupby
+from operator import itemgetter
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -924,3 +926,45 @@ def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblin
 def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
     assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
     assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True
+
+
+class _BedrockWindowRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    litellm_provider: str
+    max_input_tokens: int | None = None
+
+
+_BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse"})
+_BEDROCK_PREFIXED_ROW: Final = re.compile(r"bedrock/(?:[a-z0-9-]+/)?(?P<model>[^/]+)")
+
+
+def _bedrock_input_windows(path: Path) -> Mapping[str, int]:
+    prices: Final = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    rows: Final = tuple(
+        (key, _BedrockWindowRow.model_validate(row))
+        for key, row in prices.items()
+        if isinstance(row, dict) and row.get("litellm_provider") in _BEDROCK_PROVIDERS
+    )
+    return MappingProxyType({key: row.max_input_tokens for key, row in rows if row.max_input_tokens is not None})
+
+
+def _widest_prefixed_window_per_model(windows: Mapping[str, int]) -> Mapping[str, int]:
+    prefixed: Final = sorted(
+        (match["model"], window) for key, window in windows.items() if (match := _BEDROCK_PREFIXED_ROW.fullmatch(key))
+    )
+    return MappingProxyType(
+        {model: max(window for _, window in group) for model, group in groupby(prefixed, key=itemgetter(0))}
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_bare_bedrock_rows_admit_every_prompt_their_prefixed_rows_admit(path: Path) -> None:
+    windows: Final = _bedrock_input_windows(path)
+    widest: Final = _widest_prefixed_window_per_model(windows)
+    bare_with_prefixed_rows: Final = tuple(key for key in windows if "/" not in key and key in widest)
+    assert bare_with_prefixed_rows, f"No bare Bedrock row with a bedrock/ counterpart in {path}"
+    narrower: Final = tuple(
+        f"{key}: {windows[key]} < {widest[key]}" for key in bare_with_prefixed_rows if windows[key] < widest[key]
+    )
+    assert narrower == ()
