@@ -5059,9 +5059,10 @@ def get_optional_params(
             supported_params: List[str] - supported params from the litellm config
         """
         verbose_logger.info("\nLiteLLM completion() model= %s; provider = %s", model, custom_llm_provider)
-        verbose_logger.debug(
-            "\nLiteLLM: Non-Default params passed to completion() %s", _debug_params_repr(non_default_params)
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                "\nLiteLLM: Non-Default params passed to completion() %s", _debug_params_repr(non_default_params)
+            )
         unsupported_params: Final = {}
         for k in non_default_params:
             if k not in supported_params:
