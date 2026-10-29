@@ -1538,6 +1538,27 @@ def test_bedrock_mantle_gpt_oss_input_length_overflow_maps_to_context_window_exc
     assert "prompt is too long: 360068 tokens > 131072 maximum" in excinfo.value.message
 
 
+def test_bedrock_mantle_gpt_oss_streamed_responses_overflow_event_maps_to_context_window_exceeded():
+    from litellm.responses.streaming_iterator import map_stream_error_to_exception
+
+    mapped_exception = map_stream_error_to_exception(
+        {
+            "code": "invalid_prompt",
+            "message": (
+                'ErrorEvent { error: APIError { type: "invalid_request_error", code: Some(400), message: '
+                '"The engine prompt length 165072 exceeds the max_model_len 131072. Please reduce prompt.", '
+                'param: Some("input") } }'
+            ),
+        },
+        model="openai.gpt-oss-20b",
+        custom_llm_provider="bedrock_mantle",
+    )
+
+    assert isinstance(mapped_exception, litellm.ContextWindowExceededError)
+    assert mapped_exception.status_code == 400
+    assert "prompt is too long: 165072 tokens > 131072 maximum" in mapped_exception.message
+
+
 def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_exceeded():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
