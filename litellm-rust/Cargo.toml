@@ -131,7 +131,7 @@ semver = "1"
 tar = "0.4"
 target-lexicon = "0.13.5"
 tempfile = "3"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
