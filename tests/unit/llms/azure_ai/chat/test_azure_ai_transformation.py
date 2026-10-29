@@ -9,12 +9,12 @@ import respx
 from httpx import Response
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
 from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 @pytest.mark.asyncio
@@ -955,7 +955,7 @@ def test_azure_ai_services_handler(api_base, expected_url):
 
 
 def test_azure_ai_services_with_api_version():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     client = HTTPHandler()
 
@@ -1121,3 +1121,96 @@ def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_t
 
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
     assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."
+
+
+FOUNDRY_ACCOUNT_BASE: Final = "https://example-resource.services.ai.azure.com/models"
+FOUNDRY_CHAT_URL: Final = f"{FOUNDRY_ACCOUNT_BASE}/chat/completions"
+FOUNDRY_CHAT_RESPONSE: Final = {
+    "id": "chatcmpl-azure-ai",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-4.1-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi!"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.fixture
+def no_process_wide_azure_credentials(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    for env_var in (
+        "AZURE_AI_API_KEY",
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    return monkeypatch
+
+
+@pytest.mark.parametrize(
+    "set_process_wide_key",
+    [
+        pytest.param(lambda mp: mp.setenv("AZURE_AI_API_KEY", "process-wide-key"), id="AZURE_AI_API_KEY"),
+        pytest.param(lambda mp: mp.setenv("AZURE_API_KEY", "process-wide-key"), id="AZURE_API_KEY"),
+        pytest.param(lambda mp: mp.setenv("AZURE_OPENAI_API_KEY", "process-wide-key"), id="AZURE_OPENAI_API_KEY"),
+        pytest.param(lambda mp: mp.setattr(litellm, "api_key", "process-wide-key"), id="litellm.api_key"),
+        pytest.param(lambda mp: mp.setattr(litellm, "azure_key", "process-wide-key"), id="litellm.azure_key"),
+    ],
+)
+def test_azure_ai_completion_authenticates_with_the_entry_entra_token_over_a_process_wide_key(
+    respx_mock: respx.MockRouter,
+    no_process_wide_azure_credentials: pytest.MonkeyPatch,
+    set_process_wide_key: Callable[[pytest.MonkeyPatch], None],
+) -> None:
+    set_process_wide_key(no_process_wide_azure_credentials)
+    route: Final = respx_mock.post(FOUNDRY_CHAT_URL).mock(return_value=Response(200, json=FOUNDRY_CHAT_RESPONSE))
+
+    litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base=FOUNDRY_ACCOUNT_BASE,
+        azure_ad_token="entry-token",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer entry-token"
+    assert "api-key" not in request.headers
+
+
+def test_azure_ai_completion_without_entry_entra_still_uses_the_process_wide_key(
+    respx_mock: respx.MockRouter, no_process_wide_azure_credentials: pytest.MonkeyPatch
+) -> None:
+    no_process_wide_azure_credentials.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    route: Final = respx_mock.post(FOUNDRY_CHAT_URL).mock(return_value=Response(200, json=FOUNDRY_CHAT_RESPONSE))
+
+    litellm.completion(
+        model="azure_ai/gpt-4.1-mini", api_base=FOUNDRY_ACCOUNT_BASE, messages=[{"role": "user", "content": "hi"}]
+    )
+
+    assert route.calls.last.request.headers["api-key"] == "process-wide-key"
+
+
+def test_azure_ai_completion_explicit_api_key_wins_over_the_entry_entra_token(
+    respx_mock: respx.MockRouter, no_process_wide_azure_credentials: pytest.MonkeyPatch
+) -> None:
+    no_process_wide_azure_credentials.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    route: Final = respx_mock.post(FOUNDRY_CHAT_URL).mock(return_value=Response(200, json=FOUNDRY_CHAT_RESPONSE))
+
+    litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base=FOUNDRY_ACCOUNT_BASE,
+        api_key="entry-key",
+        azure_ad_token="entry-token",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["api-key"] == "entry-key"
+    assert "authorization" not in request.headers

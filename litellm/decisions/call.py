@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_urls_to_base64,
     convert_url_to_base64,
 )
+from litellm.llms.azure_ai.common_utils import AzureAIEntraCredentials
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
@@ -465,6 +466,7 @@ def prepare_call(
         custom_llm_provider=custom_llm_provider,
         api_base=call_api_base,
         api_key=api_key,
+        litellm_params=AzureAIEntraCredentials.model_validate(kwargs),
     )
     provider_config: Final = _provider_config(upstream_model, provider)
     if not upstream_model:

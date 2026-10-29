@@ -1,9 +1,9 @@
 import io
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
-
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
@@ -179,6 +179,21 @@ def test_mai_validate_environment_with_entra_token(monkeypatch, no_ambient_azure
     monkeypatch.setattr(litellm, "api_key", None)
 
     headers = AzureFoundryMAIImageEditConfig().validate_environment(
+        headers={},
+        model="MAI-Image-2.5",
+        litellm_params={"azure_ad_token": "entra-token"},
+    )
+
+    assert headers == {"Authorization": "Bearer entra-token"}
+
+
+def test_mai_validate_environment_uses_the_entry_entra_token_over_the_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, no_ambient_azure_credentials: None
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+
+    headers: Final = AzureFoundryMAIImageEditConfig().validate_environment(
         headers={},
         model="MAI-Image-2.5",
         litellm_params={"azure_ad_token": "entra-token"},

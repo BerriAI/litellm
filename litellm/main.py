@@ -1659,7 +1659,7 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
             raise ValueError(
                 "Azure AI Agents requests require an api_base. Set `api_base` or the AZURE_AI_API_BASE env var."
             )
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
+        api_key = AzureFoundryModelInfo.get_api_key(api_key, litellm_params)
 
         response = AzureAIAgentsConfig.completion(
             model=model,
@@ -1684,7 +1684,7 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
             raise ValueError(
                 "Azure Anthropic requests require an api_base. Set `api_base` or the AZURE_AI_API_BASE env var."
             )
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
+        api_key = AzureFoundryModelInfo.get_api_key(api_key, litellm_params)
 
         if api_base:
             api_base = azure_anthropic_messages_url(api_base)
@@ -1720,7 +1720,7 @@ def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
         # Non-Claude models use standard Azure AI flow
         api_base = AzureFoundryModelInfo.get_api_base(api_base)
         # set API KEY
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
+        api_key = AzureFoundryModelInfo.get_api_key(api_key, litellm_params)
 
         headers = headers or litellm.headers
 
@@ -7523,20 +7523,20 @@ def embedding(
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "azure_ai":
-            from litellm.llms.azure_ai.common_utils import get_azure_ai_entra_token
+            from litellm.llms.azure_ai.common_utils import (
+                AzureAIEntraCredentials,
+                AzureFoundryModelInfo,
+                get_azure_ai_entra_token,
+            )
 
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret_str("AZURE_AI_API_BASE")
             )
-            # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-                or get_secret_str("AZURE_AI_API_KEY")
-                or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
-            )
+            api_key = AzureFoundryModelInfo.get_api_key(
+                api_key, AzureAIEntraCredentials.model_validate(litellm_params_dict)
+            ) or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
 
             ## EMBEDDING CALL
             response = azure_ai_embedding.embedding(
@@ -8382,13 +8382,17 @@ def transcription(
     if max_retries is None:
         max_retries = openai.DEFAULT_MAX_RETRIES
 
+    from litellm.llms.azure_ai.common_utils import AzureAIEntraCredentials, has_azure_entra_params
+
     model_response: Final = litellm.utils.TranscriptionResponse()
 
+    entra_credentials: Final = AzureAIEntraCredentials.model_validate(kwargs)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base or base_url,
         api_key=api_key,
+        litellm_params=entra_credentials,
     )
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
@@ -8441,7 +8445,11 @@ def transcription(
 
         azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
-        api_key = api_key or litellm.api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
+        api_key = api_key or (
+            None
+            if custom_llm_provider == "azure_ai" and has_azure_entra_params(entra_credentials)
+            else litellm.api_key or litellm.azure_key or get_secret_str("AZURE_API_KEY")
+        )
 
         optional_params["extra_headers"] = extra_headers
 

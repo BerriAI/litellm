@@ -101,24 +101,6 @@ class AzureAIAgentsConfig(BaseConfig):
                 return parts[1]
         return model
 
-    def _get_openai_compatible_provider_info(
-        self,
-        api_base: str | None,
-        api_key: str | None,
-    ) -> tuple[str | None, str | None]:
-        """
-        Get Azure AI Agent Service API base and key from params or environment.
-
-        Returns:
-            Tuple of (api_base, api_key)
-        """
-        from litellm.secret_managers.main import get_secret_str
-
-        api_base = api_base or get_secret_str("AZURE_AI_API_BASE")
-        api_key = api_key or get_secret_str("AZURE_AI_API_KEY")
-
-        return api_base, api_key
-
     def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Azure Agents supports minimal OpenAI params since it's an agent runtime.
@@ -346,7 +328,7 @@ class AzureAIAgentsConfig(BaseConfig):
         from litellm.types.router import GenericLiteLLMParams
 
         # If no api_key is provided, try to get Azure AD token
-        if api_key is None:
+        if not api_key:
             # Try to get Azure AD token using the existing Azure auth mechanisms
             # This uses the scope for Azure AI (ai.azure.com) instead of cognitive services
             # Create a GenericLiteLLMParams with the scope override for Azure Foundry Agents
@@ -354,7 +336,7 @@ class AzureAIAgentsConfig(BaseConfig):
             azure_auth_params["azure_scope"] = "https://ai.azure.com/.default"
             api_key = get_azure_ad_token(GenericLiteLLMParams(**azure_auth_params))
 
-        if api_key is None:
+        if not api_key:
             raise ValueError(
                 "api_key (Azure AD token) is required for Azure Foundry Agents. "
                 "Either pass api_key directly, or set AZURE_TENANT_ID, AZURE_CLIENT_ID, "

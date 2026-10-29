@@ -22,7 +22,6 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
     """Microsoft Foundry decision models (Microsoft-Decision-1), where model is the deployment name"""
 
     path = "/providers/microsoft/v1/systemone"
-    api_key_env = ("AZURE_AI_API_KEY",)
     api_base_env = ("AZURE_AI_API_BASE",)
     api_key_required = False
 

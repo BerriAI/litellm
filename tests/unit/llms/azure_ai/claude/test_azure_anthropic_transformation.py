@@ -5,10 +5,14 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -484,3 +488,66 @@ def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_mo
         "role": "system",
         "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
     }
+
+
+AZURE_ANTHROPIC_BASE: Final = "https://example-resource.services.ai.azure.com/anthropic"
+ANTHROPIC_MESSAGE_RESPONSE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-5",
+    "content": [{"type": "text", "text": "hi"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.fixture
+def process_wide_azure_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    for env_var in (
+        "AZURE_AI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("AZURE_API_KEY", "process-wide-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+@pytest.mark.usefixtures("process_wide_azure_api_key")
+def test_claude_chat_authenticates_with_the_entry_entra_token_over_the_process_wide_azure_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__startswith=f"{AZURE_ANTHROPIC_BASE}/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_MESSAGE_RESPONSE)
+    )
+
+    litellm.completion(
+        model="azure_ai/claude-sonnet-4-5",
+        api_base=AZURE_ANTHROPIC_BASE,
+        azure_ad_token="entry-token",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer entry-token"
+    assert "x-api-key" not in request.headers
+    assert "api-key" not in request.headers
+
+
+@pytest.mark.usefixtures("process_wide_azure_api_key")
+def test_claude_chat_without_entry_entra_still_uses_the_process_wide_azure_key(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__startswith=f"{AZURE_ANTHROPIC_BASE}/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_MESSAGE_RESPONSE)
+    )
+
+    litellm.completion(
+        model="azure_ai/claude-sonnet-4-5", api_base=AZURE_ANTHROPIC_BASE, messages=[{"role": "user", "content": "hi"}]
+    )
+
+    assert route.calls.last.request.headers["api-key"] == "process-wide-key"

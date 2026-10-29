@@ -1,6 +1,9 @@
 
-import pytest
+from typing import Final
 
+import httpx
+import pytest
+import respx
 
 import litellm
 from litellm.llms.azure_ai.rerank.transformation import AzureAIRerankConfig
@@ -116,3 +119,61 @@ class TestAzureAIRerankConfigValidateEnvironment:
         )
 
         assert headers["Authorization"] == "Bearer entra-token"
+
+
+AZURE_AI_RERANK_BASE: Final = "https://my-resource.services.ai.azure.com"
+COHERE_RERANK_RESPONSE: Final = {
+    "id": "rerank-1",
+    "results": [{"index": 0, "relevance_score": 0.9}],
+    "meta": {"billed_units": {"search_units": 1}},
+}
+
+
+@pytest.fixture
+def process_wide_azure_ai_key(monkeypatch: pytest.MonkeyPatch, no_ambient_azure_credentials: None) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    monkeypatch.setattr(litellm, "azure_key", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+def _rerank(respx_mock: respx.MockRouter, **credentials: str) -> httpx.Request:
+    route: Final = respx_mock.post(f"{AZURE_AI_RERANK_BASE}/v1/rerank").mock(
+        return_value=httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+    )
+    litellm.rerank(
+        model="azure_ai/cohere-rerank-v3.5",
+        query="hello",
+        documents=["hello world"],
+        api_base=AZURE_AI_RERANK_BASE,
+        **credentials,
+    )
+    return route.calls.last.request
+
+
+@pytest.mark.usefixtures("process_wide_azure_ai_key")
+def test_rerank_authenticates_with_the_entry_entra_token_over_the_process_wide_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    assert _rerank(respx_mock, azure_ad_token="entry-token").headers["authorization"] == "Bearer entry-token"
+
+
+@pytest.mark.usefixtures("process_wide_azure_ai_key")
+def test_rerank_without_entry_entra_still_uses_the_process_wide_key(respx_mock: respx.MockRouter) -> None:
+    assert _rerank(respx_mock).headers["authorization"] == "Bearer process-wide-key"
+
+
+@pytest.mark.usefixtures("process_wide_azure_ai_key")
+def test_rerank_explicit_api_key_wins_over_the_entry_entra_token(respx_mock: respx.MockRouter) -> None:
+    request: Final = _rerank(respx_mock, api_key="entry-key", azure_ad_token="entry-token")
+
+    assert request.headers["authorization"] == "Bearer entry-key"
+
+
+def test_rerank_falls_back_to_the_azure_key_without_entry_entra(
+    monkeypatch: pytest.MonkeyPatch, no_ambient_azure_credentials: None
+) -> None:
+    monkeypatch.setattr(litellm, "azure_key", "process-wide-azure-key")
+
+    headers: Final = AzureAIRerankConfig().validate_environment(headers={}, model="azure_ai/cohere-rerank-v3.5")
+
+    assert headers["Authorization"] == "Bearer process-wide-azure-key"

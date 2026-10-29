@@ -2843,7 +2843,7 @@ async def test_azure_ai_decisions_use_entra_token_without_api_key(
     assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
 
 
-def test_azure_ai_systemone_environment_api_key_wins_over_deployment_entra(
+def test_azure_ai_systemone_deployment_entra_wins_over_environment_api_key(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -2862,11 +2862,11 @@ def test_azure_ai_systemone_environment_api_key_wins_over_deployment_entra(
     )
 
     assert route.called
-    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
 
 
 @pytest.mark.asyncio
-async def test_azure_ai_decisions_environment_api_key_wins_over_deployment_entra(
+async def test_azure_ai_decisions_deployment_entra_wins_over_environment_api_key(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -2885,7 +2885,7 @@ async def test_azure_ai_decisions_environment_api_key_wins_over_deployment_entra
     )
 
     assert route.called
-    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
 
 
 def test_azure_ai_decisions_uses_environment_api_key_without_entra_credentials(

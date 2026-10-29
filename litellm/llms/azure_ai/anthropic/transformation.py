@@ -6,7 +6,7 @@ from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.common_utils import validate_azure_ai_azure_environment
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
@@ -84,7 +84,7 @@ class AzureAnthropicConfig(AnthropicConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = validate_azure_ai_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Get tools and other anthropic-specific setup
         tools: Final = optional_params.get("tools")

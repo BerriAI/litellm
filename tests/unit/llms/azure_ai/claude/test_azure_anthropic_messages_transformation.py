@@ -607,3 +607,23 @@ async def test_outgoing_azure_request_keeps_an_object_output_format_under_drop_p
     body: Final = await _azure_request_body_for_output_format(output_format, drop_params=True)
 
     assert body["output_format"] == output_format
+
+
+def test_messages_environment_uses_the_entry_entra_token_over_the_process_wide_azure_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_API_KEY", "process-wide-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+
+    headers, _ = AzureAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={"azure_ad_token": "entry-token"},
+    )
+
+    assert headers["Authorization"] == "Bearer entry-token"
+    assert "x-api-key" not in headers
+    assert "api-key" not in headers

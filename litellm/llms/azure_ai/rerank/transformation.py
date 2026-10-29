@@ -9,7 +9,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers, has_azure_entra_params
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import RerankResponse
@@ -68,11 +68,14 @@ class AzureAIRerankConfig(CohereRerankConfig):
         optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = get_secret_str("AZURE_AI_API_KEY") or litellm.azure_key
+        resolved_api_key: Final = api_key or (
+            None
+            if has_azure_entra_params(litellm_params)
+            else get_secret_str("AZURE_AI_API_KEY") or litellm.azure_key or None
+        )
 
         default_headers: Final = {
-            **get_azure_ai_auth_headers(api_key=api_key, litellm_params=litellm_params),
+            **get_azure_ai_auth_headers(api_key=resolved_api_key, litellm_params=litellm_params),
             "accept": "application/json",
             "content-type": "application/json",
         }

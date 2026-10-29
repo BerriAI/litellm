@@ -19,6 +19,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
+from litellm.llms.azure_ai.common_utils import AzureAIEntraCredentials, AzureFoundryModelInfo
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
@@ -110,10 +111,9 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
 
-        # Get Azure AI API key from deployment config or environment
-        api_key = litellm_params.get("api_key")
-        if not api_key:
-            api_key = os.getenv("AZURE_AI_API_KEY")
+        api_key: Final = AzureFoundryModelInfo.get_api_key(
+            litellm_params.get("api_key"), AzureAIEntraCredentials.model_validate(litellm_params)
+        )
 
         api_base: Final = (
             litellm_params.get("api_base")

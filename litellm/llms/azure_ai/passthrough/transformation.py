@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
+    from litellm.types.router import CredentialLiteLLMParams
 
 
 EMPTY_QUERY: Final[Mapping[str, object]] = MappingProxyType({})
@@ -122,6 +123,9 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
     def __init__(self, passthrough_ocr: NativeOcrPassthroughResponse | None = None) -> None:
         super().__init__()
         self._passthrough_ocr: Final = passthrough_ocr
+
+    def get_passthrough_api_key(self, api_key: str | None, litellm_params: CredentialLiteLLMParams) -> str | None:
+        return self.get_api_key(api_key, litellm_params)
 
     def is_streaming_request(self, endpoint: str, request_data: Mapping[str, object]) -> bool:
         return bool(request_data.get("stream"))

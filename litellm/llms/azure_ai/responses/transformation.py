@@ -14,6 +14,7 @@ from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     api_key_header_for_base,
     get_azure_ai_auth_headers,
+    has_azure_entra_params,
 )
 from litellm.types.llms.azure_ai import FoundryAgentReference
 from litellm.types.llms.openai import (
@@ -82,15 +83,14 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         params: Final = litellm_params or GenericLiteLLMParams()
         api_base: Final = AzureFoundryModelInfo.get_api_base(params.api_base)
         on_project: Final = api_base is not None and bool(_project_root(httpx.URL(api_base)))
+        process_wide_scope: Final = None if has_azure_entra_params(params) else os.getenv("AZURE_SCOPE")
         auth_params: Final = (
-            params.model_copy(
-                update={"azure_scope": params.azure_scope or os.getenv("AZURE_SCOPE") or AZURE_AI_AGENTS_SCOPE}
-            )
+            params.model_copy(update={"azure_scope": params.azure_scope or process_wide_scope or AZURE_AI_AGENTS_SCOPE})
             if on_project
             else params
         )
         auth_headers: Final = get_azure_ai_auth_headers(
-            api_key=AzureFoundryModelInfo.get_api_key(params.api_key),
+            api_key=AzureFoundryModelInfo.get_api_key(params.api_key, params),
             litellm_params=auth_params.model_dump(),
             api_key_header="Authorization" if on_project else api_key_header_for_base(api_base),
         )

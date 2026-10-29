@@ -5,9 +5,12 @@ Every azure_ai route must authenticate with an Entra ID token when no API key is
 instead of requiring an API key.
 """
 
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.azure_ai.common_utils import (
@@ -290,3 +293,62 @@ async def test_agent_auth_header_is_the_entra_bearer():
     headers = await resolve_azure_ai_agent_auth_header({"azure_ad_token": "entra-token"})
 
     assert headers == {"Authorization": "Bearer entra-token"}
+
+
+FOUNDRY_RESOURCE_HOST: Final = "my-resource.services.ai.azure.com"
+
+
+@pytest.fixture
+def process_wide_azure_ai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+@pytest.mark.usefixtures("process_wide_azure_ai_key")
+def test_embedding_authenticates_with_the_entry_entra_token_over_the_process_wide_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(host=FOUNDRY_RESOURCE_HOST).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "cohere-embed-v3-english",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+
+    litellm.embedding(
+        model="azure_ai/cohere-embed-v3-english",
+        input=["hello"],
+        api_base=f"https://{FOUNDRY_RESOURCE_HOST}",
+        azure_ad_token="entry-token",
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer entry-token"
+    assert "api-key" not in request.headers
+
+
+@pytest.mark.usefixtures("process_wide_azure_ai_key")
+def test_image_generation_authenticates_with_the_entry_entra_token_over_the_process_wide_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(host=FOUNDRY_RESOURCE_HOST).mock(
+        return_value=httpx.Response(
+            200, json={"created": 1700000000, "data": [{"url": "https://images.example/1.png"}]}
+        )
+    )
+
+    litellm.image_generation(
+        model="azure_ai/FLUX-1.1-pro",
+        prompt="a red circle",
+        api_base=f"https://{FOUNDRY_RESOURCE_HOST}",
+        azure_ad_token="entry-token",
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer entry-token"
+    assert "api-key" not in request.headers

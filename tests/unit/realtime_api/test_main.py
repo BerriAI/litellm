@@ -23,6 +23,7 @@ from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.fixture
@@ -91,7 +92,13 @@ def _run_client_secret(session, model, monkeypatch):
         captured.update(kwargs)
         return object()
 
-    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
+    def mock_get_llm_provider(
+        model,
+        api_base,
+        api_key,
+        custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ):
         return model, "openai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -188,7 +195,13 @@ async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeyp
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
+    def mock_get_llm_provider(
+        model,
+        api_base,
+        api_key,
+        custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ):
         return model.removeprefix("meta/"), "meta", None, api_base
 
     async def mock_async_realtime(**kwargs):
@@ -218,7 +231,13 @@ async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkey
     async def hanging_token_refresh(**kwargs):
         await asyncio.sleep(30)
 
-    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
+    def mock_get_llm_provider(
+        model,
+        api_base,
+        api_key,
+        custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ):
         return model, "vertex_ai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -261,6 +280,7 @@ async def test_arealtime_live_session_dispatches_to_openai_live_handler(monkeypa
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -325,6 +345,7 @@ async def test_arealtime_live_session_rejects_matching_guardrail_before_dispatch
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -369,6 +390,7 @@ async def test_arealtime_live_session_rejects_streaming_only_pre_call_guardrail(
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -395,6 +417,7 @@ async def test_arealtime_live_session_rejects_non_openai_provider(monkeypatch: p
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "claude-live", "anthropic", None, None
 
@@ -420,6 +443,7 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-realtime", "openai", "resolved-key", "https://realtime-gateway.example/v1"
 
@@ -933,6 +957,56 @@ async def test_arealtime_azure_ai_on_a_foundry_host_connects_to_the_azure_openai
     assert connect.url == "wss://my-project.services.ai.azure.com/openai/v1/realtime?model=gpt-realtime-mini"
 
 
+class _ConnectThatStopsAfterCapturingTheAuthHeaders(_ConnectThatStopsAfterCapturingTheUrl):
+    auth_headers: object = None
+
+    def __call__(self, url: str, **kwargs: object) -> "_ConnectThatStopsAfterCapturingTheAuthHeaders":
+        self.url = url
+        self.auth_headers = kwargs.get("additional_headers")
+        return self
+
+
+async def _azure_ai_realtime_auth_headers(**credentials: str) -> object:
+    connect: Final = _ConnectThatStopsAfterCapturingTheAuthHeaders()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="azure_ai/gpt-realtime-mini",
+            websocket=MagicMock(),
+            api_base="https://my-project.services.ai.azure.com",
+            litellm_logging_obj=FakeLogging(),
+            **credentials,
+        )
+    return connect.auth_headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("process_wide_key_env", ["AZURE_AI_API_KEY", "AZURE_API_KEY"])
+async def test_arealtime_azure_ai_authenticates_with_the_entry_entra_token_over_a_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, process_wide_key_env: str
+) -> None:
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv(process_wide_key_env, "process-wide-key")
+
+    auth_headers: Final = await _azure_ai_realtime_auth_headers(azure_ad_token="entry-token")
+
+    assert auth_headers == {"Authorization": "Bearer entry-token"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_azure_ai_without_entry_entra_still_uses_the_process_wide_azure_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("AZURE_API_KEY", "process-wide-key")
+
+    assert await _azure_ai_realtime_auth_headers() == {"api-key": "process-wide-key"}
+
+
 @pytest.mark.asyncio
 async def test_arealtime_routes_a_bare_model_name_to_its_explicit_provider():
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
@@ -1044,7 +1118,13 @@ async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: 
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
+    def mock_get_llm_provider(
+        model,
+        api_base,
+        api_key,
+        custom_llm_provider: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ):
         return model.removeprefix("vertex_ai/"), "vertex_ai", None, api_base
 
     async def mock_token_resolver(**kwargs):

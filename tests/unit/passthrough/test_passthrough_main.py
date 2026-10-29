@@ -1,8 +1,10 @@
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -872,6 +874,65 @@ def test_azure_ai_relay_reaches_the_deployment_with_its_own_credential():
     assert sent.headers["api-key"] == "deployment-key"
     assert json.loads(sent.content)["model"] == "Cohere-parse-v5"
     assert response.status_code == 200
+
+
+@pytest.fixture
+def process_wide_azure_ai_key(monkeypatch: pytest.MonkeyPatch, no_ambient_azure_credentials: None) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("process_wide_azure_ai_key")
+async def test_router_relays_azure_ai_with_the_deployment_entra_token_over_the_process_wide_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(f"{FOUNDRY_BASE}/providers/cohere/v2/parse").mock(
+        return_value=_foundry_parse_response()
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "foundry-parse",
+                "litellm_params": {
+                    "model": "azure_ai/Cohere-parse-v5",
+                    "api_base": FOUNDRY_BASE,
+                    "azure_ad_token": "deployment-token",
+                },
+            }
+        ]
+    )
+
+    await router.allm_passthrough_route(
+        model="foundry-parse",
+        method="POST",
+        endpoint="foundry-parse/providers/cohere/v2/parse",
+        json={"model": "foundry-parse", "document": {"type": "image_url", "image_url": "https://x/y.png"}},
+    )
+
+    sent: Final = route.calls.last.request
+    assert sent.headers["authorization"] == "Bearer deployment-token"
+    assert "api-key" not in sent.headers
+
+
+@pytest.mark.usefixtures("process_wide_azure_ai_key")
+def test_azure_ai_relay_without_deployment_entra_still_uses_the_process_wide_key(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{FOUNDRY_BASE}/providers/cohere/v2/parse").mock(
+        return_value=_foundry_parse_response()
+    )
+
+    llm_passthrough_route(
+        model="azure_ai/Cohere-parse-v5",
+        endpoint="Cohere-parse-v5/providers/cohere/v2/parse",
+        method="POST",
+        custom_llm_provider="azure_ai",
+        api_base=FOUNDRY_BASE,
+        json={"model": "Cohere-parse-v5", "document": {"type": "image_url", "image_url": "https://x/y.png"}},
+        litellm_logging_obj=MagicMock(),
+    )
+
+    assert route.calls.last.request.headers["api-key"] == "process-wide-key"
 
 
 @pytest.mark.asyncio

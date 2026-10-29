@@ -4,12 +4,14 @@ from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlparse
 
+from pydantic import ConfigDict, TypeAdapter, model_validator
+
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
 AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
@@ -49,6 +51,8 @@ def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None)
 
 AZURE_AI_AGENTS_SCOPE: Final = "https://ai.azure.com/.default"
 AZURE_ENTRA_CREDENTIAL_PARAM_KEYS: Final = frozenset({"azure_ad_token", "client_secret", "azure_password"})
+_AZURE_ENTRA_CREDENTIAL_FIELDS: Final = MappingProxyType(dict.fromkeys(AZURE_ENTRA_CREDENTIAL_PARAM_KEYS, True))
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 AZURE_ENTRA_LITELLM_PARAM_KEYS: Final = AZURE_ENTRA_CREDENTIAL_PARAM_KEYS | frozenset(
     {"tenant_id", "client_id", "azure_username", "azure_scope"}
 )
@@ -58,10 +62,28 @@ AZURE_ENTRA_CREDENTIAL_HELP: Final = (
 )
 
 
-def has_azure_entra_params(litellm_params: Mapping[str, object] | None) -> bool:
-    if not litellm_params:
+def has_azure_entra_params(litellm_params: Mapping[str, object] | CredentialLiteLLMParams | None) -> bool:
+    if litellm_params is None:
         return False
-    return any(litellm_params.get(key) for key in AZURE_ENTRA_CREDENTIAL_PARAM_KEYS)
+    credentials: Final = (
+        litellm_params.model_dump(include=_AZURE_ENTRA_CREDENTIAL_FIELDS)
+        if isinstance(litellm_params, CredentialLiteLLMParams)
+        else litellm_params
+    )
+    return any(credentials.get(key) for key in AZURE_ENTRA_CREDENTIAL_PARAM_KEYS)
+
+
+class AzureAIEntraCredentials(GenericLiteLLMParams):
+    model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def preprocess_input_data(cls, data: object) -> Mapping[str, str]:
+        return {
+            key: value
+            for key, value in _LITELLM_PARAMS_ADAPTER.validate_python(data).items()
+            if key in AZURE_ENTRA_LITELLM_PARAM_KEYS and isinstance(value, str)
+        }
 
 
 def _resolve_config_secret(value: object) -> str | None:
@@ -135,6 +157,18 @@ def get_azure_ai_auth_headers(
         "credentials (`tenant_id` + `client_id` + `client_secret`, `azure_ad_token`, an OIDC token, or a managed "
         "identity with `litellm.enable_azure_ad_token_refresh = True`)"
     )
+
+
+def validate_azure_ai_azure_environment(
+    headers: dict[str, str],  # mutable-ok: mirrors BaseAzureLLM.base_validate_azure_environment
+    litellm_params: GenericLiteLLMParams,
+) -> dict[str, str]:  # mutable-ok: mirrors BaseAzureLLM.base_validate_azure_environment
+    from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
+
+    if "api-key" in headers or litellm_params.api_key or not has_azure_entra_params(litellm_params):
+        return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
+    azure_ad_token: Final = get_azure_ad_token(litellm_params)
+    return {**headers, "Authorization": f"Bearer {azure_ad_token}"} if azure_ad_token else headers
 
 
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
@@ -239,8 +273,15 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         return api_base or litellm.api_base or get_secret_str("AZURE_AI_API_BASE")
 
     @staticmethod
-    def get_api_key(api_key: str | None = None) -> str | None:
-        return api_key or litellm.api_key or get_secret_str("AZURE_AI_API_KEY")
+    def get_api_key(
+        api_key: str | None = None,
+        litellm_params: Mapping[str, object] | CredentialLiteLLMParams | None = None,
+    ) -> str | None:
+        if api_key:
+            return api_key
+        if has_azure_entra_params(litellm_params):
+            return None
+        return litellm.api_key or get_secret_str("AZURE_AI_API_KEY") or None
 
     @staticmethod
     def get_api_version(api_version: str | None = None) -> str | None:

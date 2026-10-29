@@ -15,10 +15,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
 )
-from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
+    has_azure_entra_params,
     is_foundry_model_inference_base,
+    validate_azure_ai_azure_environment,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
@@ -151,7 +152,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         else:
             # No api_key provided — fall back to Azure AD token-based auth
             litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
-            headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+            headers = validate_azure_ai_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
 
@@ -285,9 +286,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> tuple[str | None, str | None, str]:
         api_base = api_base or get_secret_str("AZURE_AI_API_BASE")
-        dynamic_api_key: Final = api_key or get_secret_str("AZURE_AI_API_KEY")
+        dynamic_api_key: Final = api_key or (
+            None if has_azure_entra_params(litellm_params) else get_secret_str("AZURE_AI_API_KEY") or None
+        )
 
         if self._is_azure_openai_model(model=model, api_base=api_base):
             verbose_logger.debug("Model=%s is Azure OpenAI model. Setting custom_llm_provider='azure'.", model)
@@ -300,8 +304,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> tuple[str | None, str | None, str]:
-        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider, litellm_params)
 
     def transform_request(
         self,

@@ -8,8 +8,8 @@ from typing import Any, Final
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
+from litellm.llms.azure_ai.common_utils import validate_azure_ai_azure_environment
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -52,7 +52,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = validate_azure_ai_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Azure Anthropic uses x-api-key header (not api-key)
         # Convert api-key to x-api-key if present

@@ -8,6 +8,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.azure_ai.common_utils import AzureAIEntraCredentials
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -152,6 +153,7 @@ def rerank(
             custom_llm_provider=custom_llm_provider,
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
+            litellm_params=AzureAIEntraCredentials.model_validate(kwargs),
         )
 
         rerank_provider_config: Final[BaseRerankConfig] = ProviderConfigManager.get_provider_rerank_config(

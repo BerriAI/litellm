@@ -3,7 +3,9 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
 
 MESSAGES: Final = [
@@ -547,3 +549,62 @@ def test_azure_ai_get_azure_ai_route():
     assert AzureFoundryModelInfo.get_azure_ai_route("gpt-4") == "default"
     assert AzureFoundryModelInfo.get_azure_ai_route("claude-3-sonnet") == "default"
     assert AzureFoundryModelInfo.get_azure_ai_route("azure_ai/gpt-4o") == "default"
+
+
+CLASSIC_AGENT_PROJECT_BASE: Final = "https://res.services.ai.azure.com/api/projects/proj"
+
+
+@pytest.fixture
+def no_process_wide_azure_ai_key(monkeypatch: pytest.MonkeyPatch, no_ambient_azure_credentials: None) -> None:
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+def _classic_agent_thread_request(respx_mock: respx.MockRouter, **credentials: str) -> httpx.Request:
+    route: Final = respx_mock.post(url__regex=r".*/threads(\?.*)?$").respond(
+        401, json={"error": {"message": "rejected after the auth header was read"}}
+    )
+    with pytest.raises(litellm.AuthenticationError):
+        litellm.completion(
+            model="azure_ai/agents/asst_abc123",
+            api_base=CLASSIC_AGENT_PROJECT_BASE,
+            messages=[{"role": "user", "content": "hi"}],
+            **credentials,
+        )
+    return route.calls.last.request
+
+
+@pytest.mark.usefixtures("no_process_wide_azure_ai_key")
+@pytest.mark.parametrize("process_wide_key", ["process-wide-key", ""], ids=["set", "empty"])
+def test_classic_agent_authenticates_with_the_entry_entra_token_over_the_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, process_wide_key: str
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", process_wide_key)
+
+    request: Final = _classic_agent_thread_request(respx_mock, azure_ad_token="entry-token")
+
+    assert request.headers["authorization"] == "Bearer entry-token"
+
+
+@pytest.mark.usefixtures("no_process_wide_azure_ai_key")
+def test_classic_agent_mints_from_the_process_wide_entra_token_when_the_process_wide_key_is_empty(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "")
+    monkeypatch.setenv("AZURE_AD_TOKEN", "process-wide-token")
+
+    request: Final = _classic_agent_thread_request(respx_mock)
+
+    assert request.headers["authorization"] == "Bearer process-wide-token"
+
+
+@pytest.mark.usefixtures("no_process_wide_azure_ai_key")
+def test_classic_agent_without_entry_entra_still_uses_the_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+
+    assert _classic_agent_thread_request(respx_mock).headers["authorization"] == "Bearer process-wide-key"

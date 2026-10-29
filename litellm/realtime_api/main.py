@@ -17,6 +17,7 @@ from litellm.constants import (
     request_timeout,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.azure_ai.common_utils import AzureAIEntraCredentials, has_azure_entra_params
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
@@ -503,11 +504,13 @@ async def _arealtime(
 
     litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.arealtime.value: True}
 
+    entra_params: Final = AzureAIEntraCredentials.model_validate({**kwargs, "azure_ad_token": azure_ad_token})
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
         custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=entra_params,
     )
 
     # If the client supplied `model` in the URL, ensure it uses the normalized
@@ -567,7 +570,11 @@ async def _arealtime(
     elif _custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         # set API KEY
-        api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_API_KEY")
+        api_key = dynamic_api_key or (
+            None
+            if _custom_llm_provider == "azure_ai" and has_azure_entra_params(entra_params)
+            else litellm.api_key or litellm.openai_key or get_secret_str("AZURE_API_KEY")
+        )
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
 

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
     from litellm.types.rerank import RerankResponse
+    from litellm.types.router import CredentialLiteLLMParams
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
     from ..chat.transformation import BaseLLMException
@@ -139,6 +140,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         """
         Check if the request is a streaming request
         """
+
+    def get_passthrough_api_key(self, api_key: str | None, litellm_params: CredentialLiteLLMParams) -> str | None:
+        return self.get_api_key(api_key)
 
     def format_url(
         self,

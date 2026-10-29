@@ -501,12 +501,15 @@ def image_generation(
             )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import (
+                AzureAIEntraCredentials,
                 AzureFoundryModelInfo,
                 get_azure_ai_auth_headers,
             )
 
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
-            api_key = AzureFoundryModelInfo.get_api_key(api_key)
+            api_key = AzureFoundryModelInfo.get_api_key(
+                api_key, AzureAIEntraCredentials.model_validate(litellm_params_dict)
+            )
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 

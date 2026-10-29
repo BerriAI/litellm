@@ -215,3 +215,45 @@ async def test_count_uses_the_shared_api_base_chat_would_use(monkeypatch: pytest
     assert result is not None
     assert result.total_tokens == 6
     assert route.called
+
+
+async def _count_request_headers(
+    monkeypatch: pytest.MonkeyPatch, process_wide_key_env: str, litellm_params: dict[str, str]
+) -> httpx.Headers:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+    for env_var in ("AZURE_AI_API_KEY", "AZURE_API_KEY", "AZURE_OPENAI_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv(process_wide_key_env, "process-wide-key")
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_base": API_BASE, **litellm_params}},
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+    return route.calls.last.request.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("process_wide_key_env", ("AZURE_AI_API_KEY", "AZURE_API_KEY"))
+async def test_count_authenticates_with_the_deployment_entra_token_over_a_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, process_wide_key_env: str
+) -> None:
+    headers: Final = await _count_request_headers(
+        monkeypatch, process_wide_key_env, {"azure_ad_token": "deployment-token"}
+    )
+
+    assert headers["authorization"] == "Bearer deployment-token"
+    assert "x-api-key" not in headers
+    assert "api-key" not in headers
+
+
+@pytest.mark.asyncio
+async def test_count_without_deployment_entra_still_uses_the_process_wide_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    headers: Final = await _count_request_headers(monkeypatch, "AZURE_AI_API_KEY", {})
+
+    assert headers["x-api-key"] == "process-wide-key"

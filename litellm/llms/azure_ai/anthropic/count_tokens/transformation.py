@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
-from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.common_utils import validate_azure_ai_azure_environment
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -58,7 +58,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         litellm_params_obj: Final = GenericLiteLLMParams.model_validate(litellm_params)
 
         # Get Azure auth headers (api-key or Authorization)
-        azure_headers = BaseAzureLLM.base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)
+        azure_headers = validate_azure_ai_azure_environment(headers={}, litellm_params=litellm_params_obj)
 
         headers.update(azure_headers)
         if "api-key" in azure_headers:

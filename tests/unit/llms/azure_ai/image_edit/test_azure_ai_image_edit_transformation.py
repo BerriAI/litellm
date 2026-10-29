@@ -15,6 +15,7 @@ from litellm.llms.azure_ai.image_edit.transformation import (
     AzureFoundryFluxImageEditConfig,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 
 
 def test_azure_ai_validate_environment():
@@ -68,6 +69,22 @@ def test_flux2_validate_environment_with_entra_token(monkeypatch, no_ambient_azu
 
     assert headers["Authorization"] == "Bearer entra-token"
     assert headers["Content-Type"] == "application/json"
+
+
+@pytest.mark.parametrize(
+    "config,model",
+    [(AzureFoundryFluxImageEditConfig(), "FLUX.1-Kontext-pro"), (AzureFoundryFlux2ImageEditConfig(), "flux.2-pro")],
+)
+def test_flux_validate_environment_uses_the_entry_entra_token_over_the_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, no_ambient_azure_credentials: None, config: OpenAIImageEditConfig, model: str
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+
+    headers: Final = config.validate_environment({}, model, litellm_params={"azure_ad_token": "entra-token"})
+
+    assert headers["Authorization"] == "Bearer entra-token"
+    assert "Api-Key" not in headers
 
 
 def test_flux2_image_edit_maps_openai_and_provider_parameters():

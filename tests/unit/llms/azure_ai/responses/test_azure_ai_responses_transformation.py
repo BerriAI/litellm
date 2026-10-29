@@ -1,4 +1,5 @@
 import json
+from collections.abc import Awaitable, Callable
 from typing import Final
 from unittest.mock import patch
 
@@ -847,8 +848,8 @@ async def test_aresponses_streams_answers_from_foundry_without_an_agents_own_ins
     [
         (None, None, AZURE_AI_AGENTS_SCOPE),
         ("api://custom-app/.default", None, "api://custom-app/.default"),
-        (None, "https://ai.azure.us/.default", "https://ai.azure.us/.default"),
-        ("api://custom-app/.default", "https://ai.azure.us/.default", "api://custom-app/.default"),
+        (None, "https://cognitiveservices.azure.com/.default", AZURE_AI_AGENTS_SCOPE),
+        ("api://custom-app/.default", "https://cognitiveservices.azure.com/.default", "api://custom-app/.default"),
     ],
 )
 async def test_aresponses_mints_the_service_principal_token_for_the_project_scope(
@@ -878,6 +879,80 @@ async def test_aresponses_mints_the_service_principal_token_for_the_project_scop
         tenant_id="tenant", client_id="client", client_secret="secret", scope=expected_scope
     )
     assert route.calls.last.request.headers["Authorization"] == "Bearer agent-sp-token"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aresponses_keeps_the_process_wide_scope_for_an_entry_without_its_own_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AZURE_TENANT_ID", "host-tenant")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "host-secret")
+    monkeypatch.setenv("AZURE_SCOPE", "https://ai.azure.us/.default")
+    route: Final = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    with patch(  # test-quality-ok: stubs the Entra token fetch to assert the scope the process-wide service principal requests
+        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "host-sp-token"
+    ) as mock_entra_id:
+        await litellm.aresponses(model="azure_ai/gpt-4.1", input="What is 2+2?", api_base=FOUNDRY_PROJECT_BASE)
+
+    mock_entra_id.assert_called_once_with(
+        tenant_id="host-tenant",
+        client_id="host-client",
+        client_secret="host-secret",
+        scope="https://ai.azure.us/.default",
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer host-sp-token"
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "call,model",
+    [
+        (litellm.aresponses, "azure_ai/gpt-4.1"),
+        (litellm.aresponses, "azure_ai/agents/support-agent"),
+        (litellm.acompletion, "azure_ai/agents/support-agent"),
+    ],
+)
+async def test_project_entry_authenticates_with_its_own_entra_token_over_the_process_wide_key(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[..., Awaitable[object]], model: str
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    route: Final = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_agent_answer_payload("4"))
+    )
+    request: Final = (
+        {"input": "What is 2+2?"}
+        if call is litellm.aresponses
+        else {"messages": [{"role": "user", "content": "What is 2+2?"}]}
+    )
+
+    await call(model=model, api_base=FOUNDRY_PROJECT_BASE, azure_ad_token="entry-token", **request)
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer entry-token"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_project_entry_explicit_api_key_wins_over_its_entra_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", "process-wide-key")
+    route: Final = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-4.1",
+        input="What is 2+2?",
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="entry-key",
+        azure_ad_token="entry-token",
+    )
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer entry-key"
 
 
 @pytest.mark.asyncio

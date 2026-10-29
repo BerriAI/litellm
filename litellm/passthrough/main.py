@@ -18,6 +18,7 @@ from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFi
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.azure_ai.common_utils import AzureAIEntraCredentials
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -326,6 +327,7 @@ async def allm_passthrough_route(
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
+            litellm_params=AzureAIEntraCredentials.model_validate(kwargs),
         )
 
         from litellm.types.utils import LlmProviders
@@ -461,11 +463,13 @@ def llm_passthrough_route(
 
     litellm_logging_obj: Final = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
 
+    entra_credentials: Final = AzureAIEntraCredentials.model_validate(kwargs)
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=entra_credentials,
     )
 
     litellm_params_dict: Final = get_litellm_params(api_key=api_key, api_base=api_base, **kwargs)
@@ -527,7 +531,7 @@ def llm_passthrough_route(
         updated_url = httpx.URL(encoded_url_str)
 
     # Add or update query parameters
-    provider_api_key: Final = provider_config.get_api_key(api_key)
+    provider_api_key: Final = provider_config.get_passthrough_api_key(api_key, entra_credentials)
 
     auth_headers: Final = provider_config.validate_environment(
         headers={},

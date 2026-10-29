@@ -8,6 +8,7 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.llms.azure_ai.common_utils import (
+    AzureAIEntraCredentials,
     AzureFoundryModelInfo,
     get_azure_ai_auth_headers,
 )
@@ -70,7 +71,9 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         headers.update(
             {
                 **get_azure_ai_auth_headers(
-                    api_key=AzureFoundryModelInfo.get_api_key(api_key),
+                    api_key=AzureFoundryModelInfo.get_api_key(
+                        api_key, AzureAIEntraCredentials.model_validate(litellm_params or {})
+                    ),
                     litellm_params=litellm_params,
                     api_key_header="Api-Key",
                 ),
