@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -65,6 +65,8 @@ _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
 _DATA_URL_PREFIX: Final = "data:"
+
+_StateItem: TypeAlias = str | Mapping[str, object]
 
 
 def decisions_text(value: DecisionsJSON) -> str:
@@ -260,6 +262,38 @@ def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
     return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
 
 
+def _data_url(image: DecisionsImage) -> str:
+    if isinstance(image, DecisionsBase64Image):
+        return f"{_DATA_URL_PREFIX}{image_media_type(image)};base64,{image.base64}"
+    return image
+
+
+def _image_item(image: DecisionsImage) -> _StateItem:
+    return {"type": "image_url", "image_url": {"url": _data_url(image)}}
+
+
+def _part_item(part: OpenAIDecisionInputText | OpenAIDecisionInputImage) -> _StateItem:
+    if isinstance(part, OpenAIDecisionInputText):
+        return part.text
+    return _image_item(part.image_url)
+
+
+def _message_items(message: OpenAIDecisionInputMessage) -> tuple[_StateItem, ...]:
+    if isinstance(message.content, str):
+        return (message.content,)
+    return tuple(map(_part_item, message.content))
+
+
+def _multimodal_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[_StateItem, ...]:
+    match decision_input:
+        case DecisionsIRState():
+            return (decisions_text(decision_input.state), *map(_image_item, decision_input.images))
+        case DecisionsIRMessages():
+            return tuple(chain.from_iterable(map(_message_items, decision_input.messages)))
+        case _:
+            assert_never(decision_input)
+
+
 def _optional(key: str, value: object) -> Mapping[str, object]:
     return {} if value is None else {key: value}
 
@@ -298,18 +332,23 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
 
 
 def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
+    model: str,
+    request: DecisionsIRRequest,
+    *,
+    supports_audio: bool = False,
+    supports_video: bool = False,
+    images_in_state: bool = False,
 ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
     if request.audio and not supports_audio:
         return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
     if request.videos and not supports_video:
         return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
-    state: Final = _systemone_state(request.input)
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     images: Final = input_images(request.input)
+    state_carries_images: Final = images_in_state and bool(images)
     return {
         "model": model,
-        "state": state,
+        "state": _multimodal_state(request.input) if state_carries_images else _systemone_state(request.input),
         **(
             {"audio": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.audio]}
             if request.audio
@@ -321,7 +360,7 @@ def ir_to_systemone_request(
             else {}
         ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
-        **({"images": [_systemone_image(image) for image in images]} if images else {}),
+        **({"images": [_systemone_image(image) for image in images]} if images and not state_carries_images else {}),
         **(
             {"assets": {key: asset.model_dump(exclude_none=True) for key, asset in request.assets.items()}}
             if request.assets
@@ -523,6 +562,7 @@ class BaseDecisionsConfig(ABC):
     max_total_image_bytes: int | None = None
     image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
+    images_in_state: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
@@ -642,6 +682,7 @@ class BaseDecisionsConfig(ABC):
             request,
             supports_audio=self.supports_audio_input(model, custom_llm_provider),
             supports_video=self.supports_video_input(model, custom_llm_provider),
+            images_in_state=self.images_in_state,
         )
 
     def unwrap_response(self, payload: object) -> object:
