@@ -139,6 +139,8 @@ _DEFAULT_WSS_URL: Final = "wss://default.example.com/v1/stream"
         (None, _DEFAULT_WSS_URL),
         ("https://eu.example.com", "wss://eu.example.com/v1/stream"),
         (" wss://eu.example.com:8443/other/path?q=1 ", "wss://eu.example.com:8443/v1/stream"),
+        ("https://[::1]:8443", "wss://[::1]:8443/v1/stream"),
+        ("https://[::1]", "wss://[::1]/v1/stream"),
     ],
 )
 def test_build_realtime_wss_url_pins_the_provider_path(api_base: str | None, expected: str):
@@ -156,6 +158,9 @@ def test_build_realtime_wss_url_pins_the_provider_path(api_base: str | None, exp
         "eu.example.com",
         "https://user:secret@eu.example.com",
         "https://eu.example.com#fragment",
+        "https://[::1",
+        "https://example.com:abc",
+        "https://example.com:99999",
     ],
 )
 def test_build_realtime_wss_url_rejects_insecure_or_ambiguous_bases(api_base: str):
