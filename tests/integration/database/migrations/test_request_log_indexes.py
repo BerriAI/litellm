@@ -1256,27 +1256,44 @@ def test_a_migration_that_depends_on_the_one_before_it_is_replayed_with_it_while
         ("20991231000002_index_team_alias", ()),
     )
     assert region is None, "every transaction must have been rolled back"
-    assert (
-        _index_validity(scratch_database, "region_idx") == {} and _index_validity(scratch_database, "alias_idx") == {}
-    )
+    with psycopg.connect(scratch_database) as conn:
+        probe_indexes: Final = conn.execute(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE indexname IN ('LiteLLM_TeamTable_region_idx', 'LiteLLM_TeamTable_alias_idx')"
+        ).fetchall()
+    assert probe_indexes == [], probe_indexes
 
 
 @requires_db
 @pytest.mark.parametrize("release", (CURRENT_RELEASE,), ids=("current",))
 def test_a_database_with_tables_but_no_ledger_is_judged_by_the_schema_diff_instead_of_replaying_history(
-    scratch_database: str,
+    scratch_database: str, tmp_path: Path
 ) -> None:
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute("DROP TABLE _prisma_migrations")
-        matching: Final = migration_dry_run.dry_run(conn, "public", PACKAGE / "migrations", schema_diff=lambda: None)
+        matching: Final = migration_dry_run.dry_run(conn, "public", PACKAGE / "migrations", baseline_check=lambda: None)
         differing: Final = migration_dry_run.dry_run(
             conn,
             "public",
             PACKAGE / "migrations",
-            schema_diff=lambda: "-- AlterTable\nALTER TABLE x ADD COLUMN y TEXT;",
+            baseline_check=lambda: (
+                "the schema differs from this build. prisma migrate diff:\nALTER TABLE x ADD COLUMN y TEXT;"
+            ),
+        )
+        custom: Final = migration_dry_run.dry_run(
+            conn,
+            "public",
+            PACKAGE / "migrations",
+            baseline_check=lambda: ProxyExtrasDBManager._baseline_refusal(
+                _extras_with_scratch_migration(
+                    tmp_path, "20991231000000_custom", 'ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN "c" TEXT;\n'
+                )
+            ),
         )
 
     assert matching.ok is True and matching.applied == ()
     assert "nothing to dry-run" in migration_dry_run.report(matching)
     assert differing.ok is False
     assert "ALTER TABLE x ADD COLUMN y TEXT;" in migration_dry_run.report(differing)
+    assert custom.ok is False
+    assert "custom migration history" in migration_dry_run.report(custom)

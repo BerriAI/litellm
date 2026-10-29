@@ -42,14 +42,15 @@ class Rejected:
 
 @dataclass(frozen=True, slots=True)
 class Baseline:
-    """A database with tables but no `_prisma_migrations`: the boot baselines it when the live
-    schema matches this build, so the dry run compares schemas instead of replaying history."""
+    """A database with tables but no `_prisma_migrations`: the boot baselines it instead of replaying
+    history, so the dry run asks the same question the boot does. `refusal` is None when the boot
+    will baseline, otherwise its reason (a custom migration folder, or the schema diff)."""
 
-    diff: str | None
+    refusal: str | None
 
     @property
     def matches(self) -> bool:
-        return self.diff is None
+        return self.refusal is None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,15 +136,15 @@ def dry_run(
     connection: psycopg.Connection[tuple[object, ...]],
     schema: str,
     migrations_dir: Path,
-    schema_diff: Callable[[], str | None] | None = None,
+    baseline_check: Callable[[], str | None] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> DryRun:
     """Apply every pending migration in order, each in its own transaction that is rolled back
     before the next one starts. The first migration Postgres rejects ends the run with its error.
-    `schema_diff` (None when the live schema matches this build's schema.prisma) stands in for the
-    replay on a database that has tables but no migration history, which the boot baselines."""
-    if schema_diff is not None and not _has_ledger(connection, schema) and _has_litellm_tables(connection, schema):
-        return DryRun((), None, Baseline(schema_diff()))
+    `baseline_check` (None when the boot would baseline, otherwise why it refuses) stands in for
+    the replay on a database that has tables but no migration history, which the boot baselines."""
+    if baseline_check is not None and not _has_ledger(connection, schema) and _has_litellm_tables(connection, schema):
+        return DryRun((), None, Baseline(baseline_check()))
     pending: Final = pending_migrations(connection, schema, migrations_dir)
     return reduce(
         lambda done, position: _run(connection, schema, pending, position, done, clock),
@@ -166,10 +167,7 @@ def report(result: DryRun) -> str:
                 "No migration history and the schema matches this build, "
                 "the proxy baselines it at boot, nothing to dry-run."
             )
-        return (
-            "No migration history and the schema differs from this build, so the proxy cannot baseline it "
-            f"at boot. prisma migrate diff:\n{result.baseline.diff}"
-        )
+        return f"No migration history and the proxy cannot baseline it at boot: {result.baseline.refusal}"
     timings: Final = "".join(_timing(applied) for applied in result.applied)
     if result.rejected is None:
         count: Final = len(result.applied)

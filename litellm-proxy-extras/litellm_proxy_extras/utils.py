@@ -1426,11 +1426,18 @@ class ProxyExtrasDBManager:
         return True
 
     @staticmethod
-    def _schema_diff_against_build(prisma_dir: Path) -> str | None:
-        """`prisma migrate diff` between the live database and this build's schema.prisma, the
-        same check `baseline_current_schema` runs at boot: None when they match, the diff otherwise."""
+    def _baseline_refusal(prisma_dir: Path) -> str | None:
+        """Why `baseline_current_schema` would refuse this database at boot, None when it would baseline:
+        the migrations folder must be the packaged one, then `prisma migrate diff` must find the live
+        database and this build's schema.prisma identical."""
         from litellm_proxy_extras.migration_lock import migration_environment
+        from litellm_proxy_extras.migration_recovery import has_packaged_history
 
+        if not has_packaged_history(prisma_dir):
+            return (
+                f"{prisma_dir} is a custom migration history (LITELLM_MIGRATION_DIR), it differs from the "
+                "migrations this build ships, and the proxy only baselines onto the packaged history."
+            )
         try:
             prisma_toolchain.run_prisma(
                 (
@@ -1447,7 +1454,8 @@ class ProxyExtrasDBManager:
                 env=migration_environment(_get_prisma_env()),
             )
         except subprocess.CalledProcessError as exc:
-            return str(exc.stdout or exc.stderr or exc).strip()
+            diff: Final = str(exc.stdout or exc.stderr or exc).strip()
+            return f"the schema differs from this build. prisma migrate diff:\n{diff}"
         except subprocess.TimeoutExpired as exc:
             return f"prisma migrate diff did not finish within {exc.timeout} s"
         return None
@@ -1476,7 +1484,7 @@ class ProxyExtrasDBManager:
                     connection,
                     schema,
                     prisma_dir / "migrations",
-                    schema_diff=lambda: ProxyExtrasDBManager._schema_diff_against_build(prisma_dir),
+                    baseline_check=lambda: ProxyExtrasDBManager._baseline_refusal(prisma_dir),
                 )
         except psycopg.OperationalError as exc:
             return (False, f"Could not reach the database: {_redact_credentials(str(exc))}")

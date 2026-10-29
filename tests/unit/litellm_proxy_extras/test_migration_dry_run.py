@@ -69,9 +69,12 @@ def test_a_database_without_history_that_matches_this_build_has_nothing_to_dry_r
     )
 
 
-def test_a_database_without_history_that_differs_from_this_build_reports_the_diff() -> None:
-    result: Final = DryRun((), None, Baseline('-- AlterTable\nALTER TABLE "LiteLLM_TeamTable" ADD COLUMN "x" TEXT;'))
+def test_a_database_without_history_the_boot_refuses_to_baseline_reports_the_refusal() -> None:
+    result: Final = DryRun(
+        (), None, Baseline('the schema differs from this build. prisma migrate diff:\n-- AlterTable\nALTER TABLE "x"')
+    )
     assert result.ok is False
-    assert report(result).endswith(
-        'prisma migrate diff:\n-- AlterTable\nALTER TABLE "LiteLLM_TeamTable" ADD COLUMN "x" TEXT;'
+    assert report(result) == (
+        "No migration history and the proxy cannot baseline it at boot: "
+        'the schema differs from this build. prisma migrate diff:\n-- AlterTable\nALTER TABLE "x"'
     )
