@@ -354,6 +354,29 @@ def test_failing_credential_source_is_a_401_that_keeps_its_output_out_of_the_rep
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "store_session_token",
+    [pytest.param({}, id="store-keys-without-token"), pytest.param({"aws_session_token": "store-token"}, id="own-token")],
+)
+@pytest.mark.asyncio
+async def test_store_keys_are_never_signed_with_the_ambient_session_token(
+    asynchronous: bool, store_session_token: Mapping[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in _AMBIENT_AWS_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ASIAAMBIENTIDENTITY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "ambient-session-token")
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+
+    await _search(asynchronous, respond, RecordingEmbeddingExecutor(), store_session_token)
+
+    sent: Final = _sent(respond)
+    assert _signature_scope(sent[0]) == ("aoss", "us-east-1")
+    assert sent[0].headers.get("x-amz-security-token") == store_session_token.get("aws_session_token")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
 async def test_opensearch_index_name_picks_the_index_so_the_store_id_can_differ(asynchronous: bool) -> None:
     respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))

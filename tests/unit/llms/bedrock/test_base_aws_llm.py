@@ -222,6 +222,64 @@ def test_get_credentials_falls_back_to_ambient_aws_profile_name_env():
     assert mock_profile.call_args.args[0] == "ambient-profile"
 
 
+ENV_ACCESS_KEY: Final = "ASIAENVIDENTITY"
+ENV_SECRET_KEY: Final = "env-identity-secret"
+ENV_SESSION_TOKEN: Final = "env-identity-session-token"
+
+
+@pytest.mark.parametrize(
+    "credential_params,expected_access_key,expected_session_token",
+    [
+        pytest.param(
+            {"aws_access_key_id": "AKIADEPLOYMENT", "aws_secret_access_key": "deployment-secret"},
+            "AKIADEPLOYMENT",
+            None,
+            id="deployment-key-pair-without-token",
+        ),
+        pytest.param(
+            {
+                "aws_access_key_id": "ASIADEPLOYMENT",
+                "aws_secret_access_key": "deployment-secret",
+                "aws_session_token": "deployment-session-token",
+            },
+            "ASIADEPLOYMENT",
+            "deployment-session-token",
+            id="deployment-key-pair-with-its-own-token",
+        ),
+        pytest.param(
+            {"aws_access_key_id": ENV_ACCESS_KEY, "aws_secret_access_key": ENV_SECRET_KEY},
+            ENV_ACCESS_KEY,
+            ENV_SESSION_TOKEN,
+            id="config-references-the-env-key-pair",
+        ),
+        pytest.param({}, ENV_ACCESS_KEY, ENV_SESSION_TOKEN, id="ambient-env-key-pair"),
+    ],
+)
+def test_bedrock_request_carries_only_the_session_token_of_the_key_pair_that_signs_it(
+    credential_params: Dict[str, str],
+    expected_access_key: str,
+    expected_session_token: Optional[str],
+):
+    env = {
+        **_os_environ_without_aws_keys(),
+        "AWS_ACCESS_KEY_ID": ENV_ACCESS_KEY,
+        "AWS_SECRET_ACCESS_KEY": ENV_SECRET_KEY,
+        "AWS_SESSION_TOKEN": ENV_SESSION_TOKEN,
+    }
+    with patch.dict(os.environ, env, clear=True):
+        headers, _ = BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers={},
+            optional_params={**credential_params, "aws_region_name": "us-west-2"},
+            request_data={"messages": [{"role": "user", "content": [{"text": "hi"}]}]},
+            api_base="https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-4-6/converse",
+        )
+
+    lowered: Final = {name.lower(): value for name, value in headers.items()}
+    assert lowered["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={expected_access_key}/")
+    assert lowered.get("x-amz-security-token") == expected_session_token
+
+
 def test_get_credentials_ambient_fallback_resolves_aws_external_id():
     """
     Each unset param falls back to its own AWS_* env var. Regression for an index

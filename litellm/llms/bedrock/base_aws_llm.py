@@ -368,6 +368,13 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     ) -> bool:
         return aws_access_key_id is not None and aws_secret_access_key is not None and aws_region_name is not None
 
+    @staticmethod
+    def _env_session_token_for_key_pair(aws_access_key_id: str | None, aws_secret_access_key: str | None) -> str | None:
+        env_key_pair: Final = (os.getenv("AWS_ACCESS_KEY_ID"), os.getenv("AWS_SECRET_ACCESS_KEY"))
+        if (aws_access_key_id, aws_secret_access_key) != env_key_pair:
+            return None
+        return os.getenv("AWS_SESSION_TOKEN")
+
     @tracer.wrap()
     def get_credentials(
         self,
@@ -391,11 +398,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # os.environ/<VAR> references in the model config are resolved at load time,
         # so any reference still present at this point is caller-supplied input and is
         # left as-is rather than expanded into a process environment variable. Each
-        # unset param falls back to its matching fixed AWS_* ambient env var.
+        # unset param falls back to its matching fixed AWS_* ambient env var, except the
+        # session token, which belongs to the env key pair and is only used beside it.
         (
             aws_access_key_id,
             aws_secret_access_key,
-            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -408,7 +415,6 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             for value, env_var in (
                 (aws_access_key_id, "AWS_ACCESS_KEY_ID"),
                 (aws_secret_access_key, "AWS_SECRET_ACCESS_KEY"),
-                (aws_session_token, "AWS_SESSION_TOKEN"),
                 (aws_region_name, "AWS_REGION_NAME"),
                 (aws_session_name, "AWS_SESSION_NAME"),
                 (aws_profile_name, "AWS_PROFILE_NAME"),
@@ -417,6 +423,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 (aws_sts_endpoint, "AWS_STS_ENDPOINT"),
                 (aws_external_id, "AWS_EXTERNAL_ID"),
             )
+        )
+        session_token: Final = (
+            aws_session_token
+            if aws_session_token is not None
+            else self._env_session_token_for_key_pair(aws_access_key_id, aws_secret_access_key)
         )
         session_tags: Final = _canonical_aws_session_tags(aws_session_tags)
 
@@ -435,7 +446,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws_session_tags=%s",
             aws_access_key_id is not None,
             aws_secret_access_key is not None,
-            aws_session_token is not None,
+            session_token is not None,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -449,7 +460,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         args: Final = {
             "aws_access_key_id": aws_access_key_id,
             "aws_secret_access_key": aws_secret_access_key,
-            "aws_session_token": aws_session_token,
+            "aws_session_token": session_token,
             "aws_region_name": aws_region_name,
             "aws_session_name": aws_session_name,
             "aws_profile_name": aws_profile_name,
@@ -495,7 +506,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 lambda: self._resolve_role_credentials(
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
-                    aws_session_token=aws_session_token,
+                    aws_session_token=session_token,
                     aws_role_name=cast(str, aws_role_name),
                     aws_session_name=aws_session_name,
                     aws_region_name=aws_region_name,
@@ -512,12 +523,12 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         elif self._is_auth_with_aws_session_token_tuple(
             aws_access_key_id,
             aws_secret_access_key,
-            aws_session_token,
+            session_token,
         ):
             credentials, _cache_ttl = self._auth_with_aws_session_token(
                 aws_access_key_id=cast(str, aws_access_key_id),
                 aws_secret_access_key=cast(str, aws_secret_access_key),
-                aws_session_token=cast(str, aws_session_token),
+                aws_session_token=cast(str, session_token),
             )
             return credentials
         elif self._is_auth_with_access_key_and_secret_key(
