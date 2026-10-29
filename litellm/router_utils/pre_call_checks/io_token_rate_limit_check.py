@@ -1,7 +1,8 @@
 """
 Separate ITPM/OTPM (input/output tokens per minute) deployment rate limits.
 
-- Pre-call: atomically reserve estimated_input against ITPM and max_tokens against OTPM
+- Pre-call: atomically reserve estimated_input against ITPM and max_tokens against OTPM; a request
+  without max_tokens reserves the model's max output, capped at a fraction of the OTPM limit
 - Post-call: reconcile ITPM to actual input tokens and OTPM to actual output tokens
 - Cached prompt-read tokens are excluded from ITPM post-call accounting
 
@@ -22,6 +23,7 @@ from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
@@ -154,24 +156,25 @@ def _model_max_output_tokens(model_name: str) -> int | None:
     return None
 
 
-def _resolve_max_tokens(request_kwargs: dict[str, Any] | None, deployment: dict) -> int:
-    if request_kwargs:
-        # An explicit max_tokens=0 must be honored, not treated as absent and
-        # replaced by the model default.
-        explicit = request_kwargs.get("max_tokens")
-        if explicit is None:
-            explicit = request_kwargs.get("max_completion_tokens")
-        if explicit is None:
-            explicit = request_kwargs.get("max_output_tokens")
-        if explicit is not None:
-            return max(0, int(explicit))
+_OUTPUT_CAP_KEYS: Final = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 
-    model_name: Final = (deployment.get("litellm_params") or {}).get("model")
-    if model_name:
-        model_max: Final = _model_max_output_tokens(model_name)
-        if model_max is not None:
-            return model_max
-    return 4096
+
+def _explicit_max_tokens(request_kwargs: dict[str, Any] | None) -> int | None:
+    if not request_kwargs:
+        return None
+    explicit: Final = next(
+        (request_kwargs[key] for key in _OUTPUT_CAP_KEYS if request_kwargs.get(key) is not None),
+        None,
+    )
+    return None if explicit is None else max(0, int(explicit))
+
+
+def _otpm_reservation(explicit_max_tokens: int | None, model_name: str, otpm_limit: int) -> int:
+    if explicit_max_tokens is not None:
+        return explicit_max_tokens
+    model_max: Final = _model_max_output_tokens(model_name) if model_name else None
+    share_of_limit: Final = max(1, otpm_limit // NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)
+    return min(4096 if model_max is None else model_max, share_of_limit)
 
 
 def _get_usage_tokens(usage: object) -> tuple[int, int, int]:
@@ -427,9 +430,10 @@ def io_token_pre_call_check(
         return deployment
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
-    _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
+    configured_model: Final = (deployment.get("litellm_params") or {}).get("model")
+    _model: Final = configured_model if isinstance(configured_model, str) else ""
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
-    max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
+    explicit_max_tokens: Final = _explicit_max_tokens(request_kwargs)
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
@@ -452,7 +456,7 @@ def io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
+        otpm_reserved = _otpm_reservation(explicit_max_tokens, _model, otpm_limit)
         try:
             _sync_increment_with_rollback(
                 dual_cache,
@@ -491,9 +495,10 @@ async def async_io_token_pre_call_check(
         return deployment
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
-    _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
+    configured_model: Final = (deployment.get("litellm_params") or {}).get("model")
+    _model: Final = configured_model if isinstance(configured_model, str) else ""
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
-    max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
+    explicit_max_tokens: Final = _explicit_max_tokens(request_kwargs)
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
@@ -517,7 +522,7 @@ async def async_io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
+        otpm_reserved = _otpm_reservation(explicit_max_tokens, _model, otpm_limit)
         try:
             await _increment_with_rollback(
                 dual_cache,

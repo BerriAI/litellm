@@ -9,13 +9,14 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
     OTPM_CACHE_KEY,
     OTPM_RESERVED_KEY,
+    _explicit_max_tokens,
     _reservation_value,
-    _resolve_max_tokens,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     build_io_token_rate_limit_headers,
@@ -30,6 +31,11 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
 from litellm.types.utils import ModelResponse, Usage
+
+MANTLE_OPUS = "bedrock_mantle/anthropic.claude-opus-4-7"
+MANTLE_OPUS_MAX_OUTPUT = litellm.get_model_info(model=MANTLE_OPUS)["max_output_tokens"]
+UNMAPPED_MODEL = "openai/litellm-io-unmapped-model"
+UNMAPPED_MODEL_DEFAULT_MAX_OUTPUT = 4096
 
 
 class TestIOTokenRateLimitHelpers:
@@ -47,13 +53,20 @@ class TestIOTokenRateLimitHelpers:
         # A real non-zero estimate is reserved as-is.
         assert _reservation_value(42, 100) == 42
 
-    def test_resolve_max_tokens_respects_explicit_zero(self):
-        deployment = {"litellm_params": {"model": "openai/gpt-4o-mini"}}
-        # An explicit max_tokens=0 is honored, not replaced by the model default.
-        assert _resolve_max_tokens({"max_tokens": 0}, deployment) == 0
-        # max_completion_tokens is the fallback only when max_tokens is absent.
-        assert _resolve_max_tokens({"max_completion_tokens": 12}, deployment) == 12
-        assert _resolve_max_tokens({"max_output_tokens": 9}, deployment) == 9
+    @pytest.mark.parametrize(
+        "request_kwargs, expected",
+        [
+            ({"max_tokens": 0}, 0),
+            ({"max_completion_tokens": 12}, 12),
+            ({"max_output_tokens": 9}, 9),
+            ({"max_tokens": 5, "max_completion_tokens": 12}, 5),
+            ({"max_tokens": None, "max_output_tokens": 9}, 9),
+            ({"messages": []}, None),
+            (None, None),
+        ],
+    )
+    def test_explicit_max_tokens_reads_every_output_cap_key(self, request_kwargs, expected):
+        assert _explicit_max_tokens(request_kwargs) == expected
 
     def test_build_io_token_rate_limit_headers(self):
         headers = build_io_token_rate_limit_headers(
@@ -384,6 +397,137 @@ class TestModelRateLimitingCheckIOTokens:
 
         normal_output_otpm_key = normal_output_kwargs["metadata"][OTPM_CACHE_KEY]
         assert await dual_cache.async_get_cache(key=normal_output_otpm_key) == 5
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("use_sync_check", [False, True])
+    @pytest.mark.parametrize(
+        "model, otpm_limit",
+        [
+            (MANTLE_OPUS, MANTLE_OPUS_MAX_OUTPUT // 2),
+            (MANTLE_OPUS, MANTLE_OPUS_MAX_OUTPUT - 1),
+            (UNMAPPED_MODEL, 1000),
+            (UNMAPPED_MODEL, 3),
+        ],
+    )
+    async def test_request_without_max_tokens_is_admitted_below_model_max_output(
+        self, model, otpm_limit, use_sync_check
+    ):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {"model": model, "otpm": otpm_limit},
+            "model_info": {"id": f"io-no-max-tokens-{otpm_limit}"},
+            "model_name": "no-max-tokens",
+        }
+        request_kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+
+        if use_sync_check:
+            check.pre_call_check(deployment)
+        else:
+            await check.async_pre_call_check(deployment)
+
+        reserved = request_kwargs["metadata"][OTPM_RESERVED_KEY]
+        assert isinstance(reserved, int)
+        assert 0 < reserved < otpm_limit
+        assert await dual_cache.async_get_cache(key=request_kwargs["metadata"][OTPM_CACHE_KEY]) == reserved
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model, otpm_limit",
+        [(MANTLE_OPUS, MANTLE_OPUS_MAX_OUTPUT), (UNMAPPED_MODEL, UNMAPPED_MODEL_DEFAULT_MAX_OUTPUT)],
+    )
+    async def test_concurrent_requests_without_max_tokens_share_otpm_without_overshoot(self, model, otpm_limit):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {"model": model, "otpm": otpm_limit},
+            "model_info": {"id": "io-no-max-tokens-race-id"},
+            "model_name": "no-max-tokens",
+        }
+
+        async def _attempt():
+            request_kwargs = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+            set_io_token_rate_limit_request_kwargs(request_kwargs)
+            try:
+                await check.async_pre_call_check(deployment)
+            except litellm.RateLimitError:
+                return None
+            return request_kwargs["metadata"]
+
+        admitted = [m for m in await asyncio.gather(*[_attempt() for _ in range(8)]) if m is not None]
+        otpm_key = admitted[0][OTPM_CACHE_KEY]
+
+        assert len(admitted) == NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+        assert {m[OTPM_CACHE_KEY] for m in admitted} == {otpm_key}
+        assert await dual_cache.async_get_cache(key=otpm_key) == sum(m[OTPM_RESERVED_KEY] for m in admitted)
+        assert await dual_cache.async_get_cache(key=otpm_key) <= otpm_limit
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model, model_max_output",
+        [(MANTLE_OPUS, MANTLE_OPUS_MAX_OUTPUT), (UNMAPPED_MODEL, UNMAPPED_MODEL_DEFAULT_MAX_OUTPUT)],
+    )
+    async def test_request_without_max_tokens_reserves_model_max_output_when_otpm_allows(
+        self, model, model_max_output
+    ):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {"model": model, "otpm": model_max_output * 10},
+            "model_info": {"id": "io-no-max-tokens-roomy-id"},
+            "model_name": "roomy",
+        }
+        request_kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+
+        await check.async_pre_call_check(deployment)
+
+        assert request_kwargs["metadata"][OTPM_RESERVED_KEY] == model_max_output
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("use_sync_check", [False, True])
+    async def test_unparseable_max_tokens_leaves_itpm_uncharged(self, use_sync_check):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {"model": MANTLE_OPUS, "itpm": 2000, "otpm": 2000},
+            "model_info": {"id": "io-bad-max-tokens-id"},
+            "model_name": "opus",
+        }
+
+        async def _pre_call(request_kwargs):
+            set_io_token_rate_limit_request_kwargs(request_kwargs)
+            if use_sync_check:
+                check.pre_call_check(deployment)
+            else:
+                await check.async_pre_call_check(deployment)
+
+        await _pre_call({"messages": [{"role": "user", "content": "hello there"}], "max_tokens": "abc", "metadata": {}})
+        valid_kwargs = {"messages": [{"role": "user", "content": "hello there"}], "max_tokens": 1, "metadata": {}}
+        await _pre_call(valid_kwargs)
+
+        itpm_counter = await dual_cache.async_get_cache(key=valid_kwargs["metadata"][ITPM_CACHE_KEY])
+        assert itpm_counter == valid_kwargs["metadata"][ITPM_RESERVED_KEY]
+
+    @pytest.mark.asyncio
+    async def test_explicit_max_tokens_above_default_share_is_reserved_in_full(self):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {"model": MANTLE_OPUS, "otpm": 100},
+            "model_info": {"id": "io-explicit-max-tokens-id"},
+            "model_name": "opus",
+        }
+        request_kwargs = {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 100, "metadata": {}}
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+
+        await check.async_pre_call_check(deployment)
+
+        assert request_kwargs["metadata"][OTPM_RESERVED_KEY] == 100
+        set_io_token_rate_limit_request_kwargs({"messages": [{"role": "user", "content": "hi"}], "metadata": {}})
+        with pytest.raises(litellm.RateLimitError):
+            await check.async_pre_call_check(deployment)
 
     def test_sync_io_pre_call_reserves_and_reconciles(self):
         from litellm.utils import get_utc_datetime
