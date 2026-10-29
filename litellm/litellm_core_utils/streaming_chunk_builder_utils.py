@@ -385,6 +385,28 @@ class ChunkProcessor:
                 return "assistant"
 
     @staticmethod
+    def _finish_reason_of_chunks(chunks: Sequence["_BaseChunk"]) -> object:
+        finish_reason = "stop"
+        for chunk in chunks:
+            if "choices" in chunk and len(chunk["choices"]) > 0:
+                chunk_finish_reason = None
+                if hasattr(chunk["choices"][0], "finish_reason"):
+                    chunk_finish_reason = chunk["choices"][0].finish_reason
+                elif "finish_reason" in chunk["choices"][0]:
+                    chunk_finish_reason = _CHOICE_FIELD_VALUE.validate_python(chunk["choices"][0]["finish_reason"])
+                if chunk_finish_reason is not None:
+                    finish_reason = chunk_finish_reason
+        return finish_reason
+
+    @staticmethod
+    def build_base_choice(index: int, chunks: Sequence["_BaseChunk"]) -> Choices:
+        return Choices(
+            index=index,
+            finish_reason=ChunkProcessor._finish_reason_of_chunks(chunks),
+            message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
+        )
+
+    @staticmethod
     def _get_model_from_chunks(chunks: Sequence["_BaseChunk"], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
@@ -420,16 +442,7 @@ class ChunkProcessor:
         service_tier: Final = ChunkProcessor._get_service_tier_from_chunks(chunks)
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
-        finish_reason = "stop"
-        for chunk in chunks:
-            if "choices" in chunk and len(chunk["choices"]) > 0:
-                chunk_finish_reason = None
-                if hasattr(chunk["choices"][0], "finish_reason"):
-                    chunk_finish_reason = chunk["choices"][0].finish_reason
-                elif "finish_reason" in chunk["choices"][0]:
-                    chunk_finish_reason = _CHOICE_FIELD_VALUE.validate_python(chunk["choices"][0]["finish_reason"])
-                if chunk_finish_reason is not None:
-                    finish_reason = chunk_finish_reason
+        finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -1514,11 +1527,180 @@ def _bedrock_trace_fields(chunk: object) -> Mapping[str, object]:
     return {field: fields[field] for field in BEDROCK_TRACE_FIELDS if field in fields}
 
 
+def _stream_choice_index(choice: object) -> int:
+    index: Final = _field_of(choice, "index")
+    return index if isinstance(index, int) else 0
+
+
+def _choice_streams(chunks: Sequence[_BaseChunk]) -> tuple[tuple[int, Sequence[_BaseChunk]], ...]:
+    indices: Final = sorted(
+        frozenset(map(_stream_choice_index, chain.from_iterable(chunk.get("choices") or () for chunk in chunks)))
+    )
+    if len(indices) <= 1:
+        return ((0, chunks),)
+    return tuple((index, _narrowed_to_choice(chunks, index)) for index in indices)
+
+
+def _narrowed_to_choice(chunks: Sequence[_BaseChunk], index: int) -> tuple[_BaseChunk, ...]:
+    return tuple(
+        _BaseChunk(choices=[choice for choice in chunk.get("choices") or () if _stream_choice_index(choice) == index])
+        for chunk in chunks
+    )
+
+
+def _joined_simple_text(chunks: Sequence[_BaseChunk]) -> str:
+    return "".join(_simple_text_part(chunk["choices"]) or "" for chunk in chunks if chunk.get("choices"))
+
+
+def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> Iterator[tuple[str, object]]:
+    tool_call_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if any(
+            "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"] is not None
+            for choice in chunk.get("choices") or ()
+        )
+    ]
+
+    if tool_call_chunks:
+        tool_calls_list: Final = processor.get_combined_tool_content(tool_call_chunks)
+        yield "content", None
+        yield "tool_calls", tool_calls_list
+
+    function_call_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "function_call" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["function_call"] is not None
+    ]
+
+    if function_call_chunks:
+        yield "content", None
+        yield "function_call", processor.get_combined_function_call_content(function_call_chunks)
+
+    content_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "content" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["content"] is not None
+    ]
+
+    if content_chunks:
+        yield "content", processor.get_combined_content(content_chunks)
+
+    thinking_blocks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "thinking_blocks" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
+    ]
+
+    if thinking_blocks:
+        yield "thinking_blocks", processor.get_combined_thinking_content(thinking_blocks)
+
+    reasoning_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "reasoning_content" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["reasoning_content"] is not None
+    ]
+
+    if reasoning_chunks:
+        yield "reasoning_content", processor.get_combined_reasoning_content(reasoning_chunks)
+
+    typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+    reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
+    if reasoning_items:
+        yield "reasoning_items", list(reasoning_items)
+
+    annotation_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "annotations" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["annotations"] is not None
+    ]
+
+    if annotation_chunks:
+        # Merge annotations from ALL chunks — providers may spread
+        # them across multiple streaming chunks or send them only in
+        # the final chunk.
+        all_annotations: Final[list[object]] = []
+        for ac in annotation_chunks:
+            all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
+        yield "annotations", all_annotations
+
+    audio_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "audio" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["audio"] is not None
+    ]
+
+    if audio_chunks:
+        yield "audio", processor.get_combined_audio_content(audio_chunks)
+
+    # Handle image chunks from models like gemini-2.5-flash-image
+    # See: https://github.com/BerriAI/litellm/issues/19478
+    image_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "images" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["images"] is not None
+    ]
+
+    if image_chunks:
+        # Images come complete in a single chunk, collect all images from all chunks
+        all_images: Final = []
+        for chunk in image_chunks:
+            all_images.extend(chunk["choices"][0]["delta"]["images"])
+        yield "images", all_images
+
+    # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
+    # See: https://github.com/BerriAI/litellm/issues/17737
+    provider_specific_chunks: Final = [
+        chunk
+        for chunk in chunks
+        if chunk.get("choices")
+        and "provider_specific_fields" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
+    ]
+
+    if provider_specific_chunks:
+        provider_field_dicts: Final = tuple(
+            fields
+            for chunk in provider_specific_chunks
+            for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
+            if isinstance(fields, dict)
+        )
+        streamed_citations: Final = tuple(
+            fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
+        )
+        citation_fields: Final = (
+            {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
+        )
+        combined_provider_fields: Final = {
+            key: value
+            for fields in (citation_fields, *provider_field_dicts)
+            for key, value in fields.items()
+            if key != "citation"
+        }
+
+        if combined_provider_fields:
+            yield "provider_specific_fields", combined_provider_fields
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
-    start_time=None,
-    end_time=None,
+    start_time: object = None,
+    end_time: object = None,
     logging_obj: Optional["Logging"] = None,
     count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
@@ -1552,26 +1734,21 @@ def stream_chunk_builder(
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
-        # Initialize the response dictionary
         response: Final = processor.build_base_response(chunks)
+        choice_streams: Final = _choice_streams(chunks)
+        if len(choice_streams) > 1:
+            response.choices = [
+                ChunkProcessor.build_base_choice(index, choice_chunks) for index, choice_chunks in choice_streams
+            ]
+        rebuilt_choices: Final = tuple(zip(response.choices, (choice_chunks for _, choice_chunks in choice_streams)))
 
-        # Fast path for the common text-only streaming case:
-        # avoid repeated multi-pass list scans over chunks.
-        simple_content_parts: Final[list[str]] = []
-        is_simple_text_stream = True
-        for chunk in chunks:
-            if not chunk.get("choices"):
-                continue
-
-            if (part := _simple_text_part(chunk["choices"])) is None:
-                is_simple_text_stream = False
-                break
-            if part:
-                simple_content_parts.append(part)
-
+        is_simple_text_stream: Final = all(
+            _simple_text_part(chunk["choices"]) is not None for chunk in chunks if chunk.get("choices")
+        )
         if is_simple_text_stream:
-            if simple_content_parts:
-                response["choices"][0]["message"]["content"] = "".join(simple_content_parts)
+            for choice, choice_chunks in rebuilt_choices:
+                if simple_text := _joined_simple_text(choice_chunks):
+                    choice.message.content = simple_text
             completion_output = get_content_from_model_response(response)
             usage = processor.calculate_usage(
                 chunks=chunks,
@@ -1610,155 +1787,9 @@ def stream_chunk_builder(
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
             return response
 
-        tool_call_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if any(
-                "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"] is not None
-                for choice in chunk.get("choices") or ()
-            )
-        ]
-
-        if len(tool_call_chunks) > 0:
-            tool_calls_list: Final = processor.get_combined_tool_content(tool_call_chunks)
-            _choice = response.choices[0]
-            _choice.message.content = None
-            _choice.message.tool_calls = tool_calls_list
-
-        function_call_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "function_call" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["function_call"] is not None
-        ]
-
-        if len(function_call_chunks) > 0:
-            _choice = response.choices[0]
-            _choice.message.content = None
-            _choice.message.function_call = processor.get_combined_function_call_content(function_call_chunks)
-
-        content_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "content" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["content"] is not None
-        ]
-
-        if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = processor.get_combined_content(content_chunks)
-
-        thinking_blocks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "thinking_blocks" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
-        ]
-
-        if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = processor.get_combined_thinking_content(
-                thinking_blocks
-            )
-
-        reasoning_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "reasoning_content" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["reasoning_content"] is not None
-        ]
-
-        if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
-                reasoning_chunks
-            )
-
-        typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
-        reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
-        if reasoning_items:
-            response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
-
-        annotation_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "annotations" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["annotations"] is not None
-        ]
-
-        if len(annotation_chunks) > 0:
-            # Merge annotations from ALL chunks — providers may spread
-            # them across multiple streaming chunks or send them only in
-            # the final chunk.
-            all_annotations: Final[list] = []
-            for ac in annotation_chunks:
-                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
-            response["choices"][0]["message"]["annotations"] = all_annotations
-
-        audio_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "audio" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["audio"] is not None
-        ]
-
-        if len(audio_chunks) > 0:
-            _choice = response.choices[0]
-            _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
-
-        # Handle image chunks from models like gemini-2.5-flash-image
-        # See: https://github.com/BerriAI/litellm/issues/19478
-        image_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "images" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["images"] is not None
-        ]
-
-        if len(image_chunks) > 0:
-            # Images come complete in a single chunk, collect all images from all chunks
-            all_images: Final = []
-            for chunk in image_chunks:
-                all_images.extend(chunk["choices"][0]["delta"]["images"])
-            response["choices"][0]["message"]["images"] = all_images
-
-        # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
-        # See: https://github.com/BerriAI/litellm/issues/17737
-        provider_specific_chunks: Final = [
-            chunk
-            for chunk in chunks
-            if chunk.get("choices")
-            and "provider_specific_fields" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
-        ]
-
-        if len(provider_specific_chunks) > 0:
-            provider_field_dicts: Final = tuple(
-                fields
-                for chunk in provider_specific_chunks
-                for fields in (chunk["choices"][0]["delta"]["provider_specific_fields"],)
-                if isinstance(fields, dict)
-            )
-            streamed_citations: Final = tuple(
-                fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
-            )
-            citation_fields: Final = (
-                {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
-            )
-            combined_provider_fields: Final = {
-                key: value
-                for fields in (citation_fields, *provider_field_dicts)
-                for key, value in fields.items()
-                if key != "citation"
-            }
-
-            if combined_provider_fields:
-                _choice = response.choices[0]
-                _choice.message.provider_specific_fields = combined_provider_fields
+        for choice, choice_chunks in rebuilt_choices:
+            for field, value in _assembled_message_fields(processor, choice_chunks):
+                choice.message[field] = value
 
         completion_output = get_content_from_model_response(response)
 

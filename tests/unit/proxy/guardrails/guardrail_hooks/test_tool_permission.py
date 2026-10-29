@@ -5,6 +5,7 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 import json
 import logging
 import re
+from itertools import chain
 from typing import Final
 from unittest.mock import patch
 
@@ -25,10 +26,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
+    Function,
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
 )
 
 
@@ -865,6 +870,46 @@ class TestToolPermissionGuardrail:
             "Hook must preserve the original response content; "
             f"got: {chunks[0].choices[0].delta.content!r}"
         )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_streaming_iterator_hook_re_emits_each_choice_of_an_n2_tool_call_stream(self):
+        def chunk(choice_index: int, tool_call: ChatCompletionDeltaToolCall) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-n2-tools",
+                created=1700000000,
+                model="gpt-4.1-mini",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=choice_index, delta=Delta(tool_calls=[tool_call]))],
+            )
+
+        def fragment(arguments: str, name: str | None = None) -> ChatCompletionDeltaToolCall:
+            return ChatCompletionDeltaToolCall(
+                id="call_shared" if name else None,
+                index=0,
+                type="function",
+                function=Function(name=name, arguments=arguments),
+            )
+
+        async def _stream():
+            for streamed in (
+                chunk(0, fragment("", name="Bash")),
+                chunk(1, fragment("", name="Bash")),
+                chunk(0, fragment('{"command": "ls"}')),
+                chunk(1, fragment('{"command": "pwd"}')),
+            ):
+                yield streamed
+
+        re_emitted: Final = [
+            chunk
+            async for chunk in self.guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_stream(), request_data={}
+            )
+        ]
+
+        assert [
+            (choice.index, [(call.function.name, call.function.arguments) for call in choice.delta.tool_calls])
+            for choice in chain.from_iterable(streamed.choices for streamed in re_emitted)
+        ] == [(0, [("Bash", '{"command": "ls"}')]), (1, [("Bash", '{"command": "pwd"}')])]
 
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call
