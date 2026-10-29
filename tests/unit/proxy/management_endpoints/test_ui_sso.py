@@ -6594,10 +6594,13 @@ class TestAddMissingTeamMember:
     """Tests for the add_missing_team_member function"""
 
     @staticmethod
-    def _recording_add():
-        added = []
+    def _recording_add() -> tuple[
+        list[tuple[str, str | None]],
+        Callable[[str, NewUserResponse | LiteLLM_UserTable], Awaitable[None]],
+    ]:
+        added: Final[list[tuple[str, str | None]]] = []
 
-        async def add(team_id, user_info):
+        async def add(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> None:
             added.append((team_id, user_info.user_id))
 
         return added, add
@@ -6753,11 +6756,11 @@ class TestAddMissingTeamMember:
         from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        claim = ["team-zeta", "team-alpha", "team-held", "team-zeta", "team-mu"]
-        yields_before_finishing = {"team-zeta": 3, "team-alpha": 2, "team-mu": 1}
-        finished = []
+        claim: Final = ["team-zeta", "team-alpha", "team-held", "team-zeta", "team-mu"]
+        yields_before_finishing: Final = {"team-zeta": 3, "team-alpha": 2, "team-mu": 1}
+        finished: Final[list[str]] = []
 
-        async def slower_when_earlier(team_id, user_info):
+        async def slower_when_earlier(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> None:
             for _ in range(yields_before_finishing[team_id]):
                 await asyncio.sleep(0)
             finished.append(team_id)
@@ -6769,6 +6772,71 @@ class TestAddMissingTeamMember:
         )
 
         assert finished == ["team-zeta", "team-alpha", "team-mu"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "existing,expected_teams_added",
+        [
+            pytest.param(frozenset({"team-zeta", "team-alpha"}), ["team-zeta", "team-alpha"], id="only_teams"),
+            pytest.param(None, ["grp-everyone", "team-zeta", "grp-vpn", "team-alpha"], id="lookup_failed"),
+        ],
+    )
+    async def test_add_missing_team_member_looks_up_missing_groups_once_and_adds_only_teams(
+        self, existing: frozenset[str] | None, expected_teams_added: list[str]
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        added, add = self._recording_add()
+        lookups: Final[list[tuple[str, ...]]] = []
+
+        async def existing_team_ids(team_ids: Sequence[str]) -> frozenset[str] | None:
+            lookups.append(tuple(team_ids))
+            return existing
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-held"]),
+            sso_teams=["grp-everyone", "team-zeta", "team-held", "grp-vpn", "team-alpha"],
+            add_team_member=add,
+            existing_team_ids=existing_team_ids,
+        )
+
+        assert lookups == [("grp-everyone", "team-zeta", "grp-vpn", "team-alpha")]
+        assert added == [(team_id, "group-sync-user") for team_id in expected_teams_added]
+
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_skips_the_lookup_when_every_group_is_held(self):
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        added, add = self._recording_add()
+        lookup: Final = AsyncMock(return_value=frozenset())
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-alpha", "team-zeta"]),
+            sso_teams=["team-zeta", "team-alpha"],
+            add_team_member=add,
+            existing_team_ids=lookup,
+        )
+
+        lookup.assert_not_awaited()
+        assert added == []
+
+    @pytest.mark.asyncio
+    async def test_find_existing_team_ids_returns_stored_teams_and_none_when_the_db_cannot_answer(self):
+        from litellm.proxy.management_endpoints.ui_sso import find_existing_team_ids
+
+        stored: Final = ("team-zeta", "team-alpha")
+
+        async def find_many(*, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[SimpleNamespace]:
+            return [SimpleNamespace(team_id=team_id) for team_id in stored if team_id in where["team_id"]["in"]]
+
+        prisma: Final = MagicMock()
+        prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            assert await find_existing_team_ids(("grp-vpn", "team-alpha")) == frozenset({"team-alpha"})
+            prisma.db.litellm_teamtable.find_many.side_effect = RuntimeError("db unavailable")
+            assert await find_existing_team_ids(("team-alpha",)) is None
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            assert await find_existing_team_ids(("team-alpha",)) is None
 
 
 @pytest.mark.asyncio
