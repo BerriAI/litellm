@@ -724,6 +724,37 @@ async def test_ahealth_check_probes_hosted_vllm_with_a_choice_question(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+async def test_ahealth_check_probes_ollama_decisions_with_one_noul_question_without_auth(
+    provider: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(
+        json={
+            "model": "d3:4b",
+            "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {"model": f"{provider}/d3:4b", "api_base": "http://ollama.local:11434"}, mode="decisions"
+    )
+
+    assert "error" not in result, result
+    assert upstream.call_count == 1
+    assert "authorization" not in upstream.calls.last.request.headers
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "d3:4b",
+        "state": "health check",
+        "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ("evaluation", "decisions"))
 async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
     monkeypatch: pytest.MonkeyPatch,
