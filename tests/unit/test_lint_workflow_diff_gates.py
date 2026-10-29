@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import re
 import shlex
 import subprocess
@@ -109,6 +110,7 @@ UI_API_TYPES_DETECT: Final[str] = next(
     if step.get("id") == "changes"
 )
 PRE_COMMIT_LINT: Final = WORKFLOW.parents[2] / "scripts" / "pre_commit_lint.sh"
+TERRAFORM_PROVIDER_WORKFLOW: Final = WORKFLOW.with_name("test-terraform-provider.yml")
 
 
 def _ui_api_types_relevant(tmp_path: Path, changed: str) -> bool:
@@ -189,3 +191,12 @@ def test_make_check_runs_the_api_type_sync_on_the_same_tracked_files_as_ci() -> 
     ci_selected: Final = _tracked_paths_matching(ci_trigger)
     assert "pyproject.toml" in ci_selected
     assert _tracked_paths_matching(make_check_trigger) == ci_selected - {".github/workflows/test-linting.yml"}
+
+
+def test_a_pull_request_changing_any_route_file_runs_the_terraform_provider_endpoint_audit() -> None:
+    triggers: Final = yaml.safe_load(TERRAFORM_PROVIDER_WORKFLOW.read_text())[True]["pull_request"]["paths"]
+    route_files: Final = _git(
+        WORKFLOW.parents[2], "grep", "-l", "-E", r"APIRouter\(", "--", "*.py", ":(exclude)tests/**"
+    ).splitlines()
+    assert route_files
+    assert [name for name in route_files if not any(fnmatch.fnmatch(name, pattern) for pattern in triggers)] == []
