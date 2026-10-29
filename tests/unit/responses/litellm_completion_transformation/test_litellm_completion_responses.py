@@ -663,9 +663,9 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "message" not in output_types
         assert "function_call" in output_types
 
-    def test_cited_tool_call_only_response_keeps_its_citations_in_a_message_item(self):
-        citation = {"start_index": 0, "end_index": 0, "url": "https://example.com", "title": "Example"}
-        chat_completion_response = ModelResponse(
+    def test_cited_tool_call_only_response_keeps_its_citations_in_a_message_item(self) -> None:
+        citation: Final = {"start_index": 0, "end_index": 0, "url": "https://example.com", "title": "Example"}
+        chat_completion_response: Final = ModelResponse(
             id="test-response-id",
             created=1234567890,
             model="gemini-3.8-flash",
@@ -690,7 +690,7 @@ class TestLiteLLMCompletionResponsesConfig:
             ],
         )
 
-        responses_api_response = (
+        responses_api_response: Final = (
             LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                 request_input="which museum?",
                 responses_api_request={},
@@ -698,7 +698,7 @@ class TestLiteLLMCompletionResponsesConfig:
             )
         )
 
-        output = responses_api_response.output
+        output: Final = responses_api_response.output
         assert [item.type for item in output] == ["message", "function_call"]
         assert output[0].content[0].text == ""
         assert [annotation.url for annotation in output[0].content[0].annotations] == [citation["url"]]
