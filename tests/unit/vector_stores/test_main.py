@@ -8,6 +8,7 @@ model_dump() it (the #19550 serialization trap).
 """
 
 import json
+import uuid
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 import litellm.vector_stores.main as vector_stores_main
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -200,3 +202,52 @@ async def test_direct_sdk_vector_store_writes_send_the_callers_metadata_unchange
     sent_metadata: Final = await _metadata_sent_to_provider(operation, callers_metadata)
 
     assert sent_metadata == [callers_metadata]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_type", "search_method", "search_response"),
+    (
+        ("search_api", ":search", {"results": []}),
+        ("rag_api", ":retrieveContexts", {"contexts": {"contexts": []}}),
+    ),
+)
+async def test_vertex_searches_with_the_same_credentials_refresh_the_google_token_once(
+    api_type: str,
+    search_method: str,
+    search_response: dict[str, object],
+    respx_mock,
+    requests_mock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    credentials: Final = json.dumps(
+        {
+            "type": "authorized_user",
+            "client_id": "unit-client-id",
+            "client_secret": "unit-client-secret",
+            "refresh_token": f"unit-refresh-{uuid.uuid4().hex}",
+        }
+    )
+    token_route: Final = requests_mock.post(
+        "https://oauth2.googleapis.com/token",
+        json={"access_token": "ya29.unit-token", "expires_in": 3600, "token_type": "Bearer"},
+    )
+    search_route: Final = respx_mock.post(f"https://vertex.test/{api_type}{search_method}").mock(
+        return_value=httpx.Response(200, json=search_response)
+    )
+
+    for _ in range(3):
+        await litellm.vector_stores.asearch(
+            query="what is LiteLLM?",
+            vector_store_id="unit-store",
+            custom_llm_provider=f"vertex_ai/{api_type}",
+            api_base=f"https://vertex.test/{api_type}",
+            vertex_project="unit-project",
+            vertex_location="us-central1",
+            vertex_credentials=credentials,
+        )
+
+    assert search_route.call_count == 3
+    assert token_route.call_count == 1
+    assert search_route.calls.last.request.headers["authorization"] == "Bearer ya29.unit-token"

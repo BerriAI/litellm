@@ -361,3 +361,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 status_code=response.status_code,
                 headers=response.headers,
             )
+
+
+vertex_rag_api_vector_store_config: Final = VertexVectorStoreConfig()

@@ -10483,16 +10483,16 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if api_type == "rag_api" or api_type is None:  # default to rag_api
                 from litellm.llms.vertex_ai.vector_stores.rag_api.transformation import (
-                    VertexVectorStoreConfig,
+                    vertex_rag_api_vector_store_config,
                 )
 
-                return VertexVectorStoreConfig()
+                return vertex_rag_api_vector_store_config
             elif api_type == "search_api":
                 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
-                    VertexSearchAPIVectorStoreConfig,
+                    vertex_search_api_vector_store_config,
                 )
 
-                return VertexSearchAPIVectorStoreConfig()
+                return vertex_search_api_vector_store_config
         elif litellm.LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.vector_stores.transformation import (
                 BedrockVectorStoreConfig,
