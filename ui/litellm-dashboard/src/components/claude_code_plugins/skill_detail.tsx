@@ -52,7 +52,7 @@ interface SkillDetailProps {
 const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const { data: marketplaceRequiresKey = false } = useClaudeCodeMarketplaceRequiresKey();
+  const { data: marketplaceRequiresKey = true } = useClaudeCodeMarketplaceRequiresKey();
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);

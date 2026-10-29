@@ -85,4 +85,11 @@ describe("SkillDetail marketplace setup", () => {
     expect(screen.queryByText(/\/plugin marketplace add/)).not.toBeInTheDocument();
     expect(screen.getByText(/"Authorization": "Bearer <your-litellm-key>"/)).toBeInTheDocument();
   });
+
+  it("shows the key header snippet until the probe answers, since an open marketplace ignores the header", () => {
+    mockUseMarketplaceRequiresKey.mockReturnValue({ data: undefined });
+    renderSetupTab();
+    expect(screen.queryByText(/\/plugin marketplace add/)).not.toBeInTheDocument();
+    expect(screen.getByText(/"Authorization": "Bearer <your-litellm-key>"/)).toBeInTheDocument();
+  });
 });

@@ -195,8 +195,8 @@ async def get_marketplace(request: Request, key: str | None = None):
         ```
     """
     try:
-        caller: Final = await _marketplace_caller(request, key)
         prisma_client: Final = await get_prisma_client()
+        caller: Final = await _marketplace_caller(request, key)
         visibility: Final[SkillVisibility] = await resolve_skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where=visibility.where()

@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_marketplace
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
     delete_plugin,
@@ -1157,3 +1157,17 @@ async def test_marketplace_auth_required_refuses_the_database_outage_fallback_id
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
     assert "public-skill" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_marketplace_without_a_database_answers_db_not_connected_for_a_query_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+
+    response: Final = await _get_marketplace_over_http(params={"key": "sk-not-the-master-key"})
+
+    assert response.status_code == 500
+    assert CommonProxyErrors.db_not_connected_error.value in response.text
