@@ -150,7 +150,6 @@ def _billed(row: dict[str, object]) -> tuple[object, object, float]:
     return (row["prompt_tokens"], row["completion_tokens"], float(str(row["spend"])))
 
 
-@pytest.mark.timeout(180)
 def test_text_completion_stream_without_stream_options_bills_like_its_twins(gateway: Gateway, tmp_path: Path) -> None:
     model: Final = f"gpt-5.4-mini-{uuid4().hex}"
     body: Final[dict[str, JsonValue]] = {"model": model, "prompt": PROMPT, "max_tokens": COMPLETION_TOKENS}
@@ -176,6 +175,7 @@ def test_text_completion_stream_without_stream_options_bills_like_its_twins(gate
                     'SELECT request_id, prompt_tokens, completion_tokens, spend FROM "LiteLLM_SpendLogs" '
                     "WHERE request_id = ANY(%s)",
                     (list(request_ids),),
+                    database_url=candidate.database_url,
                 ),
                 lambda values: len(values) == 3,
                 seconds=70,
@@ -186,9 +186,7 @@ def test_text_completion_stream_without_stream_options_bills_like_its_twins(gate
 
     assert upstream_stream_options == [{"include_usage": True}, {"include_usage": True}, None]
     assert all(_carries_text_or_finish(frame) for frame in silent_frames), silent.text
-    assert all(frame.get("usage", {}) == {} or frame["usage"]["total_tokens"] == 0 for frame in silent_frames), (
-        silent.text
-    )
+    assert all("usage" not in frame for frame in silent_frames), silent.text
     assert asked_frames[-1]["usage"]["total_tokens"] == PROMPT_TOKENS + COMPLETION_TOKENS, asked.text
     billed: Final = {str(row["request_id"]): _billed(row) for row in rows}
     assert billed[str(request_ids[0])] == billed[str(request_ids[1])] == billed[str(request_ids[2])], billed

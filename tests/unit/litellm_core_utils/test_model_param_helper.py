@@ -19,3 +19,30 @@ def test_get_all_llm_api_params_is_memoized():
     first = ModelParamHelper.get_all_llm_api_params()
     second = ModelParamHelper.get_all_llm_api_params()
     assert first is second
+
+
+def test_langfuse_model_parameters_no_secret_leakage():
+    optional_params_with_secrets = {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "max_tokens": 100,
+        "stream": True,
+        "api_key": "sk-secret-key-12345",
+        "api_base": "https://my-private-endpoint.com",
+        "secret_fields": {"raw_headers": {"Authorization": "Bearer sk-super-secret"}},
+        "authorization": "Bearer sk-another-secret",
+        "headers": {"X-Api-Key": "secret-header-value"},
+    }
+
+    sanitized = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
+
+    assert sanitized["temperature"] == 0.7
+    assert sanitized["top_p"] == 0.9
+    assert sanitized["max_tokens"] == 100
+    assert sanitized["stream"] is True
+
+    assert "api_key" not in sanitized
+    assert "api_base" not in sanitized
+    assert "secret_fields" not in sanitized
+    assert "authorization" not in sanitized
+    assert "headers" not in sanitized

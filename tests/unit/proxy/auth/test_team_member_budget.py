@@ -3,8 +3,11 @@ Unit tests for team member budget checks in common_checks.
 These tests verify the team member budget enforcement without requiring a proxy server.
 """
 
-import pytest
+from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi import Request
 
 import litellm
@@ -15,7 +18,10 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import common_checks, get_team_membership
+from litellm.proxy.auth.auth_checks import (
+    common_checks,
+    resolve_effective_team_member_budget,
+)
 
 
 @pytest.mark.asyncio
@@ -436,3 +442,48 @@ async def test_team_member_budget_check_personal_key_not_team():
         # Should pass and get_team_membership should not be called
         assert result is True
         mock_get_team_membership.assert_not_called()
+
+
+def test_resolve_effective_team_member_budget_preserves_member_and_default_precedence() -> None:
+    now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    member_budget: Final = LiteLLM_BudgetTable(
+        max_budget=100,
+        temp_budget_increase=10,
+        temp_budget_expiry=datetime(2030, 1, 2, tzinfo=timezone.utc),
+    )
+    expired_member_budget: Final = LiteLLM_BudgetTable(
+        max_budget=100,
+        temp_budget_increase=10,
+        temp_budget_expiry=datetime(2029, 12, 31, tzinfo=timezone.utc),
+    )
+    active_inherited_increase: Final = LiteLLM_BudgetTable(
+        max_budget=None,
+        temp_budget_increase=10,
+        temp_budget_expiry=datetime(2030, 1, 2, tzinfo=timezone.utc),
+    )
+    expired_inherited_increase: Final = LiteLLM_BudgetTable(
+        max_budget=None,
+        temp_budget_increase=10,
+        temp_budget_expiry=datetime(2029, 12, 31, tzinfo=timezone.utc),
+    )
+
+    assert resolve_effective_team_member_budget(member_budget, None, now) == 110
+    assert resolve_effective_team_member_budget(expired_member_budget, None, now) == 100
+    assert resolve_effective_team_member_budget(
+        active_inherited_increase,
+        LiteLLM_BudgetTable(max_budget=50),
+        now,
+    ) == 60
+    assert resolve_effective_team_member_budget(
+        expired_inherited_increase,
+        LiteLLM_BudgetTable(max_budget=50),
+        now,
+    ) == 50
+    assert resolve_effective_team_member_budget(
+        LiteLLM_BudgetTable(max_budget=0),
+        LiteLLM_BudgetTable(max_budget=50),
+        now,
+    ) == 0
+    assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=50), now) == 50
+    assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=0), now) is None
+    assert resolve_effective_team_member_budget(None, None, now) is None

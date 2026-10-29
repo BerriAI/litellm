@@ -17,6 +17,8 @@ sweep may find any of the three canaries.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -25,7 +27,13 @@ from pathlib import Path
 from typing import Final, Literal
 
 import httpx
+import litellm
 import pytest
+from fastapi import Request as FastAPIRequest, Response
+from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
+from litellm_enterprise.enterprise_callbacks.secret_detection import _ENTERPRISE_SecretDetection
+from starlette.datastructures import URL
 from integration._support.client import Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
@@ -36,6 +44,13 @@ from integration.security._sweeps import assert_marker_seen, assert_no_hits, rec
 Outcome = Literal["success", "upstream_401"]
 PASS_THROUGH_ROUTE: Final = "/canary-pass-through"
 PASS_THROUGH_ENV: Final = "CANARY_PASS_THROUGH_KEY"
+LANGFUSE_ROUTE: Final = "/api/public/ingestion"
+RERANK_ROUTE: Final = "/canary-rerank"
+LANGFUSE_MARKER: Final = "langfuse-pass-through-contract"
+RERANK_MARKER: Final = "rerank-pass-through-contract"
+LANGFUSE_PUBLIC_KEY: Final = "langfuse-public-canary"
+LANGFUSE_SECRET_KEY: Final = "langfuse-secret-canary"
+RERANK_AUTHORIZATION: Final = "Bearer rerank-pass-through-canary"
 VECTOR_STORE_ID: Final = "canary-vector-store"
 SEARCH_TOOL: Final = "canary-search-tool"
 UPSTREAM_REJECT: Final = "canary-upstream-reject"
@@ -45,6 +60,32 @@ SLACK: Final = timedelta(seconds=5)
 
 def _upstream(request: Request) -> Reply:
     """Pass-through, OpenAI vector store search and Perplexity search double."""
+    if request.target == LANGFUSE_ROUTE:
+        body: Final = json.loads(request.body)
+        assert body == {
+            "batch": [
+                {
+                    "id": "contract-batch",
+                    "type": "trace-create",
+                    "body": {"id": "contract-trace", "name": LANGFUSE_MARKER},
+                }
+            ]
+        }
+        expected_auth: Final = base64.b64encode(
+            f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()
+        ).decode()
+        assert request.headers.get("authorization") == f"Basic {expected_auth}"
+        return Reply(status=207, body=json.dumps({"received": body}).encode())
+    if request.target == "/v1/rerank":
+        body: Final = json.loads(request.body)
+        assert body == {
+            "model": "rerank-contract",
+            "query": RERANK_MARKER,
+            "top_n": 1,
+            "documents": [RERANK_MARKER],
+        }
+        assert request.headers.get("authorization") == RERANK_AUTHORIZATION
+        return Reply(body=json.dumps({"results": [{"index": 0, "relevance_score": 1.0}]}).encode())
     if UPSTREAM_REJECT.encode() in request.body:
         return Reply(status=401, body=b'{"error":"invalid credentials"}')
     body: Final = json.loads(request.body or b"{}")
@@ -98,7 +139,23 @@ def rigged(tmp_path: Path) -> Iterator[Upstreamed]:
                     "target": wire.url + "/pass-through",
                     "headers": {"Authorization": f"Bearer os.environ/{PASS_THROUGH_ENV}"},
                     "auth": True,
-                }
+                },
+                {
+                    "path": LANGFUSE_ROUTE,
+                    "target": wire.url + LANGFUSE_ROUTE,
+                    "headers": {
+                        "LANGFUSE_PUBLIC_KEY": "os.environ/LANGFUSE_PUBLIC_KEY",
+                        "LANGFUSE_SECRET_KEY": "os.environ/LANGFUSE_SECRET_KEY",
+                    },
+                    "custom_auth_parser": "langfuse",
+                    "auth": True,
+                },
+                {
+                    "path": RERANK_ROUTE,
+                    "target": wire.url + "/v1/rerank",
+                    "headers": {"Authorization": RERANK_AUTHORIZATION},
+                    "auth": True,
+                },
             ]
             config["vector_store_registry"] = [
                 {
@@ -122,7 +179,15 @@ def rigged(tmp_path: Path) -> Iterator[Upstreamed]:
                 }
             ]
 
-        with canary_rig(tmp_path, configure=configure, environment={PASS_THROUGH_ENV: canaries["H1"].value}) as rig:
+        with canary_rig(
+            tmp_path,
+            configure=configure,
+            environment={
+                PASS_THROUGH_ENV: canaries["H1"].value,
+                "LANGFUSE_PUBLIC_KEY": LANGFUSE_PUBLIC_KEY,
+                "LANGFUSE_SECRET_KEY": LANGFUSE_SECRET_KEY,
+            },
+        ) as rig:
             yield Upstreamed(rig, Recorder(wire), canaries)
 
 
@@ -140,6 +205,151 @@ def _send(rig: Rig, slot: str, key: str, text: str) -> httpx.Response:
     if slot == "H2":
         return rig.proxy.request("POST", f"/v1/vector_stores/{VECTOR_STORE_ID}/search", {"query": text}, key=key)
     return rig.proxy.request("POST", f"/v1/search/{SEARCH_TOOL}", {"query": text}, key=key)
+
+
+def test_langfuse_custom_auth_and_rpm_contract(rigged: Upstreamed) -> None:
+    rig: Final = rigged.rig
+    with rig.proxy.scenario() as scenario:
+        team: Final = scenario.team(metadata={"allowed_passthrough_routes": [LANGFUSE_ROUTE]})
+        user: Final = scenario.user(user_role="internal_user")
+        scenario.gateway.post("/team/member_add", {"team_id": team, "member": {"user_id": user, "role": "user"}})
+        key: Final = scenario.key(team_id=team, user_id=user, models=[CONFIG_MODEL], rpm_limit=1)
+        authorization: Final = "Basic " + base64.b64encode(f"{key}:anything".encode()).decode()
+        body: Final = {
+            "batch": [
+                {
+                    "id": "contract-batch",
+                    "type": "trace-create",
+                    "body": {"id": "contract-trace", "name": LANGFUSE_MARKER},
+                }
+            ],
+            "metadata": {"batch_size": 1, "public_key": "anything"},
+        }
+        response: Final = rig.proxy.request(
+            "POST",
+            LANGFUSE_ROUTE,
+            body,
+            key=key,
+            headers={"Authorization": authorization},
+        )
+        limited: Final = rig.proxy.request(
+            "POST",
+            LANGFUSE_ROUTE,
+            body,
+            key=key,
+            headers={"Authorization": authorization},
+        )
+
+    assert response.status_code == 207, response.text
+    assert limited.status_code == 429, limited.text
+    assert len(rigged.upstream.carrying(LANGFUSE_MARKER)) == 1
+
+
+def test_rerank_pass_through_forwards_exact_request(rigged: Upstreamed) -> None:
+    rig: Final = rigged.rig
+    body: Final = {
+        "model": "rerank-contract",
+        "query": RERANK_MARKER,
+        "top_n": 1,
+        "documents": [RERANK_MARKER],
+    }
+    with rig.proxy.scenario() as scenario:
+        team: Final = scenario.team(metadata={"allowed_passthrough_routes": [RERANK_ROUTE]})
+        user: Final = scenario.user(user_role="internal_user")
+        scenario.gateway.post("/team/member_add", {"team_id": team, "member": {"user_id": user, "role": "user"}})
+        key: Final = scenario.key(team_id=team, user_id=user, models=[CONFIG_MODEL])
+        response: Final = rig.proxy.request("POST", RERANK_ROUTE, body, key=key)
+
+    assert response.status_code == 200, response.text
+    assert len(rigged.upstream.carrying(RERANK_MARKER)) == 1
+
+
+class _SecretDetectionRecorder(CustomLogger):
+    def __init__(self) -> None:
+        self.logged_messages: object | None = None
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged_messages = kwargs.get("messages")
+
+
+@pytest.mark.asyncio
+async def test_secret_detection_redacts_the_logged_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    def upstream(request: Request) -> Reply:
+        assert request.target.endswith("/chat/completions")
+        assert json.loads(request.body)["model"] == "fake"
+        assert json.loads(request.body)["messages"] == [
+            {"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}
+        ]
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "chatcmpl-secret-detection",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "fake-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": "ok"},
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+        )
+
+    recorder: Final = _SecretDetectionRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [_ENTERPRISE_SecretDetection(), recorder])
+    prompt: Final = "Hello here is my OPENAI_API_KEY = sk-98765"
+
+    with wire_server(upstream) as wire:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "fake-model",
+                    "litellm_params": {"model": "openai/fake", "api_base": wire.url, "api_key": "sk-fake"},
+                }
+            ]
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        request: Final = FastAPIRequest(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/chat/completions",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            }
+        )
+        request._url = URL(url="/chat/completions")
+
+        async def return_body() -> bytes:
+            return json.dumps(
+                {"model": "fake-model", "messages": [{"role": "user", "content": prompt}]}
+            ).encode()
+
+        request.body = return_body
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.proxy_server import chat_completion
+
+        await chat_completion(
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-fake", token="hashed_sk-fake"),
+            fastapi_response=Response(),
+        )
+        for _ in range(100):
+            if recorder.logged_messages is not None:
+                break
+            await asyncio.sleep(0)
+
+    assert recorder.logged_messages == [
+        {"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}
+    ]
 
 
 def _spend_row(marker: Canary, since: datetime) -> str:

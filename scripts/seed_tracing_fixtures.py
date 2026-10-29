@@ -25,10 +25,10 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from litellm.proxy.lens.ingestion import IngestionKeyCreated
-from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace
-from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant, span_rows
-from litellm.tracing.config import trace_storage_config
+from litellm.rust_bridge.clickhouse import spend_storage_config
+from litellm.tracing.generated.types import AllQueryScope, Trace
+from litellm.tracing.remote import LensConnection, RemoteTraceStore
+from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import SpendLogRecord
 
 if TYPE_CHECKING:
@@ -36,8 +36,8 @@ if TYPE_CHECKING:
     from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
-TRACE_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces/tests/fixtures"
-SPEND_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces-clickhouse/tests/fixtures"
+TRACE_FIXTURES: Final = REPO_ROOT / "scripts/lens_assets/fixtures/traces"
+SPEND_FIXTURES: Final = REPO_ROOT / "scripts/lens_assets/fixtures/spend"
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 SPEND_ROWS: Final = TypeAdapter(tuple[SpendLogRecord, ...])
@@ -56,6 +56,18 @@ class TenantIdentity(BaseModel):
     team_id: str
     api_key: str
     user: str
+
+
+class IngestionKeyRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str
+
+
+class IngestionKeyCreated(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    key: str
+    active: bool
+    record: IngestionKeyRecord
 
 
 class FixtureCapture(BaseModel):
@@ -307,7 +319,7 @@ def seed_arguments(argv: Sequence[str] | None = None) -> SeedOptions:
 
 async def seed_copy(
     client: httpx.AsyncClient,
-    storage: ClickHouseStorage,
+    storage: RemoteTraceStore,
     database: Prisma,
     replays: tuple[FixtureReplay, ...],
     fixtures: tuple[tuple[str, tuple[SpendLogRecord, ...]], ...],
@@ -350,7 +362,7 @@ async def verify(
 
 
 async def ingest_replays(
-    client: httpx.AsyncClient, storage: ClickHouseStorage, replays: tuple[FixtureReplay, ...], trace_id: str
+    client: httpx.AsyncClient, storage: RemoteTraceStore, replays: tuple[FixtureReplay, ...], trace_id: str
 ) -> TenantIdentity:
     for replay in replays:
         (
@@ -358,7 +370,7 @@ async def ingest_replays(
                 "/v1/traces", content=json.dumps(replay.export), headers={"Content-Type": "application/json"}
             )
         ).raise_for_status()
-    identity: Final = await storage.query_sql(
+    identity: Final = await LensTraceStorage(storage).query_sql(
         "SELECT DISTINCT TeamId AS team_id, ApiKeyHash AS api_key, UserId AS user "
         f"FROM otel_traces WHERE TraceId = '{trace_id}'",
         AllQueryScope(kind="all"),
@@ -367,12 +379,14 @@ async def ingest_replays(
     return TenantIdentity.model_validate(identity.data[0])
 
 
-def bulk_span_rows(replays: tuple[FixtureReplay, ...], tenant: Tenant) -> tuple[Mapping[str, JsonValue], ...]:
-    return tuple(
-        chain.from_iterable(
-            span_rows(json.dumps(replay.export).encode(), "application/json", tenant) for replay in replays
-        )
+async def seeded_trace_ids(storage: RemoteTraceStore, api_key_hash: str) -> tuple[str, ...]:
+    literal: Final = api_key_hash.replace("\\", "\\\\").replace("'", "\\'")
+    result: Final = await LensTraceStorage(storage).query_sql(
+        f"SELECT DISTINCT TraceId AS trace_id FROM otel_traces WHERE ApiKeyHash = '{literal}' ORDER BY trace_id",
+        AllQueryScope(kind="all"),
+        os.environ["LITELLM_MASTER_KEY"],
     )
+    return TypeAdapter(tuple[str, ...]).validate_python(tuple(row["trace_id"] for row in result.data))
 
 
 @dataclass(frozen=True, slots=True)
@@ -556,8 +570,8 @@ async def seed(profile: str = "default", copies: int | None = None, timeout_seco
     count: Final = copies if copies is not None else (2000 if profile == "large" else 1)
     namespace: Final = uuid4().hex
     now_ms: Final = time.time_ns() // 1_000_000
-    config: Final = trace_storage_config({})
-    storage: Final = ClickHouseStorage(config)
+    config: Final = spend_storage_config()
+    connection: Final = LensConnection.from_env()
     replays: Final = fixture_replays(TRACE_FIXTURES, now_ms, namespace + "-0", pattern)
     source: Final = f"seed-{namespace}-0-"
     target: Final = f"seed-{namespace}-"
@@ -569,14 +583,15 @@ async def seed(profile: str = "default", copies: int | None = None, timeout_seco
         ) as client,
         httpx.AsyncClient(base_url=config.url, params={"database": config.database}, timeout=600) as clickhouse,
         Prisma(http={"timeout": httpx.Timeout(600)}) as database,
+        connection.lifespan_client() as lens,
     ):
+        storage: Final = RemoteTraceStore(lens)
         async with ingestion_client(client, timeout_seconds) as uploader:
             captures: Final = await seed_copy(uploader, storage, database, replays, fixtures, pattern)
         await verify(client, captures, "")
+        trace_ids: Final = await seeded_trace_ids(storage, captures[0][1][0]["api_key"])
         repeated: Final = Copies(
-            trace_ids=tuple(
-                sorted(frozenset(str(span["TraceId"]) for span in bulk_span_rows(replays, Tenant("", ""))))
-            ),
+            trace_ids=trace_ids,
             request_ids=tuple(row["request_id"] for _, rows in captures for row in rows),
             numbers=range(1, count),
             step_ms=COPY_WINDOW_MS // count,

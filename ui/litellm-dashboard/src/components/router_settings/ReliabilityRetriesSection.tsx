@@ -1,14 +1,17 @@
 import React from "react";
+import { CONFIG_OWNED_HINT, ConfigOwnedBadge, RouterSettingsSource, isOwnedByConfig } from "./ConfigOwned";
 import { Input } from "@/components/ui/input";
 
 interface ReliabilityRetriesSectionProps {
   routerSettings: { [key: string]: any };
   routerFieldsMetadata: { [key: string]: any };
+  routerSettingsSource?: RouterSettingsSource;
 }
 
 const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
   routerSettings,
   routerFieldsMetadata,
+  routerSettingsSource = {},
 }) => {
   return (
     <div className="space-y-6">
@@ -36,6 +39,7 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
                 <span className="text-xs font-medium text-foreground uppercase tracking-wide">
                   {routerFieldsMetadata[param]?.ui_field_name || param}
                 </span>
+                {isOwnedByConfig(routerSettingsSource, param) && <ConfigOwnedBadge />}
                 <p className="text-xs text-muted-foreground mt-0.5 mb-2">
                   {routerFieldsMetadata[param]?.field_description || ""}
                 </p>
@@ -49,6 +53,8 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
                         : value?.toString() || ""
                   }
                   placeholder="—"
+                  disabled={isOwnedByConfig(routerSettingsSource, param)}
+                  title={isOwnedByConfig(routerSettingsSource, param) ? CONFIG_OWNED_HINT : undefined}
                   className="font-mono text-sm w-full"
                 />
               </label>

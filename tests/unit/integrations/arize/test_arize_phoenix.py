@@ -2,7 +2,15 @@ import asyncio, importlib, litellm, logging, os, unittest
 from unittest.mock import MagicMock, patch
 
 import pytest
+from datetime import datetime, timedelta, timezone
+from typing import Final
 
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+
+from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME
 from litellm.integrations.arize.arize_phoenix import (
     ArizePhoenixConfig,
     ArizePhoenixLogger,
@@ -850,6 +858,47 @@ class TestPhoenixTraceHandling:
                 == "unified-proj"
             )
             assert span.resource.attributes.get("model_id") == "unified-proj"
+
+
+@pytest.mark.parametrize(("max_attribute_length", "expected_description"), [(None, "model not found"), (5, "model")])
+def test_failed_proxy_request_puts_the_error_message_on_every_phoenix_span_status(
+    max_attribute_length: int | None, expected_description: str
+) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider(span_limits=SpanLimits(max_attribute_length=max_attribute_length))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = ArizePhoenixLogger(callback_name="arize_phoenix", tracer_provider=provider)
+    start: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    logger._handle_failure(
+        {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "openai",
+                "proxy_server_request": {"url": "/chat/completions", "method": "POST", "headers": {}},
+            },
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "error_information": {"error_class": "NotFoundError", "error_message": "model not found"},
+            },
+            "exception": Exception("model not found"),
+        },
+        None,
+        start,
+        start + timedelta(seconds=1),
+    )
+
+    statuses: Final = {
+        span.name: (span.status.status_code, span.status.description) for span in exporter.get_finished_spans()
+    }
+    assert statuses == {
+        "litellm_proxy_request": (StatusCode.ERROR, expected_description),
+        LITELLM_REQUEST_SPAN_NAME: (StatusCode.ERROR, expected_description),
+    }
 
 
 class TestGetArizePhoenixConfigProjectName:

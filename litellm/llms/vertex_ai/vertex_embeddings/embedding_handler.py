@@ -1,6 +1,7 @@
 from typing import Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -16,6 +17,9 @@ from litellm.types.llms.vertex_ai import *
 from litellm.types.utils import EmbeddingResponse
 
 from .types import *
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexEmbedding(VertexBase):
@@ -123,12 +127,12 @@ class VertexEmbedding(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_VALUE.validate_python(response.json())
         ## LOGGING POST-CALL
         logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
         model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-            response=_json_response, model=model, model_response=model_response
+            response=_JSON_DICT.validate_python(_json_response), model=model, model_response=model_response
         )
 
         return model_response
@@ -215,12 +219,12 @@ class VertexEmbedding(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_VALUE.validate_python(response.json())
         ## LOGGING POST-CALL
         logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
         model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-            response=_json_response, model=model, model_response=model_response
+            response=_JSON_DICT.validate_python(_json_response), model=model, model_response=model_response
         )
 
         return model_response

@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from typing import Final
 
 from litellm.types.utils import ModelResponseStream, StreamingChoices
@@ -8,10 +9,14 @@ def is_empty_streaming_choice(choice: StreamingChoices) -> bool:
         return False
     if getattr(choice, "logprobs", None) is not None:
         return False
-    delta: Final = getattr(choice, "delta", None)
+    delta: Final = choice.delta if hasattr(choice, "delta") else None
     if delta is None:
         return True
-    return all(value is None for value in delta.model_dump().values())
+    return _all_values_none(delta.model_dump().values())
+
+
+def _all_values_none(values: Iterable[object]) -> bool:
+    return all(value is None for value in values)
 
 
 def is_usage_only_chunk(chunk: ModelResponseStream) -> bool:

@@ -8,6 +8,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _MODEL: Final = "fal-ai/trellis-2"
 _REQUEST_BODY: Final = {"image_url": "https://example.com/in.png", "resolution": 1536}
 _UPSTREAM_BODY: Final = {
