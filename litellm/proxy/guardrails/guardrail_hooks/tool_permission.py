@@ -27,6 +27,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
     is_raw_sse_stream,
+    is_sse_error_stream,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
@@ -952,7 +953,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         anthropic_response: Final = assemble_anthropic_sse_stream(all_chunks)
         if anthropic_response is None:
-            if is_raw_sse_stream(all_chunks):
+            if is_raw_sse_stream(all_chunks) and not is_sse_error_stream(all_chunks):
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=(

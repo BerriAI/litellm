@@ -314,3 +314,19 @@ def test_rewritten_stream_drops_the_verdict_of_a_tool_use_whose_input_the_guardr
 
     assert isinstance(rewritten_delta, dict)
     assert rewritten_delta["safeguard_results"] == _safeguard_results({"toolu_untouched": verdict})
+
+
+def test_masked_stream_that_ended_in_an_upstream_error_still_ends_in_that_error():
+    upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    upstream: Final = (*_upstream_stream({})[:-2], _frame("error", upstream_error))
+    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True)
+    assert assembled is not None
+    _set_text("call [PHONE]")(assembled)
+
+    rewritten: Final = _decode(anthropic_sse_chunks_from_response(assembled, upstream))
+
+    assert rewritten[-1] == ("error", upstream_error)
+    assert {"message_delta", "message_stop"}.isdisjoint(event for event, _ in rewritten), (
+        "a stream the upstream ended in an error must not be re-emitted as one that completed"
+    )
+    assert any(payload.get("delta") == {"type": "text_delta", "text": "call [PHONE]"} for _, payload in rewritten)

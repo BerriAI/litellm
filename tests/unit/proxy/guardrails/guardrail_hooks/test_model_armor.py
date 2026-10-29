@@ -4354,21 +4354,20 @@ async def test_streaming_responses_tool_call_output_is_scanned():
 
 
 @pytest.mark.asyncio
-async def test_streaming_hook_refuses_a_content_stream_that_ends_with_an_error_frame():
+async def test_streaming_hook_scans_a_content_stream_that_ends_with_an_error_frame_before_releasing_it():
     """The chain-aware passthrough must stay narrow. A stream carrying real content plus a
-    trailing error frame is not a bare refusal to forward: the assembler cannot read it, and
-    releasing it would ship the buffered content unscanned."""
+    trailing upstream error frame is not a bare refusal to forward, so its content is scanned,
+    and a clean verdict delivers it with the upstream error the client is owed."""
     guardrail = _surface_guardrail()
     post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
-    chunks = (*_ANTHROPIC_SSE_CHUNKS, *anthropic_sse_error_frames("upstream gave up"))
+    chunks = (*_ANTHROPIC_SSE_CHUNKS[:3], *anthropic_sse_error_frames("upstream gave up"))
 
     with patch.object(guardrail.async_handler, "post", post):
         delivered = await _drain_surface_hook(guardrail, chunks)
 
-    post.assert_not_called()
-    body = b"".join(delivered)
-    assert b"4111-1111-1111-1111" not in body
-    assert b"could not be assembled for scanning" in body
+    post.assert_called_once()
+    assert "4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert tuple(delivered) == chunks
 
 
 @pytest.mark.parametrize(

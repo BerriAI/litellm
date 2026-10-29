@@ -14,7 +14,11 @@ from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
-from litellm.llms.anthropic.messages.stream_assembly import anthropic_message_delta_fields
+from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_message_delta_fields,
+    anthropic_sse_error_events,
+    anthropic_sse_event_type,
+)
 from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
@@ -101,6 +105,13 @@ def _rewritten_message_delta_fields(
     )
 
 
+_MESSAGE_END_EVENT_TYPES: Final = frozenset({"message_delta", "message_stop"})
+
+
+def _ends_the_message(chunk: bytes) -> bool:
+    return anthropic_sse_event_type(chunk.decode()) in _MESSAGE_END_EVENT_TYPES
+
+
 def anthropic_sse_chunks_from_response(
     assembled: ModelResponse, source_chunks: Sequence[object] = (), *, keep_explanations: bool = False
 ) -> tuple[bytes, ...]:
@@ -110,6 +121,8 @@ def anthropic_sse_chunks_from_response(
     nothing the OpenAI round trip made up, with a verdict kept only for a tool call delivered with
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
+    A source stream that ended in an upstream ``error`` event ends with that event again, never
+    with a ``message_delta`` or ``message_stop`` the upstream did not send.
     """
     from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
@@ -129,11 +142,14 @@ def anthropic_sse_chunks_from_response(
     unchanged_tool_use_ids: Final = _unchanged_tool_use_ids(
         source_content or (), anthropic_response.get("content") or ()
     )
-    return tuple(
-        FakeAnthropicMessagesStreamIterator(
-            response=anthropic_response,
-            message_delta_fields=_rewritten_message_delta_fields(
-                source_chunks, unchanged_tool_use_ids, keep_explanations
-            ),
-        ).chunks
+    rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
+        response=anthropic_response,
+        message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
+    ).chunks
+    error_events: Final = anthropic_sse_error_events(source_chunks)
+    if not error_events:
+        return tuple(rewritten_chunks)
+    return (
+        *(chunk for chunk in rewritten_chunks if not _ends_the_message(chunk)),
+        *(f"{event}\n\n".encode() for event in error_events),
     )

@@ -485,6 +485,25 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     return any(event.get("type") in _ANTHROPIC_EVENT_TYPES for event in _parsed_sse_events(sse_stream))
 
 
+def anthropic_sse_event_type(event: str) -> object:
+    return next((event_data.get("type") for event_data in _parsed_sse_events(event)), None)
+
+
+def _is_error_event(event: str) -> bool:
+    return anthropic_sse_event_type(event) == "error"
+
+
+def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
+    """The ``error`` events of the stream, as raw SSE event text.
+
+    A stream whose upstream fails after it started ends with an ``error`` event in place of
+    ``message_stop``. That frame is the outcome the client is owed, not content, so assembly leaves
+    it out and a caller re-emitting a rewritten response puts it back.
+    """
+    sse_stream: Final = _joined_sse_stream(all_chunks) or ""
+    return tuple(event for event in split_sse_chunk_into_events(sse_stream) if _is_error_event(event))
+
+
 def assemble_anthropic_sse_stream(
     all_chunks: Sequence[object], *, restore_identity: bool = False
 ) -> ModelResponse | None:
@@ -502,9 +521,12 @@ def assemble_anthropic_sse_stream(
     if message_start is None:
         return None
     model: Final = message_start.get("model") if restore_identity else None
+    content_events: Final = tuple(
+        event for event in split_sse_chunk_into_events(sse_stream) if not _is_error_event(event)
+    )
     try:
         assembled: Final = build_complete_streaming_response(
-            all_chunks=(sse_stream,),
+            all_chunks=content_events,
             litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
             model=model if isinstance(model, str) else "",
         )

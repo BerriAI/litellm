@@ -1447,6 +1447,32 @@ class TestToolPermissionGuardrailAnthropicMessages:
             with pytest.raises(GuardrailRaisedException):
                 await self._drain(self.rewriting, chunks)
 
+    def _ended_by_upstream_error(self, chunks):
+        error = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+        return [*chunks, f"event: error\ndata: {json.dumps(error)}\n\n".encode()]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "delivered_events", [0, 1, 3, 7], ids=["before-message-start", "before-content", "mid-text", "after-allowed-tool"]
+    )
+    async def test_stream_ended_by_an_upstream_error_is_passed_through_verbatim(self, delivered_events):
+        chunks = self._ended_by_upstream_error(self._sse_chunks("Bash")[:delivered_events])
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            out = await self._drain(self.blocking, chunks)
+
+        assert out == chunks, "the client must see the upstream error, not a guardrail block that hides it"
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
+        chunks = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])
+
+        with patch.object(self.blocking, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException) as exc_info:
+                await self._drain(self.blocking, chunks)
+
+        assert "deny_read" in str(exc_info.value)
+
     def _resplit(self, chunks, size=7):
         joined = b"".join(chunks)
         return [joined[i : i + size] for i in range(0, len(joined), size)]
