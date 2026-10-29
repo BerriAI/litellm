@@ -8031,6 +8031,76 @@ async def test_pass_through_route_pings_while_the_upstream_call_is_still_running
     assert collected[-1] in (MESSAGE_START_SSE_FRAME, MESSAGE_START_SSE_FRAME.decode())
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_llm_provider, expect_error_event", [("anthropic", True), (None, False)])
+async def test_pass_through_route_sends_a_late_upstream_rejection_in_the_providers_error_shape(
+    custom_llm_provider, expect_error_event
+):
+    """Once a ping is out the upstream's 401 status never reaches the client, and an
+    Anthropic client only sees an error that arrives as an `event: error`."""
+    from fastapi import Response
+    from fastapi.responses import StreamingResponse
+
+    module = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
+    envelope = {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+    payload = json.dumps(envelope).encode()
+
+    async def _rejection():
+        yield payload
+
+    async def slow_rejection(**kwargs):
+        await asyncio.sleep(0.25)
+        return StreamingResponse(_rejection(), status_code=401, media_type="application/json")
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                f"{module}.InitPassThroughEndpointHelpers.is_registered_pass_through_route",
+                return_value=True,
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{module}.InitPassThroughEndpointHelpers.get_registered_pass_through_route",
+                return_value=None,
+            )
+        )
+        stack.enter_context(patch(f"{module}.pass_through_request", slow_rejection))
+        stack.enter_context(patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05))
+
+        endpoint_func = create_pass_through_route(
+            endpoint="/anthropic/v1/messages",
+            target="https://api.anthropic.com/v1/messages",
+            custom_headers={},
+            custom_llm_provider=custom_llm_provider,
+            is_streaming_request=True,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = httpx.URL("http://test-proxy.com/anthropic/v1/messages")
+        mock_request.scope = {}
+        mock_request.body = AsyncMock(return_value=b'{"model": "claude-3", "stream": true}')
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+        mock_request.state = SimpleNamespace()
+
+        response = await endpoint_func(
+            request=mock_request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+        )
+        wire = b"".join([chunk async for chunk in response.body_iterator])
+
+    error_events = [
+        json.loads(frame.split(b"data: ", 1)[1])
+        for frame in wire.split(b"\n\n")
+        if frame.startswith(b"event: error\n")
+    ]
+    assert error_events == ([envelope] if expect_error_event else [])
+    assert wire.endswith(payload) is not expect_error_event
+
+
 def test_passthrough_carries_the_per_model_budgets():
     """
     Native passthrough builds its logging metadata from

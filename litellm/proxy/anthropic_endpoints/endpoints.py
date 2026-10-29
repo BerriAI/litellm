@@ -13,22 +13,19 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
-    AnthropicErrorDetail,
-    AnthropicErrorResponse,
     AnthropicExceptionMapping,
+    anthropic_error_response,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.messages.context_management import (
     AnthropicContextManagementError,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import (
-    blocked_response_usage as _blocked_response_usage,
-)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    blocked_anthropic_message,
     create_response,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
@@ -59,25 +56,6 @@ from litellm.router import Router
 router: Final = APIRouter()
 
 
-def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDetail) -> AnthropicErrorDetail:
-    if not exc.provider_specific_fields:
-        return detail
-    with_fields: Final[AnthropicErrorDetail] = {**detail, "provider_specific_fields": exc.provider_specific_fields}
-    return with_fields
-
-
-def _anthropic_error_detail(
-    exc: ProxyException, detail: AnthropicErrorDetail, call_id: str | None
-) -> AnthropicErrorDetail:
-    if call_id is None:
-        return _with_provider_specific_fields(exc, detail)
-    with_call_id: Final[AnthropicErrorDetail] = {
-        **_with_provider_specific_fields(exc, detail),
-        "litellm_call_id": call_id,
-    }
-    return with_call_id
-
-
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
@@ -86,16 +64,13 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
 
     status_code: Final = int(exc.code) if exc.code is not None and exc.code.isdigit() else 500
     _close_dangling_otel_server_span(request, status_code, exc=exc)
-    envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+    content: Final = anthropic_error_response(
         status_code=status_code,
         raw_message=exc.message,
         request_id=request.headers.get("x-request-id"),
+        provider_specific_fields=exc.provider_specific_fields,
+        call_id=error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER)),
     )
-    body_call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
-    content: Final[AnthropicErrorResponse] = {
-        **envelope,
-        "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
-    }
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
 
 
@@ -229,24 +204,7 @@ async def anthropic_response(
             request_data=_data,
         )
 
-        # Create Anthropic-formatted response with violation message
-        import uuid
-
-        from litellm.types.utils import AnthropicMessagesResponse
-
-        # Report the blocked LLM response's real token usage (carried on the
-        # exception) instead of discarding it; zero for pre-call blocks.
-        _usage: Final = _blocked_response_usage(e.original_response)
-
-        _anthropic_response: Final = AnthropicMessagesResponse(
-            id=f"msg_{uuid.uuid4()}",
-            type="message",
-            role="assistant",
-            content=[{"type": "text", "text": e.message}],
-            model=e.model,
-            stop_reason="end_turn",
-            usage=_usage,
-        )
+        _anthropic_response: Final = blocked_anthropic_message(e)
 
         if data.get("stream", None) is not None and data["stream"] is True:
             # For streaming, use the standard SSE data generator

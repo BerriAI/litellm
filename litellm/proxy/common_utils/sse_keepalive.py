@@ -79,7 +79,7 @@ async def _keepalive_ping_stream(
                 # A relayed chunk can be a raw transport read rather than a whole
                 # SSE frame, so an upstream that stalls halfway through a frame
                 # must not have a ping spliced into it.
-                if recent_tail.endswith(_SSE_FRAME_DELIMITERS):
+                if ends_sse_frame(recent_tail):
                     yield ping_chunk
                 continue
             try:
@@ -131,6 +131,10 @@ def wrap_passthrough_sse_bytes_with_keepalive_pings(
     return _keepalive_ping_stream(stream=stream, ping_interval_seconds=interval, ping_chunk=SSE_COMMENT_PING_BYTES)
 
 
+def ends_sse_frame(recent_tail: bytes) -> bool:
+    return recent_tail.endswith(_SSE_FRAME_DELIMITERS)
+
+
 def advance_sse_tail(recent_tail: bytes, chunk: object) -> bytes:
     written: Final = _sse_tail_bytes(chunk)
     if not written:
@@ -147,7 +151,7 @@ def _sse_tail_bytes(chunk: object) -> bytes:
 
 
 def seal_open_sse_frame(recent_tail: bytes) -> str:
-    if recent_tail.endswith(_SSE_FRAME_DELIMITERS):
+    if ends_sse_frame(recent_tail):
         return ""
     line_break: Final = "" if recent_tail.endswith((b"\n", b"\r")) else "\n"
     return f"{line_break}{ANTHROPIC_PING_SSE_CHUNK}"

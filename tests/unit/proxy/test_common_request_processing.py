@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import litellm
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
+from litellm.exceptions import ModifyResponseException
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
@@ -37,6 +38,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_request_processing import (
+    AnthropicSseErrors,
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _await_llm_call_cancelling_on_disconnect,
@@ -10541,16 +10543,23 @@ async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame()
     assert collected[-1] == b"data: [DONE]\n\n"
 
 
-def _anthropic_sdk_stream_error(wire: bytes) -> anthropic.APIStatusError:
+_ANTHROPIC_ERRORS: Final = AnthropicSseErrors(request_id=None, call_id=lambda: None)
+
+
+def _anthropic_sdk_over(wire: bytes) -> anthropic.Anthropic:
     def serve(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire)
 
-    client: Final = anthropic.Anthropic(
+    return anthropic.Anthropic(
         api_key="sk-test",
         base_url="http://proxy.test",
         http_client=httpx.Client(transport=httpx.MockTransport(serve)),
         max_retries=0,
     )
+
+
+def _anthropic_sdk_stream_error(wire: bytes) -> anthropic.APIStatusError:
+    client: Final = _anthropic_sdk_over(wire)
     with pytest.raises(anthropic.APIStatusError) as raised:
         for _ in client.messages.create(
             model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "hi"}], stream=True
@@ -10580,7 +10589,7 @@ async def test_ttft_keepalive_raises_a_late_failure_in_the_anthropic_sdk(late_fa
         raise late_failure
 
     response = await open_sse_before_first_byte(
-        slow_failure(), ping_interval_seconds=0.05, error_dialect="anthropic"
+        slow_failure(), ping_interval_seconds=0.05, error_dialect=_ANTHROPIC_ERRORS
     )
     collected = await _drain(response)
 
@@ -10602,11 +10611,109 @@ async def test_ttft_keepalive_raises_a_late_error_body_in_the_anthropic_sdk():
         await asyncio.sleep(0.2)
         return JSONResponse(status_code=529, content=envelope)
 
-    response = await open_sse_before_first_byte(slow_json(), ping_interval_seconds=0.05, error_dialect="anthropic")
+    response = await open_sse_before_first_byte(slow_json(), ping_interval_seconds=0.05, error_dialect=_ANTHROPIC_ERRORS)
     collected = await _drain(response)
 
     assert collected[0] == TTFT_PING
     assert _anthropic_sdk_stream_error(b"".join(collected)).body == envelope
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_raises_a_late_upstream_error_stream_in_the_anthropic_sdk():
+    """A pass-through relays the upstream's rejection as a stream under its own
+    status, which the keepalive already replaced with a 200."""
+    envelope = {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+    payload = json.dumps(envelope).encode()
+
+    async def slow_rejection():
+        await asyncio.sleep(0.2)
+        return StreamingResponse(iter([payload[:10], payload[10:]]), status_code=401, media_type="application/json")
+
+    response = await open_sse_before_first_byte(
+        slow_rejection(), ping_interval_seconds=0.05, error_dialect=_ANTHROPIC_ERRORS
+    )
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    assert _anthropic_sdk_stream_error(b"".join(collected)).body == envelope
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_raises_a_first_chunk_failure_in_the_anthropic_sdk():
+    """A guardrail that rejects the first streamed chunk makes create_response answer
+    with an error stream, whose status the keepalive already replaced with a 200."""
+
+    async def rejected_stream():
+        for chunk in ():
+            yield chunk
+        raise HTTPException(status_code=400, detail="blocked by guardrail")
+
+    async def slow_rejected_stream():
+        await asyncio.sleep(0.2)
+        return await create_response(rejected_stream(), media_type="text/event-stream", headers={})
+
+    response = await open_sse_before_first_byte(
+        slow_rejected_stream(), ping_interval_seconds=0.05, error_dialect=_ANTHROPIC_ERRORS
+    )
+    collected = await _drain(response)
+
+    assert collected[0] == TTFT_PING
+    body = _anthropic_sdk_stream_error(b"".join(collected)).body
+    assert isinstance(body, dict)
+    assert body["error"] == {"type": "invalid_request_error", "message": "blocked by guardrail"}
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_late_anthropic_error_keeps_the_provider_fields():
+    failure = ProxyException(
+        message="quota exhausted",
+        type="rate_limit_error",
+        param=None,
+        code=429,
+        provider_specific_fields={"retry_after_seconds": 7},
+    )
+
+    async def slow_failure():
+        await asyncio.sleep(0.2)
+        raise failure
+
+    response = await open_sse_before_first_byte(
+        slow_failure(), ping_interval_seconds=0.05, error_dialect=_ANTHROPIC_ERRORS
+    )
+    body = _anthropic_sdk_stream_error(b"".join(await _drain(response))).body
+
+    assert isinstance(body, dict)
+    assert body["error"]["provider_specific_fields"] == {"retry_after_seconds": 7}
+
+
+@pytest.mark.asyncio
+async def test_ttft_keepalive_streams_a_late_guardrail_block_as_the_assistant_message():
+    """/v1/messages answers a guardrail block with a 200 message carrying the
+    violation text, so the keepalive path has to stream that message too."""
+    block = ModifyResponseException(
+        message="Blocked by policy",
+        model="claude-sonnet-4-5",
+        request_data={},
+        original_response={"usage": {"input_tokens": 31, "output_tokens": 9}},
+    )
+
+    async def slow_block():
+        await asyncio.sleep(0.2)
+        raise block
+
+    response = await open_sse_before_first_byte(
+        slow_block(), ping_interval_seconds=0.05, error_dialect=_ANTHROPIC_ERRORS
+    )
+    wire = b"".join(await _drain(response))
+
+    with _anthropic_sdk_over(wire).messages.stream(
+        model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
+    ) as stream:
+        message = stream.get_final_message()
+
+    assert [block.text for block in message.content if block.type == "text"] == ["Blocked by policy"]
+    assert message.stop_reason == "end_turn"
+    assert message.usage.output_tokens == 9
 
 
 @pytest.mark.asyncio
@@ -10897,17 +11004,19 @@ async def test_base_process_llm_request_raises_a_late_messages_failure_in_the_an
 
     proxy_logging_obj = MagicMock(spec=ProxyLogging)
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-    processor = ProxyBaseLLMRequestProcessing(data={"model": "claude-sonnet-4-5", "stream": True})
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"model": "claude-sonnet-4-5", "stream": True, "litellm_call_id": "call-1"}
+    )
 
     with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
         with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_failure):
             response = await processor.base_process_llm_request(
-                request=MagicMock(spec=Request),
+                request=MagicMock(spec=Request, headers={"x-request-id": "req_1"}),
                 fastapi_response=Response(),
                 user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
                 route_type="anthropic_messages",
                 proxy_logging_obj=proxy_logging_obj,
-                general_settings={},
+                general_settings={"include_call_id_in_error_body": True},
                 proxy_config=MagicMock(spec=ProxyConfig),
             )
         collected = await _drain(response)
@@ -10916,6 +11025,8 @@ async def test_base_process_llm_request_raises_a_late_messages_failure_in_the_an
     body = _anthropic_sdk_stream_error(b"".join(collected)).body
     assert isinstance(body, dict)
     assert body["error"]["message"] == "upstream exploded"
+    assert body["error"]["litellm_call_id"] == "call-1"
+    assert body["request_id"] == "req_1"
 
 
 @pytest.mark.asyncio

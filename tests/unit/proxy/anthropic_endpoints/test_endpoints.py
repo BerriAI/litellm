@@ -74,7 +74,9 @@ class TestBlockedResponseUsage:
     """Blocked responses report the blocked LLM response's real usage."""
 
     def test_uses_original_response_usage(self):
-        from litellm.proxy.anthropic_endpoints.endpoints import _blocked_response_usage
+        from litellm.llms.base_llm.guardrail_translation.utils import (
+            blocked_response_usage as _blocked_response_usage,
+        )
 
         # original_response is the AnthropicMessagesResponse the LLM produced
         # before the guardrail blocked it; its usage is real.
@@ -85,7 +87,9 @@ class TestBlockedResponseUsage:
         }
 
     def test_zero_usage_when_no_original_response(self):
-        from litellm.proxy.anthropic_endpoints.endpoints import _blocked_response_usage
+        from litellm.llms.base_llm.guardrail_translation.utils import (
+            blocked_response_usage as _blocked_response_usage,
+        )
 
         # Pre-call blocks never invoked the LLM -> nothing consumed.
         assert _blocked_response_usage(None) == {

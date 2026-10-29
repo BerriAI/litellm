@@ -92,6 +92,8 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
+    AnthropicSseErrors,
+    OpenAISseErrors,
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
     open_sse_before_first_byte,
@@ -2338,6 +2340,11 @@ def create_pass_through_route(
             return await open_sse_before_first_byte(
                 _relay(),
                 ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_stream else None),
+                error_dialect=(
+                    AnthropicSseErrors(request_id=request.headers.get("x-request-id"), call_id=lambda: None)
+                    if custom_llm_provider == "anthropic"
+                    else OpenAISseErrors()
+                ),
             )
 
     setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
