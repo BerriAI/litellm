@@ -45869,15 +45869,19 @@
         "supports_vision": false
     },
     "openrouter/typesafe/jev-1.14": {
+        "input_cost_per_token": 4.2e-08,
         "litellm_provider": "openrouter",
         "mode": "evaluation",
-        "source": "https://openrouter.ai/docs/guides/community/jev",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/typesafe/jev-1.14",
         "supports_box_questions": true
     },
     "openrouter/~typesafe/jev-latest": {
+        "input_cost_per_token": 4.2e-08,
         "litellm_provider": "openrouter",
         "mode": "evaluation",
-        "source": "https://openrouter.ai/docs/guides/community/jev",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/~typesafe/jev-latest",
         "supports_box_questions": true
     },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
