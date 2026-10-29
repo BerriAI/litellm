@@ -269,7 +269,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls, *, model: str | None = None):
+    def get_config(
+        cls, *, model: str | None = None, custom_llm_provider: str | None = None, base_model: str | None = None
+    ):
         return super().get_config()
 
     def get_json_schema_from_pydantic_object(
