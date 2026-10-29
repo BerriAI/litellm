@@ -905,7 +905,7 @@ def _is_openai_model_name(name: str) -> bool:
         or _tiktoken_encoding_name(name) is not None
         or any(
             name.startswith(f"{listed}-") or listed.startswith(f"{name}-")
-            for listed in litellm.open_ai_chat_completion_models
+            for listed in tuple(litellm.open_ai_chat_completion_models)
         )
     )
 

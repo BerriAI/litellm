@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.token_counter import (
     _get_tiktoken_count_function,
     calculate_img_tokens,
     high_detail_image_token_upper_bound,
+    is_openai_model,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
@@ -2537,3 +2538,24 @@ def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k
     assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
         tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE)
     )
+
+
+def test_openai_model_check_holds_while_openai_models_are_registered_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "azure/azure-only-chat-model", {"litellm_provider": "azure", "mode": "chat"})
+    registered: Final = tuple(f"concurrently-registered-model-{index}" for index in range(200))
+
+    def register() -> None:
+        for name in registered:
+            litellm.open_ai_chat_completion_models.add(name)
+            time.sleep(0)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            registering: Final = pool.submit(register)
+            while not registering.done():
+                assert not is_openai_model("azure-only-chat-model")
+            registering.result()
+    finally:
+        litellm.open_ai_chat_completion_models.difference_update(registered)
