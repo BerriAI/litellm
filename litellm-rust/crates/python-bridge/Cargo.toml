@@ -27,6 +27,7 @@ litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
+litellm-error.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
 litellm-cache-response.workspace = true
@@ -48,6 +49,7 @@ litellm-secrets-types.workspace = true
 litellm-llms-types.workspace = true
 litellm-router-types.workspace = true
 litellm-host-python.workspace = true
+litellm-model-catalog.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 prost.workspace = true
@@ -70,6 +72,7 @@ criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true
 sqlx = { workspace = true, features = ["migrate"] }
+tempfile.workspace = true
 tokio-tungstenite.workspace = true
 wiremock.workspace = true
 aws-sdk-secretsmanager = "1.117.0"

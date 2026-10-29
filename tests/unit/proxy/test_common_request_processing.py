@@ -35,6 +35,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
@@ -455,7 +456,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_add_litellm_data_to_request,
         )
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
         route_type = "acompletion"
 
@@ -512,6 +513,168 @@ class TestProxyBaseLLMRequestProcessing:
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
         assert exc_info.value.param == "model"
         add_litellm_data_to_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "route_type", "has_router", "priority_header", "body_priority", "expected_priority"),
+        [
+            ("/v1/chat/completions", "acompletion", True, "0", 5, 0),
+            ("/v1/completions", "atext_completion", True, "0", 5, 0),
+            ("/v1/chat/completions", "acompletion", True, "1", None, 1),
+            ("/v1/completions", "atext_completion", True, "1", None, 1),
+            ("/v1/chat/completions", "acompletion", True, None, 5, 5),
+            ("/v1/chat/completions", "acompletion", True, "", 5, 5),
+            ("/cursor/chat/completions", "aresponses", True, "0", None, None),
+            ("/v1/responses", "aresponses", True, "0", 5, 5),
+            ("/v1/embeddings", "aembedding", True, "0", None, None),
+            ("/v1/chat/completions", "acompletion", False, "0", None, None),
+            ("/v1/chat/completions", "acompletion", False, "0", 5, 5),
+        ],
+        ids=(
+            "chat-header-beats-body",
+            "text-completion-header-beats-body",
+            "chat-header-only",
+            "text-completion-header-only",
+            "chat-body-only",
+            "chat-empty-header-keeps-body",
+            "cursor-responses-route-ignores-header",
+            "responses-keeps-body",
+            "embeddings-ignores-header",
+            "routerless-ignores-header",
+            "routerless-keeps-body",
+        ),
+    )
+    async def test_common_processing_pre_call_logic_applies_priority_header_only_where_the_router_schedules(
+        self,
+        path: str,
+        route_type: Literal["acompletion", "atext_completion", "aresponses", "aembedding"],
+        has_router: bool,
+        priority_header: str | None,
+        body_priority: int | None,
+        expected_priority: str | int | None,
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        header_entries: Final[tuple[tuple[bytes, bytes], ...]] = (
+            () if priority_header is None else ((b"x-litellm-priority", priority_header.encode()),)
+        )
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": path,
+                "scheme": "http",
+                "server": ("localhost", 4000),
+                "client": ("127.0.0.1", 12345),
+                "query_string": b"",
+                "headers": ((b"content-type", b"application/json"), *header_entries),
+            }
+        )
+        router: Final = (
+            Router(
+                model_list=[
+                    {
+                        "model_name": "qa-model",
+                        "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test", "mock_response": "hi"},
+                    }
+                ]
+            )
+            if has_router
+            else None
+        )
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "qa-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                **({"priority": body_priority} if body_priority is not None else {}),
+            }
+        )
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=RealProxyConfig(),
+            route_type=route_type,
+            llm_router=router,
+        )
+
+        assert ("priority" in returned_data, returned_data.get("priority")) == (
+            expected_priority is not None,
+            expected_priority,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("requested_model", "deployment_drops_params", "body_priority", "expected_priority"),
+        [
+            ("qa-model", True, 5, 5),
+            ("qa-model", True, None, None),
+            ("key-alias", True, 5, 5),
+            ("qa-model", False, 5, "high"),
+        ],
+        ids=(
+            "drop-params-keeps-body",
+            "drop-params-without-body-leaves-default",
+            "drop-params-read-from-the-aliased-deployment",
+            "no-drop-params-passes-header-on-to-400",
+        ),
+    )
+    async def test_common_processing_pre_call_logic_drops_only_a_malformed_priority_header_under_drop_params(
+        self,
+        requested_model: str,
+        deployment_drops_params: bool,
+        body_priority: int | None,
+        expected_priority: str | int | None,
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "scheme": "http",
+                "server": ("localhost", 4000),
+                "client": ("127.0.0.1", 12345),
+                "query_string": b"",
+                "headers": ((b"content-type", b"application/json"), (b"x-litellm-priority", b"high")),
+            }
+        )
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "qa-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-test",
+                        "mock_response": "hi",
+                        "drop_params": deployment_drops_params,
+                    },
+                }
+            ]
+        )
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": requested_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                **({"priority": body_priority} if body_priority is not None else {}),
+            }
+        )
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", aliases={"key-alias": "qa-model"}),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=RealProxyConfig(),
+            route_type="acompletion",
+            llm_router=router,
+        )
+
+        assert ("priority" in returned_data, returned_data.get("priority")) == (
+            expected_priority is not None,
+            expected_priority,
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("safe_memory_mode", [False, True])
@@ -577,7 +740,7 @@ class TestProxyBaseLLMRequestProcessing:
         returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
-            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=MagicMock(spec=ProxyConfig),
             route_type=route_type,
@@ -1023,7 +1186,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
 
         mock_router_settings = {
@@ -2045,7 +2208,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_add_litellm_data_to_request,
         )
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
         route_type = "acompletion"
 
@@ -7544,6 +7707,56 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert call_count == 2
 
     @pytest.mark.asyncio
+    async def test_local_rate_limit_fallback_skips_an_aliased_embedding_only_model(self):
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed-only",
+                    "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "sk-synthetic"},
+                    "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+                },
+                {"model_name": "chat-model", "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-synthetic"}},
+            ],
+            fallbacks=[{"rate-limited": ["embed-alias", "chat-model"]}],
+        )
+        processor: Final = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "rate-limited",
+                "router_settings_override": {"model_group_alias": {"embed-alias": "embed-only"}},
+            }
+        )
+        attempted: Final[list[object]] = []
+
+        async def pre_call_logic(**_: object):
+            attempted.append(processor.data.get("model"))
+            if processor.data.get("model") == "rate-limited":
+                raise ProxyRateLimitError(detail="key rpm limit exceeded", headers={"retry-after": "30"})
+            return processor.data, MagicMock()
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=pre_call_logic):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="rate-limited",
+                route_type="acompletion",
+                llm_router=router,
+            )
+
+        assert attempted == ["rate-limited", "chat-model"]
+
+    @pytest.mark.asyncio
     async def test_raises_when_no_fallbacks_configured(self):
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -10826,12 +11039,19 @@ class TestResolveLitellmCallId:
 class _FailureHookRecorder:
     """Stands in for ProxyLogging.post_call_failure_hook, recording what the detached-failure closure hands it."""
 
-    def __init__(self, raises: Optional[Exception] = None):
+    def __init__(self, raises: Optional[Exception] = None, gate: Optional[asyncio.Event] = None):
         self.calls = []
+        self.entered = asyncio.Event()
+        self.reported = asyncio.Event()
         self._raises = raises
+        self._gate = gate
 
     async def post_call_failure_hook(self, **kwargs):
+        self.entered.set()
+        if self._gate is not None:
+            await self._gate.wait()
         self.calls.append(kwargs)
+        self.reported.set()
         if self._raises is not None:
             raise self._raises
 
@@ -10931,6 +11151,171 @@ class TestDetachedStreamFailureHook:
         await logging_obj.on_detached_stream_failure(failure)
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
+
+    @staticmethod
+    def _armed_stream(recorder: _FailureHookRecorder, iterator_hook_for, response: Optional[MagicMock] = None):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-6.1-sol",
+            messages=[{"role": "user", "content": "Write a story."}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=None,
+            litellm_call_id="call-lit6871",
+            function_id="function-lit6871",
+        )
+        user_api_key_dict = RealUserAPIKeyAuth(api_key="sk-test")
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.post_call_failure_hook = recorder.post_call_failure_hook
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook_for(logging_obj)
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        stream = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=MagicMock() if response is None else response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=processing_obj.data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=lambda chunk: "data: chunk\n\n",
+            serialize_error=lambda error: "data: error\n\n",
+        )
+        return logging_obj, stream
+
+    @staticmethod
+    def _hook_reporting(upstream_failure: Exception, after_report=None):
+        def iterator_hook_for(logging_obj):
+            async def iterator_hook(**_kwargs):
+                yield b"event: message_start\n\n"
+                await logging_obj.on_detached_stream_failure(upstream_failure)
+                yield b"event: error\n\n"
+                yield b"event: message_stop\n\n"
+                if after_report is not None:
+                    raise after_report
+
+            return iterator_hook
+
+        return iterator_hook_for
+
+    @pytest.mark.asyncio
+    async def test_iterator_hook_failure_after_a_bridged_failure_is_the_one_the_failure_hook_gets(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the stream")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure, after_report=hook_failure))
+
+        frames = [frame async for frame in stream]
+
+        assert frames == ["data: chunk\n\n"] * 3 + ["data: error\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_hook_replacing_the_iterator_hook_failure_aborts_the_stream(self):
+        replacement = HTTPException(status_code=418, detail="rejected by a custom failure hook")
+        recorder = _FailureHookRecorder(raises=replacement)
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the stream")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure, after_report=hook_failure))
+
+        frames = [await stream.__anext__() for _ in range(3)]
+        with pytest.raises(HTTPException) as raised:
+            await stream.__anext__()
+
+        assert raised.value is replacement
+        assert frames == ["data: chunk\n\n"] * 3
+        assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_the_stream_reaches_the_failure_hook_once_after_the_stream_ends(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure))
+
+        frames = []
+        async for frame in stream:
+            frames.append(frame)
+            assert recorder.calls == []
+
+        assert frames == ["data: chunk\n\n"] * 3
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_report_and_stream_cleanup_survive_the_client_task_being_cancelled_mid_report(self):
+        gate = asyncio.Event()
+        recorder = _FailureHookRecorder(gate=gate)
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        response = MagicMock()
+        response.aclose = AsyncMock()
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure), response=response)
+
+        async def client_reads_the_whole_stream():
+            return [frame async for frame in stream]
+
+        client = asyncio.create_task(client_reads_the_whole_stream())
+        await asyncio.wait_for(recorder.entered.wait(), timeout=5)
+        client.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await client
+
+        response.aclose.assert_awaited_once()
+        gate.set()
+        await asyncio.wait_for(recorder.reported.wait(), timeout=5)
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_the_stream_reaches_the_failure_hook_once_when_the_client_leaves_early(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+
+        _, stream = self._armed_stream(recorder, self._hook_reporting(upstream_failure))
+
+        await stream.__anext__()
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_after_the_stream_ends_still_reaches_the_failure_hook(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed after the client stream closed")
+
+        async def iterator_hook(**_kwargs):
+            yield b"event: message_start\n\n"
+
+        logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+
+        frames = [frame async for frame in stream]
+        await logging_obj.on_detached_stream_failure(upstream_failure)
+
+        assert frames == ["data: chunk\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [upstream_failure]
+
+    @pytest.mark.asyncio
+    async def test_failure_reported_by_an_iterator_hook_is_not_reported_again_when_the_stream_closes(self):
+        recorder = _FailureHookRecorder()
+        upstream_failure = RuntimeError("upstream Responses stream failed")
+        hook_failure = RuntimeError("iterator hook rejected the error frame")
+
+        async def iterator_hook(**_kwargs):
+            yield b"event: message_start\n\n"
+            raise hook_failure
+
+        logging_obj, stream = self._armed_stream(recorder, lambda _logging_obj: iterator_hook)
+
+        frames = [frame async for frame in stream]
+        await logging_obj.on_detached_stream_failure(upstream_failure)
+
+        assert frames == ["data: chunk\n\n", "data: error\n\n"]
+        assert [call["original_exception"] for call in recorder.calls] == [hook_failure]
 
 
 class TestPostCallMaskedOutputReachesDeferredLogging:
