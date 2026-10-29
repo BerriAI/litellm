@@ -1,6 +1,6 @@
-import inspect
 import asyncio
 import contextlib
+import inspect
 import json
 import socket
 from collections.abc import Iterator, Mapping
@@ -1461,10 +1461,10 @@ class TestDeleteModelClearsRouterRegistry:
         add_deployment never restores, so an unguarded pop would make it permanently
         unroutable (the same cross-tenant DoS clear_cache was hardened against).
         """
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
-        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
 
         model_id = "regular-del-1"
         admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -2739,11 +2739,11 @@ class TestAddAndDeleteModelLifecycle:
         - Delete same model again → raises (model not found)
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
             add_new_model,
-            delete_model as delete_model_endpoint,
         )
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
         )
 
         model_id = "lifecycle-test-model-123"
@@ -2833,6 +2833,8 @@ class TestDeleteTeamBYOKModelGhost:
     async def test_delete_strips_public_name_and_refreshes_cache(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -2916,6 +2918,8 @@ class TestDeleteTeamBYOKModelGhost:
         alias cleanup (delete_team_model_alias), preserving legacy behavior."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -2984,6 +2988,8 @@ class TestDeleteTeamBYOKModelGhost:
         team.models when one replica is deleted but a sibling still backs it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3065,6 +3071,8 @@ class TestDeleteTeamBYOKModelGhost:
         deployment still serves it."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3145,6 +3153,8 @@ class TestDeleteTeamBYOKModelGhost:
         the alias would break routing that works."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3252,6 +3262,8 @@ class TestDeleteModelTeamAuth:
     async def test_proxy_admin_can_delete_model_when_team_deleted(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 
@@ -3287,6 +3299,8 @@ class TestDeleteModelTeamAuth:
         """A missing team must never let a non-admin delete the orphan (no fail-open)."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
         from litellm.proxy.proxy_server import ProxyException
@@ -3322,6 +3336,8 @@ class TestDeleteModelTeamAuth:
         """The auth check must not add a redundant team query on the live-team path."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
         from litellm.proxy.proxy_server import ProxyException
@@ -4419,7 +4435,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_echoed_cost_map_metadata_is_not_persisted(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4445,7 +4460,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4510,7 +4524,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_metadata_without_a_cost_map_key_is_persisted(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
         from litellm.types.utils import echoed_cost_map_fields
@@ -4540,7 +4553,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_a_stored_mode_survives_an_echoed_save(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4563,7 +4575,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_resetting_an_override_to_the_cost_map_value_removes_it(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4587,7 +4598,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_reset_is_recognised_after_the_router_registered_the_override(self, monkeypatch: pytest.MonkeyPatch):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4613,7 +4623,6 @@ class TestModelInfoCostMapEchoFilter:
         from types import MappingProxyType
 
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4638,7 +4647,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_echo_is_compared_against_the_deployments_lookup_not_the_key(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4680,7 +4688,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_base_model_wins_over_litellm_params_model_for_the_lookup(self):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -4708,7 +4715,6 @@ class TestModelInfoCostMapEchoFilter:
 
     def test_encrypted_stored_model_is_decrypted_for_the_lookup(self, monkeypatch):
         import litellm
-
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
@@ -6458,7 +6464,7 @@ class TestStrategyRouterWriteValidation:
             AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY,
             _auto_router_capability_slot,
         )
-        from litellm.router_utils.auto_router_model_naming import gated_capabilities_of
+        from litellm.router_strategy.auto_router.auto_router_model_naming import gated_capabilities_of
 
         capabilities: Final = gated_capabilities_of(effective_params)
 
@@ -6595,7 +6601,7 @@ class TestStrategyRouterWriteValidation:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         configs = {
             "_TUNED_A": self._TUNED_A,
@@ -6651,7 +6657,7 @@ class TestStrategyRouterWriteValidation:
 
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         fake = self._FakeDb([])
         fake.tx_obj.litellm_proxymodeltable.find_many = AsyncMock(
@@ -6696,7 +6702,7 @@ class TestStrategyRouterWriteValidation:
         row id before the slot is entered, so a second tuned router is refused before its DB write."""
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
-        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+        from litellm.router_strategy.auto_router.auto_router_tuning_baseline import snapshot_tuning_baselines
 
         admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         baselines = snapshot_tuning_baselines([self._db_router_row("a", self._TUNED_A)])
@@ -8503,6 +8509,76 @@ class TestTeamMemberAutoRouterWrites:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["create", "patch", "legacy"])
+    @pytest.mark.parametrize("legacy", [False, True])
+    @pytest.mark.parametrize("field", ["api_key", "api_base"])
+    async def test_team_admin_classifier_writes_reject_environment_references(
+        self, endpoint: str, legacy: bool, field: str
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        stored_config: Final = self._classifier_config(
+            {"api_key": "os.environ/PRIVATE_JEV_VALUE", "api_base": "https://trusted-jev.test"}, legacy
+        )
+        row: Final = self._row().model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router", "complexity_router_config": stored_config,
+        }})
+        team: Final = self._team().model_copy(update={"members_with_roles": [Member(user_id="owner", role="admin")]})
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER)
+        config: Final = self._classifier_config(
+            {"api_key": "caller-key", "api_base": "https://untrusted-jev.test", field: "os.environ/PRIVATE_JEV_VALUE"},
+            legacy,
+        )
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        operation: Final = (
+            add_new_model(Deployment(
+                model_name="new-jev-router",
+                litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=config),
+                model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+            ), actor)
+            if endpoint == "create"
+            else patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+        )
+        with self._environment(database, row), pytest.raises((HTTPException, ProxyException)) as denied:
+            await operation
+        assert (denied.value.status_code if isinstance(denied.value, HTTPException) else int(denied.value.code)) == 403
+        database.db.litellm_proxymodeltable.create.assert_not_awaited()
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("change_config", [False, True])
+    async def test_team_admin_unrelated_updates_preserve_stored_environment_references(
+        self, endpoint: str, change_config: bool
+    ) -> None:
+        connection: Final = {"api_key": "os.environ/SAVED_JEV_KEY", "api_base": "os.environ/SAVED_JEV_BASE"}
+        stored_config: Final = self._classifier_config(connection, True)
+        row: Final = self._row().model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router", "complexity_router_config": stored_config,
+        }})
+        team: Final = self._team().model_copy(update={"members_with_roles": [Member(user_id="owner", role="admin")]})
+        database: Final = self._database(team, row)
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER)
+        params: Final = (
+            {"complexity_router_config": self._classifier_config({"timeout_ms": 8100}, False)}
+            if change_config else {"max_tokens": 100}
+        )
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(params), model_info=ModelInfo(id=row.model_id),
+        )
+        with self._environment(database, row):
+            await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        assert saved == (
+            self._classifier_config({**connection, "timeout_ms": 8100}, False) if change_config else stored_config
+        )
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "stored_params,removed,denied_param",
         [
@@ -8937,7 +9013,10 @@ class TestTeamMemberAutoRouterWrites:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
-        from litellm.proxy.management_helpers.auto_router_permissions import MemberAutoRouterWrite, validate_member_auto_router_config
+        from litellm.proxy.management_helpers.auto_router_permissions import (
+            MemberAutoRouterWrite,
+            validate_member_auto_router_config,
+        )
 
         row: Final = self._row()
         database: Final = self._database(self._team(), row)
@@ -10634,6 +10713,8 @@ class TestFederationGateScopesToWhatTheWriteTouches:
         and the team that owns the model must be able to take it off their page."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             ModelInfoDelete,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_model as delete_model_endpoint,
         )
 

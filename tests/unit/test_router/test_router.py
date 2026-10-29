@@ -1126,6 +1126,36 @@ def test_arouter_test_team_model():
     assert result is not None
 
 
+def test_team_public_model_names_of_lists_only_that_teams_live_public_names():
+    def team_deployment(deployment_id: str, team_id: str, public_model_name: str) -> DeploymentTypedDict:
+        return {
+            "model_name": f"model_name_{team_id}_{deployment_id}",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            "model_info": {"id": deployment_id, "team_id": team_id, "team_public_model_name": public_model_name},
+        }
+
+    router: Final = litellm.Router(
+        model_list=[
+            team_deployment("team-a-1", "team-a", "shared-model"),
+            team_deployment("team-a-2", "team-a", "shared-model"),
+            team_deployment("team-a-solo", "team-a", "solo-model"),
+            team_deployment("team-b-1", "team-b", "team-b-model"),
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "plain-1"},
+            },
+        ],
+    )
+
+    assert router.team_public_model_names_of("team-a") == frozenset({"shared-model", "solo-model"})
+    assert router.team_public_model_names_of("team-c") == frozenset()
+
+    router.delete_deployment(id="team-a-solo")
+
+    assert router.team_public_model_names_of("team-a") == frozenset({"shared-model"})
+
+
 def test_team_model_has_alternatives():
     def team_deployment(
         deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False
@@ -3771,6 +3801,132 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
     )
     assert recorder.successes[-1]["response_cost"] == pytest.approx(
         failure["response_cost"] + backup_prompt_cost + backup_completion_cost
+    )
+
+
+def _responses_sse(*events: Mapping[str, object]) -> str:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _responses_envelope(response_id: str, model: str, status: str, **fields: object) -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1700000000,
+        "status": status,
+        "model": model,
+        "output": [],
+        **fields,
+    }
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fallback_usage(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://primary.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {"type": "response.created", "response": _responses_envelope("resp_primary", "gpt-4o", "in_progress")},
+                *(
+                    {
+                        "type": "response.output_text.delta",
+                        "item_id": "msg_primary",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": word,
+                    }
+                    for word in ("Once ", "upon ", "a ", "time ", "there")
+                ),
+                {
+                    "type": "response.failed",
+                    "response": _responses_envelope(
+                        "resp_primary",
+                        "gpt-4o",
+                        "failed",
+                        error={"code": "server_error", "message": "The model had an internal error"},
+                    ),
+                },
+            ),
+        )
+    )
+    respx_mock.post("https://backup.example/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_responses_sse(
+                {"type": "response.created", "response": _responses_envelope("resp_backup", "gpt-4o-mini", "in_progress")},
+                {
+                    "type": "response.completed",
+                    "response": _responses_envelope(
+                        "resp_backup",
+                        "gpt-4o-mini",
+                        "completed",
+                        output=[
+                            {
+                                "type": "message",
+                                "id": "msg_backup",
+                                "status": "completed",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Once upon a time", "annotations": []}],
+                            }
+                        ],
+                        usage={"input_tokens": 1000, "output_tokens": 700, "total_tokens": 1700},
+                    ),
+                },
+            ),
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k1", "api_base": "https://primary.example/v1"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "k2",
+                    "api_base": "https://backup.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    shared_logging, _ = litellm.utils.function_setup(
+        original_function="aresponses",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+    )
+
+    response: Final = await router.aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+    _ = [event async for event in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    success: Final = recorder.successes[-1]
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (1000, 700)
+    spend_row: Final = recorder.spend_rows[-1]
+    assert (spend_row["prompt_tokens"], spend_row["completion_tokens"], spend_row["spend"]) == (
+        1000,
+        700,
+        success["response_cost"],
     )
 
 
@@ -7036,6 +7192,307 @@ async def test_aresponses_fallback_attempt_does_not_replay_held_lifecycle_events
 
     assert outcome == [fallback_created, fallback_error]
 
+
+_BACKGROUND_PRIMARY_URL: Final = "https://api.openai.com/v1/responses"
+_BACKGROUND_BACKUP_URL: Final = "https://backup.openai.test/v1/responses"
+
+
+def _background_sse_frame(event: Mapping[str, object]) -> bytes:
+    return f"data: {json.dumps(event)}\n\n".encode()
+
+
+def _background_response_body(status: str, background: bool) -> dict[str, object]:
+    return {
+        "id": "resp_upstream_run",
+        "object": "response",
+        "created_at": 0,
+        "status": status,
+        "model": "gpt-6.1-terra",
+        "background": background,
+        "output": [],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2} if status == "completed" else None,
+    }
+
+
+def _paused_background_stream(
+    output_may_start: asyncio.Event,
+    upstream_paused: asyncio.Event,
+    background: bool,
+    after_pause: tuple[dict[str, object], ...],
+) -> httpx.Response:
+    async def body() -> AsyncIterator[bytes]:
+        yield _background_sse_frame(
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": _background_response_body("queued", background),
+            }
+        )
+        yield _background_sse_frame(
+            {
+                "type": "response.queued",
+                "sequence_number": 1,
+                "response": _background_response_body("queued", background),
+            }
+        )
+        upstream_paused.set()
+        await output_may_start.wait()
+        for event in after_pause:
+            yield _background_sse_frame(event)
+
+    return httpx.Response(200, content=body(), headers={"content-type": "text/event-stream"})
+
+
+def _background_output_then_completed(background: bool) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "response.output_text.delta", "sequence_number": 2, "item_id": "msg_1", "delta": "41"},
+        {
+            "type": "response.completed",
+            "sequence_number": 3,
+            "response": _background_response_body("completed", background),
+        },
+    )
+
+
+def _background_router(
+    model_name: str,
+    litellm_params: dict[str, object],
+    fallbacks: list[dict[str, list[str]]] | None,
+    content_policy_fallbacks: list[dict[str, list[str]]] | None = None,
+) -> Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": model_name, "litellm_params": litellm_params},
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-6.1-terra",
+                    "api_key": "backup-key",
+                    "api_base": "https://backup.openai.test/v1",
+                },
+            },
+        ],
+        fallbacks=fallbacks,
+        content_policy_fallbacks=content_policy_fallbacks,
+        num_retries=0,
+    )
+
+
+async def _reached_client_before_upstream_paused(
+    first: "asyncio.Future[object]", upstream_paused: asyncio.Event
+) -> bool:
+    paused: Final = asyncio.ensure_future(upstream_paused.wait())
+    done, _ = await asyncio.wait({first, paused}, return_when=asyncio.FIRST_COMPLETED)
+    paused.cancel()
+    return first in done
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "request_kwargs"),
+    [
+        pytest.param(None, {}, id="no-fallback-configured"),
+        pytest.param([{"gpt-bg": ["backup"]}], {"disable_fallbacks": True}, id="fallbacks-disabled-for-the-request"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_aresponses_background_stream_hands_the_response_id_to_the_client_before_output(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    fallbacks: list[dict[str, list[str]]] | None,
+    request_kwargs: dict[str, bool],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    output_may_start: Final = asyncio.Event()
+    upstream_paused: Final = asyncio.Event()
+    respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
+        return_value=_paused_background_stream(
+            output_may_start, upstream_paused, True, _background_output_then_completed(True)
+        )
+    )
+    router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, fallbacks)
+
+    stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=True, stream=True, **request_kwargs)
+    first: Final = asyncio.ensure_future(anext(stream))
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, upstream_paused)
+    output_may_start.set()
+    created: Final = await first
+    rest: Final = [event async for event in stream]
+
+    assert arrived_before_output is True
+    assert created.type == "response.created"
+    assert [event.type for event in rest] == [
+        "response.queued",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert rest[-1].response.id == created.response.id
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "background", "fallbacks"),
+    [
+        pytest.param({"model": "openai/gpt-6.1-terra", "api_key": "k"}, False, None, id="foreground-request"),
+        pytest.param(
+            {"model": "openai/gpt-6.1-terra", "api_key": "k"}, True, [{"gpt-bg": ["backup"]}], id="fallback-configured"
+        ),
+        pytest.param(
+            {
+                "model": "azure/gpt-6.1-terra",
+                "api_key": "k",
+                "api_base": "https://bg-resource.openai.azure.com",
+                "api_version": "preview",
+            },
+            True,
+            None,
+            id="azure-deployment",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_aresponses_stream_keeps_holding_lifecycle_events_until_output_off_the_eligible_background_route(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: dict[str, object],
+    background: bool,
+    fallbacks: list[dict[str, list[str]]] | None,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    output_may_start: Final = asyncio.Event()
+    upstream_paused: Final = asyncio.Event()
+    respx_mock.route(method="POST", path__regex=r"/responses$").mock(
+        return_value=_paused_background_stream(
+            output_may_start, upstream_paused, background, _background_output_then_completed(background)
+        )
+    )
+    router: Final = _background_router("gpt-bg", litellm_params, fallbacks)
+
+    stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=background, stream=True)
+    first: Final = asyncio.ensure_future(anext(stream))
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, upstream_paused)
+    output_may_start.set()
+    events: Final = [await first, *[event async for event in stream]]
+
+    assert arrived_before_output is False
+    assert upstream_paused.is_set()
+    assert [event.type for event in events] == [
+        "response.created",
+        "response.queued",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_background_stream_surfaces_a_later_error_instead_of_a_fallback_once_its_id_is_out(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    output_may_start: Final = asyncio.Event()
+    upstream_paused: Final = asyncio.Event()
+    backup_output_may_start: Final = asyncio.Event()
+    backup_output_may_start.set()
+    server_error: Final = {
+        "type": "error",
+        "sequence_number": 2,
+        "error": {"type": "server_error", "code": "server_error", "message": "upstream died", "param": None},
+    }
+    primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
+        return_value=_paused_background_stream(output_may_start, upstream_paused, True, (server_error,))
+    )
+    backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL).mock(
+        return_value=_paused_background_stream(
+            backup_output_may_start, asyncio.Event(), True, _background_output_then_completed(True)
+        )
+    )
+    router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, None)
+
+    stream: Final = await router.aresponses(model="gpt-bg", input="hi", background=True, stream=True)
+    first: Final = asyncio.ensure_future(anext(stream))
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, upstream_paused)
+    router.fallbacks = [{"gpt-bg": ["backup"]}]
+    output_may_start.set()
+    created: Final = await first
+    rest: Final = [item async for item in _events_until_error(stream)]
+
+    assert arrived_before_output is True
+    assert created.type == "response.created"
+    assert [item.type for item in rest[:-1]] == ["response.queued"]
+    assert isinstance(rest[-1], litellm.InternalServerError)
+    assert "upstream died" in str(rest[-1])
+    assert primary_route.call_count == 1
+    assert backup_route.call_count == 0
+
+
+
+_BACKGROUND_TEXT_DELTA: Final = {
+    "type": "response.output_text.delta",
+    "sequence_number": 2,
+    "item_id": "msg_1",
+    "delta": "41",
+}
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "content_policy_fallbacks", "output_before_refusal", "router_note_expected"),
+    [
+        pytest.param(None, None, (), True, id="no-fallback-configured"),
+        pytest.param([{"other-group": ["backup"]}], None, (), True, id="fallbacks-for-another-group"),
+        pytest.param(None, [{"other-group": ["backup"]}], (), True, id="content-policy-fallbacks-for-another-group"),
+        pytest.param(None, None, (_BACKGROUND_TEXT_DELTA,), False, id="refused-after-output-text"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_aresponses_background_stream_content_policy_error_reads_the_same_once_its_id_is_out(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    fallbacks: list[dict[str, list[str]]] | None,
+    content_policy_fallbacks: list[dict[str, list[str]]] | None,
+    output_before_refusal: tuple[dict[str, object], ...],
+    router_note_expected: bool,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    released_output_may_start: Final = asyncio.Event()
+    released_upstream_paused: Final = asyncio.Event()
+    held_output_may_start: Final = asyncio.Event()
+    held_output_may_start.set()
+    refusal: Final = {
+        "type": "error",
+        "sequence_number": 2 + len(output_before_refusal),
+        "error": {
+            "type": "invalid_request_error",
+            "code": "content_policy_violation",
+            "message": "Your request was rejected as a result of our safety system.",
+            "param": None,
+        },
+    }
+    after_pause: Final = (*output_before_refusal, refusal)
+    primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
+        side_effect=[
+            _paused_background_stream(released_output_may_start, released_upstream_paused, True, after_pause),
+            _paused_background_stream(held_output_may_start, asyncio.Event(), False, after_pause),
+        ]
+    )
+    backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL)
+    router: Final = _background_router(
+        "gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, fallbacks, content_policy_fallbacks
+    )
+
+    released: Final = await router.aresponses(model="gpt-bg", input="hi", background=True, stream=True)
+    first: Final = asyncio.ensure_future(anext(released))
+    arrived_before_output: Final = await _reached_client_before_upstream_paused(first, released_upstream_paused)
+    released_output_may_start.set()
+    await first
+    released_error: Final = [item async for item in _events_until_error(released)][-1]
+    held: Final = await router.aresponses(model="gpt-bg", input="hi", stream=True)
+    held_error: Final = [item async for item in _events_until_error(held)][-1]
+
+    assert arrived_before_output is True
+    assert isinstance(released_error, litellm.ContentPolicyViolationError)
+    assert isinstance(held_error, litellm.ContentPolicyViolationError)
+    assert ("LiteLLM: model group 'gpt-bg' failed with the error above" in held_error.message) is router_note_expected
+    assert released_error.message == held_error.message
+    assert primary_route.call_count == 2
+    assert backup_route.call_count == 0
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
@@ -17347,9 +17804,9 @@ def _anthropic_messages_two_order_primary_model_list() -> list:
         pytest.param({"fallbacks": None, "enable_weighted_failover": True}, {"model": "primary"}, True, id="weighted-failover"),
     ],
 )
-def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
+def test_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
     router = _anthropic_messages_make_router(**router_kwargs)
-    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+    assert router._stream_can_fall_back("primary", request_kwargs) is expected
 
 
 @pytest.mark.parametrize(
@@ -17359,7 +17816,7 @@ def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, requ
         pytest.param([1, 1], False, id="same-order-cannot-fall-back"),
     ],
 )
-def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
+def test_stream_can_fall_back_order_levels(orders, expected):
     router = Router(
         model_list=[
             {
@@ -17370,7 +17827,7 @@ def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
         ],
         fallbacks=None,
     )
-    assert router._anthropic_messages_stream_can_fall_back("primary", {"model": "primary"}) is expected
+    assert router._stream_can_fall_back("primary", {"model": "primary"}) is expected
 
 
 @pytest.mark.parametrize(
@@ -17386,12 +17843,12 @@ def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
         ),
     ],
 )
-def test_anthropic_messages_stream_can_fall_back_order_target(request_kwargs, expected):
+def test_stream_can_fall_back_order_target(request_kwargs, expected):
     router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
-    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+    assert router._stream_can_fall_back("primary", request_kwargs) is expected
 
 
-def test_anthropic_messages_order_levels_direct_call():
+def test_stream_order_levels_direct_call():
     router = Router(
         model_list=[
             {
@@ -17402,7 +17859,7 @@ def test_anthropic_messages_order_levels_direct_call():
         ],
         fallbacks=None,
     )
-    assert router._anthropic_messages_order_levels("primary", {"model": "primary"}) == (1, 2)
+    assert router._stream_order_levels("primary", {"model": "primary"}) == (1, 2)
 
 
 @pytest.mark.asyncio
@@ -20409,6 +20866,37 @@ def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
     assert set(_resolution_router().resolved_litellm_models(model_name)) == set(expected)
 
 
+def test_resolved_litellm_models_base_model_precedence_is_opt_in() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "pooled",
+                "litellm_params": {"model": "openai/deployment-a", "api_key": "sk-test", "base_model": "gpt-5.5"},
+                "model_info": {"base_model": "gpt-6-astra"},
+            },
+            {
+                "model_name": "pooled",
+                "litellm_params": {"model": "openai/deployment-b", "api_key": "sk-test", "base_model": "gpt-5.6-sol"},
+            },
+            {
+                "model_name": "team-deployment",
+                "litellm_params": {"model": "openai/deployment-c", "api_key": "sk-test"},
+                "model_info": {
+                    "base_model": "gpt-6-astra",
+                    "team_id": "test-team",
+                    "team_public_model_name": "team-model",
+                },
+            },
+        ],
+        model_group_alias={"nickname": "pooled"},
+    )
+    assert router.resolved_litellm_models("nickname") == ("openai/deployment-a", "openai/deployment-b")
+    assert router.resolved_litellm_models("nickname", use_base_model=True) == ("gpt-6-astra", "gpt-5.6-sol")
+    assert router.resolved_litellm_models("team-model", "test-team") == ("openai/deployment-c",)
+    assert router.resolved_litellm_models("team-model", "test-team", use_base_model=True) == ("gpt-6-astra",)
+    assert router.resolved_litellm_models("never-configured", use_base_model=True) == ()
+
+
 class TestTierParamsTheTargetAccepts:
     """A tier's litellm_params are applied to every request that tier routes, so one the target
     cannot take raised UnsupportedParamsError before the request left the proxy, turning the whole
@@ -21694,6 +22182,116 @@ def test_router_retry_policy_400_moves_off_the_refusing_deployment_on_every_sync
     assert response is not None
     assert rejecting.call_count == 1
     assert accepting.call_count == 1
+
+
+_TRANSCRIPTION_AUDIO: Final = ("speech.wav", b"RIFF", "audio/wav")
+_TRANSCRIPTION_API_BASE: Final = "https://transcriber.local/v1"
+
+
+def _transcription_deployment(
+    model_name: str, deployment_id: str, litellm_model: str, weight: int
+) -> DeploymentTypedDict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": litellm_model,
+            "api_key": "sk-fake",
+            "api_base": _TRANSCRIPTION_API_BASE,
+            "weight": weight,
+        },
+        "model_info": {"id": deployment_id},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_scope", ["none", "router", "model_group", "request"])
+@pytest.mark.parametrize(
+    "caller_credentials",
+    ({}, {"api_key": "caller-key"}, {"api_base": _TRANSCRIPTION_API_BASE}, {"base_url": _TRANSCRIPTION_API_BASE}),
+    ids=("configured", "api_key", "api_base", "base_url"),
+)
+async def test_router_retries_a_transcription_off_a_deployment_whose_provider_cannot_transcribe(
+    monkeypatch: pytest.MonkeyPatch,
+    policy_scope: Literal["none", "router", "model_group", "request"],
+    caller_credentials: Mapping[str, str],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    policy: Final = RetryPolicy(BadRequestErrorRetries=0)
+    router: Final = litellm.Router(
+        model_list=[
+            _transcription_deployment("transcriber", "cannot-transcribe", "anthropic/claude-sonnet-5-5", weight=1),
+            _transcription_deployment("transcriber", "can-transcribe", "openai/gpt-transcribe", weight=0),
+        ],
+        num_retries=1,
+        retry_policy=policy if policy_scope == "router" else None,
+        model_group_retry_policy={"transcriber": policy} if policy_scope == "model_group" else None,
+        disable_cooldowns=True,
+    )
+    request_kwargs: Final = {"model_group_retry_policy": {"transcriber": policy}} if policy_scope == "request" else {}
+
+    with respx.mock as respx_mock:
+        upstream: Final = respx_mock.post(f"{_TRANSCRIPTION_API_BASE}/audio/transcriptions").mock(
+            return_value=httpx.Response(200, json={"text": "hi"})
+        )
+        response: Final = await router.atranscription(
+            model="transcriber", file=_TRANSCRIPTION_AUDIO, **request_kwargs, **caller_credentials
+        )
+
+    assert response.text == "hi"
+    assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize("deployment_count", [1, 2, 3])
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_credentials",
+    ({}, {"api_key": "caller-key"}, {"api_base": _TRANSCRIPTION_API_BASE}, {"base_url": _TRANSCRIPTION_API_BASE}),
+    ids=("configured", "api_key", "api_base", "base_url"),
+)
+async def test_router_tries_each_deployment_that_cannot_transcribe_once_then_answers_400(
+    deployment_count: int, caller_credentials: Mapping[str, str]
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _transcription_deployment("transcriber", f"cannot-transcribe-{index}", "anthropic/claude-sonnet-5-5", 1)
+            for index in range(deployment_count)
+        ],
+        num_retries=5,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock, pytest.raises(litellm.UnsupportedEndpointError) as raised:
+        await router.atranscription(model="transcriber", file=_TRANSCRIPTION_AUDIO, **caller_credentials)
+
+    assert raised.value.status_code == 400
+    assert router.fail_calls["transcriber"] == deployment_count
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_router_falls_back_from_a_group_that_cannot_transcribe_when_unsupported_params_do_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _transcription_deployment("chat-only", "cannot-transcribe", "anthropic/claude-sonnet-5-5", weight=1),
+            _transcription_deployment("transcriber", "can-transcribe", "openai/gpt-transcribe", weight=1),
+        ],
+        fallbacks=[{"chat-only": ["transcriber"]}],
+        fallback_on_unsupported_params=False,
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        upstream: Final = respx_mock.post(f"{_TRANSCRIPTION_API_BASE}/audio/transcriptions").mock(
+            return_value=httpx.Response(200, json={"text": "hi"})
+        )
+        response: Final = await router.atranscription(model="chat-only", file=_TRANSCRIPTION_AUDIO)
+
+    assert response.text == "hi"
+    assert upstream.call_count == 1
 
 
 def _make_failure_logging_obj():
@@ -27713,38 +28311,89 @@ def test_router_get_model_group_info() -> None:
     assert model_group_info.output_cost_per_token > 0
 
 
-def test_router_rpm_pre_call_check():
-    """
-    - for a given model not in model cost map
-    - with rpm set
-    - check if rpm check is run
-    """
-    try:
-        model_list = [
+def test_pre_call_checks_keep_deployment_whose_rpm_is_reached():
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 0},
+            "model_info": {"id": "rpm-zero"},
+        },
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"id": "uncapped"},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    kept: Final = router._pre_call_checks(
+        model="fake-openai-endpoint",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in kept] == ["rpm-zero", "uncapped"]
+
+
+@pytest.mark.asyncio
+async def test_enable_pre_call_checks_alone_serves_past_deployment_rpm():
+    router: Final = Router(
+        model_list=[
             {
-                "model_name": "fake-openai-endpoint",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "openai/my-fake-model",
-                    "api_key": "my-fake-key",
-                    "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
-                    "rpm": 0,
-                },
-            },
-        ]
+                "model_name": "fake-openai-endpoint",
+                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 1},
+                "model_info": {"id": "rpm-one"},
+            }
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+    )
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+    served: Final = [
+        await router.acompletion(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="served",
+        )
+        for _ in range(3)
+    ]
 
-        try:
-            router._pre_call_checks(
+    assert [response.choices[0].message.content for response in served] == ["served"] * 3
+
+
+@pytest.mark.asyncio
+async def test_enforce_model_rate_limits_returns_429_at_deployment_rpm():
+    frozen_minute: Final = datetime(2026, 1, 1, 12, 30, 15, tzinfo=timezone.utc)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fake-openai-endpoint",
+                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 1},
+                "model_info": {"id": "rpm-one"},
+            }
+        ],
+        enable_pre_call_checks=True,
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+    with patch(
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime", return_value=frozen_minute
+    ):
+        first: Final = await router.acompletion(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="served",
+        )
+        with pytest.raises(litellm.RateLimitError) as rate_limited:
+            await router.acompletion(
                 model="fake-openai-endpoint",
-                healthy_deployments=model_list,
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="served",
             )
-            pytest.fail("Expected this to fail")
-        except Exception:
-            pass
-    except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+    assert first.choices[0].message.content == "served"
+    assert rate_limited.value.status_code == 429
 
 
 @pytest.mark.parametrize(
@@ -29574,26 +30223,6 @@ def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
     assert [d["model_info"]["id"] for d in filtered] == ["large"]
 
 
-def test_pre_call_checks_rpm_check_still_enforced_when_token_counting_fails():
-    from litellm.types.router import RouterRateLimitErrorBasic
-
-    model_list: Final = [
-        {
-            "model_name": "fake-openai-endpoint",
-            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 0},
-            "model_info": {"max_input_tokens": 100},
-        },
-    ]
-    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
-
-    with pytest.raises(RouterRateLimitErrorBasic):
-        router._pre_call_checks(
-            model="fake-openai-endpoint",
-            healthy_deployments=model_list,
-            messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
-        )
-
-
 def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():
     model_list: Final = [
         {
@@ -30679,3 +31308,51 @@ async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
     finally:
         await GLOBAL_LOGGING_WORKER.flush()
         await client.close()
+
+
+_FALLBACK_VALIDATION_MODEL_LIST: Final = (
+    {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "fake-key"}},
+    {"model_name": "gpt-3.5", "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "fake-key"}},
+)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "expected_message"),
+    [
+        ({"fallbacks": [{"gpt-4": "gpt-3.5"}]}, "Fallbacks for 'gpt-4' must be a list of model names, got 'gpt-3.5'"),
+        ({"default_fallbacks": "gpt-3.5"}, "default_fallbacks must be a list of model names, got 'gpt-3.5'"),
+        (
+            {"content_policy_fallbacks": [{"gpt-4": "gpt-3.5"}]},
+            "Fallbacks for 'gpt-4' must be a list of model names, got 'gpt-3.5'",
+        ),
+    ],
+    ids=["string_fallback_target", "string_default_fallbacks", "string_content_policy_fallback_target"],
+)
+def test_router_rejects_a_string_fallback_target_at_init(
+    router_kwargs: Mapping[str, object], expected_message: str
+) -> None:
+    with pytest.raises(TypeError, match="must be a list of model names") as excinfo:
+        Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
+
+    assert expected_message in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "expected_fallbacks"),
+    [
+        ({"fallbacks": [{"gpt-4": ["gpt-3.5"]}]}, [{"gpt-4": ["gpt-3.5"]}]),
+        ({"default_fallbacks": ["gpt-3.5"]}, [{"*": ["gpt-3.5"]}]),
+        (
+            {"fallbacks": [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}]},
+            [{"gpt-4": [{"model": "gpt-3.5", "api_key": "other-key"}]}],
+        ),
+        ({"fallbacks": [{"model": "gpt-3.5"}]}, [{"model": "gpt-3.5"}]),
+    ],
+    ids=["list_fallback_target", "list_default_fallbacks", "dict_override_fallback_target", "direct_target_entry"],
+)
+def test_router_keeps_supported_fallback_shapes(
+    router_kwargs: Mapping[str, object], expected_fallbacks: list[dict[str, object]]
+) -> None:
+    router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
+
+    assert router.fallbacks == expected_fallbacks
