@@ -101,6 +101,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
 )
 from litellm.utils import get_utc_datetime
+from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
 
@@ -1551,37 +1552,24 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "prisma_client,vector_store_registry,expected_result",
-    [
-        (None, MagicMock(), True),  # No prisma client
-        (MagicMock(), None, True),  # No vector store registry
-        (MagicMock(), MagicMock(), True),  # No vector stores to run
-    ],
-)
-async def test_vector_store_access_check_early_returns(prisma_client, vector_store_registry, expected_result):
+@pytest.mark.parametrize("prisma_client", [None, MagicMock()], ids=["no-prisma-client", "no-vector-stores-to-run"])
+async def test_vector_store_access_check_early_returns(prisma_client):
     """Test vector_store_access_check returns True for early exit conditions"""
     request_body = {"messages": [{"role": "user", "content": "test"}]}
 
-    if vector_store_registry:
-        vector_store_registry.get_vector_store_ids_to_run.return_value = None
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-        patch("litellm.vector_store_registry", vector_store_registry),
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
         result = await vector_store_access_check(
             request_body=request_body,
             team_object=None,
             valid_token=None,
         )
 
-    assert result == expected_result
+    assert result is True
 
 
 @pytest.mark.asyncio
 async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_requested():
-    """Registry returns [] (not None) for plain requests; no object permission DB lookup should happen."""
+    """A plain request names no vector store, so no object permission DB lookup should happen."""
     valid_token = UserAPIKeyAuth(token="test-token", object_permission_id="perm-123")
     team_object = MagicMock()
     team_object.object_permission_id = "team-permission"
@@ -1590,16 +1578,8 @@ async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_r
     find_unique = AsyncMock()
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
 
-    mock_vector_store_registry = MagicMock()
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = []
-
-    with (
-        patch(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
-            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
-        ),
-        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
-            "litellm.vector_store_registry", mock_vector_store_registry
-        ),
+    with patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
     ):
         result = await vector_store_access_check(
             request_body={"messages": [{"role": "user", "content": "test"}]},
@@ -1669,102 +1649,6 @@ def test_can_object_call_vector_stores_scenarios(object_permissions, vector_stor
 
 
 @pytest.mark.asyncio
-async def test_vector_store_access_check_with_permissions():
-    """Test vector_store_access_check with actual permission checking"""
-    request_body = {"tools": [{"type": "function", "function": {"name": "test"}}]}
-
-    # Test with valid token that has access
-    valid_token = UserAPIKeyAuth(
-        token="test-token",
-        object_permission_id="perm-123",
-        models=["gpt-4"],
-        max_budget=100.0,
-    )
-
-    mock_prisma_client = MagicMock()
-    mock_permissions = LiteLLM_ObjectPermissionTable(
-        object_permission_id="perm-123", vector_stores=["store-1", "store-2"]
-    )
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=mock_permissions)
-
-    mock_vector_store_registry = MagicMock()
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-1"]
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
-    ):
-        result = await vector_store_access_check(
-            request_body=request_body,
-            team_object=None,
-            valid_token=valid_token,
-        )
-
-    assert result is True
-
-    # Test with denied access
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-3"]
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
-    ):
-        with pytest.raises(ProxyException) as exc_info:
-            await vector_store_access_check(
-                request_body=request_body,
-                team_object=None,
-                valid_token=valid_token,
-            )
-
-        assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
-
-
-@pytest.mark.asyncio
-async def test_vector_store_access_check_with_team_permissions():
-    """Ensure teams restricted to specific vector stores cannot access others."""
-    request_body = {}
-    valid_token = UserAPIKeyAuth(token="team-test-token", object_permission_id=None)
-
-    team_object = LiteLLM_TeamTable(team_id="team-1", object_permission_id="team-permission")
-
-    mock_prisma_client = MagicMock()
-    team_permissions = LiteLLM_ObjectPermissionTable(
-        object_permission_id="team-permission", vector_stores=["team-store-allowed"]
-    )
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=team_permissions)
-
-    mock_vector_store_registry = MagicMock()
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["team-store-allowed"]
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
-    ):
-        result = await vector_store_access_check(
-            request_body=request_body,
-            team_object=team_object,
-            valid_token=valid_token,
-        )
-
-    assert result is True
-
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["team-store-denied"]
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
-    ):
-        with pytest.raises(ProxyException) as exc_info:
-            await vector_store_access_check(
-                request_body=request_body,
-                team_object=team_object,
-                valid_token=valid_token,
-            )
-
-    assert exc_info.value.type == ProxyErrorTypes.team_vector_store_access_denied
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "requested_vector_store_id,expected_error_type",
     [
@@ -1823,6 +1707,188 @@ async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
     assert exc_info.value.type == expected_error_type
 
 
+def _file_search_tool_request(vector_store_id: str) -> dict[str, object]:
+    return {
+        "model": "gpt-5.4-mini",
+        "input": "what is in this store?",
+        "tools": [{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+    }
+
+
+def _file_search_tool_string_id_request(vector_store_id: str) -> dict[str, object]:
+    return {
+        "model": "gpt-5.4-mini",
+        "input": "what is in this store?",
+        "tools": [{"type": "file_search", "vector_store_ids": vector_store_id}],
+    }
+
+
+def _vector_store_ids_request(vector_store_id: str) -> dict[str, object]:
+    return {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "what is in this store?"}],
+        "vector_store_ids": [vector_store_id],
+    }
+
+
+def _drop_params_request(vector_store_ids: object) -> dict[str, object]:
+    return {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "what is in this store?"}],
+        "drop_params": True,
+        "vector_store_ids": vector_store_ids,
+    }
+
+
+def _allowlist(object_permission_id: str, vector_stores: list[str] | None) -> LiteLLM_ObjectPermissionTable | None:
+    if vector_stores is None:
+        return None
+    return LiteLLM_ObjectPermissionTable(object_permission_id=object_permission_id, vector_stores=vector_stores)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_vector_stores", "team_vector_stores", "request_body", "denied_by"),
+    [
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            _file_search_tool_request("vs_other_team"),
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-file-search-tool-other-store",
+        ),
+        pytest.param(None, ["vs_allowed"], _file_search_tool_request("vs_allowed"), None, id="team-file-search-tool"),
+        pytest.param(
+            ["vs_allowed"],
+            None,
+            _vector_store_ids_request("vs_other_team"),
+            ProxyErrorTypes.key_vector_store_access_denied,
+            id="key-vector-store-ids-other-store",
+        ),
+        pytest.param(["vs_allowed"], None, _vector_store_ids_request("vs_allowed"), None, id="key-vector-store-ids"),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            _file_search_tool_string_id_request("vs_other_team"),
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-file-search-tool-string-id-other-store",
+        ),
+        pytest.param(
+            None,
+            None,
+            _file_search_tool_string_id_request("vs_other_team"),
+            None,
+            id="unrestricted-file-search-tool-string-id",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            _drop_params_request(["vs_other_team", {"id": "vs_allowed"}]),
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-drop-params-list-with-an-object-other-store",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            {
+                **_file_search_tool_request("vs_other_team"),
+                "tools": [{"type": "file_search", "vector_store_ids": ["vs_other_team", 1]}],
+            },
+            ProxyErrorTypes.team_vector_store_access_denied,
+            id="team-file-search-tool-with-an-int-other-store",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            {
+                **_vector_store_ids_request("vs_other_team"),
+                "additional_drop_params": ["vector_store_ids"],
+                "vector_store_ids": {"vs_other_team": True},
+            },
+            None,
+            id="team-additional-drop-params-object-names-no-store",
+        ),
+        pytest.param(
+            None,
+            ["vs_allowed"],
+            _drop_params_request({"vs_other_team": True}),
+            None,
+            id="team-drop-params-object-names-no-store",
+        ),
+    ],
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_vector_store_access_check_enforces_allowlists_on_the_stores_the_request_names(
+    key_vector_stores: list[str] | None,
+    team_vector_stores: list[str] | None,
+    request_body: dict[str, object],
+    denied_by: ProxyErrorTypes | None,
+    vector_store_registry: VectorStoreRegistry | None,
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        token="team-a-key",
+        team_id="team-a",
+        object_permission_id="key-permission",
+        object_permission=_allowlist("key-permission", key_vector_stores),
+    )
+    team_object: Final = LiteLLM_TeamTable(
+        team_id="team-a",
+        object_permission_id="team-permission",
+        object_permission=_allowlist("team-permission", team_vector_stores),
+    )
+    with (
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", vector_store_registry
+        ),
+    ):
+        await _assert_rag_query_outcome(
+            vector_store_access_check(request_body=request_body, team_object=team_object, valid_token=valid_token),
+            denied_by,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_litellm_settings_drop_params_skips_a_malformed_vector_store_ids(
+    vector_store_registry: VectorStoreRegistry | None,
+) -> None:
+    with patch("litellm.drop_params", True):  # test-quality-ok: litellm_settings.drop_params is this module global
+        assert await _common_checks_for_rag_query(
+            {},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=["KBSTOREA"]),
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": "what is in this KB?",
+                "vector_store_ids": {"KBSTOREB": True},
+            },
+            vector_store_registry=vector_store_registry,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_params",
+    [{"drop_params": True}, {"additional_drop_params": ["vector_store_ids"]}],
+    ids=["drop-params", "additional-drop-params"],
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_a_deployment_that_drops_vector_store_ids_skips_a_malformed_one(
+    deployment_params: Mapping[str, object], vector_store_registry: VectorStoreRegistry | None
+) -> None:
+    assert await _common_checks_for_rag_query(
+        {},
+        _virtual_key(object_permission_id="key-permission"),
+        SimpleNamespace(vector_stores=["KBSTOREA"]),
+        request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", "vector_store_ids": ["KBSTOREA", 1]},
+        vector_store_registry=vector_store_registry,
+        llm_router=_gpt_4o_mini_router(deployment_params),
+    )
+
+
 _KEY_DENIED: Final = ProxyErrorTypes.key_vector_store_access_denied
 _TEAM_DENIED: Final = ProxyErrorTypes.team_vector_store_access_denied
 _USER_DENIED: Final = ProxyErrorTypes.user_vector_store_access_denied
@@ -1866,6 +1932,7 @@ async def _common_checks_for_rag_query(
     request_body: Mapping[str, object] | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     vector_store_registry: VectorStoreRegistry | None = None,
+    llm_router: "Router | None" = None,
 ) -> bool:
     permissions: Final = {
         "key-permission": _permission_row("key-permission", key_permission),
@@ -1906,11 +1973,22 @@ async def _common_checks_for_rag_query(
             global_proxy_spend=None,
             general_settings=dict(general_settings),
             route="/v1/rag/query",
-            llm_router=None,
+            llm_router=llm_router,
             proxy_logging_obj=MagicMock(),
             valid_token=valid_token,
             request=MagicMock(spec=Request),
         )
+
+
+def _gpt_4o_mini_router(litellm_params: Mapping[str, object]) -> "Router":
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", **litellm_params},
+            }
+        ]
+    )
 
 
 async def _assert_rag_query_outcome(request: Awaitable[bool], denied_by: ProxyErrorTypes | None) -> None:
@@ -2340,6 +2418,175 @@ async def test_deny_by_default_rejects_malformed_vector_store_ids_as_bad_request
         "invalid_request_error",
         "vector_store_ids",
         "400",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"vector_store_ids": {"KBSTOREB": True}},
+        {"vector_store_ids": ["KBSTOREA", {"id": "KBSTOREB"}]},
+        {"vector_store_ids": 7},
+    ],
+    ids=["object-top-level-ids", "object-top-level-id", "int-top-level-ids"],
+)
+@pytest.mark.parametrize(
+    "general_settings", [{"vector_store_deny_by_default": True}, {}], ids=["deny-by-default", "legacy"]
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_malformed_vector_store_ids_are_rejected_as_bad_request(
+    request_body: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    vector_store_registry: VectorStoreRegistry | None,
+):
+    with pytest.raises(ProxyException) as exc_info:
+        await _common_checks_for_rag_query(
+            general_settings,
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=["KBSTOREA"]),
+            request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", **request_body},
+            vector_store_registry=vector_store_registry,
+            llm_router=_gpt_4o_mini_router({}),
+        )
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        "invalid_request_error",
+        "vector_store_ids",
+        "400",
+    )
+
+
+_MALFORMED_TOP_LEVEL_IDS: Final = pytest.mark.parametrize(
+    "vector_store_ids",
+    [{"KBSTOREB": True}, ["KBSTOREA", {"id": "KBSTOREB"}], 7],
+    ids=["object-top-level-ids", "object-top-level-id", "int-top-level-ids"],
+)
+
+
+async def _team_key_query_with_top_level_ids(
+    key_vector_stores: list[str] | None,
+    team_vector_stores: list[str] | None,
+    vector_store_ids: object,
+    vector_store_registry: VectorStoreRegistry | None,
+) -> bool:
+    return await _common_checks_for_rag_query(
+        {},
+        _virtual_key(object_permission_id=None if key_vector_stores is None else "key-permission", team_id="team-1"),
+        None if key_vector_stores is None else SimpleNamespace(vector_stores=key_vector_stores),
+        LiteLLM_TeamTable(
+            team_id="team-1", object_permission_id=None if team_vector_stores is None else "team-permission"
+        ),
+        None if team_vector_stores is None else SimpleNamespace(vector_stores=team_vector_stores),
+        request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", "vector_store_ids": vector_store_ids},
+        vector_store_registry=vector_store_registry,
+        llm_router=_gpt_4o_mini_router({}),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vector_store_ids",
+    ["KBSTOREB", {"KBSTOREB": True}, ["KBSTOREA", {"id": "KBSTOREB"}]],
+    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
+)
+@pytest.mark.parametrize(
+    ("key_vector_stores", "team_vector_stores"),
+    [(None, None), ([], [])],
+    ids=["no-permission-rows", "empty-allowlists"],
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_legacy_mode_passes_malformed_vector_store_ids_through_without_an_allowlist(
+    vector_store_ids: object,
+    key_vector_stores: list[str] | None,
+    team_vector_stores: list[str] | None,
+    vector_store_registry: VectorStoreRegistry | None,
+):
+    assert (
+        await _team_key_query_with_top_level_ids(
+            key_vector_stores, team_vector_stores, vector_store_ids, vector_store_registry
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+@_MALFORMED_TOP_LEVEL_IDS
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_legacy_mode_rejects_malformed_vector_store_ids_under_a_team_allowlist(
+    vector_store_ids: object, vector_store_registry: VectorStoreRegistry | None
+):
+    with pytest.raises(ProxyException) as exc_info:
+        await _team_key_query_with_top_level_ids(None, ["KBSTOREA"], vector_store_ids, vector_store_registry)
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        "invalid_request_error",
+        "vector_store_ids",
+        "400",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("vector_store_ids", "denied_by"), [("KBSTOREA", None), ("KBSTOREB", _TEAM_DENIED)])
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_legacy_mode_checks_a_top_level_vector_store_ids_string_as_one_store(
+    vector_store_ids: str, denied_by: ProxyErrorTypes | None, vector_store_registry: VectorStoreRegistry | None
+):
+    await _assert_rag_query_outcome(
+        _team_key_query_with_top_level_ids(None, ["KBSTOREA"], vector_store_ids, vector_store_registry), denied_by
+    )
+
+
+def _managed_vector_store_id(unified_uuid: str, provider_vector_store_id: str) -> str:
+    return encode_unified_id(
+        generate_unified_id_string(
+            resource_type="vector_store",
+            unified_uuid=unified_uuid,
+            target_model_names=["gpt-4o-mini"],
+            provider_resource_id=provider_vector_store_id,
+            model_id="deployment-1",
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_vector_stores", "requested_id", "denied_by"),
+    [
+        (["KBSTOREA"], _managed_vector_store_id("uuid-a", "KBSTOREA"), None),
+        ([_managed_vector_store_id("uuid-a", "KBSTOREA")], "KBSTOREA", None),
+        ([_managed_vector_store_id("uuid-a", "KBSTOREA")], _managed_vector_store_id("uuid-a2", "KBSTOREA"), None),
+        (["KBSTOREA"], _managed_vector_store_id("uuid-b", "KBSTOREB"), _TEAM_DENIED),
+        (["uuid-a"], _managed_vector_store_id("uuid-a", "KBSTOREB"), _TEAM_DENIED),
+        ([_managed_vector_store_id("uuid-a", "KBSTOREA")], "KBSTOREB", _TEAM_DENIED),
+        (["KBSTOREA"], "litellm_proxy:vector_store;unified_id,uuid-a;resource_id,KBSTOREA", _TEAM_DENIED),
+    ],
+    ids=[
+        "provider-id-allows-its-managed-id",
+        "managed-id-allows-its-provider-id",
+        "managed-ids-for-one-provider-store",
+        "managed-id-for-another-store",
+        "managed-uuid-cannot-vouch-for-another-store",
+        "managed-id-for-another-provider-store",
+        "undecoded-managed-id-is-its-own-store",
+    ],
+)
+@pytest.mark.parametrize("deny_by_default", [True, False], ids=["strict", "default"])
+async def test_allowlist_compares_a_managed_vector_store_id_by_the_provider_store_it_names(
+    team_vector_stores: list[str], requested_id: str, denied_by: ProxyErrorTypes | None, deny_by_default: bool
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission", team_id="team-1"),
+            SimpleNamespace(vector_stores=[requested_id]),
+            LiteLLM_TeamTable(team_id="team-1", object_permission_id="team-permission"),
+            SimpleNamespace(vector_stores=team_vector_stores),
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": "what is in this KB?",
+                "tools": [{"type": "file_search", "vector_store_ids": [requested_id]}],
+            },
+        ),
+        denied_by,
     )
 
 
