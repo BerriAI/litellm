@@ -4234,7 +4234,7 @@ class ProxyBaseLLMRequestProcessing:
             e = transformed_exception
         litellm_debug_info: Final = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s %s",
             e,
             litellm_debug_info,
         )
@@ -4597,7 +4597,7 @@ class ProxyBaseLLMRequestProcessing:
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
-                "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+                "An error occurred: %s",
                 e,
             )
 
