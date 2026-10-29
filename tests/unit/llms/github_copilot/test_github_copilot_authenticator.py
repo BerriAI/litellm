@@ -4,6 +4,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
@@ -28,7 +29,7 @@ TRUNCATED_UTF_16: Final = b"\xff\xfe\x00\xd8"
 
 
 @pytest.fixture
-def logged_in_token_dir(tmp_path, monkeypatch):
+def logged_in_token_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
     monkeypatch.setenv("GITHUB_COPILOT_API_KEY_URL", API_KEY_URL)
     (tmp_path / "access-token").write_text("gho_logged_in")
@@ -87,7 +88,7 @@ class TestGitHubCopilotAuthenticator:
         headers_with_token = authenticator._get_github_headers("test-token")
         assert headers_with_token["authorization"] == "token test-token"
 
-    def test_get_access_token_from_file(self, logged_in_token_dir):
+    def test_get_access_token_from_file(self, logged_in_token_dir: Path) -> None:
         """Test retrieving an access token from a file."""
         assert Authenticator().get_access_token() == "gho_logged_in"
 
@@ -133,7 +134,9 @@ class TestGitHubCopilotAuthenticator:
         mock_login.assert_not_called()
 
     @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-8-sig"])
-    def test_saved_access_token_in_another_encoding_is_sent_on_refresh(self, logged_in_token_dir, encoding):
+    def test_saved_access_token_in_another_encoding_is_sent_on_refresh(
+        self, logged_in_token_dir: Path, encoding: str
+    ) -> None:
         """An access-token file a Windows editor saved as UTF-16 or with a BOM still refreshes the key."""
         (logged_in_token_dir / "access-token").write_bytes("gho_logged_in\n".encode(encoding))
 
@@ -143,7 +146,7 @@ class TestGitHubCopilotAuthenticator:
 
         assert route.calls.last.request.headers["authorization"] == "token gho_logged_in"
 
-    def test_undecodable_access_token_is_refused_like_a_missing_one(self, logged_in_token_dir):
+    def test_undecodable_access_token_is_refused_like_a_missing_one(self, logged_in_token_dir: Path) -> None:
         """A proxy worker gets the login hint for an access-token file it cannot decode, and the file is kept."""
         access_token_file: Final = logged_in_token_dir / "access-token"
         access_token_file.write_bytes(TRUNCATED_UTF_16)
@@ -209,7 +212,9 @@ class TestGitHubCopilotAuthenticator:
         ],
         ids=["json-list", "text-expires-at", "truncated-utf-16", "list-endpoints-beside-live-key"],
     )
-    def test_get_api_key_malformed_file_refreshes_like_missing(self, logged_in_token_dir, malformed):
+    def test_get_api_key_malformed_file_refreshes_like_missing(
+        self, logged_in_token_dir: Path, malformed: bytes
+    ) -> None:
         """A file that is not a Copilot key object is ignored, refreshed over, never answered with a parse error."""
         api_key_file: Final = logged_in_token_dir / "api-key.json"
         api_key_file.write_bytes(malformed)
@@ -232,7 +237,9 @@ class TestGitHubCopilotAuthenticator:
         ],
         ids=["json-list", "text-expires-at", "truncated-utf-16", "list-endpoints-beside-live-key"],
     )
-    def test_get_api_key_malformed_file_is_kept_when_refresh_fails(self, logged_in_token_dir, malformed):
+    def test_get_api_key_malformed_file_is_kept_when_refresh_fails(
+        self, logged_in_token_dir: Path, malformed: bytes
+    ) -> None:
         """Ignoring the file never deletes it, so a failed refresh leaves the operator's file for inspection."""
         api_key_file: Final = logged_in_token_dir / "api-key.json"
         api_key_file.write_bytes(malformed)
@@ -244,7 +251,7 @@ class TestGitHubCopilotAuthenticator:
 
         assert api_key_file.read_bytes() == malformed
 
-    def test_refreshed_key_that_cannot_be_saved_is_reused_with_its_endpoint(self, logged_in_token_dir):
+    def test_refreshed_key_that_cannot_be_saved_is_reused_with_its_endpoint(self, logged_in_token_dir: Path) -> None:
         unwritable_key_file: Final = logged_in_token_dir / "api-key.json"
         unwritable_key_file.mkdir()
         first: Final = Authenticator()
@@ -259,7 +266,9 @@ class TestGitHubCopilotAuthenticator:
         assert route.call_count == 1
         assert unwritable_key_file.is_dir()
 
-    def test_refreshed_key_that_cannot_be_saved_and_has_expired_is_refreshed_again(self, logged_in_token_dir):
+    def test_refreshed_key_that_cannot_be_saved_and_has_expired_is_refreshed_again(
+        self, logged_in_token_dir: Path
+    ) -> None:
         (logged_in_token_dir / "api-key.json").mkdir()
         auth: Final = Authenticator()
 
@@ -270,7 +279,9 @@ class TestGitHubCopilotAuthenticator:
         assert served == ("expired-api-key",) * 2
         assert route.call_count == 2
 
-    def test_kept_key_and_its_endpoint_stay_paired_after_the_key_file_is_repaired(self, logged_in_token_dir):
+    def test_kept_key_and_its_endpoint_stay_paired_after_the_key_file_is_repaired(
+        self, logged_in_token_dir: Path
+    ) -> None:
         key_file: Final = logged_in_token_dir / "api-key.json"
         key_file.mkdir()
         auth: Final = Authenticator()
@@ -288,7 +299,7 @@ class TestGitHubCopilotAuthenticator:
             ("repaired-api-key", REPAIRED_API),
         )
 
-    def test_unsaved_key_is_not_reused_after_the_access_token_changes(self, logged_in_token_dir):
+    def test_unsaved_key_is_not_reused_after_the_access_token_changes(self, logged_in_token_dir: Path) -> None:
         (logged_in_token_dir / "api-key.json").mkdir()
 
         with respx.mock(assert_all_called=True) as router:
@@ -312,14 +323,16 @@ class TestGitHubCopilotAuthenticator:
         ],
         ids=["json-list", "number-api", "list-endpoints", "truncated-utf-16"],
     )
-    def test_get_api_base_malformed_file_returns_none(self, tmp_path, monkeypatch, malformed):
+    def test_get_api_base_malformed_file_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: bytes
+    ) -> None:
         """get_api_base runs before get_api_key on every request, so it must survive malformed shapes too."""
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
         (tmp_path / "api-key.json").write_bytes(malformed)
 
         assert Authenticator().get_api_base() is None
 
-    def test_get_api_base_keeps_endpoints_when_the_key_is_malformed(self, logged_in_token_dir):
+    def test_get_api_base_keeps_endpoints_when_the_key_is_malformed(self, logged_in_token_dir: Path) -> None:
         """The endpoint is read on its own, so a bad key never sends the refreshed key to the default host."""
         (logged_in_token_dir / "api-key.json").write_text(
             json.dumps({"token": "tid=abc", "expires_at": "soon", "endpoints": {"api": TENANT_API}})
@@ -332,7 +345,9 @@ class TestGitHubCopilotAuthenticator:
             assert auth.get_api_key() == "new-api-key"
 
     @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-8-sig"])
-    def test_live_key_file_in_another_json_encoding_is_used_without_a_refresh(self, logged_in_token_dir, encoding):
+    def test_live_key_file_in_another_json_encoding_is_used_without_a_refresh(
+        self, logged_in_token_dir: Path, encoding: str
+    ) -> None:
         """A key file a Windows editor saved as UTF-16 or with a BOM still holds a live key and tenant."""
         live_key: Final = json.dumps({"token": "tid=abc", "expires_at": 4102444800, "endpoints": {"api": TENANT_API}})
         api_key_file: Final = logged_in_token_dir / "api-key.json"
@@ -345,7 +360,9 @@ class TestGitHubCopilotAuthenticator:
 
         assert api_key_file.read_bytes() == live_key.encode(encoding)
 
-    def test_ignored_key_file_is_logged_without_its_contents(self, logged_in_token_dir, caplog):
+    def test_ignored_key_file_is_logged_without_its_contents(
+        self, logged_in_token_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """The warning names the file but never echoes a token saved in the wrong shape."""
         (logged_in_token_dir / "api-key.json").write_text(
             json.dumps({"token": ["tid=secret-value"], "expires_at": 4102444800})
