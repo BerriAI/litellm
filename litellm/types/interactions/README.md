@@ -16,8 +16,9 @@ files the issue "Interactions spec canary is red" on a red run and closes it onc
 means the spec moved in a way these types no longer cover
 
 When the red run names one new status, the small fix is a hand edit adding that member to the enum the failing
-schema's model carries, the way `queued` was added in #34135. When the spec moved further than that, refresh the
-snapshot and regenerate the types from it:
+schema's model carries, the way `queued` was added in #34135. Refresh the snapshot in the same change, so the
+compliance tests check the new member on every PR and not only in the canary. When the spec moved further than
+that, refresh the snapshot and regenerate the types from it:
 
 ```bash
 curl -fsSL https://ai.google.dev/static/api/interactions.openapi.json \

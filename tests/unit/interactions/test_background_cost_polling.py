@@ -144,15 +144,17 @@ async def test_poller_bills_once_when_interaction_completes():
 
 
 @pytest.mark.asyncio
-async def test_poller_bills_an_interaction_paused_for_a_tool_result():
+@pytest.mark.parametrize("status", ["requires_action", "requires_continuation"])
+async def test_poller_bills_an_interaction_that_stopped_for_the_caller(status):
     logging_obj = _logging_obj()
     fetch, calls = _fetch_sequence(
         _response("in_progress", with_usage=False),
-        _response("requires_action", with_usage=True),
+        _response(status, with_usage=True),
     )
 
-    await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+    outcome = await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
 
+    assert outcome == "billed"
     assert len(calls) == 2
     assert logging_obj.model_call_details["response_cost"] > 0
     assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
