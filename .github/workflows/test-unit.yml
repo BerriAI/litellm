@@ -616,7 +616,6 @@ jobs:
           - shard: proxy-infra
             test-path: |-
               tests/unit/proxy/db
-              tests/unit/proxy/deps
               --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
               --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
               tests/unit/proxy/middleware
