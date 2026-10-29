@@ -1570,7 +1570,7 @@ def responses(
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
         )
-        litellm_logging_obj.model_call_details["agentic_loop_params"] = AgenticLoopParams(model=model)
+        litellm_logging_obj.record_agentic_loop_params(AgenticLoopParams(model=model))
 
         from litellm.litellm_core_utils.core_helpers import attribute_or_none
 

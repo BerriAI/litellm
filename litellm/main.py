@@ -1283,6 +1283,16 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
     return None
 
 
+def _record_agentic_loop_params(
+    logging_obj: object, requested_model: str, custom_llm_provider: str, owns_agentic_loop: bool
+) -> None:
+    if not owns_agentic_loop or not isinstance(logging_obj, LiteLLMLoggingObj):
+        return
+    logging_obj.record_agentic_loop_params(
+        AgenticLoopParams(model=requested_model, custom_llm_provider=custom_llm_provider)
+    )
+
+
 def _register_custom_pricing_for_request(
     model: str,
     custom_llm_provider: str,
@@ -5711,10 +5721,12 @@ def completion(
                 else None
             ),
         )
-        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and not skip_responses_api_bridge:
-            litellm_logging_obj.model_call_details["agentic_loop_params"] = AgenticLoopParams(
-                model=requested_model, custom_llm_provider=custom_llm_provider
-            )
+        _record_agentic_loop_params(
+            logging_obj=logging,
+            requested_model=requested_model,
+            custom_llm_provider=custom_llm_provider,
+            owns_agentic_loop=not skip_responses_api_bridge,
+        )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
