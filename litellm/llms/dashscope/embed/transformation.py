@@ -25,7 +25,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import DashScopeError
+from ..common_utils import DashScopeError, resolve_dashscope_openai_api_base
 
 DEFAULT_API_BASE: Final = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
@@ -91,7 +91,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         return resolved_api_key
 
     def _resolve_embedding_api_base(self, api_base: str | None) -> str:
-        return api_base or get_secret_str("DASHSCOPE_API_BASE") or DEFAULT_API_BASE
+        return resolve_dashscope_openai_api_base(api_base, default=DEFAULT_API_BASE)
 
     def validate_environment(
         self,

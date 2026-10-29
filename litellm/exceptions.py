@@ -139,6 +139,7 @@ class AuthenticationError(openai.AuthenticationError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 401
         self.message = f"litellm.AuthenticationError: {message}"
@@ -152,7 +153,7 @@ class AuthenticationError(openai.AuthenticationError):
             request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -189,6 +190,7 @@ class NotFoundError(openai.NotFoundError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 404
         self.message = f"litellm.NotFoundError: {message}"
@@ -202,7 +204,7 @@ class NotFoundError(openai.NotFoundError):
             request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -319,6 +321,17 @@ class MalformedRequestFieldError(BadRequestError):
 
 class UnsupportedEndpointError(BadRequestError):
     pass
+
+
+class EndpointNotSupportedByModelError(BadRequestError):
+    def __init__(self, message: str, model: str, llm_provider: str = "") -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # inherited public exception constructor is untyped
+            message=message, model=model, llm_provider=llm_provider
+        )
+        self.message = message
+        self.type = "invalid_request_error"
+        self.param = "model"
+        self.code = "400"
 
 
 class UnprocessableEntityError(openai.UnprocessableEntityError):

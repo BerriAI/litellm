@@ -795,9 +795,12 @@ async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
         ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock", None),
         ("claude-haiku-4-5", "anthropic", None),
         ("anthropic.claude-haiku-4-5", None, None),
+        ("stt-rt-v5", "soniox", "realtime"),
+        ("stt-rt-preview", "soniox", "realtime"),
+        ("stt-async-v5", "soniox", None),
     ),
 )
-def test_native_health_check_mode_is_messages_only_for_mantle_claude(
+def test_native_health_check_mode_routes_mantle_claude_to_messages_and_soniox_realtime_models_to_realtime(
     model: str, custom_llm_provider: str | None, expected: str | None
 ) -> None:
     assert native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider) == expected

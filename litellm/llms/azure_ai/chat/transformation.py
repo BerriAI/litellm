@@ -13,11 +13,12 @@ from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    audio_or_image_in_message_content,
     chat_completion_prompt_cache_breakpoints_for_wire,
+    content_parts,
     convert_content_list_to_str,
     drop_tool_reference_parts_from_tool_messages,
     filter_value_from_dict,
+    is_pdf_file_part,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
@@ -50,6 +51,20 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "cache_control",
 )
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+LIST_ONLY_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_audio"})
+
+
+def _is_list_only_content_part(part: object) -> bool:
+    match part:
+        case {"type": str() as part_type} if part_type in LIST_ONLY_CONTENT_PART_TYPES:
+            return True
+        case _:
+            return is_pdf_file_part(part)
+
+
+def _has_list_only_content_part(message: Mapping[str, object]) -> bool:
+    return any(_is_list_only_content_part(part) for part in content_parts(message))
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
@@ -251,7 +266,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
             2. Transforms list content to a string.
-            3. If message contains an image or audio, send as is (user-intended)
+            3. If message contains an image, audio, or PDF file part, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
@@ -262,8 +277,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
                 filter_value_from_dict(message_dict, field)
 
-            # Do nothing if the message contains an image or audio
-            if audio_or_image_in_message_content(message):
+            if _has_list_only_content_part(message):
                 continue
 
             texts = convert_content_list_to_str(message=message)

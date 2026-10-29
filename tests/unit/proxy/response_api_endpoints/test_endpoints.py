@@ -12,6 +12,8 @@ from collections.abc import Callable, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import httpx
 import pytest
 import respx
@@ -912,7 +914,7 @@ def _configured_deployment_router(fetched: ResponsesAPIResponse) -> MagicMock:
         )
     )
     router.aget_responses = AsyncMock(return_value=fetched)
-    return router
+    return route_entry_points_to_stubs(router)
 
 
 def _background_response(response_id: str, status: str, input_tokens: int) -> ResponsesAPIResponse:
@@ -2053,6 +2055,22 @@ def test_responses_ws_failure_frame_uses_the_http_status_for_the_same_failure(
     assert frame["status"] == expected_status
     assert frame["error"]["type"] == expected_type
     assert frame["error"]["message"] == handle_exception_on_proxy(failure).message
+
+
+def test_responses_ws_failure_frame_shows_only_the_refusal_for_a_model_that_refuses_the_endpoint():
+    from litellm.exceptions import EndpointNotSupportedByModelError
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+
+    refusal: Final = "/v1/responses is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
+    failure: Final = EndpointNotSupportedByModelError(
+        message=f"{refusal}\n\nLiteLLM: model group 'embed-only' failed with the error above", model="embed-only"
+    )
+
+    assert json.loads(_responses_ws_failure_frame(failure)) == {
+        "type": "error",
+        "status": 400,
+        "error": {"type": "invalid_request_error", "message": refusal},
+    }
 
 
 class TestWSSessionCostTracking:
@@ -4112,7 +4130,7 @@ class TestResolveCursorModelVariant:
 
 
 def _router_serving_only(base_model: str) -> MagicMock:
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.model_names = set()
     mock_router.model_group_alias = {}
     mock_router.team_public_model_names = frozenset()
