@@ -65,12 +65,17 @@ _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
 _DATA_URL_PREFIX: Final = "data:"
+_URL_SAFE_TO_STANDARD_BASE64: Final = str.maketrans("-_", "+/")
 
 _StateItem: TypeAlias = str | Mapping[str, object]
 
 
 def decisions_text(value: DecisionsJSON) -> str:
     return value if isinstance(value, str) else json.dumps(value)
+
+
+def standard_base64(value: str) -> str:
+    return value.translate(_URL_SAFE_TO_STANDARD_BASE64)
 
 
 def systemone_keys(questions: Sequence[DecisionsIRQuestion]) -> tuple[str, ...]:
@@ -262,10 +267,10 @@ def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
 def _data_url(image: DecisionsImage) -> str:
     media_type: Final = image_media_type(image)
     if isinstance(image, DecisionsBase64Image):
-        return f"{_DATA_URL_PREFIX}{media_type};base64,{image.base64}"
+        return f"{_DATA_URL_PREFIX}{media_type};base64,{standard_base64(image.base64)}"
     if media_type is None:
         return image
-    return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
+    return f"{_DATA_URL_PREFIX}{media_type};base64,{standard_base64(image.partition(',')[2])}"
 
 
 def _image_item(image: DecisionsImage) -> _StateItem:
@@ -284,10 +289,16 @@ def _message_items(message: OpenAIDecisionInputMessage) -> tuple[_StateItem, ...
     return tuple(map(_part_item, message.content))
 
 
-def _multimodal_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[_StateItem, ...]:
+def _state_items(state: DecisionsJSON) -> tuple[object, ...]:
+    if isinstance(state, (str, Mapping)):
+        return (state,)
+    return tuple(state)
+
+
+def _multimodal_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[object, ...]:
     match decision_input:
         case DecisionsIRState():
-            return (decisions_text(decision_input.state), *map(_image_item, decision_input.images))
+            return (*_state_items(decision_input.state), *map(_image_item, decision_input.images))
         case DecisionsIRMessages():
             return tuple(chain.from_iterable(map(_message_items, decision_input.messages)))
         case _:
@@ -649,8 +660,8 @@ class BaseDecisionsConfig(ABC):
     ) -> bool:
         return self.supports_images
 
-    def image_media_types_for(self, model: str) -> frozenset[str] | None:
-        return self.image_media_types
+    def image_rules_for(self, model: str) -> "BaseDecisionsConfig":
+        return self
 
     def supports_assets(self, headers: Mapping[str, str]) -> bool:
         return False

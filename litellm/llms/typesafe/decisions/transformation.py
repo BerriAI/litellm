@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.constants import TYPESAFE_DANGER_ZONE_HEADER_PREFIX
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, image_media_type
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, image_media_type, standard_base64
 from litellm.types.decisions import (
     DecisionsAsset,
     DecisionsIRMessages,
@@ -22,7 +22,6 @@ _IMAGES_HEADER: Final = f"{TYPESAFE_DANGER_ZONE_HEADER_PREFIX}images"
 _ASSET_FORMATS: Final[Mapping[str, Literal["png", "jpg"]]] = MappingProxyType(
     {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg"}
 )
-_URL_SAFE_TO_STANDARD_BASE64: Final = str.maketrans("-_", "+/")
 
 
 def _image_reference(image_url: str) -> str:
@@ -36,7 +35,7 @@ def _image_asset(image_url: str) -> DecisionsAsset | None:
     return DecisionsAsset(
         type="image",
         format=asset_format,
-        data_base64=image_url.partition(",")[2].translate(_URL_SAFE_TO_STANDARD_BASE64),
+        data_base64=standard_base64(image_url.partition(",")[2]),
     )
 
 

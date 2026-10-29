@@ -1,9 +1,15 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
+from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
 from litellm.types.decisions import DecisionsIRResponse
 
-_TYPESAFE_IMAGE_MEDIA_TYPES: Final = frozenset({"image/png", "image/jpeg", "image/jpg"})
+_ORG_IMAGE_RULES: Final[Mapping[str, BaseDecisionsConfig]] = MappingProxyType(
+    {"typesafe": TypeSafeDecisionsConfig(), "cloudflare": CloudflareDecisionsConfig()}
+)
 
 
 class OpenRouterDecisionsConfig(BaseDecisionsConfig):
@@ -18,10 +24,8 @@ class OpenRouterDecisionsConfig(BaseDecisionsConfig):
     def get_default_api_base(self) -> str | None:
         return "https://openrouter.ai/api"
 
-    def image_media_types_for(self, model: str) -> frozenset[str] | None:
-        if model.removeprefix("~").startswith("typesafe/"):
-            return _TYPESAFE_IMAGE_MEDIA_TYPES
-        return self.image_media_types
+    def image_rules_for(self, model: str) -> BaseDecisionsConfig:
+        return _ORG_IMAGE_RULES.get(model.removeprefix("~").partition("/")[0], self)
 
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         cost: Final = response.usage.extra.get("cost") if response.usage is not None else None

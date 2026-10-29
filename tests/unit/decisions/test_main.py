@@ -4124,19 +4124,91 @@ def test_systemone_moves_images_into_state(
         model=model,
         state={"ticket": 1234},
         questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
-        images=["data:IMAGE/JPEG;name=shot.jpg;base64,AA==", {"content_type": "image/webp", "base64": "BB=="}],
+        images=["data:IMAGE/JPEG;name=shot.jpg;base64,A-_A", {"content_type": "image/webp", "base64": "B-_B"}],
         api_key="caller-key",
     )
 
     assert json.loads(route.calls.last.request.content) == {
         "model": upstream_model,
         "state": [
-            '{"ticket": 1234}',
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA=="}},
-            {"type": "image_url", "image_url": {"url": "data:image/webp;base64,BB=="}},
+            {"ticket": 1234},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,A+/A"}},
+            {"type": "image_url", "image_url": {"url": "data:image/webp;base64,B+/B"}},
         ],
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
+
+
+@pytest.mark.parametrize(("model", "url", "upstream_model"), _STATE_IMAGE_PROVIDERS, ids=_STATE_IMAGE_PROVIDER_IDS)
+def test_a_list_state_keeps_its_items_ahead_of_the_images(
+    model: str, url: str, upstream_model: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model=model,
+        state=["Ticket 1234", {"severity": "high"}],
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_PNG_DATA_URL],
+        api_key="caller-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["state"] == [
+        "Ticket 1234",
+        {"severity": "high"},
+        {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "max_images"),
+    (
+        ("perplexity/pplx-decider-v1.2", "https://api.perplexity.ai/v1/decisions", 8),
+        ("openrouter/cloudflare/clef-flash", "https://openrouter.ai/api/alpha/decisions", 4),
+    ),
+    ids=("perplexity", "openrouter-clef"),
+)
+def test_more_images_than_the_model_takes_are_refused_before_http(
+    model: str, url: str, max_images: int, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model=model,
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_PNG_DATA_URL] * max_images,
+        api_key="k",
+    )
+    with pytest.raises(
+        litellm.BadRequestError,
+        match=re.escape(f"takes at most {max_images} images per request, got {max_images + 1}"),
+    ):
+        litellm.systemone(
+            model=model,
+            state=_SCREEN_TEXT,
+            questions=_SYSTEMONE_PREDICATE,
+            images=[_PNG_DATA_URL] * (max_images + 1),
+            api_key="k",
+        )
+
+    assert route.call_count == 1
+
+
+def test_an_image_over_the_clef_size_limit_is_refused_before_the_openrouter_call(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    over_four_mib: Final = "data:image/png;base64," + "A" * (4 * 1024 * 1024 // 3 * 4 + 8)
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("openrouter takes images of at most 4,194,304 bytes")):
+        litellm.systemone(
+            model="openrouter/cloudflare/clef-flash",
+            state=_SCREEN_TEXT,
+            questions=_SYSTEMONE_PREDICATE,
+            images=[over_four_mib],
+            api_key="k",
+        )
+
+    assert not route.called
 
 
 @pytest.mark.parametrize(("model", "url", "upstream_model"), _STATE_IMAGE_PROVIDERS, ids=_STATE_IMAGE_PROVIDER_IDS)

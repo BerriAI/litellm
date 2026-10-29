@@ -612,7 +612,7 @@ def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bo
 
 
 def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
-    media_types: Final = call.provider_config.image_media_types_for(call.model)
+    media_types: Final = call.provider_config.image_rules_for(call.model).image_media_types
     if media_types is None:
         return call
     found: Final = (image_media_type(image) for image in input_images(call.ir_request.input))
@@ -635,7 +635,7 @@ def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
 
 
 def _checked_image_count(call: DecisionsCall) -> DecisionsCall:
-    max_images: Final = call.provider_config.max_images
+    max_images: Final = call.provider_config.image_rules_for(call.model).max_images
     image_count: Final = len(input_images(call.ir_request.input))
     if max_images is None or image_count <= max_images:
         return call
@@ -660,8 +660,9 @@ def _byte_limit(limit: int) -> str:
 def _image_size_error(call: DecisionsCall) -> str | None:
     sizes: Final = tuple(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
     largest: Final = max(sizes, default=0)
-    per_image: Final = call.provider_config.max_image_bytes
-    total: Final = call.provider_config.max_total_image_bytes
+    rules: Final = call.provider_config.image_rules_for(call.model)
+    per_image: Final = rules.max_image_bytes
+    total: Final = rules.max_total_image_bytes
     if per_image is not None and largest > per_image:
         return f"takes images of at most {_byte_limit(per_image)} each, got one of {largest:,} bytes"
     if total is not None and sum(sizes) > total:
