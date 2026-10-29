@@ -6606,7 +6606,7 @@ class ProxyConfig:
             reset_color_code: Final = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy")
+                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy{reset_color_code}")
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -9825,7 +9825,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
             request_data=request_data,
         )
         verbose_proxy_logger.debug(
-            "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s",
             e,
         )
         if isinstance(e, HTTPException):
@@ -10655,7 +10655,7 @@ async def async_data_generator(
         )
         client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
-            "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
+            "An error occurred: %s",
             e,
         )
 
@@ -18437,7 +18437,6 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug("receiving data: %s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
