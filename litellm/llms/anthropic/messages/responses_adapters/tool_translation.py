@@ -5,6 +5,7 @@ from typing import Final, TypeAlias
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.anthropic.messages.utils import json_copy_or_original
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 _VERSIONED_TOOL_TYPE: Final = re.compile(r"(?P<family>[a-z0-9_]+?)_(?P<version>\d{8})")
 _UNVERSIONED_SERVER_TOOL_TYPES: Final = frozenset({"mcp_toolset", "computer_toolset"})
@@ -39,7 +40,7 @@ _COMPUTER_ACTIONS_20251124: Final = (*_COMPUTER_ACTIONS_20250124, "zoom")
 class ResponsesTool:
     name: str
     payload: Mapping[str, object]
-    choice: Mapping[str, object]
+    choice: Mapping[str, object] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +176,10 @@ def _computer_properties(version: str, zoom: bool) -> Mapping[str, object]:
         **pointer,
         "scroll_direction": _enum(("up", "down", "left", "right")),
         "scroll_amount": _integer("Number of scroll steps, for scroll."),
+        "text": _string(
+            "Text to type for type, keys to press for key and hold_key, such as ctrl+s, or a modifier key to hold "
+            "during scroll, such as shift."
+        ),
         "duration": {"type": "number", "description": "Seconds to wait for wait, or to hold for hold_key."},
         "key": _string("Modifier key to hold during a click, such as shift."),
     }
@@ -202,9 +207,14 @@ def _computer_tool(name: str, version: str, tool: Mapping[str, object]) -> Respo
     )
 
 
-def _custom_function(name: str, tool: Mapping[str, object]) -> ResponsesTool:
+def _tool_search(name: str, tool: Mapping[str, object]) -> ResponsesTool:
+    return ResponsesTool(name=name, payload=dict(tool), choice=None)
+
+
+def _custom_function(name: str, tool: Mapping[str, object], keeps_deferral: bool) -> ResponsesTool:
     description: Final = tool.get("description")
     input_schema: Final = tool.get("input_schema")
+    defer_loading: Final = tool.get("defer_loading")
     return ResponsesTool(
         name=name,
         payload={
@@ -213,19 +223,26 @@ def _custom_function(name: str, tool: Mapping[str, object]) -> ResponsesTool:
             "strict": bool(tool.get("strict")),
             **({"description": description} if "description" in tool else {}),
             **({"parameters": json_copy_or_original(input_schema)} if "input_schema" in tool else {}),
+            **({"defer_loading": defer_loading} if keeps_deferral and isinstance(defer_loading, bool) else {}),
         },
         choice={"type": "function", "name": name},
     )
 
 
-def responses_tool(tool: Mapping[str, object]) -> TranslatedTool:
+def is_tool_search(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def responses_tool(tool: Mapping[str, object], *, keeps_deferral: bool = False) -> TranslatedTool:
     tool_type: Final = tool.get("type")
     tool_name: Final = tool.get("name")
     name: Final = tool_name if isinstance(tool_name, str) else ""
     type_name: Final = tool_type if isinstance(tool_type, str) else ""
     family, version = _family_and_version(type_name)
-    if type_name.startswith("web_search") or name == "web_search":
+    if type_name.startswith("web_search") or (name == "web_search" and "input_schema" not in tool):
         return _hosted(name, {"type": "web_search_preview"})
+    if is_tool_search(tool):
+        return _tool_search(name, tool)
     match family:
         case "bash":
             return _bash_tool(name)
@@ -238,14 +255,14 @@ def responses_tool(tool: Mapping[str, object]) -> TranslatedTool:
         case _ if version or family in _UNVERSIONED_SERVER_TOOL_TYPES:
             return UntranslatableTool(name=name, type=type_name)
         case _:
-            return _custom_function(name, tool)
+            return _custom_function(name, tool, keeps_deferral)
 
 
 def untranslatable_tools_error(tools: Sequence[UntranslatableTool]) -> UnsupportedParamsError:
     types: Final = ", ".join(dict.fromkeys(tool.type for tool in tools))
     return UnsupportedParamsError(
         message=(
-            f"The Responses API has no equivalent for these Anthropic tools: {types}. To drop them, set "
+            f"LiteLLM does not translate these Anthropic tools to the Responses API: {types}. To drop them, set "
             "`drop_params: true` in the model's `litellm_params` or under `litellm_settings` on the proxy, or "
             "`litellm.drop_params=True` in the SDK"
         )

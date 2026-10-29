@@ -949,6 +949,15 @@ class TestTranslateToolChoiceToResponsesAPI:
         assert result == {"type": "function", "name": "get_weather"}
 
 
+_TOOL_SEARCH: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+_DEFERRED_WEATHER: Final = {
+    "name": "get_weather",
+    "description": "Weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    "defer_loading": True,
+}
+
+
 class TestAnthropicTypedToolsOnResponses:
     """Anthropic-defined tools carry no input_schema, so the adapter has to supply the schema Claude has built in."""
 
@@ -1029,10 +1038,11 @@ class TestAnthropicTypedToolsOnResponses:
     def test_every_web_search_type_runs_the_hosted_web_search(self, tool_type: str):
         assert self._only_tool({"type": tool_type, "name": "web_search"}) == {"type": "web_search_preview"}
 
-    def test_custom_tool_named_like_a_typed_tool_keeps_its_own_schema(self):
+    @pytest.mark.parametrize("name", ["bash", "web_search"])
+    def test_custom_tool_named_like_a_typed_tool_keeps_its_own_schema(self, name: str):
         schema: Final = {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}
 
-        tool: Final = self._only_tool({"name": "bash", "input_schema": schema})
+        tool: Final = self._only_tool({"name": name, "input_schema": schema})
 
         assert tool["parameters"] == schema
         assert "description" not in tool
@@ -1042,8 +1052,6 @@ class TestAnthropicTypedToolsOnResponses:
         [
             {"type": "web_fetch_20250910", "name": "web_fetch"},
             {"type": "code_execution_20250825", "name": "code_execution"},
-            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
-            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
             {"type": "mcp_toolset", "mcp_server_name": "docs"},
             {"type": "computer_toolset_20260801"},
         ],
@@ -1099,6 +1107,25 @@ class TestAnthropicTypedToolsOnResponses:
 
         assert "tools" not in kwargs
         assert "tool_choice" not in kwargs
+
+    def test_tool_choice_naming_the_tool_search_leaves_the_choice_to_the_model(self):
+        kwargs: Final = _ADAPTER.translate_request(
+            _make_request(
+                tools=[_TOOL_SEARCH, _DEFERRED_WEATHER],
+                tool_choice={"type": "tool", "name": "tool_search_tool_bm25"},
+            ),
+            drop_params=False,
+        )
+
+        assert [tool["name"] for tool in kwargs["tools"]] == ["tool_search_tool_bm25", "get_weather"]
+        assert "tool_choice" not in kwargs
+
+    @pytest.mark.parametrize(("tools", "deferred"), [([_TOOL_SEARCH, _DEFERRED_WEATHER], True), ([_DEFERRED_WEATHER], None)])
+    def test_a_custom_tool_stays_deferred_only_beside_a_tool_search(self, tools: List[Dict[str, Any]], deferred: Any):
+        kwargs: Final = _ADAPTER.translate_request(_make_request(tools=tools), drop_params=False)
+
+        weather: Final = next(tool for tool in kwargs["tools"] if tool.get("name") == "get_weather")
+        assert weather.get("defer_loading") is deferred
 
     def test_tool_choice_without_tools_still_reaches_the_provider(self):
         kwargs: Final = _ADAPTER.translate_request(_make_request(tool_choice={"type": "any"}))

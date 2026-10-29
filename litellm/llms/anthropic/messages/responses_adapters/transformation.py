@@ -29,6 +29,7 @@ from litellm.llms.anthropic.messages.responses_adapters.tool_translation import 
     ResponsesTool,
     TranslatedTool,
     UntranslatableTool,
+    is_tool_search,
     responses_tool,
     untranslatable_tools_error,
 )
@@ -476,7 +477,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         *,
         drop_params: bool = True,
     ) -> tuple[TranslatedTool, ...]:
-        translated: Final = tuple(responses_tool(tool) for tool in tools)
+        keeps_deferral: Final = any(is_tool_search(tool) for tool in tools)
+        translated: Final = tuple(responses_tool(tool, keeps_deferral=keeps_deferral) for tool in tools)
         untranslatable: Final = tuple(tool for tool in translated if isinstance(tool, UntranslatableTool))
         if untranslatable and not drop_params:
             raise untranslatable_tools_error(untranslatable)
@@ -500,7 +502,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         tool_choice: AnthropicMessagesToolChoice,
         tools: Sequence[TranslatedTool] = (),
     ) -> str | dict[str, object] | None:
-        """Convert Anthropic tool_choice to Responses API tool_choice, or None when it names a dropped tool."""
+        """Map Anthropic tool_choice to Responses API tool_choice, or None when the named tool cannot be forced."""
         tc_type: Final = tool_choice.get("type")
         if tc_type == "any":
             return "required"
@@ -510,9 +512,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return "auto"
         name: Final = tool_choice.get("name", "")
         match next((tool for tool in tools if tool.name == name), None):
-            case ResponsesTool(choice=choice):
+            case ResponsesTool(choice=choice) if choice is not None:
                 return dict(choice)
-            case UntranslatableTool():
+            case ResponsesTool() | UntranslatableTool():
                 return None
             case None:
                 return {"type": "function", "name": name}

@@ -629,7 +629,7 @@ def test_chat_completions_through_the_responses_bridge_follow_drop_params(
     assert [tuple(tool.get(key) for key in wire_keys) for tool in tools] == forwarded, tools
 
 
-def test_messages_to_an_openai_model_with_the_search_tool_still_answers(
+def test_messages_to_an_openai_model_runs_the_search_tool_on_openai_with_the_tool_still_deferred(
     openai_gateway: Gateway, openai_api: ControlPlane
 ) -> None:
     exchange: Final = _exchange(
@@ -654,7 +654,12 @@ def test_messages_to_an_openai_model_with_the_search_tool_still_answers(
     )
 
     assert exchange.response.status_code == 200, exchange.response.text
-    assert len(exchange.requests) == 1, exchange.requests
+    tools: Final = _ITEMS.validate_python(exchange.only_body()["tools"])
+    wire_keys: Final = ("type", "execution", "name", "defer_loading")
+    assert [tuple(tool.get(key) for key in wire_keys) for tool in tools] == [
+        ("tool_search", "server", None, None),
+        ("function", None, "get_weather", True),
+    ], tools
 
 
 def test_a_global_drop_params_drops_the_search_for_an_openai_model_that_cannot_run_it(
