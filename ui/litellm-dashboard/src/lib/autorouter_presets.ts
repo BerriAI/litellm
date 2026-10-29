@@ -353,6 +353,7 @@ export const buildPresetPrefill = (
       classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
+      classifier_context_include_tool_turns: config.classifier_context_include_tool_turns,
       classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
       session_affinity_ttl_seconds: config.session_affinity_ttl_seconds,

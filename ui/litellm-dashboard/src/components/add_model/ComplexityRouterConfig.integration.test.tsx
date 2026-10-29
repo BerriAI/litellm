@@ -445,6 +445,43 @@ describe("ComplexityRouterConfig", () => {
     );
   });
 
+  it("should turn tool turns on from its switch when classifier_type is llm", async () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+
+    openAutoRouterAdvanced("Classification Method");
+    const toolTurns = screen.getByRole("switch", { name: "Include Tool Turns" });
+    expect(toolTurns).not.toBeChecked();
+    fireEvent.click(toolTurns);
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classifier_context_include_tool_turns: true }));
+  });
+
+  it("should hide the tool-turns switch when classifier_type is heuristic", async () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.queryByRole("switch", { name: "Include Tool Turns" })).not.toBeInTheDocument();
+  });
+
+  it("should hide the tool-turns switch when session affinity is on", async () => {
+    const pinnedValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      session_affinity: true,
+      classifier_context_include_tool_turns: true,
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={pinnedValue} onChange={vi.fn()} />);
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Include Tool Turns" })).not.toBeInTheDocument();
+  });
+
   it("should hide classifier context fields when classifier_type is heuristic", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
     openAutoRouterAdvanced("Classification Method");

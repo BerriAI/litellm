@@ -99,6 +99,10 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
         ? parsedConfig.classifier_context_include_assistant_turns
         : undefined,
+    classifier_context_include_tool_turns:
+      typeof parsedConfig.classifier_context_include_tool_turns === "boolean"
+        ? parsedConfig.classifier_context_include_tool_turns
+        : undefined,
     classifier_fallback:
       parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
         ? parsedConfig.classifier_fallback

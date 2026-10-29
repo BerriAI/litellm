@@ -780,6 +780,82 @@ describe("buildComplexityRouterConfig assistant turns", () => {
   });
 });
 
+describe("buildComplexityRouterConfig tool turns", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  };
+
+  it.each(["llm", "heuristic_first", "hybrid"] as const)("emits the field when %s classifies", (classifierType) => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierType,
+      classifierContextIncludeToolTurns: true,
+    });
+    expect(config.classifier_context_include_tool_turns).toBe(true);
+  });
+
+  it("emits it for the decision model under its oss_classifier wire name", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "jev",
+      classifierContextIncludeToolTurns: true,
+    });
+    expect(config.classifier_type).toBe("oss_classifier");
+    expect(config.classifier_context_include_tool_turns).toBe(true);
+  });
+
+  it("emits the switch turned off", () => {
+    const config = buildComplexityRouterConfig({ ...llmParams, classifierContextIncludeToolTurns: false });
+    expect(config.classifier_context_include_tool_turns).toBe(false);
+  });
+
+  it.each(["heuristic", "heuristic_v2", "capability", "llm_v2", "custom"] as const)(
+    "omits it for %s, which the backend rejects it beside",
+    (classifierType) => {
+      const config = buildComplexityRouterConfig({
+        ...llmParams,
+        classifierType,
+        classifierContextIncludeToolTurns: true,
+      });
+      expect(config.classifier_context_include_tool_turns).toBeUndefined();
+    },
+  );
+
+  it("omits it with session affinity on, which the backend rejects it beside", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      sessionAffinity: true,
+      classifierContextIncludeToolTurns: true,
+    });
+    expect(config.session_affinity).toBe(true);
+    expect(config.classifier_context_include_tool_turns).toBeUndefined();
+  });
+
+  it("emits it under an edited tier set, whose save turns a lingering session affinity off", () => {
+    const pinnedCustomParams: BuildComplexityRouterConfigParams = {
+      ...llmParams,
+      sessionAffinity: true,
+      classifierContextIncludeToolTurns: true,
+      customTierSet: {
+        tiers: [
+          { id: "quick", name: "QUICK", definition: "Short answers", models: ["fast"] },
+          { id: "review", name: "REVIEW", definition: "Deep review", models: ["strong"] },
+        ],
+        fallback_tier_id: "quick",
+      },
+    };
+    const config = buildComplexityRouterConfig(pinnedCustomParams);
+    expect(config.session_affinity).toBe(false);
+    expect(config.classifier_context_include_tool_turns).toBe(true);
+  });
+
+  it("omits it when unset, leaving the backend default", () => {
+    expect(buildComplexityRouterConfig(llmParams).classifier_context_include_tool_turns).toBeUndefined();
+  });
+});
+
 describe("classifier prompt and fallback", () => {
   const llmParams: BuildComplexityRouterConfigParams = {
     ...baseParams,

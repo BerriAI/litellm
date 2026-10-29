@@ -19,3 +19,6 @@ export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
 
 export const usesClassifierContext = (classifierType: ClassifierType): boolean =>
   classifierType === "jev" || usesLlmClassifier(classifierType);
+
+export const readsToolTurns = (classifierType: ClassifierType): boolean =>
+  (["llm", "jev", "heuristic_first", "hybrid"] as const).some((type) => type === classifierType);
