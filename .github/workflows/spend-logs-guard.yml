@@ -1,7 +1,7 @@
 name: Spend logs guard
 
-on: # zizmor: ignore[dangerous-triggers] runs the base branch's code only; the PR's diff is read as data and never executed
-  pull_request_target:
+on:
+  pull_request:
     branches:
       - main
 
@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Fetch the pull request head, its merge base and its reviews
         id: revisions
