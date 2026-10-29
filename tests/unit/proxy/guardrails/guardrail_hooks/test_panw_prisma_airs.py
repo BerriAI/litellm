@@ -4835,6 +4835,83 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
                 id="function_call_output",
             ),
             pytest.param(
+                (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": [{"type": "input_text", "text": "tool "}, {"type": "input_text", "text": "result"}],
+                    },
+                ),
+                None,
+                id="function_call_output_text_parts",
+            ),
+            pytest.param(
+                (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": [
+                            {"type": "input_text", "text": "tool "},
+                            {"type": "input_image", "image_url": "https://example.com/chart.png"},
+                            {"type": "input_text", "text": "result"},
+                        ],
+                    },
+                ),
+                None,
+                id="function_call_output_text_and_image_parts",
+            ),
+            pytest.param(
+                (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {"type": "function_call_output", "output": "orphan tool result"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "tool result"},
+                ),
+                None,
+                id="function_call_output_without_call_id",
+            ),
+            pytest.param(
+                (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {"type": "tool_result", "call_id": "call_1", "output": "tool result"},
+                ),
+                None,
+                id="tool_result",
+            ),
+            pytest.param(
+                (
+                    {"type": "computer_call", "call_id": "cu_1", "id": "cu_1", "action": {"type": "screenshot"}},
+                    {
+                        "type": "computer_call_output",
+                        "call_id": "cu_1",
+                        "output": {"type": "computer_screenshot", "image_url": "https://example.com/screen.png"},
+                    },
+                ),
+                None,
+                id="computer_call_output",
+            ),
+            pytest.param(
+                (
+                    {"type": "computer_call", "call_id": "cu_1", "id": "cu_1", "action": {"type": "screenshot"}},
+                    {
+                        "type": "computer_call_output",
+                        "call_id": "cu_1",
+                        "output": {"type": "computer_screenshot", "file_id": "file-screen"},
+                    },
+                ),
+                None,
+                id="computer_call_output_file_id",
+            ),
+            pytest.param(
+                (
+                    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": ""},
+                ),
+                None,
+                id="function_call_output_empty",
+            ),
+            pytest.param(
                 ({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]},),
                 None,
                 id="reasoning",
@@ -4891,6 +4968,25 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
             *history_tail,
             {"role": "user", "content": self.LATEST},
             instructions="answer briefly",
+        )
+        patcher, mock_api = self._scan(handler)
+        with patcher:
+            await OpenAIResponsesHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
+
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == [self.LATEST]
+
+    @pytest.mark.asyncio
+    async def test_flag_true_with_skip_tool_still_scans_only_the_latest_turn_on_responses(self) -> None:
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+        handler.skip_tool_message_in_guardrail = True
+        request_data = self._responses_request(
+            {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "tool result"},
+            {"role": "user", "content": self.LATEST},
         )
         patcher, mock_api = self._scan(handler)
         with patcher:
