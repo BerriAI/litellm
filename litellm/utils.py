@@ -606,7 +606,21 @@ def custom_llm_setup():
             litellm.provider_list.append(custom_llm["provider"])
 
         if custom_llm["provider"] not in litellm._custom_providers:
+            _warn_if_built_in_provider_shadows_custom_handler(custom_llm["provider"])
             litellm._custom_providers.append(custom_llm["provider"])
+
+
+def _warn_if_built_in_provider_shadows_custom_handler(provider: str) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    if provider not in LlmProvidersSet and not JSONProviderRegistry.exists(provider):
+        return
+    verbose_logger.warning(
+        "custom_provider_map provider '%s' has the same name as a built-in LiteLLM provider, which handles "
+        "'%s/' models instead of your custom_handler. Rename the provider and its models to use your handler",
+        provider,
+        provider,
+    )
 
 
 def add_custom_logger_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
@@ -5661,6 +5675,7 @@ def add_provider_specific_params_to_optional_params(
         "openai",
         "azure",
         "text-completion-openai",
+        "bigmodel",
         *litellm.openai_compatible_providers,
     ] or JSONProviderRegistry.exists(custom_llm_provider)
     if calls_through_openai_sdk:
@@ -9170,6 +9185,7 @@ class ProviderConfigManager:
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.BIGMODEL: (ProviderConfigManager._get_bigmodel_chat_config, False),
             LlmProviders.OPENCODE_GO: (ProviderConfigManager.get_opencode_go_config, True),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
@@ -9361,6 +9377,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_bigmodel_chat_config() -> BaseConfig:
+        from litellm.llms.bigmodel.chat.transformation import BigModelChatConfig
+
+        return BigModelChatConfig()
 
     @staticmethod
     def get_opencode_go_config(model: str) -> BaseConfig:
@@ -9683,6 +9705,10 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if provider == LlmProviders.BIGMODEL:
+            from litellm.llms.bigmodel.messages.transformation import BigModelMessagesConfig
+
+            return BigModelMessagesConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.common_utils import go_endpoint
             from litellm.llms.opencode.messages.transformation import OpenCodeGoMessagesConfig
@@ -9914,6 +9940,10 @@ class ProviderConfigManager:
         if provider is None:
             return None
 
+        if provider == LlmProviders.BIGMODEL:
+            from litellm.llms.bigmodel.responses.transformation import BigModelResponsesAPIConfig
+
+            return BigModelResponsesAPIConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.common_utils import go_endpoint
             from litellm.llms.opencode.responses.transformation import OpenCodeGoResponsesConfig
@@ -9935,8 +9965,14 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.common_utils import (
                 azure_ai_supports_native_responses,
+                is_foundry_project_agent,
+            )
+            from litellm.llms.azure_ai.responses.transformation import (
+                AzureAIAgentResponsesAPIConfig,
             )
 
+            if is_foundry_project_agent(model):
+                return AzureAIAgentResponsesAPIConfig()
             if azure_ai_supports_native_responses(model, api_base):
                 return litellm.AzureAIResponsesAPIConfig()
             return None

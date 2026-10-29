@@ -71,6 +71,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
+    replayable_responses_input,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import CallTypes, ModelResponse
@@ -2379,15 +2380,17 @@ def _ws_event_error(event: Mapping[str, object]) -> object:
     return response.get("error") if _is_json_object(response) else None
 
 
-def _restore_input_item_ids(items: Sequence[object]) -> Sequence[object]:
-    return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
+def _replayable_input_items(items: Sequence[object]) -> object:
+    return replayable_responses_input(
+        ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
+    )
 
 
 def _restored_container_fields(container: Mapping[str, object]) -> Mapping[str, object]:
     input_items: Final = container.get("input")
     previous_response_id: Final = container.get("previous_response_id")
     restored: Final = {
-        "input": _restore_input_item_ids(input_items) if _is_json_array(input_items) else input_items,
+        "input": _replayable_input_items(input_items) if _is_json_array(input_items) else input_items,
         "previous_response_id": (
             ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(previous_response_id)
             if isinstance(previous_response_id, str)
