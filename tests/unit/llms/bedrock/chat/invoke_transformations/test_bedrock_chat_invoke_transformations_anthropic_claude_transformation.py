@@ -2048,11 +2048,25 @@ def test_bedrock_invoke_claude_explicit_max_tokens_is_kept(local_model_cost_map)
     assert body["max_tokens"] == 123, f"explicit max_tokens must not be overridden, got {body['max_tokens']}"
 
 
-def test_bedrock_invoke_claude_default_max_tokens_honors_a_regional_override(local_model_cost_map, monkeypatch):
+def test_bedrock_invoke_claude_default_max_tokens_takes_the_deployments_own_cap(local_model_cost_map):
+    deployment_cap: Final = 8192
+    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != deployment_cap
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": deployment_cap}},
+        headers={},
+    )
+
+    assert body["max_tokens"] == deployment_cap, f"the deployment's own cap should win, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_ignores_a_sibling_deployments_cap(local_model_cost_map):
     regional_id: Final = f"us.{BEDROCK_HAIKU_45_BASE_ID}"
-    override: Final = 8192
-    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != override
-    monkeypatch.setitem(litellm.model_cost, regional_id, {**litellm.model_cost[regional_id], "max_output_tokens": override})
+    mapped_cap: Final = litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID)
+    litellm.register_model(model_cost={regional_id: {"max_output_tokens": 50}}, persist_across_reloads=False)
 
     body: Final = AmazonAnthropicClaudeConfig().transform_request(
         model=f"invoke/{regional_id}",
@@ -2062,7 +2076,23 @@ def test_bedrock_invoke_claude_default_max_tokens_honors_a_regional_override(loc
         headers={},
     )
 
-    assert body["max_tokens"] == override, f"a deployment's regional max_output_tokens should win, got {body['max_tokens']}"
+    assert body["max_tokens"] == mapped_cap, f"a sibling's cap on the shared id leaked, got {body['max_tokens']}"
+
+
+def test_bedrock_invoke_claude_default_max_tokens_yields_to_anthropic_config(local_model_cost_map, monkeypatch):
+    configured_max_tokens: Final = 1000
+    assert litellm.get_max_tokens(BEDROCK_HAIKU_45_BASE_ID) != configured_max_tokens
+    monkeypatch.setattr(litellm.AnthropicConfig, "max_tokens", configured_max_tokens)
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == configured_max_tokens, f"AnthropicConfig(max_tokens) was ignored, got {body['max_tokens']}"
 
 
 def test_bedrock_invoke_claude_default_max_tokens_reads_an_inference_profile_arns_base_model(local_model_cost_map):
