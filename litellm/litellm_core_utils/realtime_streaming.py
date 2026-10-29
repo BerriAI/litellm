@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import functools
 import json
 import traceback
 from collections.abc import Callable, Coroutine, Mapping, MutableMapping, Sequence
@@ -8,7 +9,6 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast, runtime_checkable
 
-from openai.types.realtime.realtime_audio_formats import AudioPCM, AudioPCMA, AudioPCMU, RealtimeAudioFormats
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
@@ -40,6 +40,7 @@ from .litellm_logging import Logging as LiteLLMLogging
 from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
 
 if TYPE_CHECKING:
+    from openai.types.realtime.realtime_audio_formats import RealtimeAudioFormats
     from websockets.asyncio.client import ClientConnection
     from websockets.exceptions import ConnectionClosed
 
@@ -292,12 +293,16 @@ def _gate_session_update(
     return {**client_session, "turn_detection": gate(None)}
 
 
-_TRANSLATION_AUDIO_FORMAT: Final[TypeAdapter[str | RealtimeAudioFormats | None]] = TypeAdapter(
-    str | RealtimeAudioFormats | None
-)
+@functools.cache
+def _translation_audio_format_adapter() -> "TypeAdapter[str | RealtimeAudioFormats | None]":
+    from openai.types.realtime.realtime_audio_formats import RealtimeAudioFormats
+
+    return TypeAdapter(str | RealtimeAudioFormats | None)
 
 
-def _translation_audio_bytes_per_second(audio_format: str | RealtimeAudioFormats | None) -> float | None:
+def _translation_audio_bytes_per_second(audio_format: "str | RealtimeAudioFormats | None") -> float | None:
+    from openai.types.realtime.realtime_audio_formats import AudioPCM, AudioPCMA, AudioPCMU
+
     match audio_format:
         case "pcm16" | AudioPCM():
             return 48000.0
@@ -840,7 +845,7 @@ class RealTimeStreaming:
             try:
                 if (
                     bytes_per_second := _translation_audio_bytes_per_second(
-                        _TRANSLATION_AUDIO_FORMAT.validate_python(configuration.get("format"))
+                        _translation_audio_format_adapter().validate_python(configuration.get("format"))
                     )
                 ) is None:
                     continue

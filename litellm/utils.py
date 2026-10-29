@@ -5769,6 +5769,7 @@ def add_provider_specific_params_to_optional_params(
         "openai",
         "azure",
         "text-completion-openai",
+        "bigmodel",
         *litellm.openai_compatible_providers,
     ] or JSONProviderRegistry.exists(custom_llm_provider)
     if calls_through_openai_sdk:
@@ -9279,6 +9280,7 @@ class ProviderConfigManager:
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.BIGMODEL: (ProviderConfigManager._get_bigmodel_chat_config, False),
             LlmProviders.OPENCODE_GO: (ProviderConfigManager.get_opencode_go_config, True),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
@@ -9470,6 +9472,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_bigmodel_chat_config() -> BaseConfig:
+        from litellm.llms.bigmodel.chat.transformation import BigModelChatConfig
+
+        return BigModelChatConfig()
 
     @staticmethod
     def get_opencode_go_config(model: str) -> BaseConfig:
@@ -9792,6 +9800,10 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAnthropicMessagesConfig | None:
+        if provider == LlmProviders.BIGMODEL:
+            from litellm.llms.bigmodel.messages.transformation import BigModelMessagesConfig
+
+            return BigModelMessagesConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.common_utils import go_endpoint
             from litellm.llms.opencode.messages.transformation import OpenCodeGoMessagesConfig
@@ -10030,6 +10042,10 @@ class ProviderConfigManager:
         if provider is None:
             return None
 
+        if provider == LlmProviders.BIGMODEL:
+            from litellm.llms.bigmodel.responses.transformation import BigModelResponsesAPIConfig
+
+            return BigModelResponsesAPIConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.common_utils import go_endpoint
             from litellm.llms.opencode.responses.transformation import OpenCodeGoResponsesConfig
