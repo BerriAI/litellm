@@ -318,7 +318,10 @@ class TestFilterWebSearchDeployments:
             {"googleSearch": {}},
             {"google_search": {}},
             {"googleSearchRetrieval": {}},
+            {"google_search_retrieval": {}},
             {"enterpriseWebSearch": {}},
+            {"enterprise_web_search": {}},
+            {"type": "google_search"},
         ],
     )
     def test_native_web_search_tools_filter_unsupported(
@@ -334,6 +337,8 @@ class TestFilterWebSearchDeployments:
             {"type": "function", "function": {"name": "web_search"}},
             {"type": "function", "name": "googleSearch"},
             {"urlContext": {}},
+            {"googleSearch": None},
+            {"google_search": None, "urlContext": {}},
         ],
     )
     def test_non_web_search_tools_preserve_deployments(
@@ -365,15 +370,27 @@ class TestFilterWebSearchDeployments:
         result = filter_web_search_deployments(deployments, request_kwargs)
         assert len(result) == 2
 
-    def test_no_deployments_support_web_search(self):
-        """When no deployments support web search, all are filtered out"""
-        deployments = [
+    def test_no_deployment_supporting_web_search_keeps_every_deployment(self) -> None:
+        deployments: Final = [
             {"model_info": {"id": "d1", "supports_web_search": False}},
             {"model_info": {"id": "d2", "supports_web_search": False}},
         ]
-        request_kwargs = {"tools": [{"type": "web_search"}]}
-        result = filter_web_search_deployments(deployments, request_kwargs)
-        assert len(result) == 0
+        result: Final = filter_web_search_deployments(deployments, {"tools": [{"type": "web_search"}]})
+        assert result == deployments
+
+    def test_a_tool_that_is_not_an_object_is_no_web_search_request(
+        self, sample_deployments: list[dict[str, object]]
+    ) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": ["web_search", None]})
+        assert result == sample_deployments
+
+    def test_web_search_options_filter_unsupported(self, sample_deployments: list[dict[str, object]]) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"web_search_options": {}})
+        assert result == sample_deployments[:2]
+
+    def test_null_web_search_options_preserve_deployments(self, sample_deployments: list[dict[str, object]]) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"web_search_options": None})
+        assert result == sample_deployments
 
     def test_missing_config_defaults_to_supported(self):
         """Deployments without supports_web_search config default to True"""
@@ -407,6 +424,70 @@ class TestFilterWebSearchDeployments:
         # Should return the dict unchanged, not filter it
         assert result == deployment
 
+
+
+def _router_with_a_deployment_that_disables_web_search(routing_strategy: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "search-model",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key"},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+            {
+                "model_name": "search-model",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key"},
+                "model_info": {"id": "search"},
+            },
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+
+_ANTHROPIC_WEB_SEARCH_REQUEST: Final = {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}
+
+
+@pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "usage-based-routing"])
+def test_sync_pick_skips_deployments_without_web_search(routing_strategy: str) -> None:
+    router: Final = _router_with_a_deployment_that_disables_web_search(routing_strategy)
+    picks: Final = {
+        router.get_available_deployment(model="search-model", request_kwargs=dict(_ANTHROPIC_WEB_SEARCH_REQUEST))[
+            "model_info"
+        ]["id"]
+        for _ in range(20)
+    }
+    assert picks == {"search"}
+
+
+@pytest.mark.asyncio
+async def test_web_search_request_still_routes_when_every_deployment_disables_web_search() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "search-model",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key"},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            }
+        ]
+    )
+    deployment: Final = await router.async_get_available_deployment(
+        model="search-model", request_kwargs=dict(_ANTHROPIC_WEB_SEARCH_REQUEST)
+    )
+    assert deployment["model_info"]["id"] == "no-search"
+
+
+@pytest.mark.asyncio
+async def test_legacy_usage_based_async_pick_skips_deployments_without_web_search() -> None:
+    router: Final = _router_with_a_deployment_that_disables_web_search("usage-based-routing")
+    picks: Final = {
+        (
+            await router.async_get_available_deployment(
+                model="search-model", request_kwargs=dict(_ANTHROPIC_WEB_SEARCH_REQUEST)
+            )
+        )["model_info"]["id"]
+        for _ in range(20)
+    }
+    assert picks == {"search"}
 
 def test_invalidate_model_group_info_cache():
     """Test that _invalidate_model_group_info_cache clears the LRU cache."""

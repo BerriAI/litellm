@@ -16416,7 +16416,10 @@ class Router:
         )
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
             self._without_deployments_that_cannot_serve_route(
-                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                filter_web_search_deployments(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    request_kwargs,
+                ),
                 model,
             )
         )

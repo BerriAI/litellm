@@ -13,9 +13,11 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.rust_bridge.public_call import optional_sequence
 from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
@@ -35,7 +37,6 @@ _V = TypeVar("_V")
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
-_OBJECT_TUPLE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _GEMINI_SEARCH_TOOL_KEYS: Final = frozenset(
     {
         "googleSearch",
@@ -46,6 +47,7 @@ _GEMINI_SEARCH_TOOL_KEYS: Final = frozenset(
         "enterprise_web_search",
     }
 )
+_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "google_search"})
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -439,13 +441,19 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
 
 
 def _is_web_search_tool(tool: object) -> bool:
-    if not isinstance(tool, Mapping):
+    tool_fields: Final = as_str_mapping(tool)
+    if tool_fields is None:
         return False
-    tool_mapping: Final = _OBJECT_MAPPING_ADAPTER.validate_python(tool)
-    tool_type: Final = tool_mapping.get("type")
-    if isinstance(tool_type, str) and (tool_type == "web_search" or tool_type.startswith("web_search_")):
+    tool_type: Final = tool_fields.get("type")
+    if isinstance(tool_type, str) and (tool_type in _WEB_SEARCH_TOOL_TYPES or tool_type.startswith("web_search_")):
         return True
-    return any(key in _GEMINI_SEARCH_TOOL_KEYS for key in tool_mapping if isinstance(key, str))
+    return not _GEMINI_SEARCH_TOOL_KEYS.isdisjoint(tool_fields) and any(
+        tool_fields[key] is not None for key in _GEMINI_SEARCH_TOOL_KEYS.intersection(tool_fields)
+    )
+
+
+def _is_web_search_request(tools: object, web_search_options: object) -> bool:
+    return web_search_options is not None or any(_is_web_search_tool(tool) for tool in optional_sequence(tools) or ())
 
 
 def filter_web_search_deployments(
@@ -463,17 +471,17 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     tools: Final[object] = request_kwargs.get("tools")
-    is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
-        _is_web_search_tool(tool) for tool in _OBJECT_TUPLE_ADAPTER.validate_python(tools)
-    )
-    if not is_web_search_request:
+    web_search_options: Final[object] = request_kwargs.get("web_search_options")
+    if not _is_web_search_request(tools, web_search_options):
         return healthy_deployments
 
     # Filter out deployments that don't support web search
     final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    if len(healthy_deployments) > 0 and len(final_deployments) == 0:
-        verbose_logger.warning("No deployments support web search for request")
-    return final_deployments
+    if final_deployments:
+        return final_deployments
+    if healthy_deployments:
+        verbose_logger.warning("No deployment supports web search for this request, so every deployment stays eligible")
+    return healthy_deployments
 
 
 # Credential params that only one provider family reads, paired with the providers
