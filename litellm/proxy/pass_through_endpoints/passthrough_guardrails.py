@@ -7,11 +7,10 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
-from itertools import chain
 from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import guardrail_entry_names
+from litellm.integrations.custom_guardrail import merged_guardrail_entries
 from litellm.proxy._types import (
     PassThroughGuardrailsConfig,
     PassThroughGuardrailSettings,
@@ -207,7 +206,7 @@ class PassthroughGuardrailHandler:
     def collect_guardrails(
         user_api_key_dict: UserAPIKeyAuth,
         passthrough_guardrails_config: PassThroughGuardrailsConfigInput | None,
-    ) -> dict[str, bool] | None:
+    ) -> list[object] | None:
         """
         Collect guardrails for a passthrough endpoint.
 
@@ -227,7 +226,7 @@ class PassthroughGuardrailHandler:
             passthrough_guardrails_config: List or Dict of guardrail names/settings
 
         Returns:
-            Dict of guardrail names to run (format: {guardrail_name: True}), or None
+            Guardrail entries to run, each a name or a ``{name: settings}`` entry, or None
         """
         from litellm.proxy.litellm_pre_call_utils import (
             add_guardrails_from_key_or_team_metadata,
@@ -244,15 +243,6 @@ class PassthroughGuardrailHandler:
             verbose_proxy_logger.debug("Passthrough guardrails config is empty, skipping")
             return None
 
-        # Passthrough is enabled - collect guardrails
-        guardrails_to_run: Final[dict[str, bool]] = {}
-
-        # Add passthrough-specific guardrails
-        for guardrail_name in normalized_config:
-            guardrails_to_run[guardrail_name] = True
-            verbose_proxy_logger.debug("Added passthrough-specific guardrail: %s", guardrail_name)
-
-        # Add org/team/key level guardrails using shared helper
         temp_data: Final[dict[str, Any]] = {"metadata": {}}
         add_guardrails_from_key_or_team_metadata(
             key_metadata=user_api_key_dict.metadata,
@@ -260,20 +250,12 @@ class PassthroughGuardrailHandler:
             data=temp_data,
             metadata_variable_name="metadata",
         )
+        inherited_guardrails: Final[list[object]] = temp_data["metadata"].get("guardrails", [])
+        guardrails_to_run: Final = merged_guardrail_entries(normalized_config, inherited_guardrails)
 
-        # Merge inherited guardrails into guardrails_to_run
-        inherited_guardrails: Final = temp_data["metadata"].get("guardrails", [])
-        for guardrail_name in chain.from_iterable(guardrail_entry_names(entry) for entry in inherited_guardrails):
-            if guardrail_name not in guardrails_to_run:
-                guardrails_to_run[guardrail_name] = True
-                verbose_proxy_logger.debug("Added inherited guardrail (key/team level): %s", guardrail_name)
+        verbose_proxy_logger.debug("Collected guardrails for passthrough endpoint: %s", guardrails_to_run)
 
-        verbose_proxy_logger.debug(
-            "Collected guardrails for passthrough endpoint: %s",
-            list(guardrails_to_run.keys()),
-        )
-
-        return guardrails_to_run if guardrails_to_run else None
+        return guardrails_to_run or None
 
     @staticmethod
     def get_field_targeted_text(

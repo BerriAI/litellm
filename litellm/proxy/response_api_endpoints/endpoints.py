@@ -50,8 +50,8 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     get_team_object,
-    guardrail_modification_check,
     requests_guardrail_modification,
+    require_guardrail_modification_permission,
 )
 from litellm.proxy.auth.auth_utils import carries_client_side_overrides
 from litellm.proxy.auth.user_api_key_auth import (
@@ -2183,6 +2183,7 @@ class _GuardrailWalk(Protocol):
         data: dict[str, object],  # mutable-ok: ProxyLogging.during_call_hook hands the guardrails a dict they edit
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: Literal["aresponses"],
+        guardrails_only: bool,
     ) -> object: ...
 
 
@@ -2192,13 +2193,16 @@ async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTab
     team_id: Final = user_api_key_dict.team_id
     if team_id is None or team_id == UI_TEAM_ID:
         return None
-    return await get_team_object(
-        team_id=team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=user_api_key_dict.parent_otel_span,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        return LiteLLM_TeamTable(team_id=team_id, metadata=user_api_key_dict.team_metadata)
 
 
 def _responses_ws_frame_guard(
@@ -2274,7 +2278,7 @@ def _responses_ws_frame_guard(
             }
             pii_tokens: Final = _recorded_pii_tokens(guarded_data.get("metadata"))
             await proxy_logging_obj.during_call_hook(
-                data=guarded_data, user_api_key_dict=user_api_key_dict, call_type="aresponses"
+                data=guarded_data, user_api_key_dict=user_api_key_dict, call_type="aresponses", guardrails_only=True
             )
         except Exception as e:
             raise await rejection(e, frame_data) from e
@@ -2316,10 +2320,9 @@ async def _check_frame_may_modify_guardrails(
     user_api_key_dict: UserAPIKeyAuth,
     team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]],
 ) -> None:
-    """A frame that picks guardrails needs the team permission an HTTP body that picks them needs"""
-    modifying_source: Final = next((source for source in sources if requests_guardrail_modification(source)), None)
-    if modifying_source is not None:
-        guardrail_modification_check(modifying_source, await team_object(user_api_key_dict))
+    """A frame that picks guardrails or policies needs the team's permission to modify guardrails"""
+    if any("policies" in source or requests_guardrail_modification(source) for source in sources):
+        require_guardrail_modification_permission(await team_object(user_api_key_dict))
 
 
 def _forwarded_frame_fields(source: Mapping[str, object]) -> dict[str, object]:

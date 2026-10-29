@@ -3497,6 +3497,7 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
+        guardrails_only: bool = False,
     ):
         caps: Final = ProxyLogging.callback_capabilities()
         if not caps.has_guardrail and not caps.has_moderation_override:
@@ -3508,6 +3509,7 @@ class ProxyLogging:
             if (
                 isinstance(callback, CustomLogger)
                 and not isinstance(callback, CustomGuardrail)
+                and (not guardrails_only or callback.enforces_request_content)
                 and _overrides_moderation_hook(callback)
                 and user_api_key_dict is not None
             ):

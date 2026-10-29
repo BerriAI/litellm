@@ -981,10 +981,12 @@ def guardrail_modification_check(request_body: Mapping[str, object], team_object
     failing loudly at the auth layer so operators see an explicit 403 instead
     of a confusing silent-ignore.
     """
-    from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+    if requests_guardrail_modification(request_body):
+        require_guardrail_modification_permission(team_object)
 
-    if not requests_guardrail_modification(request_body):
-        return
+
+def require_guardrail_modification_permission(team_object: LiteLLM_TeamTable | None) -> None:
+    from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
 
     if not can_modify_guardrails(team_object):
         raise HTTPException(

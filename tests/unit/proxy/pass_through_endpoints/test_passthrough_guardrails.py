@@ -74,7 +74,8 @@ class TestPassthroughGuardrailHandlerGetGuardrailNames:
 
 
 class TestPassthroughGuardrailHandlerCollectGuardrails:
-    def test_inherits_a_key_guardrail_listed_with_settings_by_its_name(self, monkeypatch):
+    def test_inherits_a_key_guardrail_with_its_settings(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.proxy._types import UserAPIKeyAuth
 
         monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
@@ -82,10 +83,12 @@ class TestPassthroughGuardrailHandlerCollectGuardrails:
             api_key="hashed", metadata={"guardrails": [{"pii": {"extra_body": {"threshold": 1}}}, "toxic"]}
         )
 
-        assert PassthroughGuardrailHandler.collect_guardrails(key, ["passthrough-guard"]) == {
-            "passthrough-guard": True,
-            "pii": True,
-            "toxic": True,
+        guardrails = PassthroughGuardrailHandler.collect_guardrails(key, ["passthrough-guard", "toxic"])
+
+        assert guardrails == ["passthrough-guard", "toxic", {"pii": {"extra_body": {"threshold": 1}}}]
+        request_data = {"metadata": {"guardrails": guardrails}}
+        assert CustomGuardrail(guardrail_name="pii").get_guardrail_dynamic_request_body_params(request_data) == {
+            "threshold": 1
         }
 
 

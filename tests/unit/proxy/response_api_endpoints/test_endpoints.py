@@ -2629,6 +2629,34 @@ class TestResponsesWSFirstFrameModelAuth:
         assert during_pick.inputs == ["hi"]
 
     @pytest.mark.asyncio
+    async def test_frame_guard_runs_only_the_moderation_hooks_that_enforce_request_content(self):
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        class _ModerationHook(CustomLogger):
+            def __init__(self, enforces_request_content: bool) -> None:
+                super().__init__()
+                self.enforces_request_content = enforces_request_content
+                self.inputs: list[object] = []
+
+            async def async_moderation_hook(
+                self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: CallTypesLiteral
+            ) -> None:
+                self.inputs.append(data.get("input"))
+
+        vendor_moderation = _ModerationHook(enforces_request_content=False)
+        content_enforcer = _ModerationHook(enforces_request_content=True)
+
+        with _guardrails_on(vendor_moderation, content_enforcer) as proxy_logging_obj:
+            guard = _responses_ws_frame_guard(
+                {"model": "gpt-4o-mini", "litellm_metadata": {}}, _key(), proxy_logging_obj, MagicMock()
+            )
+            await guard(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert vendor_moderation.inputs == []
+        assert content_enforcer.inputs == ["hi"]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("selection", "message"),
         [
@@ -2918,10 +2946,12 @@ class TestResponsesWSFirstFrameModelAuth:
             {"type": "response.create", "input": "hi", "metadata": {"disable_global_guardrails": True}},
             {"type": "response.create", "response": {"input": "hi", "guardrails": ["frame-pick"]}},
             {"type": "response.create", "litellm_metadata": {"guardrails": ["frame-pick"]}, "response": {"input": "hi"}},
+            {"type": "response.create", "input": "hi", "policies": ["frame-policy"]},
+            {"type": "response.create", "response": {"input": "hi", "policies": ["frame-policy"]}},
         ],
-        ids=["top-level", "metadata", "global-toggle", "nested", "beside-nested"],
+        ids=["top-level", "metadata", "global-toggle", "nested", "beside-nested", "policies", "nested-policies"],
     )
-    async def test_frame_guard_refuses_guardrail_changes_from_a_team_without_permission_like_http(self, frame):
+    async def test_frame_guard_refuses_guardrail_and_policy_picks_from_a_team_without_permission(self, frame):
         from litellm.proxy._types import LiteLLM_TeamTable
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
@@ -2976,6 +3006,43 @@ class TestResponsesWSFirstFrameModelAuth:
             await guard(json.dumps({"type": "response.create", "input": "hi", "guardrails": ["frame-pick"]}))
 
         assert frame_pick.inputs == ["hi"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("modify_guardrails", "picked_inputs"),
+        [(True, ["hi"]), (False, [])],
+        ids=["open", "locked"],
+    )
+    async def test_frame_guard_reads_the_key_s_team_metadata_when_the_team_row_is_gone(
+        self, modify_guardrails: bool, picked_inputs: list[str]
+    ):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        frame_pick = _FrameGuardrail("frame-pick")
+        key = UserAPIKeyAuth(
+            api_key="hashed",
+            team_id="deleted-team",
+            team_metadata={"guardrails": {"modify_guardrails": modify_guardrails}},
+        )
+        frame = json.dumps({"type": "response.create", "input": "hi", "guardrails": ["frame-pick"]})
+
+        with (
+            _guardrails_on(frame_pick) as proxy_logging_obj,
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.get_team_object",
+                AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team doesn't exist"})),
+            ),
+        ):
+            guard = _responses_ws_frame_guard(
+                {"model": "gpt-4o-mini", "litellm_metadata": {}}, key, proxy_logging_obj, MagicMock()
+            )
+            if modify_guardrails:
+                await guard(frame)
+            else:
+                with pytest.raises(ValueError, match=r"^Your team does not have permission to modify guardrails\.$"):
+                    await guard(frame)
+
+        assert frame_pick.inputs == picked_inputs
 
     @pytest.mark.asyncio
     async def test_frame_guard_forwards_the_pre_call_output_and_not_a_during_call_rewrite_like_http(self):
