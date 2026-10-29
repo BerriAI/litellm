@@ -285,7 +285,7 @@ def test_cumulative_partials_start_the_turn_once_and_emit_only_new_text():
 def test_revised_partial_emits_nothing_and_the_commit_carries_the_final_text():
     transformer: Final = ElevenLabsEventTransformer(new_item_id=_item_ids())
     first: Final = _events(transformer, _frame("partial_transcript", text="Hello world today"))
-    revised: Final = _events(transformer, _frame("partial_transcript", text="Hallo world tomorrow"))
+    revised: Final = _events(transformer, _frame("partial_transcript", text="Hallo world tomorrow soon"))
     resumed: Final = _events(
         transformer,
         _frame("partial_transcript", text="Hello world tomorrow soon"),
@@ -299,6 +299,20 @@ def test_revised_partial_emits_nothing_and_the_commit_carries_the_final_text():
         ("conversation.item.input_audio_transcription.delta", "item_0", " tomorrow"),
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", "Hello world tomorrow soon."),
+    ]
+
+
+def test_case_and_punctuation_changes_in_emitted_words_allow_new_stable_words():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        _frame("partial_transcript", text="Hello world today"),
+        _frame("partial_transcript", text="hello, world today again"),
+    )
+
+    assert _summary(events) == [
+        ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "Hello world"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " today"),
     ]
 
 
