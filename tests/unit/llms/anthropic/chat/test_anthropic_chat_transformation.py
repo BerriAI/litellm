@@ -9240,6 +9240,31 @@ def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(res
     ]
 
 
+def test_native_claude_computer_tool_reaches_anthropic_as_sent_with_its_beta_header(respx_mock: respx.MockRouter):
+    """computer_20251124 needs the computer-use-2025-11-24 beta (platform.claude.com computer-use-tool, read 2026-10-29)"""
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "ok"}], "end_turn"))
+    )
+    computer_tool: Final = {
+        "type": "computer_20251124",
+        "name": "computer",
+        "display_width_px": 1280,
+        "display_height_px": 800,
+    }
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Take a screenshot"}],
+        tools=[computer_tool],
+    )
+
+    sent_request: Final = route.calls.last.request
+    assert json.loads(sent_request.content)["tools"] == [computer_tool]
+    sent_betas: Final = frozenset(beta.strip() for beta in sent_request.headers.get("anthropic-beta", "").split(","))
+    assert "computer-use-2025-11-24" in sent_betas
+
+
 def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
     return {
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",

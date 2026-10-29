@@ -214,8 +214,27 @@ _TOOL_TYPE_PREFIXES_ANTHROPIC_EXPRESSES: Final = (
 )
 
 
+_ANTHROPIC_COMPUTER_TOOL_TYPE: Final = re.compile(r"computer_\d{8}")
+
+
 def _anthropic_expresses_tool_type(tool_type: str) -> bool:
-    return tool_type in _TOOL_TYPES_ANTHROPIC_EXPRESSES or tool_type.startswith(_TOOL_TYPE_PREFIXES_ANTHROPIC_EXPRESSES)
+    return (
+        tool_type in _TOOL_TYPES_ANTHROPIC_EXPRESSES
+        or tool_type.startswith(_TOOL_TYPE_PREFIXES_ANTHROPIC_EXPRESSES)
+        or _ANTHROPIC_COMPUTER_TOOL_TYPE.fullmatch(tool_type) is not None
+    )
+
+
+def _is_anthropic_computer_tool(tool: object) -> bool:
+    match as_str_mapping(tool):
+        case {"type": str() as tool_type} as fields if "function" not in fields:
+            return _ANTHROPIC_COMPUTER_TOOL_TYPE.fullmatch(tool_type) is not None
+        case _:
+            return False
+
+
+def _reaches_anthropic_as_sent(tool: object) -> bool:
+    return is_anthropic_client_toolset(tool) or _is_anthropic_computer_tool(tool)
 
 
 def _tool_type_anthropic_cannot_express(tool: object) -> str | None:
@@ -1362,7 +1381,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             anthropic_tools.append(nested_tool)
                         if nested_mcp is not None:
                             mcp_servers.append(nested_mcp)
-            elif "input_schema" in tool or is_anthropic_client_toolset(tool):
+            elif "input_schema" in tool or _reaches_anthropic_as_sent(tool):
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
                 new_tool, mcp_server_tool = self._map_tool_helper(tool)
