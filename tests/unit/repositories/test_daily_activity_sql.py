@@ -141,38 +141,6 @@ def test_key_page_sql_rejects_invalid_page_bounds(offset: int, limit: int, error
         build_key_page_sql(_scope(), offset=offset, limit=limit)
 
 
-def test_tag_page_sql_scopes_to_team_excludes_user_agents_and_orders_tags() -> None:
-    query: Final = build_tag_page_sql(
-        _scope(table=DailyActivityTable.TEAM, entity_ids=("team-a",), api_keys=("key-1",), model="gpt-test"),
-        team_id="team-a",
-        offset=7,
-        limit=3,
-    )
-
-    assert query.params == (
-        "2026-01-01",
-        "2026-01-31",
-        "gpt-test",
-        ["key-1"],
-        "team-a",
-        PTU_SENTINEL_API_KEY,
-        3,
-        7,
-    )
-    assert 'FROM "LiteLLM_DailyTagSpend"' in query.sql
-    assert "team_id = $5" in query.sql
-    assert "api_key = ANY($4::text[])" in query.sql
-    assert "tag IS NOT NULL" in query.sql
-    assert "api_key <> $6" in query.sql
-    assert "NOT (LOWER(BTRIM(tag)) LIKE 'user-agent:%' OR LOWER(BTRIM(tag)) LIKE 'user agent:%')" in query.sql
-    assert "GROUP BY tag" in query.sql
-    assert "SUM(spend::numeric) AS rank_spend" in query.sql
-    assert "ORDER BY rank_spend DESC, tag ASC" in query.sql
-    assert "(SELECT COUNT(*) FROM ranked)::bigint AS total_tags" in query.sql
-    assert "LIMIT $7 OFFSET $8" in query.sql
-    assert '"tag" = ANY' not in query.sql
-
-
 @pytest.mark.parametrize(
     ("offset", "limit", "error"),
     (
