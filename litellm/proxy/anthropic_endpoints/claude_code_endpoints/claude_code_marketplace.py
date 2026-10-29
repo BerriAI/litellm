@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
@@ -39,6 +39,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_a
 )
 from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
@@ -112,21 +113,6 @@ async def get_prisma_client() -> object:
 _get_prisma_client: Final = get_prisma_client
 
 
-_AUTH_REQUIRED_SETTING: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
-
-
-def marketplace_auth_required() -> bool:
-    from litellm.proxy.proxy_server import general_settings_view
-
-    try:
-        return (
-            _AUTH_REQUIRED_SETTING.validate_python(general_settings_view().get("claude_code_marketplace_auth_required"))
-            is True
-        )
-    except ValidationError:
-        return True
-
-
 async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
     try:
         caller: Final = await user_api_key_auth(
@@ -147,10 +133,9 @@ async def _header_key_caller(request: Request) -> UserAPIKeyAuth:
     if caller.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
         raise ProxyException(
             message="The LiteLLM key could not be verified because the database is unavailable",
-            type=ProxyErrorTypes.auth_error,
+            type=ProxyErrorTypes.no_db_connection,
             param=None,
-            code=401,
-            headers={"WWW-Authenticate": "Bearer"},
+            code=503,
         )
     return caller
 

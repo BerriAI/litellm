@@ -12,7 +12,7 @@ vi.mock("@/app/(dashboard)/hooks/claudeCodeMarketplace/useClaudeCodeMarketplaceR
 }));
 
 beforeEach(() => {
-  mockUseMarketplaceRequiresKey.mockReturnValue({ data: false });
+  mockUseMarketplaceRequiresKey.mockReturnValue(false);
 });
 
 const buildSkill = (source: Plugin["source"]): Plugin => ({
@@ -77,19 +77,14 @@ describe("SkillDetail marketplace setup", () => {
     renderSetupTab();
     expect(screen.getByText(/^\/plugin marketplace add .*\/claude-code\/marketplace\.json$/)).toBeInTheDocument();
     expect(screen.queryByText(/Bearer/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/plugin marketplace remove/)).not.toBeInTheDocument();
   });
 
   it("replaces the add command with a snippet carrying the key header when the marketplace requires a key", () => {
-    mockUseMarketplaceRequiresKey.mockReturnValue({ data: true });
+    mockUseMarketplaceRequiresKey.mockReturnValue(true);
     renderSetupTab();
     expect(screen.queryByText(/\/plugin marketplace add/)).not.toBeInTheDocument();
     expect(screen.getByText(/"Authorization": "Bearer <your-litellm-key>"/)).toBeInTheDocument();
-  });
-
-  it("shows the key header snippet until the probe answers, since an open marketplace ignores the header", () => {
-    mockUseMarketplaceRequiresKey.mockReturnValue({ data: undefined });
-    renderSetupTab();
-    expect(screen.queryByText(/\/plugin marketplace add/)).not.toBeInTheDocument();
-    expect(screen.getByText(/"Authorization": "Bearer <your-litellm-key>"/)).toBeInTheDocument();
+    expect(screen.getByText("/plugin marketplace remove litellm")).toBeInTheDocument();
   });
 });

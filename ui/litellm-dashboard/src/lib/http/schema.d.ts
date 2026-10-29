@@ -48183,6 +48183,11 @@ export interface components {
             admin_ui_disabled: boolean;
             /** Auto Redirect To Sso */
             auto_redirect_to_sso: boolean;
+            /**
+             * Claude Code Marketplace Auth Required
+             * @default false
+             */
+            claude_code_marketplace_auth_required: boolean;
             /** Gateway Base Url */
             gateway_base_url?: string | null;
             /**

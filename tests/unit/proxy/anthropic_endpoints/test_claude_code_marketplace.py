@@ -1154,8 +1154,8 @@ async def test_marketplace_auth_required_refuses_the_database_outage_fallback_id
 
     response: Final = await _get_marketplace_over_http({"Authorization": "Bearer sk-not-a-litellm-key"})
 
-    assert response.status_code == 401
-    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.status_code == 503
+    assert "www-authenticate" not in response.headers
     assert "public-skill" not in response.text
 
 

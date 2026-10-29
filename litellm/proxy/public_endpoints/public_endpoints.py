@@ -372,8 +372,8 @@ async def public_skill_hub():
         MANIFEST_FIELDS,
         get_installation_preference,
         get_prisma_client,
-        marketplace_auth_required,
     )
+    from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
         PluginListItem,

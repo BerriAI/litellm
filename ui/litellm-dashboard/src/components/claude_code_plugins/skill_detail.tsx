@@ -52,7 +52,7 @@ interface SkillDetailProps {
 const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const { data: marketplaceRequiresKey = true } = useClaudeCodeMarketplaceRequiresKey();
+  const marketplaceRequiresKey = useClaudeCodeMarketplaceRequiresKey();
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -236,12 +236,22 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
           <h2 className="m-0 mb-2 text-lg font-normal text-foreground">One-time marketplace setup</h2>
 
           {marketplaceRequiresKey ? (
-            <p className="m-0 mb-3 text-sm leading-relaxed text-muted-foreground">
-              This proxy requires a LiteLLM key to read the marketplace. Add this to{" "}
-              <code className="rounded bg-muted px-1.5 py-px text-[13px]">~/.claude/settings.json</code> and replace{" "}
-              <code className="rounded bg-muted px-1.5 py-px text-[13px]">{MARKETPLACE_KEY_PLACEHOLDER}</code> with your
-              key:
-            </p>
+            <>
+              <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3">
+                <p className="m-0 mb-2 text-[13px] leading-relaxed text-muted-foreground">
+                  If you added this marketplace before without a key, remove it first in Claude Code:
+                </p>
+                <pre className="m-0 bg-transparent font-mono text-[13px] text-foreground">
+                  /plugin marketplace remove litellm
+                </pre>
+              </div>
+              <p className="m-0 mb-3 text-sm leading-relaxed text-muted-foreground">
+                This proxy requires a LiteLLM key to read the marketplace. Add this to{" "}
+                <code className="rounded bg-muted px-1.5 py-px text-[13px]">~/.claude/settings.json</code> and replace{" "}
+                <code className="rounded bg-muted px-1.5 py-px text-[13px]">{MARKETPLACE_KEY_PLACEHOLDER}</code> with
+                your key:
+              </p>
+            </>
           ) : (
             <>
               {/* Option 1: single command — fastest path for most users */}
