@@ -57,8 +57,10 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
 def reject_caller_opensearch_index_name(
     caller_body: Mapping[str, object], request_fields: Mapping[str, object], source: str
 ) -> None:
+    provider: Final = request_fields.get("custom_llm_provider")
     if (
-        request_fields.get("custom_llm_provider") == LlmProviders.OPENSEARCH.value
+        isinstance(provider, str)
+        and provider.split("/", 1)[0] == LlmProviders.OPENSEARCH.value
         and "opensearch_index_name" in caller_body
     ):
         raise HTTPException(

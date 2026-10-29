@@ -3068,7 +3068,7 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
 @pytest.mark.parametrize(
     ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("openai", 200, 1)],
+    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
 )
 def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
     provider, expected_status, expected_searches
