@@ -1021,16 +1021,23 @@ OWN_REPORTED_COST_READER_PROVIDERS: Final = frozenset({"xai", "perplexity", "ope
 
 
 def _carries_litellm_bill(response: object) -> bool:
-    """A response the stream builder already priced carries litellm's own bill in ``usage.cost`` too."""
-    hidden: Final[object] = getattr(response, "_hidden_params", None)
-    stamped: Final = hidden.get("response_cost") if isinstance(hidden, Mapping) else None
+    hidden: Final = as_str_mapping(getattr(response, "_hidden_params", None))
+    stamped: Final[object] = None if hidden is None else hidden.get("response_cost")
     return isinstance(stamped, (int, float)) and not isinstance(stamped, bool)
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:
-    """The charge an OpenAI-compatible upstream reports in ``usage.cost``, billed unless the provider has its own
-    reader or the number is litellm's own bill written back onto the usage."""
-    if custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS or _carries_litellm_bill(response):
+    """The charge an OpenAI-compatible upstream reports in a chat completion's ``usage.cost``. Skipped once the stream
+    builder stamped litellm's own bill onto the response (its ``usage.cost`` then holds that bill), and for Responses
+    API objects, whose terminal ``usage.cost`` litellm also rewrites and whose upstream figure is billed through
+    ``set_response_cost_in_hidden_params``."""
+    from litellm.types.utils import ModelResponse
+
+    if (
+        custom_llm_provider in OWN_REPORTED_COST_READER_PROVIDERS
+        or not isinstance(response, ModelResponse)
+        or _carries_litellm_bill(response)
+    ):
         return None
     cost: Final = provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None

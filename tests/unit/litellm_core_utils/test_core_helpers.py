@@ -803,3 +803,20 @@ class TestReceiveStampSurvivesASecondMetadataBucket:
         }
 
         assert get_litellm_metadata_from_kwargs(kwargs)["litellm_received_at"] is own
+
+
+def test_billed_usage_cost_bills_any_chat_upstream_without_its_own_reader() -> None:
+    from types import SimpleNamespace
+
+    from litellm.litellm_core_utils.core_helpers import billed_usage_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    usage = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=0.037)
+    chat = ModelResponse(usage=usage)
+    assert billed_usage_cost(chat, "openai") == 0.037
+    assert billed_usage_cost(chat, "openrouter") == 0.037
+    assert billed_usage_cost(chat, "xai") is None
+    assert billed_usage_cost(SimpleNamespace(usage=usage), "openai") is None
+    stamped = ModelResponse(usage=usage)
+    stamped._hidden_params["response_cost"] = 0.037
+    assert billed_usage_cost(stamped, "openai") is None
