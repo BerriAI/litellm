@@ -219,8 +219,8 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         images: Final = [*(model_response.data or ()), *(ImageObject(url=url) for url in _image_urls(response_object))]
         usage: Final = response_object.get("usage")
         usage_fields: Final[Mapping[str, object]] = usage if isinstance(usage, Mapping) else {}
-        width: Final = usage_fields.get("width")
-        height: Final = usage_fields.get("height")
+        width: Final = usage_fields.get("output_width", usage_fields.get("width"))
+        height: Final = usage_fields.get("output_height", usage_fields.get("height"))
         image_response: Final = model_response.model_copy(
             update={
                 "data": images,

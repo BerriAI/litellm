@@ -564,16 +564,28 @@ def test_transform_response_rejects_malformed_payloads_without_echoing_them(
     assert "input_value" not in str(exc_info.value)
 
 
-def test_a_per_pixel_deployment_bills_the_size_dashscope_rendered_when_the_caller_sent_none():
+@pytest.mark.parametrize(
+    ("model", "usage"),
+    (
+        ("qwen-image-2.0", {"width": 2048, "height": 1536, "image_count": 1}),
+        (
+            "qwen-image-3.0",
+            {"output_width": 2048, "output_height": 1536, "output_image_count": 1, "input_image_count": 0},
+        ),
+    ),
+)
+def test_a_per_pixel_deployment_bills_the_size_dashscope_rendered_when_the_caller_sent_none(
+    model: str, usage: dict[str, int]
+):
     response = _transform_response(
         {
             "output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]},
-            "usage": {"width": 2048, "height": 1536, "image_count": 1},
+            "usage": usage,
         }
     )
 
     cost = CostCalculatorUtils.route_image_generation_cost_calculator(
-        model="qwen-image-2.0",
+        model=model,
         completion_response=response,
         custom_llm_provider="dashscope",
         call_type="image_generation",
