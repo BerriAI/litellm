@@ -2308,6 +2308,30 @@ def test_a_failed_dispatch_is_estimated_as_input_only():
     assert usage.total_tokens == usage.prompt_tokens
 
 
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+def test_a_failed_dispatch_to_a_custom_named_deployment_is_counted_with_its_base_model_only_when_it_is_openai(
+    base_model: str, counted_as: str
+):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _estimated_prompt_usage, count_request_input_tokens
+
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    logging_obj = _dispatched_failure_logging_obj(
+        "my-gpt-6", get_litellm_params(metadata={"model_info": {"base_model": base_model}})
+    )
+    logging_obj.model_call_details["messages"] = messages
+
+    usage: Final = _estimated_prompt_usage(logging_obj.model_call_details, {}, "acompletion")
+
+    assert usage is not None
+    assert count_request_input_tokens(base_model, messages, None) != count_request_input_tokens(
+        "my-gpt-6", messages, None
+    )
+    assert usage.prompt_tokens == count_request_input_tokens(counted_as, messages, None)
+
+
 @pytest.mark.parametrize("request_input", [[], object()])
 def test_nothing_is_estimated_when_there_is_nothing_to_count(request_input):
     from litellm.proxy.utils import _estimate_dispatched_failure_usage

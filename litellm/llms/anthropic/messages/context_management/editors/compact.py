@@ -189,6 +189,21 @@ def _strip_compaction_blocks(
     return cleaned
 
 
+def history_after_client_compaction(
+    messages: Sequence[dict[str, object]],
+    system: str | Sequence[Mapping[str, object]] | None,
+) -> tuple[list[dict[str, object]], str | Sequence[Mapping[str, object]] | None]:
+    """Return the history the API keeps after the latest compaction block, without it, and the system with its summary."""
+    sliced, block = _slice_around_compaction_block(messages)
+    if block is None:
+        return list(messages), system
+    tail: Final = _strip_compaction_blocks(sliced)
+    summary: Final = block.get("content")
+    if not isinstance(summary, str) or not summary:
+        return tail, system
+    return tail, _augment_system_with_summary(_system_to_text(system) or None, summary)
+
+
 def _augment_system_with_summary(
     system: str | list[dict[str, object]] | None,
     summary_text: str,
@@ -320,14 +335,16 @@ def _count_effective_tokens(
         content: Final = compaction_block.get("content") or ""
         if content:
             total += litellm.token_counter(model=model, text=content)
+    return total + count_system_tokens(model, system)
+
+
+def count_system_tokens(model: str, system: str | Sequence[Mapping[str, object]] | None) -> int:
     system_text: Final = _system_to_text(system)
-    if system_text:
-        total += litellm.token_counter(model=model, text=system_text)
-    return total
+    return litellm.token_counter(model=model, text=system_text) if system_text else 0
 
 
 def _system_to_text(
-    system: str | list[dict[str, object]] | None,
+    system: str | Sequence[Mapping[str, object]] | None,
 ) -> str:
     """Flatten an Anthropic-style ``system`` value into a single string for
     token counting. Returns ``""`` when ``system`` carries no text."""
@@ -338,7 +355,7 @@ def _system_to_text(
     return "\n".join(
         text
         for block in system
-        if isinstance(block, dict)
+        if isinstance(block, Mapping)
         and block.get("type") == "text"
         and isinstance(text := block.get("text"), str)
         and text
