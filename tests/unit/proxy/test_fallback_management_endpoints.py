@@ -12,7 +12,7 @@ import copy
 import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +21,7 @@ from pydantic import JsonValue, TypeAdapter
 from redis.exceptions import NoPermissionError
 
 from litellm import Router
+from litellm.proxy.config_resolvers.settings_rules import Section
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -32,6 +33,15 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.utils import evict_config_param, get_config_param, litellm_config_cache
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
+
+
+@pytest.fixture(autouse=True)
+async def empty_config_cache() -> AsyncIterator[None]:
+    for section in get_args(Section):
+        await evict_config_param(section)
+    yield
+    for section in get_args(Section):
+        await evict_config_param(section)
 
 
 class TestFallbackCreateRequest:
@@ -172,6 +182,7 @@ class TestCreateFallbackForTeamScopedModels:
         client.writer_db = client.db
         client.db.litellm_config.find_unique = AsyncMock(return_value=None)
         client.db.litellm_config.upsert = AsyncMock()
+        client.get_generic_data = AsyncMock(return_value=None)
         return client
 
     @pytest.fixture
@@ -261,8 +272,7 @@ class _ConfigFileProxyConfig(ProxyConfig):
         self.config_file: RouterSettings = config_file or {}
         self.router_settings.load_yaml(_ROUTER_SETTINGS_JSON.validate_python(self.config_file))
 
-    async def get_config(self, config_file_path: str | None = None) -> dict:
-        self.router_settings.load_yaml(_ROUTER_SETTINGS_JSON.validate_python(self.config_file))
+    async def _get_config_from_file(self, config_file_path: str | None = None) -> dict[str, RouterSettings]:
         return {"router_settings": copy.deepcopy(self.config_file)}
 
 
@@ -278,7 +288,9 @@ class _StoredRouterSettings:
     ) -> None:
         self.row: SimpleNamespace | None = None if router_settings is None else _config_row(router_settings)
         self.prisma_client: Final = MagicMock()
-        self.prisma_client.get_generic_data = AsyncMock(side_effect=lambda **_: self.row)
+        self.prisma_client.get_generic_data = AsyncMock(
+            side_effect=lambda value, **_: self.row if value == "router_settings" else None
+        )
         self.prisma_client.writer_db.litellm_config.find_unique = AsyncMock(
             side_effect=lambda **_: copy.deepcopy(self.row)
         )
@@ -328,12 +340,6 @@ class _RedisThatRefusesDel:
 
 class TestFallbackWritesSeeTheLatestStoredRules:
     """A write reads the rules the database holds now and leaves no stale copy in the config cache behind"""
-
-    @pytest.fixture(autouse=True)
-    async def clean_config_cache(self) -> AsyncIterator[None]:
-        await evict_config_param("router_settings")
-        yield
-        await evict_config_param("router_settings")
 
     async def _create(self, request: FallbackCreateRequest, stored: _StoredRouterSettings) -> FallbackResponse:
         with (
@@ -604,6 +610,7 @@ class TestCreateFallback:
         client.writer_db = client.db
         client.db.litellm_config.find_unique = AsyncMock(return_value=None)
         client.db.litellm_config.upsert = AsyncMock()
+        client.get_generic_data = AsyncMock(return_value=None)
         client.jsonify_object = lambda x: x
         return client
 
@@ -913,6 +920,7 @@ class TestDeleteFallback:
             return_value=_config_row({"fallbacks": [{"gpt-3.5-turbo": ["gpt-4", "claude-3-haiku"]}]})
         )
         client.db.litellm_config.upsert = AsyncMock()
+        client.get_generic_data = AsyncMock(return_value=None)
         client.jsonify_object = lambda x: x
         return client
 
