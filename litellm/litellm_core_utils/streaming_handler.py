@@ -2410,6 +2410,7 @@ class CustomStreamWrapper:
                 self.sent_stream_usage = True
                 return response
 
+            self.logging_obj.mark_stream_success_dispatched()
             _deferred_cb: Final = getattr(
                 self.logging_obj,
                 "_on_deferred_stream_complete",

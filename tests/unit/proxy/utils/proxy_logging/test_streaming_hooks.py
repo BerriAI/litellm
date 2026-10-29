@@ -27,7 +27,8 @@ from litellm.llms.anthropic.messages.native.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.utils import ProxyLogging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.proxy.utils import ProxyLogging, _failure_fields_to_lift
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Usage
 
@@ -733,6 +734,87 @@ async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes
         "failure_usage_recorded": "combined_usage_object" in logging_obj.model_call_details,
     }
     assert snapshot == {"events": ["success_dispatched"], "args_cleared": True, "failure_usage_recorded": False}
+
+
+async def _chat_stream_parked_for_the_proxy(
+    test_name: str, request_data: dict[str, object], events: list[str]
+) -> CustomStreamWrapper:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="gpt-4o-mini",
+        messages=messages,
+        stream=True,
+        litellm_call_id=test_name,
+    )
+
+    async def _dispatch_deferred_logging(*args: object) -> None:
+        events.append("success_dispatched")
+
+    logging_obj._on_deferred_stream_complete = _dispatch_deferred_logging
+    request_data["litellm_logging_obj"] = logging_obj
+    stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=messages,
+        stream=True,
+        mock_response="BANANA SPLIT",
+        litellm_logging_obj=logging_obj,
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_callback_error_after_its_success_dispatch_leaves_the_failure_row_nothing_to_bill(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    events: Final[list[str]] = []
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+    stream: Final = await _chat_stream_parked_for_the_proxy("stream-success-then-callback-error", request_data, events)
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(RuntimeError("callback crashed"))])
+
+    with pytest.raises(RuntimeError):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=stream, user_api_key_dict=make_user_api_key_auth(), request_data=request_data
+        ):
+            pass
+    await asyncio.sleep(0)
+
+    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    assert events == ["success_dispatched"]
+    assert (lifted.get("combined_usage_object"), lifted.get("response_cost")) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_guardrail_block_after_its_success_was_parked_bills_the_stream_on_the_failure_row(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    events: Final[list[str]] = []
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+    stream: Final = await _chat_stream_parked_for_the_proxy("stream-success-then-guardrail-block", request_data, events)
+    monkeypatch.setattr(
+        litellm, "callbacks", [_raising_at_end_of_stream(GuardrailRaisedException(guardrail_name="g", message="no"))]
+    )
+
+    with pytest.raises(GuardrailRaisedException):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=stream, user_api_key_dict=make_user_api_key_auth(), request_data=request_data
+        ):
+            pass
+    await asyncio.sleep(0)
+
+    lifted: Final = _failure_fields_to_lift(request_data)
+    billed_usage: Final = lifted.get("combined_usage_object")
+    assert events == []
+    assert isinstance(billed_usage, Usage)
+    assert billed_usage.completion_tokens > 0
+    assert lifted.get("response_cost") == pytest.approx(
+        litellm.completion_cost(
+            completion_response=litellm.ModelResponse(model="gpt-4o-mini", usage=billed_usage), model="gpt-4o-mini"
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

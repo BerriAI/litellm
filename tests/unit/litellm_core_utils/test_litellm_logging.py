@@ -4574,6 +4574,48 @@ async def test_async_success_handler_logs_a_completed_stream_only_once():
 
 
 @pytest.mark.asyncio
+async def test_an_unpriced_continuation_logs_only_its_own_tokens_and_keeps_the_cut_partial_off_the_success_row():
+    recorder: Final = _SuccessCapturingLogger()
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="litellm-unpriced-continuation",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="unpriced-continuation",
+        function_id="unpriced-continuation",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="litellm-unpriced-continuation",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "unpriced-continuation", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+    cut_usage: Final = Usage(prompt_tokens=40, completion_tokens=7, total_tokens=47)
+    logging_obj.record_partial_usage_for_failure(cut_usage, 0.001)
+    logging_obj.carry_failed_attempt_usage()
+    logging_obj.record_continued_partial(usage=cut_usage, response_cost=0.001, response_id=None)
+
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="litellm-unpriced-continuation",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+
+    assert recorder.success_payload is not None
+    assert (recorder.success_payload["prompt_tokens"], recorder.success_payload["completion_tokens"]) == (5, 2)
+    assert not recorder.success_payload["response_cost"]
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((cut_usage, 0.001),)
+
+
+@pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_streaming_pass_through():
     """
     Test that async_success_handler sets standard_logging_object for streaming

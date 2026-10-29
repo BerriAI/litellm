@@ -618,6 +618,9 @@ def same_attempt_marker(first: object, second: object) -> bool:
     return first is second or first == second
 
 
+_NO_STREAM_SUCCESS_DISPATCHED: Final = object()
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -841,6 +844,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
+        self._stream_success_dispatched_attempt: object = _NO_STREAM_SUCCESS_DISPATCHED
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
@@ -2544,13 +2548,17 @@ class Logging(LiteLLMLoggingBaseClass):
     def _add_continued_partial_spend(self, response: object) -> None:
         partial_usage: Final = self.model_call_details.get("continued_partial_usage")
         partial_cost: Final = self.model_call_details.get("continued_partial_cost")
+        own_cost: Final = self.model_call_details.get("response_cost")
+        if not (
+            isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_cost, (int, float))
+        ):
+            return
         own_usage: Final = (
             ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)
             if isinstance(response, ResponsesAPIResponse)
             else getattr(response, "usage", None)
         )
-        own_cost: Final = self.model_call_details.get("response_cost")
-        if not (isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_usage, Usage)):
+        if not isinstance(own_usage, Usage):
             return
         from litellm.cost_calculator import BaseTokenUsageProcessor
 
@@ -2558,8 +2566,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, partial_usage]
         )
-        if not isinstance(own_cost, (int, float)):
-            return
         self.model_call_details["response_cost"] = own_cost + partial_cost
         if self.cost_breakdown is not None:
             self.cost_breakdown = self.cost_breakdown | CostBreakdown(
@@ -2634,6 +2640,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def mark_async_success_log_enqueued(self) -> None:
         self._async_success_enqueued = True
+
+    def mark_stream_success_dispatched(self) -> None:
+        self._stream_success_dispatched_attempt = self.model_call_details.get("current_attempt_api_call_start_time")
+
+    def withdraw_stream_success_dispatch(self) -> None:
+        self._stream_success_dispatched_attempt = _NO_STREAM_SUCCESS_DISPATCHED
+
+    @property
+    def stream_success_dispatched_for_current_attempt(self) -> bool:
+        return same_attempt_marker(
+            self._stream_success_dispatched_attempt, self.model_call_details.get("current_attempt_api_call_start_time")
+        )
 
     def claim_async_success_log(self) -> bool:
         """One async success log per request. The innermost @client wrapper always exits first,

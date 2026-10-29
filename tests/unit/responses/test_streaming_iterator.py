@@ -1426,6 +1426,9 @@ class _FakeLoggingObj:
         self.success_logged = threading.Event()
         self.failure_logged = threading.Event()
 
+    def mark_stream_success_dispatched(self) -> None:
+        pass
+
     # Signature alignment with Logging handlers
     async def dispatch_success_handlers(self, *args, **kwargs):
         kwargs.pop("prefer_async_handlers", None)

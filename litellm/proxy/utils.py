@@ -1597,15 +1597,22 @@ def _failure_fields_to_lift(
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
-    _billed: Final = provider_billed and not _success_already_logged
-    _usage_to_lift: Final = _failure_usage_to_lift(
-        model_call_details=_model_call_details,
-        request_body=request_data,
-        dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
-        provider_billed=_billed,
-        deployment_id=_deployment_id,
-        base_model=_base_model,
-        dispatched_call_type=dispatched_call_type,
+    _stream_success_bills_this_attempt: Final = (
+        isinstance(_logging_obj, Logging) and _logging_obj.stream_success_dispatched_for_current_attempt
+    )
+    _billed: Final = provider_billed and not (_success_already_logged or _stream_success_bills_this_attempt)
+    _usage_to_lift: Final = (
+        None
+        if _stream_success_bills_this_attempt
+        else _failure_usage_to_lift(
+            model_call_details=_model_call_details,
+            request_body=request_data,
+            dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
+            provider_billed=_billed,
+            deployment_id=_deployment_id,
+            base_model=_base_model,
+            dispatched_call_type=dispatched_call_type,
+        )
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data, dispatched_call_type)
@@ -4943,6 +4950,7 @@ class ProxyLogging:
                 logging_obj.record_billed_rounds_for_failure(billed.spend)
             case _:
                 return False
+        logging_obj.withdraw_stream_success_dispatch()
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
         return True

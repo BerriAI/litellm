@@ -634,6 +634,7 @@ class BaseResponsesAPIStreamingIterator:
         self._restore_provider_response_headers(logging_response)
 
         end_time: Final = datetime.now()
+        self.logging_obj.mark_stream_success_dispatched()
         if is_async:
             logging_coroutine: Final = self.logging_obj.dispatch_success_handlers(
                 logging_response,

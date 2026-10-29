@@ -3738,13 +3738,7 @@ async def test_continued_stream_success_log_bills_every_cut_leg(
     assert {chunk.id for chunk in chunks} == {spend_row["request_id"]}
 
 
-@pytest.mark.asyncio
-async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_to_its_own_deployment(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    recorder: Final = _SlowFailureRecorder()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
+async def _stream_chat_continuation_sharing_the_proxy_logging_object(respx_mock: respx.MockRouter) -> LiteLLMLogging:
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Transformers use"))
     )
@@ -3788,6 +3782,18 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
         litellm_logging_obj=shared_logging,
     )
     _ = [chunk async for chunk in response]
+    return shared_logging
+
+
+@pytest.mark.asyncio
+async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_to_its_own_deployment(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SlowFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await _stream_chat_continuation_sharing_the_proxy_logging_object(respx_mock)
     await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
     await asyncio.sleep(0.5)
 
@@ -3803,6 +3809,25 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
     assert recorder.successes[-1]["response_cost"] == pytest.approx(
         failure["response_cost"] + backup_prompt_cost + backup_completion_cost
     )
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_a_continued_stream_success_bills_nothing_the_success_row_already_billed(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    shared_logging: Final = await _stream_chat_continuation_sharing_the_proxy_logging_object(respx_mock)
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    (success,) = recorder.successes
+    assert success["cost_breakdown"]["additional_costs"]["mid_stream_partial_cost"] > 0
+    late_failure: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging}, provider_billed=True)
+    assert (late_failure.get("combined_usage_object"), late_failure.get("response_cost")) == (None, None)
 
 
 def _responses_sse(*events: Mapping[str, object]) -> str:
@@ -3984,7 +4009,7 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_bills_the_cut
         success["response_cost"],
     )
     late_failure: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging}, provider_billed=True)
-    assert float(late_failure.get("response_cost", 0.0)) - success["response_cost"] < 1e-9
+    assert (late_failure.get("combined_usage_object"), late_failure.get("response_cost")) == (None, None)
 
 
 @pytest.mark.asyncio
