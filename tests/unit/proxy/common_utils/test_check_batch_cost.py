@@ -2917,6 +2917,7 @@ class TestPollPageStarvation:
                 created_at=now - age,
                 updated_at=now,
                 status="in_progress",
+                file_object={},
             )
             for name, age in (("old", timedelta(days=3)), ("new", timedelta(hours=1)))
         )
@@ -2943,6 +2944,7 @@ class TestPollPageStarvation:
                 created_at=now - age,
                 updated_at=now,
                 status="in_progress",
+                file_object={},
             )
             for name, age in ages.items()
         )
@@ -3787,8 +3789,18 @@ class TestMultiPodBatchCostClaim:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("has_batch_processed_column", (True, False))
     async def test_billing_a_batch_keeps_the_endpoint_it_was_created_for(self, has_batch_processed_column: bool) -> None:
+        from litellm.types.utils import LiteLLMBatch
+
         row: Final = _FakeManagedObjectRow()
-        row.file_object = json.dumps({**json.loads(row.file_object), "endpoint": "/v1/embeddings"})
+        row.file_object = LiteLLMBatch(
+            id="batch-456",
+            status="in_progress",
+            input_file_id="file-input-1",
+            endpoint="/v1/embeddings",
+            completion_window="24h",
+            created_at=1,
+            object="batch",
+        ).model_dump_json()
         instance: Final = self._instance(self._prisma(row, []), self._router())
         instance._has_batch_processed_column = has_batch_processed_column
 
