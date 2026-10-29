@@ -389,8 +389,9 @@ class _ProxyDBLogger(CustomLogger):
         completed_cost: Final = (
             _str_keyed_fields(request_data.get("standard_logging_object")).get("cost_finalized") is True
         )
+        tracking_disabled: Final = ProxyUpdateSpend.disable_spend_updates()
         try:
-            if not completed_cost:
+            if not completed_cost or tracking_disabled:
                 await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
@@ -402,6 +403,9 @@ class _ProxyDBLogger(CustomLogger):
                 verbose_proxy_logger.exception(
                     "Failed to invalidate budget reservation counters after failure release failed"
                 )
+
+        if completed_cost and tracking_disabled:
+            return
 
         request_route: Final = user_api_key_dict.request_route
         if (

@@ -411,6 +411,7 @@ async def test_deferred_cache_hit_finalizes_zero_for_results_without_hidden_para
 @pytest.mark.parametrize("mutate_usage", [False, True])
 @pytest.mark.parametrize("disable_error_logs", [False, True])
 @pytest.mark.parametrize("reserved_cost", [0.0, 0.4])
+@pytest.mark.parametrize("disable_spend_updates", [False, True])
 async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     logging_obj: Logging,
     monkeypatch: pytest.MonkeyPatch,
@@ -419,6 +420,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     mutate_usage: bool,
     disable_error_logs: bool,
     reserved_cost: float,
+    disable_spend_updates: bool,
 ) -> None:
     from unittest.mock import create_autospec
     import anyio
@@ -449,7 +451,14 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
             assert isinstance(failure, BaseException)
             raise failure
 
-    monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_error_logs})
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {
+            "disable_error_logs": disable_error_logs,
+            "disable_spend_updates": disable_spend_updates,
+        },
+    )
     writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
     monkeypatch.setattr(litellm, "callbacks", [RejectCompletedCall(), ProxyDBLogger(spend_writer=lambda: writer)])
     monkeypatch.setattr(litellm, "apply_search_free_tier", False)
@@ -508,6 +517,13 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
         with pytest.raises(ProxyException) as error:
             await processor.handle_llm_api_exception(e=failure, user_api_key_dict=auth, proxy_logging_obj=proxy_logging)
         assert float(error.value.headers["x-litellm-response-cost"]) == pytest.approx(0.5 + guardrail_cost)
+    if disable_spend_updates:
+        assert writer.update_database.await_count == 0
+        for key in ("spend:key:completed-key", "spend:team:completed-team", "spend:tag:User-Agent: budget-client"):
+            assert await counters.async_get_cache(key=key) == pytest.approx(1.5)
+        if auth.budget_reservation is not None:
+            assert auth.budget_reservation["finalized"] is True
+        return
     assert writer.update_database.await_count == 1
     recorded: Final = writer.update_database.call_args.kwargs
     assert recorded["response_cost"] == pytest.approx(0.5 + guardrail_cost)
