@@ -1052,13 +1052,21 @@ def is_openai_model(model: str) -> bool:
 def deployment_openai_model(deployment: object) -> str | None:
     """The OpenAI model a router deployment serves, read from its base model first, since a custom deployment name
     (`azure/my-gpt-5`) says nothing about its tokenizer, or None when it serves no OpenAI model."""
-    served: Final = next(iter(deployment_pricing_models(deployment)), None)
-    return served if served is not None and is_openai_model(served) else None
+    return _as_openai_model(_served_model(deployment))
 
 
 def served_openai_models(deployments: Iterable[object]) -> tuple[str | None, ...]:
     """The distinct OpenAI models `deployments` serve, with None standing for any deployment serving another model."""
-    return tuple(dict.fromkeys(deployment_openai_model(deployment) for deployment in deployments))
+    served: Final = dict.fromkeys(_served_model(deployment) for deployment in deployments)
+    return tuple(dict.fromkeys(_as_openai_model(model) for model in served))
+
+
+def _served_model(deployment: object) -> str | None:
+    return next(iter(deployment_pricing_models(deployment)), None)
+
+
+def _as_openai_model(model: str | None) -> str | None:
+    return model if model is not None and is_openai_model(model) else None
 
 
 def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
