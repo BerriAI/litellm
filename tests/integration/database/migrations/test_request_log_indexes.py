@@ -1,5 +1,7 @@
+import hashlib
 import os
 import queue
+import secrets
 import shutil
 import subprocess
 import sys
@@ -14,7 +16,7 @@ from typing import Final
 
 import psycopg
 import pytest
-from litellm_proxy_extras import request_log_indexes
+from litellm_proxy_extras import migration_data_checks, request_log_indexes
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
 from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
@@ -408,6 +410,12 @@ def test_a_migration_without_a_failed_row_is_not_touched(partitioned_database: s
     assert _ledger(partitioned_database) == before
 
 
+def _backend_pid(connection: "psycopg.Connection[tuple[object, ...]]") -> int:
+    row: Final = connection.execute("SELECT pg_backend_pid()").fetchone()
+    assert row is not None and isinstance(row[0], int), row
+    return row[0]
+
+
 def _pin_a_snapshot_on(database_url: str, table: str) -> "psycopg.Connection[tuple[object, ...]]":
     pin: Final = psycopg.connect(database_url)
     pin.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
@@ -529,6 +537,25 @@ def test_an_invalid_child_index_left_by_an_interrupted_build_is_rebuilt_and_atta
     assert ensure_request_log_indexes(partitioned_database, "public") is True
 
     _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+
+
+@requires_db
+def test_partitioning_a_table_the_index_job_already_covered_moves_its_call_id_index_aside(
+    scratch_database: str,
+) -> None:
+    """The runbook renames the Prisma indexes off the legacy table so the partitioned table can take their
+    names. The call-id index is built by the index job, not Prisma, and a deployment that partitions after
+    that job ran kept the name on the legacy table, so every later job run reported it as on another table."""
+    assert ensure_request_log_indexes(scratch_database, "public") is True
+    assert _indexed_table(scratch_database, CALL_ID_INDEX) == "LiteLLM_SpendLogs"
+
+    _partition_spend_logs(scratch_database)
+
+    assert (
+        _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_litellm_call_id_idx") == "LiteLLM_SpendLogs_legacy"
+    )
+    assert ensure_request_log_indexes(scratch_database, "public") is True
+    _assert_index_covers_every_partition(scratch_database, CALL_ID_INDEX, "litellm_call_id_idx")
 
 
 @requires_db
@@ -722,7 +749,7 @@ def test_inserts_are_never_held_back_while_attach_partition_waits_for_a_reader_o
         reader.execute(
             sql.SQL('SELECT count(*) FROM {} WHERE "litellm_call_id" IS NULL').format(sql.Identifier(partition))
         ).fetchone()
-        reader_pid: Final = reader.execute("SELECT pg_backend_pid()").fetchone()[0]
+        reader_pid: Final = _backend_pid(reader)
         with psycopg.connect(partitioned_database, autocommit=True) as inspector:
             child_lock: Final = inspector.execute(
                 "SELECT 1 FROM pg_locks WHERE pid = %s AND relation = to_regclass(%s) "
@@ -785,7 +812,7 @@ def test_an_attach_that_never_gets_its_lock_is_left_for_the_next_index_build(
         reader.execute(
             sql.SQL('SELECT count(*) FROM {} WHERE "litellm_call_id" IS NULL').format(sql.Identifier(partition))
         ).fetchone()
-        reader_pid: Final = reader.execute("SELECT pg_backend_pid()").fetchone()[0]
+        reader_pid: Final = _backend_pid(reader)
         with psycopg.connect(partitioned_database, autocommit=True) as inspector:
             child_lock: Final = inspector.execute(
                 "SELECT 1 FROM pg_locks WHERE pid = %s AND relation = to_regclass(%s) "
@@ -914,3 +941,249 @@ def test_a_second_copy_of_a_managed_index_is_reported_with_its_drop_statement_an
 
     assert 'remove it with: DROP INDEX CONCURRENTLY "public"."call_id_copy"' in caplog.text
     assert _index_oids(scratch_database)["call_id_copy"] == copy
+
+
+def _insert_spend_log_with_key(conn: "psycopg.Connection[tuple[object, ...]]", request_id: str, api_key: str) -> None:
+    conn.execute(
+        'INSERT INTO "LiteLLM_SpendLogs" ("request_id", "call_type", "startTime", "endTime", "api_key") '
+        "VALUES (%s, %s, %s, %s, %s)",
+        (request_id, "acompletion", "2025-06-03 14:02:11", "2025-06-03 14:02:13", api_key),
+    )
+
+
+def _legacy_bearer_token() -> str:
+    """A raw JWT-sized bearer token the way a pre-v1.99.0 proxy stored it: random, so
+    Postgres cannot compress it into the 2704-byte btree entry limit."""
+    return "Bearer " + secrets.token_hex(1600)
+
+
+_HASH_LEGACY_KEYS: Final = (
+    'UPDATE "LiteLLM_SpendLogs" SET api_key = encode(sha256(convert_to('
+    "regexp_replace(api_key, '^[Bb][Ee][Aa][Rr][Ee][Rr] ', ''), 'UTF8')), 'hex') "
+    "WHERE api_key <> '' AND api_key !~ '^[0-9a-fA-F]{64}$' AND api_key !~ '^hashed-jwt-[0-9A-Fa-f]{64}$'"
+)
+
+
+@requires_db
+@RESOLVERS
+@pytest.mark.parametrize("release", (API_KEY_INDEX_MIGRATION,), ids=("v1.102.1",))
+def test_the_migration_job_refuses_before_the_first_migration_when_spend_log_keys_are_too_long_for_the_index(
+    scratch_database: str, use_v2_resolver: bool
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        _insert_spend_log_with_key(conn, "legacy-1", _legacy_bearer_token())
+        _insert_spend_log_with_key(conn, "legacy-2", _legacy_bearer_token())
+        _insert_spend_log_with_key(conn, "hashed-1", "a" * 64)
+        _insert_spend_log_with_key(conn, "repetitive-1", "z" * 3000)
+    ledger_before: Final = _ledger(scratch_database)
+
+    with pytest.raises(RuntimeError) as refused:
+        ProxyExtrasDBManager.run_migration_job(use_migrate=True, use_v2_resolver=use_v2_resolver)
+
+    refusal: Final = str(refused.value)
+    assert (
+        '"LiteLLM_SpendLogs".api_key, startTime: 2 row(s) with an index entry over 2704 bytes, largest 3232 bytes '
+        "(api_key up to 3207 bytes)"
+    ) in refusal, refusal
+    assert f'blocks: CREATE INDEX "{API_KEY_INDEX}"' in refusal, refusal
+    assert _ledger(scratch_database) == ledger_before, "a refused job must not apply a single migration"
+    assert API_KEY_INDEX not in _index_validity(scratch_database, "api_key_startTime_idx")
+
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(_HASH_LEGACY_KEYS)
+    assert ProxyExtrasDBManager.run_migration_job(use_migrate=True, use_v2_resolver=use_v2_resolver) is True
+    assert _index_validity(scratch_database, "api_key_startTime_idx") == {API_KEY_INDEX: True}
+    assert len(_ledger(scratch_database)) > len(ledger_before)
+
+
+@requires_db
+@pytest.mark.parametrize("release", (API_KEY_INDEX_MIGRATION,), ids=("v1.102.1",))
+def test_a_serving_proxy_index_build_that_meets_too_long_keys_reports_the_rows_instead_of_the_postgres_error(
+    scratch_database: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True) is True
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        _insert_spend_log_with_key(conn, "legacy-1", _legacy_bearer_token())
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        built: Final = ensure_request_log_indexes(scratch_database, "public")
+
+    assert built is False
+    assert f"Not building index {API_KEY_INDEX}" in caplog.text, caplog.text
+    assert '"LiteLLM_SpendLogs".api_key, startTime: 1 row(s) with an index entry over 2704 bytes' in caplog.text, (
+        caplog.text
+    )
+    assert "exceeds btree version 4 maximum" not in caplog.text, caplog.text
+    assert API_KEY_INDEX not in _index_validity(scratch_database, "api_key_startTime_idx")
+
+
+_PROBE_STATEMENTS: Final = (
+    'CREATE UNIQUE INDEX "probe_b_key" ON "preflight_probe" ("b")',
+    'ALTER TABLE "preflight_probe" ALTER COLUMN "b" SET NOT NULL',
+    'ALTER TABLE "preflight_probe" ADD COLUMN "c" INTEGER NOT NULL',
+    'ALTER TABLE "preflight_probe" ADD CONSTRAINT "probe_r_fkey" FOREIGN KEY ("r") REFERENCES "preflight_parent"("id")',
+    'ALTER TABLE "preflight_probe" ADD CONSTRAINT "probe_a_check" CHECK ("a" <> \'bad\')',
+    'CREATE INDEX "probe_a_idx" ON "preflight_probe" ("a")',
+)
+
+
+@requires_db
+def test_each_check_kind_counts_exactly_the_rows_postgres_would_reject(scratch_database: str) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "preflight_parent" ("id" INTEGER PRIMARY KEY)')
+        conn.execute('CREATE TABLE "preflight_probe" ("a" TEXT, "b" INTEGER, "r" INTEGER)')
+        conn.execute('INSERT INTO "preflight_parent" VALUES (1)')
+        conn.execute(
+            'INSERT INTO "preflight_probe" VALUES (%s, 1, 1), (%s, 1, 1), (%s, NULL, 2), (%s, 2, NULL), (%s, 3, 1)',
+            ("ok", "ok", "bad", "bad", secrets.token_hex(1400)),
+        )
+        checks: Final = tuple(
+            check
+            for statement in _PROBE_STATEMENTS
+            for check in migration_data_checks.checks_for_statement(statement, "probe")
+        )
+        findings: Final = migration_data_checks.find_blockers(conn, "public", checks)
+        for statement in _PROBE_STATEMENTS:
+            with conn.transaction(force_rollback=True), pytest.raises(psycopg.Error):
+                conn.execute(statement)  # pyright: ignore[reportArgumentType]  # test SQL
+
+    counted: Final = {
+        (f.check.kind, f.check.columns): f.rows for f in findings if isinstance(f, migration_data_checks.BlockedChange)
+    }
+    assert counted == {
+        ("duplicates", ("b",)): 1,
+        ("nulls", ("b",)): 1,
+        ("any_row", ("c",)): 5,
+        ("orphans", ("r",)): 1,
+        ("check_violations", ()): 2,
+        ("too_long", ("a",)): 1,
+    }
+
+
+@requires_db
+@pytest.mark.parametrize(
+    ("index_columns", "s_value", "t_value", "longest_fitting_key", "described_as"),
+    (
+        (("k", "t"), None, "2025-06-03 14:02:11", 2684, "k up to 2685 bytes"),
+        (("s", "k"), "q" * 20, None, 2668, "s up to 20 bytes, k up to 2669 bytes"),
+        (("s", "k"), None, None, 2684, "k up to 2685 bytes"),
+    ),
+    ids=("key then timestamp", "20-byte text then key", "NULL then key"),
+)
+def test_the_entry_size_check_draws_the_line_exactly_where_postgres_does(
+    scratch_database: str,
+    index_columns: tuple[str, ...],
+    s_value: str | None,
+    t_value: str | None,
+    longest_fitting_key: int,
+    described_as: str,
+) -> None:
+    """One row's key is the longest that still fits the index entry, the other's is one byte
+    longer. Where that line falls depends on the other indexed column, its alignment and the
+    null bitmap, so the same two rows go through the check and through Postgres."""
+    create_index: Final = sql.SQL('CREATE INDEX "entry_probe_idx" ON "entry_probe" ({})').format(
+        sql.SQL(", ").join(sql.Identifier(column) for column in index_columns)
+    )
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "entry_probe" ("s" TEXT, "k" TEXT, "t" TIMESTAMP(3))')
+        conn.execute(
+            'INSERT INTO "entry_probe" ("s", "k", "t") VALUES (%s, %s, %s), (%s, %s, %s)',
+            (
+                s_value,
+                secrets.token_hex(longest_fitting_key)[:longest_fitting_key],
+                t_value,
+                s_value,
+                secrets.token_hex(longest_fitting_key)[: longest_fitting_key + 1],
+                t_value,
+            ),
+        )
+        findings: Final = migration_data_checks.find_blockers(
+            conn, "public", migration_data_checks.checks_for_statement(create_index.as_string(conn), "probe")
+        )
+        with pytest.raises(psycopg.errors.ProgramLimitExceeded, match="exceeds btree version 4 maximum 2704"):
+            conn.execute(create_index)
+        conn.execute('DELETE FROM "entry_probe" WHERE octet_length("k") > %s', (longest_fitting_key,))
+        conn.execute(create_index)
+
+    (finding,) = findings
+    assert isinstance(finding, migration_data_checks.BlockedChange)
+    assert finding.rows == 1, "the check must count the row one byte over the line and not the row on it"
+    assert finding.detail == f"with an index entry over 2704 bytes, largest 2712 bytes ({described_as})"
+
+
+@requires_db
+def test_a_value_postgres_compresses_under_the_limit_is_not_counted_while_random_text_of_that_length_is(
+    scratch_database: str,
+) -> None:
+    """Postgres compresses a long value before it checks the entry size, so 3000 repeated
+    bytes index fine while 3000 random hex bytes do not. The check must draw the same line."""
+    create_index: Final = sql.SQL('CREATE INDEX "compress_probe_idx" ON "compress_probe" ("k")')
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "compress_probe" ("k" TEXT)')
+        conn.execute('INSERT INTO "compress_probe" ("k") VALUES (%s), (%s)', ("a" * 3000, secrets.token_hex(1500)))
+        findings: Final = migration_data_checks.find_blockers(
+            conn, "public", migration_data_checks.checks_for_statement(create_index.as_string(conn), "probe")
+        )
+        with pytest.raises(psycopg.errors.ProgramLimitExceeded, match="index row size 3016 exceeds"):
+            conn.execute(create_index)
+        conn.execute('DELETE FROM "compress_probe" WHERE "k" <> %s', ("a" * 3000,))
+        conn.execute(create_index)
+        stored: Final = conn.execute('SELECT octet_length("k"), pg_column_size("k") FROM "compress_probe"').fetchone()
+
+    assert stored is not None and stored[0] == 3000 and stored[1] < 2704, stored
+    (finding,) = findings
+    assert isinstance(finding, migration_data_checks.BlockedChange)
+    assert finding.rows == 1, "only the random key is too long for the index once Postgres compresses the other"
+    assert finding.detail == "with an index entry over 2704 bytes, largest 3016 bytes (k up to 3000 bytes)"
+
+
+def _postgres_rejects_an_index_on(conn: "psycopg.Connection[tuple[object, ...]]", key: str) -> bool:
+    conn.execute('DROP TABLE IF EXISTS "one_key"')
+    conn.execute('CREATE TABLE "one_key" ("k" TEXT)')
+    conn.execute('INSERT INTO "one_key" ("k") VALUES (%s)', (key,))
+    try:
+        conn.execute('CREATE INDEX "one_key_idx" ON "one_key" ("k")')
+    except psycopg.errors.ProgramLimitExceeded:
+        return True
+    return False
+
+
+@requires_db
+def test_the_check_flags_exactly_the_compressed_keys_postgres_rejects_at_the_entry_limit(scratch_database: str) -> None:
+    """Keys that compress to a stored size just under and just over the entry limit go through the
+    check and through Postgres one by one. The check must flag a key exactly when Postgres rejects it."""
+    noise: Final = "".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(40))
+    keys: Final = tuple(noise[:n] + "a" * 1500 for n in range(2400, 2500))
+    create_index: Final = sql.SQL('CREATE INDEX "stored_probe_idx" ON "stored_probe" ("k")')
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "stored_probe" ("k" TEXT)')
+        conn.execute('INSERT INTO "stored_probe" ("k") SELECT unnest(%s::text[])', (list(keys),))
+        compressed: Final = conn.execute(
+            'SELECT count(*) FROM "stored_probe" WHERE pg_column_size("k") < octet_length("k") AND octet_length("k") > 2704'
+        ).fetchone()
+        findings: Final = migration_data_checks.find_blockers(
+            conn, "public", migration_data_checks.checks_for_statement(create_index.as_string(conn), "probe")
+        )
+        rejected: Final = tuple(key for key in keys if _postgres_rejects_an_index_on(conn, key))
+
+    assert compressed == (len(keys),), "every probe key must be longer than the limit yet stored compressed"
+    assert 0 < len(rejected) < len(keys), f"the probe must straddle the limit, Postgres rejected {len(rejected)}"
+    (finding,) = findings
+    assert isinstance(finding, migration_data_checks.BlockedChange)
+    assert finding.rows == len(rejected), f"the check must flag the {len(rejected)} keys Postgres rejects and no other"
+
+
+@requires_db
+def test_a_scan_that_cannot_finish_in_time_is_reported_as_unverified_rather_than_passed(scratch_database: str) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute('CREATE TABLE "preflight_slow" ("a" INTEGER)')
+        conn.execute('INSERT INTO "preflight_slow" SELECT generate_series(1, 50)')
+        (check,) = migration_data_checks.checks_for_statement(
+            'ALTER TABLE "preflight_slow" ADD CONSTRAINT "slow" CHECK (pg_sleep(0.1) IS NULL)', "probe"
+        )
+        findings: Final = migration_data_checks.find_blockers(conn, "public", (check,), timeout_seconds=0.5)
+        timeout_afterwards: Final = conn.execute("SHOW statement_timeout").fetchone()
+
+    assert findings == (migration_data_checks.CouldNotVerify(check, 0.5),)
+    assert timeout_afterwards == ("0",), "the preflight must hand the session back with the timeout it found"
+    assert "could not be checked within 0.5 s" in migration_data_checks.report(findings)

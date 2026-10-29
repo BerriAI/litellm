@@ -38,7 +38,7 @@ def test_a_complete_reservation_is_accepted():
     terms = ptu_terms(_VALID)
 
     assert terms is not None
-    assert terms.team_id == "team-alpha"
+    assert terms.shares == {"team-alpha": 100}
     assert terms.ptu_count == 100
     assert terms.effective_from == datetime(2026, 1, 1, tzinfo=timezone.utc)
     assert terms.effective_to is None
@@ -193,8 +193,8 @@ def test_a_deployment_with_no_ptu_fields_is_not_a_ptu_deployment():
 @pytest.mark.parametrize(
     "override, expected",
     [
-        ({"team_id": None}, "team_id is required when PTU fields are set (one model maps to one team)"),
-        ({"team_id": ""}, "team_id is required when PTU fields are set (one model maps to one team)"),
+        ({"team_id": None}, "team_id or ptu_shares is required when PTU fields are set"),
+        ({"team_id": ""}, "team_id or ptu_shares is required when PTU fields are set"),
         ({"cost_per_ptu_per_hour": None}, "ptu_count and cost_per_ptu_per_hour must be set together"),
         ({"ptu_count": None}, "ptu_count and cost_per_ptu_per_hour must be set together"),
         ({"ptu_effective_to": "2025-01-01T00:00:00Z"}, "ptu_effective_to must be after ptu_effective_from"),
@@ -356,3 +356,139 @@ def test_no_spillover_marker_returns_none():
         is None
     )
     assert azure_spillover(response_headers=None, additional_headers=None) is None
+
+
+# --- a reservation split into per-team shares ------------------------------------------
+
+_SHARED = {**{k: v for k, v in _VALID.items() if k != "team_id"}, "ptu_shares": {"team-a": 60, "team-b": 40}}
+
+
+def test_a_split_reservation_attributes_each_share_to_its_team():
+    terms = ptu_terms(_SHARED)
+
+    assert terms is not None
+    assert terms.shares == {"team-a": 60, "team-b": 40}
+    assert terms.ptu_count == 100
+    assert ptu_config_error(_SHARED) is None
+
+
+def test_a_single_team_reservation_holds_the_whole_count_under_that_team():
+    terms = ptu_terms(_VALID)
+
+    assert terms is not None
+    assert sum(terms.shares.values()) == terms.ptu_count
+
+
+@pytest.mark.parametrize(
+    "override, expected",
+    [
+        (
+            {"team_id": "team-alpha"},
+            "team_id and ptu_shares cannot both be set; ptu_shares lists every team the capacity is split across",
+        ),
+        ({"ptu_shares": {}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        (
+            {"ptu_shares": {"team-a": 0, "team-b": 100}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
+        (
+            {"ptu_shares": {"team-a": 50.5, "team-b": 49.5}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
+        (
+            {"ptu_shares": {"team-a": True}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
+        (
+            {"ptu_shares": {"team-a": "60", "team-b": 40}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
+        (
+            {"ptu_shares": {"team-a": float("inf"), "team-b": 40}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
+        ({"ptu_shares": {"": 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        ({"ptu_shares": {None: 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        ({"ptu_shares": {1: 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        ({"ptu_shares": ["team-a"]}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        ({"ptu_shares": {"team-a": 60, "team-b": 30}}, "ptu_shares must add up to ptu_count (90 of 100 allocated)"),
+        ({"ptu_shares": {"team-a": 60, "team-b": 50}}, "ptu_shares must add up to ptu_count (110 of 100 allocated)"),
+    ],
+    ids=[
+        "team_id and shares",
+        "empty shares",
+        "zero share",
+        "fractional share",
+        "boolean share",
+        "string share",
+        "infinite share",
+        "blank team",
+        "null team",
+        "numeric team",
+        "not a mapping",
+        "shares short of the count",
+        "shares over the count",
+    ],
+)
+def test_an_incoherent_split_names_its_reason_and_reserves_nothing(override, expected):
+    assert ptu_config_error({**_SHARED, **override}) == expected
+    assert ptu_terms({**_SHARED, **override}) is None
+
+
+def test_a_whole_count_written_as_a_float_is_checked_against_the_shares_all_the_same():
+    assert ptu_config_error({**_SHARED, "ptu_count": 100.0, "ptu_shares": {"team-a": 60, "team-b": 30}}) == (
+        "ptu_shares must add up to ptu_count (90 of 100 allocated)"
+    )
+    terms = ptu_terms({**_SHARED, "ptu_count": 100.0})
+    assert terms is not None
+    assert terms.ptu_count == 100
+
+
+def test_whole_shares_written_as_floats_split_the_reservation_like_integers():
+    written_as_floats = {**_SHARED, "ptu_count": 100.0, "ptu_shares": {"team-a": 60.0, "team-b": 40.0}}
+
+    terms = ptu_terms(written_as_floats)
+
+    assert ptu_config_error(written_as_floats) is None
+    assert terms is not None
+    assert terms.shares == {"team-a": 60, "team-b": 40}
+    assert {type(share) for share in terms.shares.values()} == {int}
+
+
+def test_a_rate_that_is_not_a_number_reserves_nothing():
+    assert ptu_terms({**_VALID, "cost_per_ptu_per_hour": "two cents"}) is None
+
+
+def test_a_fractional_count_reserves_nothing():
+    assert ptu_terms({**_VALID, "ptu_count": 100.5}) is None
+    assert ptu_terms({**_SHARED, "ptu_count": 100.5}) is None
+
+
+@pytest.mark.parametrize(
+    "shares_only",
+    [
+        {"ptu_shares": {"team-a": 60, "team-b": 40}},
+        {"ptu_shares": {"team-a": 60, "team-b": 40}, "ptu_effective_from": "2026-01-01T00:00:00Z"},
+    ],
+    ids=["shares alone", "shares with a window"],
+)
+def test_shares_without_the_count_and_rate_are_refused_instead_of_registering_unpriced(shares_only):
+    """Shares split a count, so a split with no count has nothing to add up to and would register a
+    deployment the share filter and ceiling honour while flat cost never rolls up."""
+    assert ptu_config_error(shares_only) == "ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set"
+    assert ptu_terms(shares_only) is None
+
+
+def test_the_split_is_named_after_the_deployment_when_the_caller_supplies_one():
+    error = ptu_config_error({**_SHARED, "ptu_shares": {"team-a": 1}}, model_name="gpt-4.1-ptu")
+
+    assert error is not None
+    assert "'gpt-4.1-ptu'" in error
+    assert "1 of 100 allocated" in error
+
+
+def test_a_split_reservation_is_zeroed_like_a_single_team_one():
+    zeroed = _with_flag(_SHARED)
+
+    assert zeroed["input_cost_per_token"] == 0.0
+    assert zeroed["output_cost_per_token"] == 0.0

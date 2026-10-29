@@ -20,9 +20,11 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     exception_type,
     extract_and_raise_litellm_exception,
 )
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.proxy.common_utils.openai_error_payload import openai_error_type
 from litellm.types.utils import LlmProviders
 
 
@@ -57,10 +59,114 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 
+
+def _debug_info_for_api_base(configured_api_base: str) -> str:
+    request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=500, message="upstream failed", request=request, response=httpx.Response(500, request=request)
+    )
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={"api_base": configured_api_base},
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    return debug_info
+
+
+@pytest.mark.parametrize(
+    ("configured_api_base", "shown_api_base"),
+    [
+        ("https://qa-user:function-secret@gateway.example/v1?code=function-secret", "https://gateway.example/v1"),
+        ("https://gateway.example/v1#function-secret", "https://gateway.example/v1"),
+        ("qa-user:function-secret@gateway.example:8080/v1", "gateway.example:8080/v1"),
+        ("https://gateway.example?code=function/secret", "https://gateway.example"),
+        ("https://gateway.example?user=alice@example.org&code=function-secret", "https://gateway.example"),
+        ("https://gateway.example?email=ops@other-host.example", "https://gateway.example"),
+        ("qa-user:function-secret@gateway.example/v1?next=https://other.example/y", "gateway.example/v1"),
+        (
+            "https://qa-user:function-secret@gateway.example/models/claude-opus-5-5@default",
+            "https://gateway.example/models/claude-opus-5-5@default",
+        ),
+    ],
+    ids=[
+        "userinfo_and_query",
+        "fragment",
+        "no_scheme",
+        "slash_in_query_without_path",
+        "at_sign_in_query_without_path",
+        "at_sign_names_other_host",
+        "no_scheme_with_url_in_query",
+        "userinfo_and_at_sign_in_path",
+    ],
+)
+def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api_base: str) -> None:
+    debug_info: Final = _debug_info_for_api_base(configured_api_base)
+    assert f"API Base: `{shown_api_base}`" in debug_info
+    assert "function-secret" not in debug_info
+    assert "secret" not in debug_info.split("API Base:", 1)[1].split("\n", 1)[0]
+
+
+@pytest.mark.parametrize(
+    "configured_api_base",
+    [
+        "https://qa-user:qa?function-secret@gateway.example/v1",
+        "https://qa-user:qa#function-secret@gateway.example/v1",
+        "https://qa-user:qa/function-secret@gateway.example/v1",
+        "https://qa-user:qa/function?secret@gateway.example/v1",
+        "https://qa.user:qa/function-secret@gateway.example/v1",
+        "https://qa-user:1234/function-secret@gateway.example/v1",
+        "https://function-secret/more@gateway.example/v1",
+        "qa-user:qa://function-secret@gateway.example",
+    ],
+    ids=[
+        "question_mark_in_password",
+        "hash_in_password",
+        "slash_in_password",
+        "slash_and_question_mark_in_password",
+        "dotted_username_and_slash_in_password",
+        "numeric_password_with_slash",
+        "slash_in_username",
+        "no_scheme_with_scheme_separator_in_password",
+    ],
+)
+def test_api_base_line_is_left_out_when_a_password_breaks_the_url(configured_api_base: str) -> None:
+    debug_info: Final = _debug_info_for_api_base(configured_api_base)
+    assert "API Base:" not in debug_info
+    assert not any(part in debug_info for part in ("qa-user", "qa.user", "function", "secret"))
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+        "/publishers/anthropic/models/claude-opus-5-5@default:rawPredict",
+        "us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1"
+        "/publishers/mistralai/models/mistral-large@2407:rawPredict",
+        "https://gateway.ai.cloudflare.com/v1/account/gateway/workers-ai/@cf/meta/llama-3.1-8b-instruct",
+        "http://localhost:4000/v1/models/claude@default",
+        "https://[::1]:8080/v1/models/claude@default",
+    ],
+    ids=["vertex_partner_model", "vertex_without_scheme", "workers_ai_path", "localhost", "ipv6"],
+)
+def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
+    assert f"API Base: `{api_base}`" in _debug_info_for_api_base(api_base)
+
+
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
 context_window_test_cases = [
     # Positive cases (should return True)
+    (
+        '"{\n  "error": {\n    "message": "Your input exceeds the context window of this model. '
+        'Please adjust your input and try again.",\n    "type": "invalid_request_error",\n'
+        '    "param": "input",\n    "code": "context_length_exceeded"\n  }\n}"',
+        True,
+    ),
     (
         "An error occurred: The input exceeds the model's maximum context limit of 8192 tokens.",
         True,
@@ -127,6 +233,14 @@ context_window_test_cases = [
     ),
     (
         "Invalid 'metadata': maximum input length is 512 characters.",
+        False,
+    ),
+    (
+        '{"error":{"message":"Input too long: 150055 input tokens, limit is 131072 for this model","code":"upstream_rejected"}}',
+        True,
+    ),
+    (
+        "Input should be 'error' or 'truncate', field: 'context_length_exceeded_behavior', value: 'foo'",
         False,
     ),
     # Negative cases (should return False)
@@ -472,6 +586,131 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
             )
 
 
+def test_vertex_status_code_429_ignores_403_token_in_message() -> None:
+    original_exception: Final = BaseLLMException(status_code=429, message="scripted vertex rejection f4039")
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 429
+
+
+def test_vertex_status_code_403_maps_to_403() -> None:
+    original_exception: Final = BaseLLMException(status_code=403, message="permission denied")
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_status_code_403_with_text_token_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=403,
+        message='{"error":{"code":403,"message":"Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_text_403_without_status_code_still_maps_to_bad_request() -> None:
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=Exception("403 Forbidden: permission denied"),
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_status_substring_without_status_code_does_not_map_to_403() -> None:
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=Exception("scripted vertex rejection f4039a"),
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code != 403
+
+
+def test_vertex_wrapped_500_with_403_body_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='Error code: 403 - {"error": {"code": 403, "message": "Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_wrapped_500_with_embedded_403_text_does_not_map_to_403() -> None:
+    original_exception: Final = BaseLLMException(status_code=500, message="scripted vertex rejection f4039")
+
+    with pytest.raises(litellm.InternalServerError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 500
+
+
+def test_vertex_wrapped_500_with_body_code_429_and_403_token_maps_to_rate_limit() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='{"error":{"code":429,"message":"upstream unavailable (request id: 403-xyz)"}}',
+    )
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 429
+
+
+def test_vertex_wrapped_500_with_body_code_403_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='{"error":{"code":403,"message":"Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
 class TestGetBodyErrorCode:
     """Unit tests for _get_body_error_code helper."""
 
@@ -777,6 +1016,138 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
 
 
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize(
+    "status_code, message, expected_exception",
+    [
+        (400, "Invalid 'temperature'", litellm.BadRequestError),
+        (401, "Invalid API key", litellm.AuthenticationError),
+        (404, "The model does not exist", litellm.NotFoundError),
+    ],
+)
+def test_openai_invalid_request_error_respects_status_code(
+    provider: str, status_code: int, message: str, expected_exception: type[openai.APIStatusError]
+) -> None:
+    error_message: Final = json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    original_exception: Final = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is expected_exception
+    assert excinfo.value.status_code == status_code
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(provider: str) -> None:
+    message: Final = "Missing required parameter: 'input'."
+    original_exception: Final = Exception(json.dumps({"error": {"message": message, "type": "invalid_request_error"}}))
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert message in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+    provider: str, status_code: int
+) -> None:
+    message: Final = "Cannot cancel a batch that is already completed."
+    error_message: Final = json.dumps({"error": {"message": message, "type": "invalid_request_error"}})
+    original_exception: Final = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert type(excinfo.value) is litellm.BadRequestError
+    assert message in excinfo.value.message
+
+
+def _openai_sdk_error(
+    sdk_error: type[openai.APIStatusError], status_code: int, provider_error: dict[str, str | None]
+) -> openai.APIStatusError:
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return sdk_error(
+        f"Error code: {status_code} - {{'error': {provider_error}}}",
+        response=httpx.Response(status_code, request=request),
+        body=provider_error,
+    )
+
+
+@pytest.mark.parametrize(
+    "sdk_error, status_code, expected_exception, param, code",
+    [
+        (openai.AuthenticationError, 401, litellm.AuthenticationError, "organization", "mismatched_organization"),
+        (openai.NotFoundError, 404, litellm.NotFoundError, "id", None),
+    ],
+)
+def test_openai_invalid_request_error_401_and_404_keep_the_provider_error_fields(
+    sdk_error: type[openai.APIStatusError],
+    status_code: int,
+    expected_exception: type[openai.APIStatusError],
+    param: str,
+    code: str | None,
+) -> None:
+    provider_error: Final = {
+        "message": "The request was rejected.",
+        "type": "invalid_request_error",
+        "param": param,
+        "code": code,
+    }
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="gpt-5-mini",
+            original_exception=_openai_sdk_error(sdk_error, status_code, provider_error),
+            custom_llm_provider="openai",
+        )
+
+    assert type(excinfo.value) is expected_exception
+    assert (excinfo.value.status_code, excinfo.value.type, excinfo.value.param, excinfo.value.code) == (
+        status_code,
+        "invalid_request_error",
+        param,
+        code,
+    )
+    assert excinfo.value.body == provider_error
+    assert openai_error_type(excinfo.value, status_code) == "invalid_request_error"
+    assert excinfo.value.message.count(expected_exception.__name__) == 1
+
+
+def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() -> None:
+    provider_error: Final = {
+        "message": "Incorrect API key provided: sk-litellmqa.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "invalid_api_key",
+    }
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="gpt-5-mini",
+            original_exception=_openai_sdk_error(openai.AuthenticationError, 401, provider_error),
+            custom_llm_provider="openai",
+        )
+
+    assert openai_error_type(excinfo.value, 401) == "authentication_error"
+
+
 class _UpstreamHTTPError(Exception):
     def __init__(self, status_code: int) -> None:
         super().__init__("upstream failure")
@@ -830,6 +1201,10 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
     },
+    "inferenceapis": {
+        403: PERMISSION_DENIED,
+        422: (litellm.BadRequestError, 400),
+    },
     "mistral": {402: (litellm.APIError, 402)},
     "nlp_cloud": {
         402: (litellm.RateLimitError, 429),
@@ -876,6 +1251,7 @@ PROVIDERS_WITH_A_HANDLER = (
     "gemini",
     "groq",
     "huggingface",
+    "inferenceapis",
     "mistral",
     "nlp_cloud",
     "ollama",
@@ -1119,6 +1495,7 @@ PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
     "fireworks_ai",
     "gemini",
     "groq",
+    "inferenceapis",
     "mistral",
     "openai",
     "perplexity",
@@ -1272,9 +1649,9 @@ def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_
 
 
 def test_bedrock_mantle_streamed_context_overflow_event_maps_to_context_window_exceeded():
-    from litellm.responses.streaming_iterator import _map_stream_error_to_exception
+    from litellm.responses.streaming_iterator import map_stream_error_to_exception
 
-    mapped_exception = _map_stream_error_to_exception(
+    mapped_exception = map_stream_error_to_exception(
         {
             "code": "context_length_exceeded",
             "message": "Your input exceeds the context window of this model. Please adjust your input and try again.",
@@ -2448,7 +2825,6 @@ def test_openai_gateway_timeout_error():
     Test that the OpenAI gateway timeout error is raised
     """
     openai_client = OpenAI()
-    mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
 
     def _return_exception(*args, **kwargs):
 
@@ -2484,8 +2860,8 @@ def test_openai_gateway_timeout_error():
 
     with pytest.raises(litellm.Timeout) as exc_info:
         with patch.object(
-            mapped_target,
-            "create",
+            openai_client,
+            "post",
             side_effect=_return_exception,
         ):
             litellm.completion(
@@ -2544,3 +2920,23 @@ def test_missing_aws_dependency_is_not_mapped_to_provider_failure(provider, depe
 def test_non_aws_import_failure_keeps_provider_mapping(failure):
     with pytest.raises(litellm.APIConnectionError):
         exception_type(model="test-model", original_exception=failure, custom_llm_provider="openai")
+
+
+@pytest.mark.parametrize(
+    "transport_timeout,reason",
+    [
+        (httpx.ReadTimeout(""), "ReadTimeout"),
+        (httpx.ReadTimeout("Timeout on reading data from socket"), "Timeout on reading data from socket"),
+        (httpx.TimeoutException(""), "TimeoutException"),
+    ],
+    ids=["httpx_read_timeout", "aiohttp_read_timeout", "timeout_base_class"],
+)
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai", "anthropic"])
+def test_transport_timeout_maps_to_timeout(
+    transport_timeout: httpx.TimeoutException, reason: str, provider: str
+) -> None:
+    with pytest.raises(litellm.Timeout) as exc_info:
+        exception_type(model="glm", original_exception=transport_timeout, custom_llm_provider=provider)
+
+    assert exc_info.value.status_code == 408
+    assert f"Request timed out. Error_str: {reason}" in str(exc_info.value)

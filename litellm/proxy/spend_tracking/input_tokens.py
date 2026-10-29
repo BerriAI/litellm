@@ -15,10 +15,16 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.token_counter import served_openai_models, unresolved_tokenizer_model
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    billable_input_since_newest_compaction,
+    holds_compaction_summary,
+)
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -28,6 +34,9 @@ from litellm.rust_bridge.token_counter import (
     native_count,
     rust_tokenizer,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
@@ -43,6 +52,25 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
 
 
+def tokenizer_models(model: str, llm_router: Router | None) -> tuple[str, ...]:
+    """The names to count a request for `model` with, keeping the largest count.
+
+    An alias resolves to its target group. A group served only by OpenAI models counts as those models, so it gets
+    their tokenizer. Any other group counts as its OpenAI models, if any, and as the requested name with the encoding
+    tiktoken gives that name as written, so its other deployments keep that count without loading their vendor's
+    tokenizer. A name the router does not index counts as written."""
+    if llm_router is None:
+        return (model,)
+    group: Final = resolve_model_group_alias(llm_router.model_group_alias, model) or model
+    served: Final = served_openai_models(llm_router.deployments_named(group) or ())
+    if not served:
+        return (model,)
+    openai_served: Final = tuple(served_model for served_model in served if served_model is not None)
+    if len(openai_served) == len(served):
+        return openai_served
+    return (unresolved_tokenizer_model(model), *openai_served)
+
+
 async def count_input_tokens(
     request_body: dict,
     raw_body: bytes | None,
@@ -54,10 +82,11 @@ async def count_input_tokens(
         (model, rust_tokenizer(model)) for model in models
     )
     groups: Final[tuple[RustTokenizer | None, ...]] = tuple(dict.fromkeys(tokenizer for _, tokenizer in tokenizers))
+    counted_raw_body: Final = None if holds_compaction_summary(request_body.get("input")) else raw_body
     group_counts: Final = [
         await _count_group(
             request_body=request_body,
-            raw_body=raw_body,
+            raw_body=counted_raw_body,
             tokenizer=tokenizer,
             models=tuple(model for model, selected in tokenizers if selected == tokenizer),
         )
@@ -140,7 +169,9 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
-            return _count_text_tokens(model=model, text=request_body.get("input"))
+            return _count_text_tokens(
+                model=model, text=billable_input_since_newest_compaction(request_body.get("input"))
+            )
         if "query" in request_body or "documents" in request_body:
             query_tokens: Final = _count_text_tokens(model=model, text=request_body.get("query"))
             document_tokens: Final = _count_text_tokens(

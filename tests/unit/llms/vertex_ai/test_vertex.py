@@ -1814,8 +1814,8 @@ def test_gemini_nullable_object_tool_schema_httpx(
             "type": "object",
             "required": ["source"],
             "properties": {"source": {"type": "string"}},
+            "nullable": True,
         },
-        {"type": "null"},
     ]
 
 
@@ -2461,7 +2461,7 @@ async def test_anthropic_message_via_anthropic_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
         VertexAIPartnerModelsAnthropicMessagesConfig,
     )
     from litellm.utils import ProviderConfigManager

@@ -26,6 +26,8 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 MARKER: Final = re.compile(rb"signoz-[0-9a-f]{32}")
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 RESPONSE_ID: Final = "gen_ai.response.id"
@@ -422,7 +424,7 @@ class RigFactory:
             yield Rig(owned.gateway, owned, model, self.provider, self.sink, self.tenant_sink)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def rig(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Rig]:
@@ -432,7 +434,7 @@ def rig(
     yield from factory.start()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def v2_rig(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Rig]:
@@ -948,7 +950,6 @@ def test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates
 def test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exit(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    pytest.skip("BUG: spans still queued in the OTel batch processor at SIGTERM never reach the sink (4 of 10 lost)")
     factory: Final = RigFactory(
         provider,
         operator_sink,

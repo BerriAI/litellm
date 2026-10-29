@@ -140,7 +140,7 @@ class TestPoolDatabaseUrl:
         assert "DATABASE_URL" in outcome.reason
 
     def test_token_auth_hands_the_workers_the_pool_user_not_the_token(
-        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, socket_tempdir: Path
     ):
         monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
         monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
@@ -149,7 +149,7 @@ class TestPoolDatabaseUrl:
         with _minted_iam_token("MINTED_TOKEN"):
             outcome: Final = pool_database_url(
                 DatabaseURLSettings.from_env(),
-                PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(tmp_path))),
+                PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(socket_tempdir))),
                 environ,
             )
         assert isinstance(outcome, str), outcome
@@ -160,12 +160,12 @@ class TestPoolDatabaseUrl:
 
 class TestMain:
     def test_workers_inherit_the_loopback_url_the_supervisor_installed(
-        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, socket_tempdir: Path
     ):
         port: Final = _free_port()
         monkeypatch.setenv("LITELLM_PGBOUNCER_ENABLED", "true")
         monkeypatch.setenv("LITELLM_PGBOUNCER_PORT", str(port))
-        monkeypatch.setenv("LITELLM_PGBOUNCER_BINARY", str(_fake_pooler(tmp_path)))
+        monkeypatch.setenv("LITELLM_PGBOUNCER_BINARY", str(_fake_pooler(socket_tempdir)))
         monkeypatch.setenv("KEEPALIVE_TIMEOUT", "75")
         served: Final[list[tuple[str, ...]]] = []
         main(("--workers", "4"), serve=lambda argv: served.append(tuple(argv)))
@@ -183,7 +183,7 @@ class TestMain:
         assert _query(os.environ["DATABASE_URL"])["pgbouncer"] == "true"
 
     def test_iam_workers_keep_the_loopback_url_instead_of_minting_their_own(
-        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, socket_tempdir: Path
     ):
         port: Final = _free_port()
         monkeypatch.delenv("DATABASE_PASSWORD")
@@ -191,7 +191,7 @@ class TestMain:
         monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
         monkeypatch.setenv("LITELLM_PGBOUNCER_ENABLED", "true")
         monkeypatch.setenv("LITELLM_PGBOUNCER_PORT", str(port))
-        monkeypatch.setenv("LITELLM_PGBOUNCER_BINARY", str(_fake_pooler(tmp_path)))
+        monkeypatch.setenv("LITELLM_PGBOUNCER_BINARY", str(_fake_pooler(socket_tempdir)))
         served: Final[list[tuple[str, ...]]] = []
         with _minted_iam_token("SUPERVISOR_TOKEN"):
             main(("--workers", "4"), serve=lambda argv: served.append(tuple(argv)))

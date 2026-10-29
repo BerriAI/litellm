@@ -24,7 +24,7 @@ from tests.integration._support.wire import Reply, Request, wire_server
 KEY_ID: Final = "integration-jwt-map-existing-key"
 MAPPING_INSERT: Final = b'INSERT INTO "public"."LiteLLM_JWTKeyMapping"'
 
-pytestmark = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 
 def _hash(key: str) -> str:

@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
@@ -10,21 +10,40 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    openai_prompt_cache_breakpoint_support,
+    targets_openai_api,
+)
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    cache_control_as_prompt_cache_breakpoint,
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
+    prompt_cache_breakpoint_for_wire,
+    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
+    is_gpt_reasoning_series_name,
+    refused_reasoning_effort_warning,
+    unsupported_reasoning_effort_message,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
+from litellm.responses.litellm_completion_transformation.tool_search import (
+    input_without_unanswered_anthropic_tool_search_calls,
+    is_anthropic_tool_search_chat_tool,
+    is_openai_tool_search_tool,
+    tools_with_anthropic_tool_search_mapped,
+    tools_without_anthropic_tool_search,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -37,6 +56,9 @@ from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
+DROP_UNSUPPORTED_REASONING_WARNING: Final = (
+    "Dropping reasoning=%r for model=%r (drop_params=True) because its model cost map entry lacks supports_reasoning."
+)
 _RAW_RESPONSE_JSON: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 if TYPE_CHECKING:
@@ -51,6 +73,221 @@ _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
+_ROLES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"system", "developer", "user"})
+_PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "input_image", "input_file"})
+_INPUT_PART_LIST_KEYS: Final = frozenset({"content", "output"})
+_COMPACT_TRACKING_PARAMS: Final = frozenset({"metadata", "user"})
+_COMPACT_REJECTED_PARAMS: Final = frozenset(
+    {
+        "background",
+        "context_management",
+        "max_output_tokens",
+        "max_tool_calls",
+        "moderation",
+        "partial_images",
+        "prompt",
+        "safety_identifier",
+        "store",
+        "stream_options",
+        "temperature",
+        "tool_choice",
+        "top_logprobs",
+        "top_p",
+        "truncation",
+    }
+)
+_PROVIDERS_WITH_STRICT_COMPACT_PARAMS: Final = frozenset(
+    {LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI}
+)
+_INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
+
+
+class _DeclaredModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    base_model: object = None
+    model_info: object = None
+
+
+class _DeploymentHost(BaseModel):
+    """`responses()` builds the params from raw kwargs, where callers may spell the host `base_url`."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    api_base: object = None
+    base_url: object = None
+
+
+class _DropParamsSetting(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    drop_params: object = None
+
+
+def drops_params(litellm_params: GenericLiteLLMParams) -> bool:
+    setting: Final = _DropParamsSetting.model_validate(litellm_params)
+    return litellm.drop_params is True or normalize_drop_params(setting.drop_params) is True
+
+
+class _ToolDeferral(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    type: str = ""
+    defer_loading: object = None
+    tools: tuple[Mapping[str, object], ...] = ()
+
+    @property
+    def is_namespace(self) -> bool:
+        return self.type == "namespace"
+
+    @property
+    def defers(self) -> bool:
+        members_defer: Final = self.is_namespace and any(member.get("defer_loading") is True for member in self.tools)
+        return self.defer_loading is True or members_defer
+
+
+def _defer_loading_removed(fields: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _tool_deferral(tool: object) -> _ToolDeferral:
+    try:
+        return _ToolDeferral.model_validate(tool)
+    except ValidationError:
+        return _ToolDeferral()
+
+
+def _runs_tool_search(model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS]) -> bool:
+    return any(_tool_deferral(tool).defers for tool in tools) and litellm.supports_tool_search(
+        model=model, custom_llm_provider=LlmProviders.OPENAI.value
+    )
+
+
+def _without_defer_loading(tool: ALL_RESPONSES_API_TOOL_PARAMS) -> ALL_RESPONSES_API_TOOL_PARAMS:
+    deferral: Final = _tool_deferral(tool)
+    if not deferral.defers:
+        return tool
+    undeferred: Final = _defer_loading_removed(tool)
+    members: Final = (
+        {"tools": [_defer_loading_removed(member) for member in deferral.tools]} if deferral.is_namespace else {}
+    )
+    return cast(  # cast-ok: a TypedDict minus its deferral keys has no typed construction, and nothing else changes
+        ALL_RESPONSES_API_TOOL_PARAMS, {**undeferred, **members}
+    )
+
+
+def _provider_name(provider: LlmProviders | str) -> str:
+    """Configs generated from a provider JSON file return the slug as a plain str."""
+    return provider.value if isinstance(provider, LlmProviders) else provider
+
+
+def _item_with_prompt_cache_breakpoints(item: object) -> object:
+    """Marks on assistant output and on tools are left for the strip that follows: OpenAI writes no cache there."""
+    try:
+        fields: Final = _INPUT_ITEM.validate_python(item)
+    except ValidationError:
+        return item
+    if fields.get("type") == "function_call_output":
+        return _with_prompt_cache_breakpoints_under(fields, "output")
+    if fields.get("type", "message") == "message" and fields.get("role") in _ROLES_READING_PROMPT_CACHE_BREAKPOINTS:
+        return _with_prompt_cache_breakpoints_under(fields, "content")
+    return item
+
+
+def _with_prompt_cache_breakpoints_under(item: Mapping[str, object], key: str) -> Mapping[str, object]:
+    value: Final = item.get(key)
+    item_mark: Final = item.get("cache_control")
+    unmarked_item: Final = {name: field for name, field in item.items() if name != "cache_control"}
+    if isinstance(value, str):
+        if item_mark is None:
+            return item
+        text_part: Final[Mapping[str, object]] = {"type": "input_text", "text": value}
+        return {**unmarked_item, key: [with_prompt_cache_breakpoint(text_part, PromptCacheBreakpoint(mode="explicit"))]}
+    try:
+        parts: Final = _CONTENT_PARTS.validate_python(value)
+    except ValidationError:
+        return item
+    swapped_parts: Final = tuple(_part_with_prompt_cache_breakpoint(part) for part in parts)
+    return {**unmarked_item, key: list(_with_breakpoint_on_last_reading_part(swapped_parts, item_mark))}
+
+
+def _part_with_prompt_cache_breakpoint(part: Mapping[str, object]) -> Mapping[str, object]:
+    if part.get("type") not in _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS:
+        return part
+    return cache_control_as_prompt_cache_breakpoint(part)
+
+
+def _with_breakpoint_on_last_reading_part(
+    parts: Sequence[Mapping[str, object]], item_mark: object
+) -> Sequence[Mapping[str, object]]:
+    if item_mark is None:
+        return parts
+    reading_indexes: Final = [
+        index for index, part in enumerate(parts) if part.get("type") in _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS
+    ]
+    if not reading_indexes:
+        return parts
+    last: Final = reading_indexes[-1]
+    marked_last: Final = with_prompt_cache_breakpoint(parts[last], PromptCacheBreakpoint(mode="explicit"))
+    return (*parts[:last], marked_last, *parts[last + 1 :])
+
+
+def _json_object_or_none(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
+def _json_array_or_empty(value: object) -> Sequence[object]:
+    return value if isinstance(value, (list, tuple)) else ()
+
+
+def _item_with_wire_safe_prompt_cache_breakpoints(item: object, keeps_markers: bool) -> object:
+    fields: Final = _json_object_or_none(item)
+    if fields is None or not _carries_prompt_cache_breakpoint(fields):
+        return item
+    wire_safe_fields: Final = {
+        key: _parts_with_wire_safe_prompt_cache_breakpoints(key, value, keeps_markers)
+        for key, value in fields.items()
+        if key != "prompt_cache_breakpoint"
+    }
+    unchanged: Final = "prompt_cache_breakpoint" not in fields and _same_objects(
+        wire_safe_fields.values(), fields.values()
+    )
+    return item if unchanged else wire_safe_fields
+
+
+def _same_objects(rebuilt: Iterable[object], originals: Iterable[object]) -> bool:
+    return all(new is old for new, old in zip(rebuilt, originals, strict=True))
+
+
+def _carries_prompt_cache_breakpoint(fields: Mapping[str, object]) -> bool:
+    return "prompt_cache_breakpoint" in fields or any(
+        _parts_carry_prompt_cache_breakpoint(fields.get(key)) for key in _INPUT_PART_LIST_KEYS
+    )
+
+
+def _parts_carry_prompt_cache_breakpoint(parts: object) -> bool:
+    return any(isinstance(part, Mapping) and "prompt_cache_breakpoint" in part for part in _json_array_or_empty(parts))
+
+
+def _parts_with_wire_safe_prompt_cache_breakpoints(key: str, value: object, keeps_markers: bool) -> object:
+    if key not in _INPUT_PART_LIST_KEYS or not _parts_carry_prompt_cache_breakpoint(value):
+        return value
+    parts: Final = _json_array_or_empty(value)
+    wire_safe_parts: Final = tuple(_part_with_wire_safe_prompt_cache_breakpoint(part, keeps_markers) for part in parts)
+    return value if _same_objects(wire_safe_parts, parts) else list(wire_safe_parts)
+
+
+def _part_with_wire_safe_prompt_cache_breakpoint(part: object, keeps_markers: bool) -> object:
+    fields: Final = _json_object_or_none(part)
+    if fields is None or "prompt_cache_breakpoint" not in fields:
+        return part
+    marker: Final = fields["prompt_cache_breakpoint"]
+    wire_marker: Final = prompt_cache_breakpoint_for_wire(marker, drop_params=True) if keeps_markers else None
+    if keeps_markers and wire_marker == marker:
+        return part
+    unmarked: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    return with_prompt_cache_breakpoint(unmarked, wire_marker)
 
 
 class _ReasoningSupportEntry(LiteLLMBaseModel):
@@ -142,6 +379,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return supports_none_reasoning_effort(model=model, custom_llm_provider=None)
 
     @staticmethod
+    def _effort_level_is_disabled(model: str, level: str) -> bool:
+        """Whether the model's cost-map row turns this effort level off.
+
+        The same row the chat gate reads, so a level the row refuses is refused on both wires
+        and a new model needs its row, not code. This surface stays opt-out for every level,
+        xhigh included, since it never refused a level the row omits; max is the exception, a
+        level the row cannot gate because the same model takes it here and refuses it on chat.
+        Azure overrides this so a bare deployment name reads the azure/ entry.
+        """
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.row_disables_reasoning_effort_level(model, level)
+
+    @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         """Whether this request's reasoning effort ends up as "none", the one condition
         under which a non-default temperature is accepted.
@@ -151,7 +402,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         copy of the rule here is what let this surface keep forwarding temperature after the
         chat surface stopped.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+        from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
@@ -171,11 +422,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return info["key"] in _bundled_openai_reasoning_models()
 
     @staticmethod
+    def _is_known_non_reasoning_model(model: str) -> bool:
+        from litellm.utils import is_known_non_reasoning_model
+
+        return is_known_non_reasoning_model(model.split("/")[-1], LlmProviders.OPENAI.value)
+
+    @staticmethod
     def _requests_reasoning_effort(reasoning: object) -> bool:
-        effort: Final = (
-            reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
-        )
-        return effort is not None
+        return OpenAIResponsesAPIConfig._requested_effort(reasoning) is not None
+
+    @staticmethod
+    def _requested_effort(reasoning: object) -> object:
+        return reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
@@ -183,10 +441,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         OpenAI's Responses API rejects max_output_tokens below 16 for every model
         (not gpt-5 specific), so a client like Claude Code that sends a max_tokens=1
-        warmup probe on model switch would otherwise 400. Values that are None or
-        already at/above the minimum are returned unchanged.
+        warmup probe on model switch would otherwise 400. Values that are None,
+        already at/above the minimum, or not positive are returned unchanged.
         """
-        if isinstance(max_output_tokens, int) and max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
+        if isinstance(max_output_tokens, int) and 0 < max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
             return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
         return max_output_tokens
 
@@ -215,6 +473,23 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        return dict(
+            self.map_openai_params_for_deployment(
+                response_api_optional_params, model, drop_params, declared_reasoning_efforts=None
+            )
+        )
+
+    def honors_declared_reasoning_efforts(self) -> bool:
+        return type(self).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
+
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None,
+    ) -> Mapping[str, object]:
         """No mapping applied since inputs are in OpenAI spec already.
 
         GPT-5 models have restrictions on temperature and top_p (only temperature=1
@@ -233,7 +508,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             and not self._supports_reasoning_param(model=model)
         ):
             if drop_params or litellm.drop_params:
-                params.pop("reasoning", None)
+                dropped_reasoning: Final = params.pop("reasoning", None)
+                if self._requested_effort(dropped_reasoning) != "none" or not self._is_known_non_reasoning_model(model):
+                    verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, dropped_reasoning, model)
             else:
                 raise litellm.UnsupportedParamsError(
                     message=(
@@ -247,7 +524,35 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
-            effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            if (
+                isinstance(reasoning, dict)
+                and isinstance(requested_effort, str)
+                and requested_effort not in (declared_reasoning_efforts or ())
+                and self._effort_level_is_disabled(lookup_name, requested_effort)
+            ):
+                if not (drop_params or litellm.drop_params):
+                    raise litellm.UnsupportedParamsError(
+                        message=unsupported_reasoning_effort_message("reasoning.effort", requested_effort, model),
+                        status_code=400,
+                    )
+                verbose_logger.warning(
+                    refused_reasoning_effort_warning(
+                        suggest_declared_levels=declared_reasoning_efforts is not None, suggest_base_model=False
+                    ),
+                    "reasoning.effort",
+                    requested_effort,
+                    model,
+                    lookup_name,
+                )
+                remaining: Final = reasoning.copy()
+                remaining.pop("effort", None)
+                if remaining:
+                    params["reasoning"] = remaining
+                else:
+                    params.pop("reasoning", None)
+            forwarded_reasoning: Final = params.get("reasoning")
+            effort: Final = forwarded_reasoning.get("effort") if isinstance(forwarded_reasoning, dict) else None
             supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
             effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
 
@@ -293,24 +598,32 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        """Strip Anthropic-only `cache_control` markers before sending to OpenAI.
-
-        OpenAI's Responses API rejects unknown fields on input content blocks
-        with HTTP 400 ("Unknown parameter: 'input[0].content[0].cache_control'").
-        Chat Completions strips these in
-        `remove_cache_control_flag_from_messages_and_tools`; mirror that here.
+        """Anthropic-only `cache_control` marks become `prompt_cache_breakpoint` on the same block
+        where the deployment reads them (gpt-5.6 and newer on OpenAI's API, or a host opted in
+        through `prompt_cache_options`) and are stripped everywhere else, because OpenAI's
+        Responses API rejects unknown fields on input content blocks with HTTP 400
+        ("Unknown parameter: 'input[0].content[0].cache_control'").
         """
 
+        request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
+            "Mapping[str, object]", response_api_optional_request_params
+        )
         replay_safe_input, sanitized_tools = self._prepared_input_and_tools(
             model=model,
             input=input,
             tools=response_api_optional_request_params.get("tools"),
             litellm_params=litellm_params,
+            prompt_cache_options=request_params.get("prompt_cache_options"),
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        final_request_params: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
+        final_request_params: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
+            dict[str, object],
+            {
+                "model": model,
+                "input": replay_safe_input,
+                **response_api_optional_request_params,
+            },
         )
 
         return final_request_params
@@ -321,16 +634,127 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input: str | ResponseInputParam,
         tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
         litellm_params: GenericLiteLLMParams,
+        prompt_cache_options: object = None,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
-        validated_input: Final = self._validate_input_param(self._drop_bridge_minted_reasoning_items(input))
-        stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
-            model=model, input=validated_input, tools=tools
+        validated_input: Final = self._validate_input_param(
+            self._drop_bridge_minted_reasoning_items(input), drops_set_created_by=drops_params(litellm_params)
         )
+        reads_breakpoints: Final = self._reads_prompt_cache_breakpoints(
+            model=model, litellm_params=litellm_params, prompt_cache_options=prompt_cache_options
+        )
+        marker_safe_input: Final = self._input_with_wire_safe_prompt_cache_breakpoints(
+            model=model, input=validated_input, litellm_params=litellm_params, reads_breakpoints=reads_breakpoints
+        )
+        maps_anthropic_tool_search: Final = self._targets_openai_api(litellm_params) and any(
+            is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()
+        )
+        mapped_tools: Final = (
+            self._tools_for_openai_tool_search(model=model, tools=tools, litellm_params=litellm_params)
+            if maps_anthropic_tool_search
+            else tools
+        )
+        stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
+            model=model,
+            input=self._replayable_input(marker_safe_input, reads_breakpoints, maps_anthropic_tool_search),
+            tools=mapped_tools,
+        )
+        if marker_safe_input is not validated_input:
+            self._strip_caller_input_as_if_unmarked(
+                model=model,
+                caller_input=validated_input,
+                reads_breakpoints=reads_breakpoints,
+                maps_anthropic_tool_search=maps_anthropic_tool_search,
+            )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
         )
         return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
+
+    def _replayable_input(
+        self, input: str | ResponseInputParam, reads_breakpoints: bool, maps_anthropic_tool_search: bool
+    ) -> str | ResponseInputParam:
+        marked_input: Final = self._input_with_prompt_cache_breakpoints(input) if reads_breakpoints else input
+        if not maps_anthropic_tool_search:
+            return marked_input
+        return input_without_unanswered_anthropic_tool_search_calls(marked_input)
+
+    def _strip_caller_input_as_if_unmarked(
+        self,
+        model: str,
+        caller_input: str | ResponseInputParam,
+        reads_breakpoints: bool,
+        maps_anthropic_tool_search: bool,
+    ) -> None:
+        self.remove_cache_control_flag_from_input_and_tools(
+            model=model, input=self._replayable_input(caller_input, reads_breakpoints, maps_anthropic_tool_search)
+        )
+
+    def _input_with_wire_safe_prompt_cache_breakpoints(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        litellm_params: GenericLiteLLMParams,
+        reads_breakpoints: bool,
+    ) -> str | ResponseInputParam:
+        if not isinstance(input, list) or not drops_params(litellm_params):
+            return input
+        keeps_markers: Final = reads_breakpoints or self._keeps_prompt_cache_breakpoints(
+            model=model, litellm_params=litellm_params
+        )
+        wire_safe_items: Final = tuple(
+            _item_with_wire_safe_prompt_cache_breakpoints(item, keeps_markers) for item in input
+        )
+        if _same_objects(wire_safe_items, input):
+            return input
+        wire_safe_input: Final = list(wire_safe_items)
+        return cast("ResponseInputParam", wire_safe_input)  # cast-ok: items keep their shape, minus a rejected marker
+
+    def _keeps_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
+        provider: Final = _provider_name(self.custom_llm_provider)
+        base_model: Final = self._declared_base_model(model=model, litellm_params=litellm_params)
+        known_support: Final = (
+            openai_prompt_cache_breakpoint_support(name, provider) for name in dict.fromkeys((base_model, model))
+        )
+        return next((support for support in known_support if support is not None), None) is not False
+
+    def _targets_openai_api(self, litellm_params: GenericLiteLLMParams) -> bool:
+        host: Final = _DeploymentHost.model_validate(litellm_params)
+        return self.custom_llm_provider == LlmProviders.OPENAI and targets_openai_api(host.api_base or host.base_url)
+
+    @staticmethod
+    def _tools_for_openai_tool_search(
+        model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None, litellm_params: GenericLiteLLMParams
+    ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
+        if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+            return tools
+        callers_own_search: Final = any(is_openai_tool_search_tool(tool) for tool in tools)
+        if callers_own_search or not drops_params(litellm_params) or _runs_tool_search(model, tools):
+            return tools_with_anthropic_tool_search_mapped(tools)
+        verbose_logger.warning(
+            "Dropping tool search under drop_params: OpenAI model '%s' cannot run it or no tool is deferred, so every "
+            "tool loads up front.",
+            model,
+        )
+        return tuple(_without_defer_loading(tool) for tool in tools_without_anthropic_tool_search(tools))
+
+    def _reads_prompt_cache_breakpoints(
+        self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object
+    ) -> bool:
+        host: Final = _DeploymentHost.model_validate(litellm_params)
+        return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model=model,
+            custom_llm_provider=_provider_name(self.custom_llm_provider),
+            api_base=host.api_base or host.base_url,
+            prompt_cache_options=prompt_cache_options,
+        )
+
+    @staticmethod
+    def _input_with_prompt_cache_breakpoints(input: str | ResponseInputParam) -> str | ResponseInputParam:
+        if not isinstance(input, list):
+            return input
+        marked_items: Final = [_item_with_prompt_cache_breakpoints(item) for item in input]
+        return cast("ResponseInputParam", marked_items)  # cast-ok: items keep their shape, marks renamed in place
 
     def _tools_with_object_parameters(
         self, model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None
@@ -409,14 +833,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _without_foreign_tool_call_item_id(item: object) -> object:
-        if not isinstance(item, dict):
+        fields: Final = _json_object_or_none(item)
+        if fields is None:
             return item
-        item_type: Final = item.get("type")
-        item_id: Final = item.get("id")
+        item_type: Final = fields.get("type")
+        item_id: Final = fields.get("id")
         genuine_prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type) if isinstance(item_type, str) else None
         if genuine_prefix is None or not isinstance(item_id, str) or item_id.startswith(genuine_prefix):
             return item
-        return {key: value for key, value in item.items() if key != "id"}
+        return {key: value for key, value in fields.items() if key != "id"}
 
     def _sanitized_tool_schemas_for_openai(
         self,
@@ -461,6 +886,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return base_model if isinstance(base_model, str) and base_model else model
 
     @staticmethod
+    def _declared_base_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
+        declared: Final = _DeclaredModel.model_validate(litellm_params)
+        model_info: Final = _json_object_or_none(declared.model_info)
+        candidates: Final = (declared.base_model, None if model_info is None else model_info.get("base_model"))
+        return next((name for name in candidates if isinstance(name, str) and name), model)
+
+    @staticmethod
     def _sanitized_tool_entry(
         entry: Mapping[str, object],
         sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
@@ -498,7 +930,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         ]
         return tools if all(new is old for new, old in zip(sanitized, tools, strict=True)) else sanitized
 
-    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+    def _validate_input_param(
+        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+    ) -> str | ResponseInputParam:
         """
         Ensure all input fields if pydantic are converted to dict
 
@@ -510,25 +944,27 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             for item in input:
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
-                    validated_input.append(item.model_dump(exclude_none=True))
+                    validated_input.append(
+                        replayable_responses_item(
+                            item.model_dump(exclude_none=True), drops_set_created_by=drops_set_created_by
+                        )
+                    )
                 elif isinstance(item, dict):
-                    # Handle reasoning items specifically to filter out status=None
-                    if item.get("type") == "reasoning":
-                        verbose_logger.debug("Handling reasoning item: %s", item)
-                        # Type assertion since we know it's a dict at this point
-                        dict_item = cast(dict[str, Any], item)
-                        filtered_item = self._handle_reasoning_item(dict_item)
-                    else:
-                        # For other dict items, just pass through
-                        filtered_item = cast(dict[str, Any], item)
-                    validated_input.append(filtered_item)
+                    validated_input.append(
+                        replayable_responses_item(
+                            self._handle_reasoning_item(cast(dict[str, object], item))
+                            if item.get("type") == "reasoning"
+                            else item,
+                            drops_set_created_by=drops_set_created_by,
+                        )
+                    )
                 else:
                     validated_input.append(item)
             return validated_input
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
         """
         Handle reasoning items specifically to filter out status=None using OpenAI's model.
         Issue: https://github.com/BerriAI/litellm/issues/13484
@@ -632,10 +1068,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             or "https://api.openai.com/v1"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def transform_streaming_response(
         self,
@@ -814,7 +1247,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the get response API request into a URL and data
 
@@ -823,7 +1256,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -862,7 +1295,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         order: Literal["asc", "desc"] = "desc",
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/input_items"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
         params: Final[dict[str, object]] = {}
         if after is not None:
             params["after"] = after
@@ -903,7 +1336,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         - POST /v1/responses/{response_id}/cancel
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
-        url: Final = f"{api_base}/{encoded_response_id}/cancel"
+        url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
         data: Final[dict] = {}
         return url, data
 
@@ -931,6 +1364,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########
     #########################################################
+    def compact_url(self, api_base: str) -> str:
+        parsed_url: Final = httpx.URL(api_base)
+        return str(parsed_url.copy_with(path=parsed_url.path.rstrip("/") + "/compact"))
+
+    def compact_dropped_params(self, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+        if self.custom_llm_provider not in _PROVIDERS_WITH_STRICT_COMPACT_PARAMS:
+            return frozenset()
+        if drops_params(litellm_params):
+            return _COMPACT_TRACKING_PARAMS | _COMPACT_REJECTED_PARAMS
+        return _COMPACT_TRACKING_PARAMS
+
     def transform_compact_response_api_request(
         self,
         model: str,
@@ -946,22 +1390,26 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/compact
         """
-        # Preserve query params (e.g., api-version) while appending /compact.
-        parsed_url: Final = httpx.URL(api_base)
-        compact_path: Final = parsed_url.path.rstrip("/") + "/compact"
-        url: Final = str(parsed_url.copy_with(path=compact_path))
+        url: Final = self.compact_url(api_base)
+        dropped_params: Final = self.compact_dropped_params(litellm_params)
 
+        request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
+            "Mapping[str, object]", response_api_optional_request_params
+        )
         replay_safe_input, sanitized_tools = self._prepared_input_and_tools(
             model=model,
             input=input,
             tools=response_api_optional_request_params.get("tools"),
             litellm_params=litellm_params,
+            prompt_cache_options=request_params.get("prompt_cache_options"),
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        data: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
-        )
+        data: Final = {
+            "model": model,
+            "input": replay_safe_input,
+            **{key: value for key, value in request_params.items() if key not in dropped_params},
+        }
 
         return url, data
 

@@ -72,7 +72,7 @@ const ON_TOTAL_LATENCY_INDEX = 24;
 async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction): Promise<void> {
   renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
   expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
-  fireEvent.change(screen.getByPlaceholderText("How can I help you today?"), {
+  fireEvent.change(screen.getByPlaceholderText("Describe a change, paste an error, or ask a question…"), {
     target: { value: "How much did this cost?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -157,7 +157,7 @@ describe("/ui/chat storage banner", () => {
   it("keeps the dismiss control amber on hover instead of the ghost variant's foreground", async () => {
     renderWithProviders(<ChatConversationPage />);
 
-    const banner = await screen.findByText("Chat history won't be saved in this browser session");
+    const banner = await screen.findByText("Some chat history or attachments could not be saved or restored.");
     const dismiss = within(banner.parentElement!).getByRole("button");
     expect(dismiss).toHaveClass("hover:text-warning/80");
     expect(dismiss).not.toHaveClass("hover:text-foreground");

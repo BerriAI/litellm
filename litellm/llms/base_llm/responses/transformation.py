@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 import httpx
 
@@ -26,6 +26,8 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
+ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
+
 
 class BaseResponsesAPIConfig(ABC):
     def __init__(self):
@@ -38,9 +40,10 @@ class BaseResponsesAPIConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -66,6 +69,9 @@ class BaseResponsesAPIConfig(ABC):
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 
+    def supports_streamed_retrieval(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI)
+
     def sign_request(
         self,
         headers: dict,
@@ -89,6 +95,10 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
+
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        """The ``reasoning.summary`` LiteLLM's opt-in auto summary asks this provider for."""
+        return "detailed"
 
     @abstractmethod
     def map_openai_params(
@@ -202,7 +212,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         pass
 
     @abstractmethod
@@ -259,6 +269,9 @@ class BaseResponsesAPIConfig(ABC):
         custom_llm_provider: str | None = None,
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False
+
+    def may_answer_stream_with_json(self) -> bool:
         return False
 
     def supports_native_websocket(self) -> bool:

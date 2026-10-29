@@ -47,13 +47,13 @@ class QualityRouter(CustomLogger):
         model_name: str,
         litellm_router_instance: "Router",
         default_model: str | None = None,
-        quality_router_config: dict[str, Any] | None = None,
+        quality_router_config: Mapping[str, object] | None = None,
     ):
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
 
         if quality_router_config:
-            self.config = QualityRouterConfig(**quality_router_config)
+            self.config = QualityRouterConfig.model_validate(dict(**quality_router_config))
         else:
             self.config = QualityRouterConfig()
 
@@ -113,12 +113,12 @@ class QualityRouter(CustomLogger):
             return getattr(model_info, "litellm_routing_preferences", None)
 
         # Pydantic-object deployment.
-        model_info = getattr(deployment, "model_info", None)
-        if model_info is None:
+        deployment_model_info: Final[object] = getattr(deployment, "model_info", None)
+        if deployment_model_info is None:
             return None
-        if isinstance(model_info, dict):
-            return model_info.get("litellm_routing_preferences")
-        return getattr(model_info, "litellm_routing_preferences", None)
+        if isinstance(deployment_model_info, dict):
+            return deployment_model_info.get("litellm_routing_preferences")
+        return getattr(deployment_model_info, "litellm_routing_preferences", None)
 
     def _get_deployment_input_cost(self, deployment: object) -> float | None:
         """
@@ -185,7 +185,7 @@ class QualityRouter(CustomLogger):
                 if isinstance(raw_prefs, RoutingPreferences):
                     prefs = raw_prefs
                 elif isinstance(raw_prefs, dict):
-                    prefs = RoutingPreferences(**raw_prefs)
+                    prefs = RoutingPreferences.model_validate(dict(**raw_prefs))
                 else:
                     # A Pydantic object of some other shape — coerce via its dict.
                     prefs = RoutingPreferences(
@@ -323,7 +323,7 @@ class QualityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> Optional["PreRoutingHookResponse"]:

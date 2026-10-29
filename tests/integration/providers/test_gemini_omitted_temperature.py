@@ -20,9 +20,9 @@ from pydantic import JsonValue
 
 GENERATE_TARGET: Final = "/models/gemini-3.8-flash:generateContent"
 STREAM_TARGET: Final = "/models/gemini-3.8-flash:streamGenerateContent?alt=sse"
-EXPECTED_GENERATION_CONFIG: Final = {"max_output_tokens": 1024}
 ENDPOINT_CASES: Final = (CHAT_COMPLETIONS_TEST_CASE, MESSAGES_TEST_CASE, RESPONSES_TEST_CASE)
 BURST: Final = ENDPOINT_CASES * 4
+BURST_ANSWER: Final = "I need to inspect `shop/validation.py` next."
 STREAM_USAGE: Final = {
     "promptTokenCount": 10,
     "candidatesTokenCount": 2,
@@ -54,6 +54,12 @@ def _generation_config(request: Request) -> dict[str, JsonValue]:
     return object_value(JSON_OBJECT.validate_json(request.body)["generationConfig"])
 
 
+def _expected_generation_config(case: TranslationTestCase) -> dict[str, JsonValue]:
+    expected: Final = object_value(case.expected_provider_request["generationConfig"])
+    assert "temperature" not in expected, expected
+    return expected
+
+
 @pytest.mark.parametrize("case", ENDPOINT_CASES, ids=lambda case: case.litellm_endpoint)
 def test_streamed_request_without_temperature_forwards_none(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
@@ -64,7 +70,7 @@ def test_streamed_request_without_temperature_forwards_none(
     assert "Hello." in response.text, response.text
     received: Final = provider.received()
     assert [(request.method, request.target) for request in received] == [("POST", STREAM_TARGET)]
-    assert _generation_config(received[0]) == EXPECTED_GENERATION_CONFIG
+    assert _generation_config(received[0]) == _expected_generation_config(case)
 
 
 def test_concurrent_mixed_endpoint_burst_without_temperature_forwards_none(
@@ -77,7 +83,10 @@ def test_concurrent_mixed_endpoint_burst_without_temperature_forwards_none(
             pool.map(lambda case: gateway.request("POST", case.litellm_endpoint, case.litellm_request), BURST)
         )
     assert [response.status_code for response in responses] == [200] * len(BURST), [r.text for r in responses]
-    assert all("Hello." in response.text for response in responses), [r.text for r in responses]
+    assert all(BURST_ANSWER in response.text for response in responses), [r.text for r in responses]
     received: Final = provider.received()
     assert [(request.method, request.target) for request in received] == [("POST", GENERATE_TARGET)] * len(BURST)
-    assert [_generation_config(request) for request in received] == [EXPECTED_GENERATION_CONFIG] * len(BURST)
+    expected_configs: Final = [_expected_generation_config(CHAT_COMPLETIONS_TEST_CASE)] * len(BURST)
+    assert sorted(map(json.dumps, (_generation_config(r) for r in received))) == sorted(
+        map(json.dumps, expected_configs)
+    )

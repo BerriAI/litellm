@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import socket
 import subprocess
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -23,7 +22,10 @@ from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import TypeAdapter
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 ChaosEndpoint: TypeAlias = Literal["chat", "messages", "responses"]
 CHAOS_ENDPOINTS: Final[tuple[ChaosEndpoint, ...]] = ("chat", "messages", "responses")
@@ -455,12 +457,6 @@ def _owned_proxy(
         yield owned
 
 
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return int(reserve.getsockname()[1])
-
-
 def _assert_down_wave(
     plans: Sequence[CallPlan],
     responses: Sequence[httpx.Response],
@@ -485,7 +481,7 @@ def _assert_down_wave(
 
 
 def test_h1_sink_outage_keeps_scope_isolated_through_recovery(rig: ChaosRig, tmp_path: Path) -> None:
-    port_a: Final = _free_port()
+    port_a: Final = allocate_port()
     started: Final = Event()
     unavailable: Final = Event()
     release: Final = Event()
@@ -763,7 +759,7 @@ def _owned_postgres(directory: Path) -> Iterator[PostgresCluster]:
     )
     assert docker_info.returncode == 0, docker_info.stderr
     directory.mkdir(parents=True, exist_ok=True)
-    port: Final = _free_port()
+    port: Final = allocate_port()
     container_name: Final = f"litellm-stream-scope-h5-{uuid.uuid4().hex}"
     password: Final = uuid.uuid4().hex
     created: Final = subprocess.run(
@@ -965,7 +961,6 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pytest.skip("BUG: LIT-9050 spend rows for requests served during a Postgres restart are dropped")
     postgres_directory: Final = Path(os.environ["INTEGRATION_RESULTS_DIR"]) / f"owned-postgres-{uuid.uuid4().hex}"
     with _owned_postgres(postgres_directory) as database, wire_server(_sink) as sink:
         monkeypatch.setenv("INTEGRATION_PROXY_DATABASE_URL", database.database_url)
