@@ -36,7 +36,7 @@ else:
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
-_STORE_ID_ITEMS: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
+_STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
 
 
 def _named_store_ids(store_ids: object) -> tuple[str, ...]:
@@ -50,7 +50,7 @@ def _named_store_ids(store_ids: object) -> tuple[str, ...]:
 
 
 def listed_vector_store_ids(store_ids: object) -> tuple[str, ...]:
-    return _named_store_ids(store_ids) if isinstance(store_ids, list) else ()
+    return _named_store_ids(store_ids) if isinstance(store_ids, (list, tuple)) else ()
 
 
 def vector_store_ids_in_tool(tool: object) -> tuple[str, ...]:

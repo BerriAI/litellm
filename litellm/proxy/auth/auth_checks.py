@@ -47,6 +47,10 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.base_llm.managed_resources.utils import (
+    extract_provider_resource_id_from_unified_id,
+    is_base64_encoded_unified_id,
+)
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
@@ -7992,6 +7996,8 @@ def _top_level_vector_store_ids(
         return listed
     if any(policy.drops("vector_store_ids") for policy in drop_policies()):
         return listed
+    if isinstance(vector_store_ids, str):
+        return (vector_store_ids,)
     return _UnreadableVectorStoreIds()
 
 
@@ -8000,9 +8006,10 @@ def _legacy_requested_vector_store_ids(
 ) -> tuple[str, ...] | _UnreadableVectorStoreIds:
     """
     Reads tools the way VectorStoreRegistry does and leaves a malformed tool to the proxy's tool
-    validation. A top-level vector_store_ids that is not a list of strings names no readable stores
-    unless a drop policy the request can resolve to drops it, and then only the string entries of a list
-    name stores, as in registry retrieval.
+    validation. A top-level vector_store_ids string names one store, since a query parameter always
+    arrives as a string. Any other value that is not a list of strings names no readable stores unless a
+    drop policy the request can resolve to drops it, and then only the string entries of a list name
+    stores, as in registry retrieval.
     """
     top_level: Final = _top_level_vector_store_ids(request_body.get("vector_store_ids"), drop_policies)
     if isinstance(top_level, _UnreadableVectorStoreIds):
@@ -8085,7 +8092,8 @@ async def vector_store_access_check(
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400
     when the top-level `vector_store_ids` is not a list of strings, which legacy mode does only when the
-    key or team has an allowlist. Legacy mode skips that value instead when the request, `litellm_settings`, the router defaults or a deployment of the requested
+    key or team has an allowlist and the value is not a string, which it checks as one store id. A
+    LiteLLM-managed store id is compared by the provider store id it decodes to, on both sides. Legacy mode skips that value instead when the request, `litellm_settings`, the router defaults or a deployment of the requested
     model drops it (`drop_params`, or `additional_drop_params` naming it), the same settings the proxy's
     tool validation reads, and reads tools the way the registry does, where strict mode answers 400 on a
     malformed one.
@@ -8162,6 +8170,12 @@ async def vector_store_access_check(
     return True
 
 
+def _provider_vector_store_id(vector_store_id: str) -> str:
+    if not is_base64_encoded_unified_id(vector_store_id):
+        return vector_store_id
+    return extract_provider_resource_id_from_unified_id(vector_store_id) or vector_store_id
+
+
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org", "user"],
     vector_store_ids_to_run: Sequence[str],
@@ -8180,8 +8194,9 @@ def _can_object_call_vector_stores(
     if len(object_permissions.vector_stores) == 0:
         return True
 
+    allowed_stores: Final = frozenset(map(_provider_vector_store_id, object_permissions.vector_stores))
     for vector_store_id in vector_store_ids_to_run:
-        if vector_store_id not in object_permissions.vector_stores:
+        if _provider_vector_store_id(vector_store_id) not in allowed_stores:
             raise ProxyException(
                 message=f"User not allowed to access vector store. Tried to access {vector_store_id}. Only allowed to access {object_permissions.vector_stores}",
                 type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),

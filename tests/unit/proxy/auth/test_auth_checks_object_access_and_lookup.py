@@ -101,6 +101,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
 )
 from litellm.utils import get_utc_datetime
+from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
 
@@ -2424,11 +2425,11 @@ async def test_deny_by_default_rejects_malformed_vector_store_ids_as_bad_request
 @pytest.mark.parametrize(
     "request_body",
     [
-        {"vector_store_ids": "KBSTOREA"},
         {"vector_store_ids": {"KBSTOREB": True}},
         {"vector_store_ids": ["KBSTOREA", {"id": "KBSTOREB"}]},
+        {"vector_store_ids": 7},
     ],
-    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
+    ids=["object-top-level-ids", "object-top-level-id", "int-top-level-ids"],
 )
 @pytest.mark.parametrize(
     "general_settings", [{"vector_store_deny_by_default": True}, {}], ids=["deny-by-default", "legacy"]
@@ -2457,8 +2458,8 @@ async def test_malformed_vector_store_ids_are_rejected_as_bad_request(
 
 _MALFORMED_TOP_LEVEL_IDS: Final = pytest.mark.parametrize(
     "vector_store_ids",
-    ["KBSTOREA", {"KBSTOREB": True}, ["KBSTOREA", {"id": "KBSTOREB"}]],
-    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
+    [{"KBSTOREB": True}, ["KBSTOREA", {"id": "KBSTOREB"}], 7],
+    ids=["object-top-level-ids", "object-top-level-id", "int-top-level-ids"],
 )
 
 
@@ -2483,7 +2484,11 @@ async def _team_key_query_with_top_level_ids(
 
 
 @pytest.mark.asyncio
-@_MALFORMED_TOP_LEVEL_IDS
+@pytest.mark.parametrize(
+    "vector_store_ids",
+    ["KBSTOREB", {"KBSTOREB": True}, ["KBSTOREA", {"id": "KBSTOREB"}]],
+    ids=["string-top-level-ids", "object-top-level-ids", "object-top-level-id"],
+)
 @pytest.mark.parametrize(
     ("key_vector_stores", "team_vector_stores"),
     [(None, None), ([], [])],
@@ -2516,6 +2521,72 @@ async def test_legacy_mode_rejects_malformed_vector_store_ids_under_a_team_allow
         "invalid_request_error",
         "vector_store_ids",
         "400",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("vector_store_ids", "denied_by"), [("KBSTOREA", None), ("KBSTOREB", _TEAM_DENIED)])
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_legacy_mode_checks_a_top_level_vector_store_ids_string_as_one_store(
+    vector_store_ids: str, denied_by: ProxyErrorTypes | None, vector_store_registry: VectorStoreRegistry | None
+):
+    await _assert_rag_query_outcome(
+        _team_key_query_with_top_level_ids(None, ["KBSTOREA"], vector_store_ids, vector_store_registry), denied_by
+    )
+
+
+def _managed_vector_store_id(unified_uuid: str, provider_vector_store_id: str) -> str:
+    return encode_unified_id(
+        generate_unified_id_string(
+            resource_type="vector_store",
+            unified_uuid=unified_uuid,
+            target_model_names=["gpt-4o-mini"],
+            provider_resource_id=provider_vector_store_id,
+            model_id="deployment-1",
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_vector_stores", "requested_id", "denied_by"),
+    [
+        (["KBSTOREA"], _managed_vector_store_id("uuid-a", "KBSTOREA"), None),
+        ([_managed_vector_store_id("uuid-a", "KBSTOREA")], "KBSTOREA", None),
+        ([_managed_vector_store_id("uuid-a", "KBSTOREA")], _managed_vector_store_id("uuid-a2", "KBSTOREA"), None),
+        (["KBSTOREA"], _managed_vector_store_id("uuid-b", "KBSTOREB"), _TEAM_DENIED),
+        (["uuid-a"], _managed_vector_store_id("uuid-a", "KBSTOREB"), _TEAM_DENIED),
+        ([_managed_vector_store_id("uuid-a", "KBSTOREA")], "KBSTOREB", _TEAM_DENIED),
+        (["KBSTOREA"], "litellm_proxy:vector_store;unified_id,uuid-a;resource_id,KBSTOREA", _TEAM_DENIED),
+    ],
+    ids=[
+        "provider-id-allows-its-managed-id",
+        "managed-id-allows-its-provider-id",
+        "managed-ids-for-one-provider-store",
+        "managed-id-for-another-store",
+        "managed-uuid-cannot-vouch-for-another-store",
+        "managed-id-for-another-provider-store",
+        "undecoded-managed-id-is-its-own-store",
+    ],
+)
+@pytest.mark.parametrize("deny_by_default", [True, False], ids=["strict", "default"])
+async def test_allowlist_compares_a_managed_vector_store_id_by_the_provider_store_it_names(
+    team_vector_stores: list[str], requested_id: str, denied_by: ProxyErrorTypes | None, deny_by_default: bool
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission", team_id="team-1"),
+            SimpleNamespace(vector_stores=[requested_id]),
+            LiteLLM_TeamTable(team_id="team-1", object_permission_id="team-permission"),
+            SimpleNamespace(vector_stores=team_vector_stores),
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": "what is in this KB?",
+                "tools": [{"type": "file_search", "vector_store_ids": [requested_id]}],
+            },
+        ),
+        denied_by,
     )
 
 
