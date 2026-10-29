@@ -50,8 +50,6 @@ BEDROCK_INVOKE_TRACE_FIELD: Final = "amazon-bedrock-trace"
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
-# Families with no invoke transformation; unmapped ids default to converse.
-_CONVERSE_ONLY_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])(minimax|nvidia|writer|zai|google|xai)\.")
 _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)(?:\.(\d{1,3})(?!\d))?")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
@@ -1756,7 +1754,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
         feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
-        model stays on Converse without the prefix.
+        model stays on Converse without the prefix. A model the cost map does not list as Converse goes to
+        Invoke only when its id names an Invoke provider, and to Converse otherwise.
         """
         route_mappings: dict[
             str,
@@ -1812,7 +1811,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
             return "converse"
         if _OPENAI_FAMILY_MODEL_RE.search(base_model):
             return "converse"
-        if _CONVERSE_ONLY_FAMILY_MODEL_RE.search(base_model):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        if BaseAWSLLM.get_bedrock_invoke_provider(model) is None:
             return "converse"
         return "invoke"
 

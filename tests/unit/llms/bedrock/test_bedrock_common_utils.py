@@ -214,24 +214,22 @@ def test_system_defined_inference_profile_arn_still_routes_to_converse():
     assert route == "converse"
 
 
-def test_other_opaque_arn_types_still_route_to_invoke():
+@pytest.mark.parametrize(
+    "arn_segment",
+    ["provisioned-model/abcdefgh1234", "imported-model/abcdefgh1234", "custom-model-deployment/abcdefgh1234"],
+)
+def test_bare_opaque_arn_with_no_invoke_provider_routes_to_converse(arn_segment: str):
     """
-    Only application-inference-profile ARNs are auto-routed to converse. Other
-    opaque ARNs (provisioned-model, imported-model, custom-model-deployment)
-    also yield no invoke provider, but they are frequently invoke-only with
-    provider-specific body formats, so routing them to converse could break
-    them. Guards the deliberate scope against an over-broad "any opaque ARN ->
-    converse" generalization.
+    A bare provisioned-model, imported-model, or custom-model-deployment ARN names no Invoke provider,
+    so Invoke could only fail locally with "Unknown provider=None". It goes to Converse instead, and a
+    caller who needs Invoke for one still names the provider (``bedrock/llama/arn:...``).
     """
-    for arn_segment in (
-        "provisioned-model/abcdefgh1234",
-        "imported-model/abcdefgh1234",
-        "custom-model-deployment/abcdefgh1234",
-    ):
-        route = BedrockModelInfo.get_bedrock_route(
-            model=f"bedrock/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}"
-        )
-        assert route == "invoke", f"{arn_segment} should stay on invoke route"
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model: Final = f"bedrock/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}"
+    assert BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/llama/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}") == "invoke"
 
 
 def test_govcloud_cross_region_inference_prefix():
@@ -1110,12 +1108,11 @@ def test_unmapped_openai_family_model_routes_to_converse():
     ],
 )
 def test_unmapped_converse_only_family_model_routes_to_converse(unmapped: str):
-    """Same rule as the OpenAI family, for the other Bedrock-native families with no invoke handler.
+    """An id newer than the cost map from a family with no Invoke provider goes to Converse.
 
     minimax, nvidia, writer, zai, google and xai have no transformation under
-    ``litellm/llms/bedrock/chat/invoke_transformations``; every id of theirs is served by Converse.
-    An id newer than the cost map used to fall to the invoke route, where
-    ``get_bedrock_invoke_provider`` returns ``None`` and the request fails, instead of Converse.
+    ``litellm/llms/bedrock/chat/invoke_transformations``. Such an id used to fall to the invoke route,
+    where ``get_bedrock_invoke_provider`` returns ``None`` and the request fails before it is sent.
     """
     import litellm
 
@@ -1124,7 +1121,7 @@ def test_unmapped_converse_only_family_model_routes_to_converse(unmapped: str):
 
 
 def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
-    """The converse-only default is scoped to families without an invoke handler; ``meta`` has one."""
+    """The Converse default is scoped to ids with no Invoke provider, and ``meta`` has one."""
     from typing import Final
 
     import litellm
@@ -1132,6 +1129,59 @@ def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
     unmapped: Final = "bedrock/meta.llama99-unmapped-v1:0"
     assert BedrockModelInfo.get_base_model(unmapped) not in litellm.bedrock_converse_models
     assert BedrockModelInfo.get_bedrock_route(unmapped) == "invoke"
+
+
+@pytest.mark.parametrize(
+    ("model", "model_path", "response_json"),
+    [
+        (
+            "bedrock/us.newvendor.model-1",
+            b"/model/us.newvendor.model-1/converse",
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        ),
+        (
+            "bedrock/mistral.mistral-99-unmapped-v1:0",
+            b"/model/mistral.mistral-99-unmapped-v1:0/invoke",
+            {"outputs": [{"text": "ok", "stop_reason": "stop"}]},
+        ),
+    ],
+)
+def test_completion_on_unmapped_model_posts_converse_unless_its_id_names_an_invoke_provider(
+    model: str, model_path: bytes, response_json: dict[str, object]
+):
+    """An id missing from the cost map used to be sent to Invoke, which fails locally for one naming no
+    Invoke provider (``Unknown provider=None``) before any request leaves, so a new vendor's model was unusable
+    without the ``converse/`` prefix."""
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    assert BedrockModelInfo.get_base_model(model) not in litellm.bedrock_converse_models
+    sent: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200,
+            json=response_json,
+            headers={"x-amzn-bedrock-input-token-count": "1", "x-amzn-bedrock-output-token-count": "1"},
+        )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert [request.url.raw_path for request in sent] == [model_path]
 
 
 @pytest.mark.parametrize(
