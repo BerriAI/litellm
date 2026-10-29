@@ -212,7 +212,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         mask_on_block: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
-        include_masked_response_on_block: bool | str | None = False,
+        include_masked_response_on_block: object = False,
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
