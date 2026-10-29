@@ -47,6 +47,7 @@ from litellm.proxy.common_request_processing import (
     _ClientDisconnectedBeforeFirstChunk,
     attach_guardrail_information,
     _extract_error_from_sse_chunk,
+    FirstChunkSseFraming,
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
@@ -2373,7 +2374,9 @@ class TestCommonRequestProcessingHelpers:
             (RESPONSES_FIRST_CHUNK_FRAMING, ('event: error\ndata: {"type": "error", "code": "server_error"',)),
         ],
     )
-    async def test_a_stream_that_fails_before_its_first_chunk_ends_in_its_own_api_shape(self, framing, frame_starts):
+    async def test_a_stream_that_fails_before_its_first_chunk_ends_in_its_own_api_shape(
+        self, framing: FirstChunkSseFraming, frame_starts: tuple[str, ...]
+    ) -> None:
         response: Final = await create_response(
             _stream_failing_before_its_first_chunk(), "text/event-stream", {}, framing=framing
         )
