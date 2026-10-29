@@ -4831,16 +4831,35 @@ def _usage_with_batch_token_counts(usage: Usage, counts: _BatchTokenCounts) -> U
     )
 
 
+class _ProviderBatchUsageDetails(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    input_tokens_details: Mapping[str, JsonValue] | None = None
+    output_tokens_details: Mapping[str, JsonValue] | None = None
+
+
+def _provider_batch_usage_details(usage: Usage) -> _ProviderBatchUsageDetails:
+    try:
+        return _ProviderBatchUsageDetails.model_validate(usage)
+    except ValidationError:
+        return _ProviderBatchUsageDetails()
+
+
 def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
+    provider_details: Final = _provider_batch_usage_details(usage)
     cached_tokens: Final = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else None
     reasoning_tokens: Final = (
         usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
     )
     return BatchUsage(
         input_tokens=usage.prompt_tokens,
-        input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens or 0),
+        input_tokens_details=InputTokensDetails.model_validate(
+            {**(provider_details.input_tokens_details or {}), "cached_tokens": cached_tokens or 0}
+        ),
         output_tokens=usage.completion_tokens,
-        output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens or 0),
+        output_tokens_details=OutputTokensDetails.model_validate(
+            {**(provider_details.output_tokens_details or {}), "reasoning_tokens": reasoning_tokens or 0}
+        ),
         total_tokens=usage.total_tokens,
     )
 
