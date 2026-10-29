@@ -127,9 +127,27 @@ def _sanitize_inbound_headers(
     return sanitized or None
 
 
-def _logged_inbound_headers(details: Mapping[str, object]) -> Mapping[object, object] | None:
+def _str_or_none(data: Mapping[str, object], key: str) -> str | None:
+    value: Final = data.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _call_type(request_data: Mapping[str, object], logging_obj: Optional["LiteLLMLoggingObj"]) -> str | None:
+    """The LiteLLM call type being checked (request data first, then the logging object)."""
+    value: Final = request_data.get("call_type") or (getattr(logging_obj, "call_type", None) if logging_obj else None)
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(getattr(value, "value", value))
+
+
+def _logged_metadata(details: Mapping[str, object]) -> Mapping[str, object] | None:
+    """`litellm_params.metadata` of a logging-details dict (identity and inbound headers live there)."""
     litellm_params: Final = as_str_mapping(details.get("litellm_params", {}))
-    metadata: Final = as_str_mapping(litellm_params.get("metadata", {})) if litellm_params is not None else None
+    return as_str_mapping(litellm_params.get("metadata", {})) if litellm_params is not None else None
+
+
+def _logged_inbound_headers(details: Mapping[str, object]) -> Mapping[object, object] | None:
+    metadata: Final = _logged_metadata(details)
     headers: Final = metadata.get("headers", None) if metadata is not None else None
     return headers if isinstance(headers, dict) else None
 
@@ -166,6 +184,12 @@ def _extract_inbound_headers(
     litellm_metadata_headers: Final = (request_data.get("litellm_metadata") or {}).get("headers")
     if litellm_metadata_headers:
         return _sanitize_inbound_headers(litellm_metadata_headers, extra_allowlist=extra_allowlist)
+
+    # MCP result hooks (post_mcp_call) pass the logging details themselves as request_data,
+    # with the inbound headers under litellm_params.metadata.
+    logged_request_headers: Final = _logged_inbound_headers(request_data)
+    if logged_request_headers:
+        return _sanitize_inbound_headers(logged_request_headers, extra_allowlist=extra_allowlist)
 
     # 4) Post-call: headers not present on response; fallback to logging object
     if logging_obj and getattr(logging_obj, "model_call_details", None):
@@ -344,7 +368,9 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         verbose_proxy_logger.debug("Generic Guardrail API initialized with api_base: %s", self.api_base)
 
-    def _extract_user_api_key_metadata(self, request_data: dict) -> GenericGuardrailAPIMetadata:
+    def _extract_user_api_key_metadata(
+        self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"] = None
+    ) -> GenericGuardrailAPIMetadata:
         """
         Extract user API key metadata from request_data.
 
@@ -352,20 +378,27 @@ class GenericGuardrailAPI(CustomGuardrail):
             request_data: Request data dictionary that may contain:
                 - metadata (for input requests) with user_api_key_* fields
                 - litellm_metadata (for output responses) with user_api_key_* fields
+                - litellm_params.metadata (MCP hooks pass the logging details, e.g. post_mcp_call)
 
         Returns:
             GenericGuardrailAPIMetadata with extracted user information
         """
         result_metadata: Final = GenericGuardrailAPIMetadata()
 
-        # Get the source of metadata - try both locations
+        # Get the source of metadata - try all locations
         # 1. For output responses: litellm_metadata (set by handlers with prefixed keys)
         # 2. For input requests: metadata (already present in request_data with prefixed keys)
+        # 3. For MCP hooks: litellm_params.metadata of the logging details, used only to fill gaps
         litellm_metadata: Final = request_data.get("litellm_metadata", {})
         top_level_metadata: Final = request_data.get("metadata", {})
+        logging_details: Final = getattr(logging_obj, "model_call_details", None) if logging_obj else None
+        logged_metadata: Final = {
+            **((_logged_metadata(logging_details) if isinstance(logging_details, dict) else None) or {}),
+            **(_logged_metadata(request_data) or {}),
+        }
 
-        # Merge both sources, preferring litellm_metadata if both exist
-        metadata_dict: Final = {**top_level_metadata, **litellm_metadata}
+        # Merge the sources, preferring litellm_metadata, then metadata, then the logged metadata
+        metadata_dict: Final = {**logged_metadata, **top_level_metadata, **litellm_metadata}
 
         if not metadata_dict:
             return result_metadata
@@ -571,7 +604,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata
-        user_metadata: Final = self._extract_user_api_key_metadata(request_data)
+        user_metadata: Final = self._extract_user_api_key_metadata(request_data, logging_obj)
         extra_allowlist = {h.lower() for h in self.extra_headers if isinstance(h, str)} if self.extra_headers else None
         inbound_headers: Final = _extract_inbound_headers(
             request_data=request_data,
@@ -582,8 +615,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         try:
             # Create request payload
             guardrail_request: Final = GenericGuardrailAPIRequest(
-                litellm_call_id=logging_obj.litellm_call_id if logging_obj else None,
-                litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
+                # MCP result hooks pass no logging_obj; the logging details in request_data carry the IDs.
+                litellm_call_id=logging_obj.litellm_call_id
+                if logging_obj
+                else _str_or_none(request_data, "litellm_call_id"),
+                litellm_trace_id=logging_obj.litellm_trace_id
+                if logging_obj
+                else _str_or_none(request_data, "litellm_trace_id"),
                 texts=texts,
                 request_data=user_metadata,
                 request_headers=inbound_headers,
@@ -595,6 +633,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 additional_provider_specific_params=additional_params,
                 input_type=input_type,
                 model=model,
+                call_type=_call_type(request_data, logging_obj),
             )
 
             headers: Final = self._build_request_headers()
@@ -664,4 +703,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_call,
+            # MCP tool calls go through apply_guardrail too (MCPGuardrailTranslationHandler)
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]

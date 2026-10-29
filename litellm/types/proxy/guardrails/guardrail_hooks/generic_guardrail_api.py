@@ -164,6 +164,13 @@ class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     additional_provider_specific_params: dict[str, Any] | None = None
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None
     model: str | None = None  # the model being used for the LLM call
+    call_type: str | None = Field(
+        default=None,
+        description=(
+            "LiteLLM call type of the request being checked, e.g. 'call_mcp_tool' or 'list_mcp_tools' for MCP "
+            "tool calls and tool listings. Lets the guardrail tell MCP checks apart from LLM calls."
+        ),
+    )
 
 
 def coerce_stream_holdback_value(value: Any) -> int:
