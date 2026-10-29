@@ -1942,10 +1942,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def set_cost_breakdown(
         self,
-        input_cost: float,
-        output_cost: float,
+        input_cost: float | None,
+        output_cost: float | None,
         total_cost: float,
-        cost_for_built_in_tools_cost_usd_dollar: float,
+        cost_for_built_in_tools_cost_usd_dollar: float | None,
         additional_costs: dict | None = None,
         original_cost: float | None = None,
         discount_percent: float | None = None,
@@ -1984,14 +1984,17 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.billed_token_rates = billed_token_rates
         self.cost_breakdown = CostBreakdown(
-            input_cost=input_cost,
-            output_cost=output_cost,
             total_cost=total_cost,
-            tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
             service_tier=service_tier,
             data_residency=data_residency,
             vertex_location=vertex_location,
         )
+        if input_cost is not None:
+            self.cost_breakdown["input_cost"] = input_cost
+        if output_cost is not None:
+            self.cost_breakdown["output_cost"] = output_cost
+        if cost_for_built_in_tools_cost_usd_dollar is not None:
+            self.cost_breakdown["tool_usage_cost"] = cost_for_built_in_tools_cost_usd_dollar
         if cache_read_cost is not None and cache_read_cost > 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
         if cache_creation_cost is not None and cache_creation_cost > 0:
