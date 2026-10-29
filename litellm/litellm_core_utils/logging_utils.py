@@ -5,7 +5,7 @@ import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     )
 
     LiteLLMModelResponse = _ModelResponse
-    Span = _Span | Any
+    Span: TypeAlias = _Span
 else:
     LiteLLMModelResponse = Any
     LiteLLMLoggingObject = Any

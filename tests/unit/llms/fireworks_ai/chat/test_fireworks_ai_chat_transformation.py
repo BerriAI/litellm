@@ -5,10 +5,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 import litellm
-from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
@@ -491,6 +492,46 @@ def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_co
     assert "thinking_blocks" not in out[1]
     assert out[1]["reasoning_content"] == "internal"
     assert out[1]["content"] == "I can help."
+
+
+def test_tool_search_reply_sent_to_fireworks_drops_litellm_response_fields():
+    tool_search_reply = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+        "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                "provider_specific_fields": {"namespace": "weather"},
+            }
+        ],
+    }
+    request = FireworksAIConfig().transform_request(
+        model="accounts/fireworks/models/gpt-oss-120b",
+        messages=[
+            {"role": "user", "content": "Weather in Paris?"},
+            tool_search_reply,
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            }
+        ],
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -1288,7 +1329,7 @@ def test_streaming_surfaces_fireworks_response_fields():
     raw_response = MagicMock()
     raw_response.status_code = 200
     raw_response.headers = {}
-    raw_response.iter_lines = lambda: iter(sse_lines)
+    raw_response.iter_text = lambda: iter(f"{line}\n" for line in sse_lines)
 
     client = HTTPHandler()
     with patch.object(client, "post", return_value=raw_response):
@@ -1747,7 +1788,7 @@ def test_streaming_preserves_selected_model_for_private_accounting():
     raw_response = MagicMock()
     raw_response.status_code = 200
     raw_response.headers = {}
-    raw_response.iter_lines = lambda: iter(sse_lines)
+    raw_response.iter_text = lambda: iter(f"{line}\n" for line in sse_lines)
 
     client = HTTPHandler()
     with patch.object(client, "post", return_value=raw_response):
@@ -2011,6 +2052,121 @@ VISION_MODEL = next(
 )
 
 
+_CHAT_REPLY: Final = {
+    "id": "chat-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "accounts/fireworks/models/llama-v3p1-8b-instruct",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+}
+_FIREWORKS_BASE: Final = "https://api.fireworks.ai/inference/v1"
+_MODELS_URL: Final = f"{_FIREWORKS_BASE}/accounts/acct/models"
+
+
+def _complete_against_reply(reply: object) -> ModelResponse:
+    return litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct",
+        messages=[{"role": "user", "content": "ping"}],
+        api_key="fw-test-key",
+        client=HTTPHandler(
+            client=httpx.Client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200, json=reply, request=request))
+            )
+        ),
+    )
+
+
+def test_completion_keeps_unmodelled_reply_fields_and_nested_fireworks_metrics() -> None:
+    perf_metrics: Final = {"ttft": 0.1, "per_stage": [{"name": "prefill", "ms": None}]}
+
+    response: Final = _complete_against_reply(
+        {
+            **_CHAT_REPLY,
+            "system_fingerprint": None,
+            "service_tier": "default",
+            "x-trace": {"spans": [1, 2]},
+            "perf_metrics": perf_metrics,
+            "prompt_token_ids": [7, 8, 9],
+        }
+    )
+
+    assert response.model == "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
+    assert response.choices[0].message.content == "pong"
+    assert response.model_dump()["service_tier"] == "default"
+    assert response.model_dump()["x-trace"] == {"spans": [1, 2]}
+    assert response._hidden_params["fireworks_perf_metrics"] == perf_metrics
+    assert response._hidden_params["fireworks_prompt_token_ids"] == [7, 8, 9]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [pytest.param([_CHAT_REPLY], id="list"), pytest.param("pong", id="string"), pytest.param(7, id="number")],
+)
+def test_completion_with_non_object_reply_raises_api_connection_error(reply: object) -> None:
+    with pytest.raises(litellm.APIConnectionError):
+        _complete_against_reply(reply)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        pytest.param(
+            {"models": [{"name": "accounts/acct/models/a", "state": {"ready": [True]}}, {"name": "b"}], "totalSize": 2},
+            ["fireworks_ai/accounts/acct/models/a", "fireworks_ai/b"],
+            id="listed-models",
+        ),
+        pytest.param({"models": []}, [], id="empty-list"),
+        pytest.param({"models": ""}, [], id="models-empty-string"),
+        pytest.param({"models": {}}, [], id="models-empty-object"),
+        pytest.param({"models": [{"name": ""}]}, ["fireworks_ai/"], id="empty-name"),
+    ],
+)
+def test_get_models_prefixes_each_listed_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: dict[str, object], expected: list[str]
+) -> None:
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "acct")
+    respx_mock.get(_MODELS_URL).respond(200, json=body)
+
+    assert FireworksAIConfig().get_models(api_key="fw-test-key", api_base=_FIREWORKS_BASE) == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "missing_key"),
+    [
+        pytest.param({"data": []}, "models", id="no-models-key"),
+        pytest.param({"models": [{"name": "a"}, {"id": "b"}]}, "name", id="entry-without-name"),
+    ],
+)
+def test_get_models_raises_key_error_for_missing_field(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: dict[str, object], missing_key: str
+) -> None:
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "acct")
+    respx_mock.get(_MODELS_URL).respond(200, json=body)
+
+    with pytest.raises(KeyError, match=missing_key):
+        FireworksAIConfig().get_models(api_key="fw-test-key", api_base=_FIREWORKS_BASE)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param([{"name": "a"}], id="top-level-list"),
+        pytest.param({"models": None}, id="models-null"),
+        pytest.param({"models": ["a"]}, id="entry-not-an-object"),
+        pytest.param({"models": [{"name": 7}]}, id="name-not-a-string"),
+    ],
+)
+def test_get_models_rejects_malformed_listing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: object
+) -> None:
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "acct")
+    respx_mock.get(_MODELS_URL).respond(200, json=body)
+
+    with pytest.raises(ValidationError):
+        FireworksAIConfig().get_models(api_key="fw-test-key", api_base=_FIREWORKS_BASE)
+
+
 def _fireworks_chat_client() -> MagicMock:
     body: Final = {
         "id": "chat-user-attribution",
@@ -2119,7 +2275,7 @@ def test_completion_forwards_litellm_user_id_as_user(call_kwargs: dict[str, obje
 
 def test_completion_forwards_litellm_user_id_when_streaming() -> None:
     client: Final = _fireworks_chat_client()
-    client.post.return_value.iter_lines = lambda: iter(())
+    client.post.return_value.iter_text = lambda: iter(())
     litellm.completion(
         model="fireworks_ai/accounts/fireworks/models/kimi-k3",
         messages=[{"role": "user", "content": "hi"}],

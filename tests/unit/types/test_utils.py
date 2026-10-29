@@ -1,6 +1,13 @@
 import pytest
 
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_excluded_services_value
 from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VALUES, CaptureMessageContent, captures_span_content
+
+
+@pytest.mark.parametrize("value", ["", "  ", "auth", "none,redis", "redis,", ",postgres"])
+def test_invalid_excluded_services_values_are_rejected(value: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid excluded_services.*none"):
+        validate_excluded_services_value(value)
 
 
 @pytest.mark.parametrize(

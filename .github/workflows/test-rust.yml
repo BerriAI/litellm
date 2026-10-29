@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "litellm-rust/**"
+      - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
       - "scripts/trace_codegen/**"
@@ -16,6 +17,10 @@ on:
       - "litellm/proxy/guardrails/**"
       - "litellm/utils.py"
       - "litellm/ocr/**"
+      - "litellm/chat_completions/dispatch.py"
+      - "litellm/embeddings/dispatch.py"
+      - "litellm/messages/dispatch.py"
+      - "litellm/responses/dispatch.py"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
       - "Makefile"
@@ -34,6 +39,7 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
+      - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
       - "scripts/trace_codegen/**"
@@ -46,6 +52,10 @@ on:
       - "litellm/proxy/guardrails/**"
       - "litellm/utils.py"
       - "litellm/ocr/**"
+      - "litellm/chat_completions/dispatch.py"
+      - "litellm/embeddings/dispatch.py"
+      - "litellm/messages/dispatch.py"
+      - "litellm/responses/dispatch.py"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
       - "Makefile"

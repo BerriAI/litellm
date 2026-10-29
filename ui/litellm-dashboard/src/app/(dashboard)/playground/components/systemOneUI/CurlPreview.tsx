@@ -8,7 +8,7 @@ interface CurlPreviewProps extends CurlCommandInput {
 export default function CurlPreview({ errorCount = 0, ...input }: CurlPreviewProps) {
   const command = buildCurlCommand(input);
   return (
-    <div className="flex min-h-0 flex-1 flex-col rounded-md border">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2 text-sm">
         <span className="font-medium">cURL request</span>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">

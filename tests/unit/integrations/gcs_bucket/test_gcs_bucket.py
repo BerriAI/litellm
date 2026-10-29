@@ -330,3 +330,67 @@ async def test_unbatched_gcs_logs_upload_individual_success_and_failure_objects(
             flush_task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await flush_task
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_one_ndjson_object_in_the_default_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    logger, uploads = _gcs_logger_with_upload_status(monkeypatch, 200)
+
+    def stored(request: httpx.Request) -> httpx.Response:
+        uploads(request=request)
+        return httpx.Response(200, json={"name": request.url.params["name"]})
+
+    logger.async_httpx_client = AsyncHTTPHandler(transport=httpx.MockTransport(stored))
+    lines: Final = (
+        {"batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA", "custom_id": "ok-1", "status": "success", "response_cost": 0.5},
+        {"batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA", "custom_id": "bad-1", "status": "failure", "response_cost": 0.0},
+    )
+
+    await logger.async_log_batch_line_items(
+        {"batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA", "finished_at": 1791494130, "part": 3, "lines": lines}
+    )
+
+    request: Final = uploads.call_args.kwargs["request"]
+    assert uploads.call_count == 1
+    assert request.url.path == "/upload/storage/v1/b/test-bucket/o"
+    assert request.url.params["name"] == "batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00003.jsonl"
+    assert request.headers["Authorization"] == "Bearer test-access-token"
+    assert [json.loads(line) for line in request.content.decode().splitlines()] == list(lines)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_batch_line_items_write_raises_for_the_dispatcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    logger, uploads = _gcs_logger_with_upload_status(monkeypatch, 503)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await logger.async_log_batch_line_items(
+            {"batch_id": "b", "finished_at": 1791494130, "part": 0, "lines": ({"custom_id": "ok-1"},)}
+        )
+
+    assert uploads.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_serialized_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    import litellm.integrations.gcs_bucket.gcs_bucket as gcs_bucket_module
+    from litellm.types.utils import StandardBatchLineItemsPayload
+
+    logger, _ = _gcs_logger_with_upload_status(monkeypatch, 200)
+    logger.async_httpx_client = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"name": request.url.params["name"]}))
+    )
+    serialize: Final = gcs_bucket_module.batch_line_items_ndjson
+    threads: Final[list[threading.Thread]] = []
+
+    def _serialize(payload: StandardBatchLineItemsPayload) -> str:
+        threads.append(threading.current_thread())
+        return serialize(payload)
+
+    monkeypatch.setattr(gcs_bucket_module, "batch_line_items_ndjson", _serialize)
+
+    await logger.async_log_batch_line_items({"batch_id": "b", "finished_at": 1791494130, "part": 0, "lines": ()})
+
+    (thread,) = threads
+    assert thread is not threading.main_thread()

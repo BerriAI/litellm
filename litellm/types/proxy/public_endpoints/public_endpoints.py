@@ -1,6 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import date
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import ConfigDict
 
@@ -14,7 +13,7 @@ class PublicModelHubInfo(LiteLLMBaseModel):
     # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
-    useful_links: dict[str, str | dict[str, Any]] | None
+    useful_links: dict[str, str | dict[str, object]] | None
 
 
 class ProviderCredentialField(LiteLLMBaseModel):
@@ -112,24 +111,6 @@ class AutoRouterPresetRecord(LiteLLMBaseModel):
     label: str
     description: str
     complexity_router_config: AutoRouterPresetConfig
-
-
-class WhatsNewLaunch(LiteLLMBaseModel):
-    """One launch card in the dashboard Home page's What's new section."""
-
-    model_config = ConfigDict(frozen=True)
-
-    icon: str
-    title: str
-    description: str
-    href: str
-    published_on: date
-
-
-class WhatsNewResponse(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    launches: tuple[WhatsNewLaunch, ...]
 
 
 class ComplexityScorerDefaults(LiteLLMBaseModel):

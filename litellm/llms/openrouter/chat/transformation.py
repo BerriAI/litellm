@@ -6,11 +6,12 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
 
 class CacheControlSupportedModels(str, Enum):
     """Models that support cache_control in content blocks."""
@@ -35,6 +38,11 @@ class CacheControlSupportedModels(str, Enum):
     MINIMAX = "minimax"
     GLM = "glm"
     ZAI = "z-ai"
+
+
+def openrouter_model_supports_cache_control(model: str) -> bool:
+    model_lower: Final = model.lower()
+    return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -79,8 +87,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             bool: True if model supports cache_control (Claude or Gemini models)
         """
-        model_lower: Final = model.lower()
-        return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
+        return openrouter_model_supports_cache_control(model)
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
@@ -203,9 +210,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             if "usage" in response_json and response_json["usage"]:
-                response_cost: Final = response_json["usage"].get("cost")
+                response_cost: Final = _JSON_OBJECT.validate_python(response_json["usage"]).get("cost")
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
                     if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
@@ -218,7 +225,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
                         dict[str, object], hidden_params["additional_headers"]
                     )
-                    additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
+                    if isinstance(response_cost, str | int | float):
+                        additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
@@ -237,7 +245,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenRouterChatCompletionStreamingHandler":
         return OpenRouterChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

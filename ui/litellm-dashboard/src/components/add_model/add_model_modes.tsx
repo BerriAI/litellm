@@ -13,7 +13,8 @@ export const TEST_MODES = [
   { value: "batch", label: "Batch - /batch" },
   { value: "anthropic_messages", label: "Anthropic Messages - /v1/messages" },
   { value: "ocr", label: "OCR - /ocr" },
-  { value: "evaluation", label: "Evaluation - /v1/decisions" },
+  { value: "decisions", label: "Decisions - /v1/decisions" },
+  { value: "extraction", label: "Extraction - /v1/extraction" },
 ];
 
 // Define the available auto router routing strategies

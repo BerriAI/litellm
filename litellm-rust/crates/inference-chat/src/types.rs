@@ -1,8 +1,5 @@
-use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
-use litellm_auth::SecretValue;
-use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
@@ -49,31 +46,11 @@ impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
     }
 }
 
-pub struct ResolvedChatCompletionsRequest<'a> {
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub config: &'static dyn BaseConfig,
+pub struct ResolvedChatCompletionsRequest {
     pub messages: Vec<ChatMessage>,
     pub optional_params: Map<String, Value>,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
-}
-
-pub struct ProviderChatCompletionsRequest {
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub config: &'static dyn BaseConfig,
-    pub url: String,
-    pub body: Value,
-    /// The route's parameters before the provider transformation, reported to the host
-    /// beside the wire request.
-    pub optional_params: Map<String, Value>,
-    /// The forwarded and default headers plus how the call authenticates; the credential
-    /// itself is applied when the request is sent.
-    pub environment: ValidatedEnvironment,
-    pub secrets: Secrets,
-    pub timeout: Option<Duration>,
-    pub api_key: Option<SecretValue>,
 }

@@ -524,8 +524,7 @@ def test_owned_proxy_loss_retains_exit_status_and_first_http_failure(gateway: Ga
         with owned_proxy_process(gateway, tmp_path, {}) as owned:
             response: Final = owned.gateway.client.get("/health/readiness")
             assert response.status_code == 200, response.text
-            owned.process.kill()
-            owned.process.wait(timeout=3)
+            owned.kill_supervisor()
             owned.gateway.client.get("/health/readiness")
     record: Final = TypeAdapter(dict[str, int | float | str | None]).validate_json(
         owned.log.with_suffix(".exit.json").read_text()

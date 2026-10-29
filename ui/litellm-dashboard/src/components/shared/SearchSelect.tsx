@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import {
   Combobox,
   ComboboxContent,
@@ -19,6 +19,11 @@ export interface SearchSelectOption {
   icon?: React.ReactNode;
 }
 
+interface CustomValue {
+  hint: string;
+  accepts: (typed: string) => boolean;
+}
+
 interface SearchSelectProps {
   options: SearchSelectOption[];
   value?: string | null;
@@ -29,7 +34,10 @@ interface SearchSelectProps {
   className?: string;
   inputId?: string;
   allowClear?: boolean;
+  customValue?: CustomValue;
+  reservedValues?: readonly string[];
   "aria-label"?: string;
+  id?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -48,12 +56,22 @@ export function SearchSelect({
   className,
   inputId,
   allowClear = true,
+  customValue,
+  reservedValues = [],
   "aria-label": ariaLabel,
+  id,
 }: SearchSelectProps) {
+  const [query, setQuery] = useState("");
   const selected =
     value == null || value === "" ? null : options.find((option) => option.value === value) ?? { label: value, value };
-  const items =
+  const known =
     selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
+  const typed = query.trim();
+  const isNewValue = typed !== "" && !reservedValues.includes(typed) && !known.some((option) => option.value === typed);
+  const items =
+    customValue !== undefined && isNewValue && customValue.accepts(typed)
+      ? [...known, { label: typed, value: typed, sublabel: customValue.hint }]
+      : known;
 
   return (
     <Combobox
@@ -63,10 +81,11 @@ export function SearchSelect({
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={matchesQuery}
+      onInputValueChange={setQuery}
       disabled={disabled}
     >
       <ComboboxInput
-        id={inputId}
+        id={id ?? inputId}
         aria-label={ariaLabel}
         placeholder={placeholder}
         showClear={allowClear && value != null && value !== ""}

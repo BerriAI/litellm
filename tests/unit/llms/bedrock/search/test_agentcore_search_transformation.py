@@ -8,6 +8,7 @@ the sharded CI (coverage collection runs against this tree).
 
 import json
 import os
+from typing import Final
 
 import httpx
 import pytest
@@ -636,7 +637,11 @@ class TestAgentCoreSearchEdgeCases:
         from litellm.search.cost_calculator import search_provider_cost_per_query
 
         monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
-        assert search_provider_cost_per_query(model="agentcore/search", custom_llm_provider="agentcore") == (0.0, 0.0)
+        price_per_query = litellm.model_cost["agentcore/search"]["input_cost_per_query"]
+        assert price_per_query > 0
+        assert search_provider_cost_per_query(
+            model="agentcore/search", custom_llm_provider="agentcore", number_of_queries=3
+        ) == (3 * price_per_query, 0.0)
 
 
 def _transform_text(text: str) -> SearchResponse:
@@ -678,3 +683,17 @@ def test_transform_search_response_ignores_text_blocks_without_result_objects(bl
     body = {"result": {"content": [{"type": "text", "text": block_text}]}}
 
     assert _transform_text(json.dumps(body)).results == []
+
+
+def test_transform_search_response_keeps_a_result_whose_sse_json_holds_unicode_line_separators() -> None:
+    snippet: Final = "Snippet\u2028for\u2029result"
+    results: Final = [{"title": "Result", "url": "https://example.com/1", "text": snippet}]
+    body: Final = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"content": [{"type": "text", "text": json.dumps(results, ensure_ascii=False)}]},
+    }
+
+    response: Final = _transform_text(f"event: message\ndata: {json.dumps(body, ensure_ascii=False)}\n\n")
+
+    assert _as_tuples(response) == [("Result", "https://example.com/1", snippet, None, None)]

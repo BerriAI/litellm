@@ -1,12 +1,81 @@
 import asyncio
 import json
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY
 
+import litellm
 from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
 from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+from litellm.types.services import ServiceTypes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("aggregation_threshold", (2, 3))
+async def test_spend_queue_gauge_tracks_enqueue_aggregation_and_drain(
+    monkeypatch: pytest.MonkeyPatch, aggregation_threshold: int
+) -> None:
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    queue: Final = SpendUpdateQueue()
+    queue.MAX_SIZE_IN_MEMORY_QUEUE = aggregation_threshold
+    response_cost: Final = 0.5
+    update: Final = SpendUpdateQueueItem(
+        entity_type=Litellm_EntityType.USER, entity_id="queue-user", response_cost=response_cost
+    )
+
+    await queue.add_update(update)
+    await asyncio.sleep(0)
+    assert REGISTRY.get_sample_value(
+        "litellm_in_memory_spend_update_queue_size",
+        {"in_memory_spend_update_queue": str(ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE)},
+    ) == queue.update_queue.qsize() == 1
+
+    await queue.add_update(update)
+    await asyncio.sleep(0)
+    assert REGISTRY.get_sample_value(
+        "litellm_in_memory_spend_update_queue_size",
+        {"in_memory_spend_update_queue": str(ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE)},
+    ) == queue.update_queue.qsize() == (1 if aggregation_threshold == 2 else 2)
+
+    await queue.aggregate_queue_updates()
+    await asyncio.sleep(0)
+    assert REGISTRY.get_sample_value(
+        "litellm_in_memory_spend_update_queue_size",
+        {"in_memory_spend_update_queue": str(ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE)},
+    ) == queue.update_queue.qsize() == 1
+
+    transactions: Final = await queue.flush_and_get_aggregated_db_spend_update_transactions()
+    await asyncio.sleep(0)
+    assert transactions["user_list_transactions"] == {"queue-user": 2 * response_cost}
+    assert REGISTRY.get_sample_value(
+        "litellm_in_memory_spend_update_queue_size",
+        {"in_memory_spend_update_queue": str(ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE)},
+    ) == queue.update_queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_spend_queue_gauge_tracks_partial_flush(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.db.db_transaction_queue.base_update_queue as base_queue_module
+
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    monkeypatch.setattr(base_queue_module, "MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1)
+    queue: Final = SpendUpdateQueue()
+    update: Final = SpendUpdateQueueItem(
+        entity_type=Litellm_EntityType.USER, entity_id="queue-user", response_cost=0.5
+    )
+    await queue.add_update(update)
+    await queue.add_update(update)
+
+    transactions: Final = await queue.flush_and_get_aggregated_db_spend_update_transactions()
+    await asyncio.sleep(0)
+    assert transactions["user_list_transactions"] == {"queue-user": update["response_cost"]}
+    assert REGISTRY.get_sample_value(
+        "litellm_in_memory_spend_update_queue_size",
+        {"in_memory_spend_update_queue": str(ServiceTypes.IN_MEMORY_SPEND_UPDATE_QUEUE)},
+    ) == queue.update_queue.qsize() == 1
 
 
 
