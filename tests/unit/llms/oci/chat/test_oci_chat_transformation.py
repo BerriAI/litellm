@@ -2167,8 +2167,19 @@ class TestOpenAIPrefixMaxTokensKey:
         assert "maxTokens" not in chat_request
 
 
-def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
-    pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+_OCI_PDF_DATA_URL: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+_OCI_PDF_URL: Final = "https://docs.example/report.pdf"
+
+
+@pytest.mark.parametrize(
+    ("file", "image_url"),
+    [
+        ({"filename": "report.pdf", "file_data": _OCI_PDF_DATA_URL}, _OCI_PDF_DATA_URL),
+        ({"filename": "report.pdf", "file_id": _OCI_PDF_URL, "format": "application/pdf"}, _OCI_PDF_URL),
+    ],
+    ids=["data_url", "remote_url"],
+)
+def test_transform_request_sends_a_pdf_file_part_as_an_image_url(file: dict[str, str], image_url: str) -> None:
     transformed_request: Final = OCIChatConfig().transform_request(
         model="google.gemini-2.5-flash",
         messages=[
@@ -2176,7 +2187,7 @@ def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Summarize this."},
-                    {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+                    {"type": "file", "file": file},
                 ],
             }
         ],
@@ -2190,7 +2201,7 @@ def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
             "role": "USER",
             "content": [
                 {"type": "TEXT", "text": "Summarize this."},
-                {"type": "IMAGE", "imageUrl": {"url": pdf_data_url}},
+                {"type": "IMAGE", "imageUrl": {"url": image_url}},
             ],
         }
     ]

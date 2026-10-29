@@ -18,7 +18,10 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
-from litellm.litellm_core_utils.prompt_templates.common_utils import infer_content_type_from_url_and_content
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    REMOTE_URL_PREFIXES,
+    infer_content_type_from_url_and_content,
+)
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
@@ -156,9 +159,6 @@ def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None
     )
 
 
-_REMOTE_URL_PREFIXES: Final = ("http://", "https://")
-
-
 @dataclass(frozen=True, slots=True)
 class _RemoteImage:
     part: Mapping[str, object]
@@ -178,7 +178,7 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
 
 
 def _remote_url(candidate: object) -> str | None:
-    return candidate if isinstance(candidate, str) and candidate.startswith(_REMOTE_URL_PREFIXES) else None
+    return candidate if isinstance(candidate, str) and candidate.startswith(REMOTE_URL_PREFIXES) else None
 
 
 _ANTHROPIC_MEDIA_BLOCK_TYPES: Final = frozenset({"document", "image"})
@@ -207,6 +207,10 @@ def inline_every_remote_url(_media: RemoteMedia) -> bool:
 
 def inline_remote_image_urls(media: RemoteMedia) -> bool:
     return media.part_type == "image_url"
+
+
+def inline_remote_files(media: RemoteMedia) -> bool:
+    return media.part_type == "file"
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:

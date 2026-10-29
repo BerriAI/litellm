@@ -18,7 +18,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     filter_value_from_dict,
     is_pdf_file_part,
+    message_without_file_formats,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_files, inline_remote_media
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
@@ -363,7 +365,8 @@ class AzureAIStudioConfig(OpenAIConfig):
             texts = convert_content_list_to_str(message=message)
             if texts:
                 message["content"] = texts
-        return stripped_messages
+        messages_without_formats: Final = [message_without_file_formats(message) for message in stripped_messages]
+        return messages_without_formats
 
     def _is_foundry_model_inference_base(self, api_base: str) -> bool:
         return is_foundry_model_inference_base(api_base)
@@ -416,9 +419,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         optional_params.pop("max_retries", None)
         deployment_params: Final = as_str_mapping(litellm_params)
         base_model: Final = deployment_params.get("base_model") if deployment_params is not None else None
+        inlined_messages: Final = inline_remote_media(messages, should_inline=inline_remote_files)
         return {
             "model": model,
-            "messages": self._transform_messages(messages, model, base_model if isinstance(base_model, str) else None),
+            "messages": self._transform_messages(
+                inlined_messages, model, base_model if isinstance(base_model, str) else None
+            ),
             **optional_params,
         }
 

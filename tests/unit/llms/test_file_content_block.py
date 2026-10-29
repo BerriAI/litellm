@@ -35,6 +35,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
     OpenAIMessageContentListBlock,
 )
 
@@ -399,6 +400,32 @@ def test_anthropic_process_openai_file_message_well_formed_file_id_does_not_rais
     )
     result = anthropic_process_openai_file_message(well_formed)
     assert result.get("type") in ("document", "image", "container_upload")
+
+
+@pytest.mark.parametrize(
+    ("file", "expected_block"),
+    [
+        pytest.param(
+            ChatCompletionFileObjectFile(file_id="https://example.com/report.pdf", format="application/pdf"),
+            {"type": "document", "source": {"type": "url", "url": "https://example.com/report.pdf"}},
+            id="remote_pdf",
+        ),
+        pytest.param(
+            ChatCompletionFileObjectFile(file_id="https://example.com/chart.png", format="image/png"),
+            {"type": "image", "source": {"type": "url", "url": "https://example.com/chart.png"}},
+            id="remote_image",
+        ),
+        pytest.param(
+            ChatCompletionFileObjectFile(file_id="file-abc123", format="application/pdf"),
+            {"type": "document", "source": {"type": "file", "file_id": "file-abc123"}},
+            id="anthropic_file_id",
+        ),
+    ],
+)
+def test_anthropic_process_openai_file_message_sends_a_remote_file_id_as_a_url_source(
+    file: ChatCompletionFileObjectFile, expected_block: dict[str, object]
+) -> None:
+    assert anthropic_process_openai_file_message(ChatCompletionFileObject(type="file", file=file)) == expected_block
 
 
 # ---------------------------------------------------------------------------
