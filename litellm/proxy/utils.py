@@ -1592,6 +1592,11 @@ def _failure_fields_to_lift(
     if _logging_obj is None:
         return _EMPTY_LIFT
     _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
+    _sent_model_call_details: Final = (
+        {**_model_call_details, "messages": _logging_obj.messages_sent_to_model}
+        if isinstance(_logging_obj, Logging)
+        else _model_call_details
+    )
     _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
@@ -1599,7 +1604,7 @@ def _failure_fields_to_lift(
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
     _billed: Final = provider_billed and not _success_already_logged
     _usage_to_lift: Final = _failure_usage_to_lift(
-        model_call_details=_model_call_details,
+        model_call_details=_sent_model_call_details,
         request_body=request_data,
         dispatched=_model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
         provider_billed=_billed,
@@ -1608,7 +1613,7 @@ def _failure_fields_to_lift(
         dispatched_call_type=dispatched_call_type,
     )
     _prompt_estimate: Final = (
-        _estimated_prompt_usage(_model_call_details, request_data, dispatched_call_type)
+        _estimated_prompt_usage(_sent_model_call_details, request_data, dispatched_call_type)
         if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
@@ -3947,8 +3952,9 @@ class ProxyLogging:
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
         set_up_by_request: Final = litellm_logging_obj is not None
         request_fields: Final = cast(Mapping[str, object], request_data)  # cast-ok: request bodies are str-keyed JSON
+        authenticated: Final = error_type != ProxyErrorTypes.auth_error
         logged_metadata_keys: Final = _proxy_only_error_logged_metadata_keys(
-            authenticated=error_type != ProxyErrorTypes.auth_error, past_pre_call=set_up_by_request
+            authenticated=authenticated, past_pre_call=set_up_by_request
         )
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
@@ -4059,6 +4065,8 @@ class ProxyLogging:
                 input=input,
                 api_key="",
             )
+            if not authenticated:
+                litellm_logging_obj.redact_failure_log_request()
 
             await self._dispatch_proxy_only_failure_handlers(
                 litellm_logging_obj=litellm_logging_obj,

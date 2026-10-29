@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import MagicMock, patch
 
 import aiohttp
@@ -34,7 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, StandardLoggingPayload, StreamingChoices
 
 
 def _make_mock_session_iterator(json_response, status=200, content_type="application/json", text_response=""):
@@ -4429,14 +4429,13 @@ async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_use
 class _FailureLogRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.logged: list[tuple[list[dict], list[dict]]] = []
+        self.logged: list[tuple[object, object]] = []
 
     async def async_log_failure_event(
-        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self.logged.append(
-            (copy.deepcopy(kwargs["messages"]), copy.deepcopy(kwargs["standard_logging_object"]["messages"]))
-        )
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.logged.append((copy.deepcopy(kwargs["messages"]), copy.deepcopy(payload["messages"])))
 
 
 async def test_logging_only_presidio_masks_the_prompt_in_the_failure_log(monkeypatch: pytest.MonkeyPatch) -> None:

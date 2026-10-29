@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
-from typing import ClassVar, Final, Literal
+from typing import ClassVar, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -8341,6 +8341,7 @@ async def test_streaming_success_callbacks_survive_guardrail_logging_hook_failur
 _RAW_PROMPT: Final = "My name is John Smith"
 _RAW_LOG: Final = [{"role": "user", "content": _RAW_PROMPT}]
 _MASKED_LOG: Final = [{"role": "user", "content": "My name is <PERSON>"}]
+_REDACTED_LOG: Final = [{"role": "user", "content": REDACTED_BY_LITELLM}]
 
 
 class _NameMaskingGuardrail(CustomGuardrail):
@@ -8350,16 +8351,20 @@ class _NameMaskingGuardrail(CustomGuardrail):
         super().__init__(guardrail_name="name-masker", event_hook=event_hook)
         self.scans = 0
 
-    def _mask(self, kwargs: dict) -> dict:
+    def _mask(self, kwargs: dict[str, object]) -> dict[str, object]:
         self.scans += 1
-        for message in kwargs["messages"]:
+        for message in cast(list[dict[str, str]], kwargs["messages"]):
             message["content"] = message["content"].replace("John Smith", "<PERSON>")
         return kwargs
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         return self._mask(kwargs), result
 
-    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         await asyncio.sleep(0)
         return self._mask(kwargs), result
 
@@ -8369,36 +8374,53 @@ class _UnflaggedNameMaskingGuardrail(_NameMaskingGuardrail):
 
 
 class _RaisingMaskingGuardrail(_NameMaskingGuardrail):
-    def _mask(self, kwargs: dict) -> dict:
+    def _mask(self, kwargs: dict[str, object]) -> dict[str, object]:
         raise RuntimeError("masking failed")
+
+
+class _BlockingNameMaskingGuardrail(_NameMaskingGuardrail):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scanning: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        self.scanning.set()
+        await self.release.wait()
+        return self._mask(kwargs), result
 
 
 class _FailureLogRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.logged: list[tuple[list[dict], list[dict]]] = []
+        self.logged: list[tuple[object, object]] = []
 
-    def _record(self, kwargs: dict) -> None:
-        self.logged.append(
-            (copy.deepcopy(kwargs["messages"]), copy.deepcopy(kwargs["standard_logging_object"]["messages"]))
-        )
+    def _record(self, kwargs: dict[str, object]) -> None:
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.logged.append((copy.deepcopy(kwargs["messages"]), copy.deepcopy(payload["messages"])))
 
-    def log_failure_event(self, kwargs: dict, response_obj: object, start_time: object, end_time: object) -> None:
+    def log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self._record(kwargs)
 
     async def async_log_failure_event(
-        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         self._record(kwargs)
 
 
 def _register_failure_logging(
     monkeypatch: pytest.MonkeyPatch, guardrail: CustomGuardrail
-) -> tuple[_FailureLogRecorder, list[list[dict]]]:
+) -> tuple[_FailureLogRecorder, list[object]]:
     recorder: Final = _FailureLogRecorder()
-    sync_logged: Final[list[list[dict]]] = []
+    sync_logged: Final[list[object]] = []
 
-    def record_sync_failure(kwargs: dict, completion_response: object, start_time: object, end_time: object) -> None:
+    def record_sync_failure(
+        kwargs: dict[str, object], completion_response: object, start_time: object, end_time: object
+    ) -> None:
         sync_logged.append(copy.deepcopy(kwargs["messages"]))
 
     for name in ("input_callback", "success_callback", "_async_success_callback", "_async_failure_callback"):
@@ -8408,8 +8430,17 @@ def _register_failure_logging(
     return recorder, sync_logged
 
 
-async def _fail_chat_call(call: Literal["completion", "acompletion"], messages: list[dict]) -> None:
-    error: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini")
+def _bad_key_error() -> litellm.AuthenticationError:
+    return litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini")
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    while not condition():
+        await asyncio.sleep(0)
+
+
+async def _fail_chat_call(call: Literal["completion", "acompletion"], messages: list[dict[str, str]]) -> None:
+    error: Final = _bad_key_error()
     request: Final = (
         litellm.acompletion(model="gpt-4o-mini", messages=messages, mock_response=error)
         if call == "acompletion"
@@ -8469,6 +8500,41 @@ async def test_failure_is_still_logged_when_the_masking_guardrail_raises(
 
     assert len(recorder.logged) == 1
     assert len(sync_logged) == 1
+
+
+@pytest.mark.asyncio
+async def test_failure_log_still_goes_out_masked_when_the_caller_is_cancelled_mid_mask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _BlockingNameMaskingGuardrail()
+    _, sync_logged = _register_failure_logging(monkeypatch, guardrail)
+    call: Final = asyncio.create_task(
+        litellm.acompletion(model="gpt-4o-mini", messages=copy.deepcopy(_RAW_LOG), mock_response=_bad_key_error())
+    )
+    await asyncio.wait_for(guardrail.scanning.wait(), timeout=10)
+
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    guardrail.release.set()
+    await asyncio.wait_for(_until(lambda: bool(sync_logged)), timeout=10)
+
+    assert sync_logged == [_MASKED_LOG]
+
+
+@pytest.mark.asyncio
+async def test_failure_log_is_redacted_when_the_mask_outlasts_its_time_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder, sync_logged = _register_failure_logging(monkeypatch, _BlockingNameMaskingGuardrail())
+
+    with pytest.raises(litellm.AuthenticationError):
+        await asyncio.wait_for(
+            litellm.acompletion(model="gpt-4o-mini", messages=copy.deepcopy(_RAW_LOG), mock_response=_bad_key_error()),
+            timeout=10,
+        )
+    await asyncio.wait_for(_until(lambda: bool(recorder.logged)), timeout=10)
+
+    assert sync_logged == [_REDACTED_LOG]
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
 
 
 @pytest.mark.asyncio
