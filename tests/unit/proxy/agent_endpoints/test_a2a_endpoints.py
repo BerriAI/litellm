@@ -4,10 +4,11 @@ Mock tests for A2A endpoints.
 Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request.
 """
 
+import asyncio
 import json
 import socket
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from typing import Final
@@ -22,6 +23,21 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.agents import AgentCaller
 
 AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
+
+
+class _SSELineStream(httpx.AsyncByteStream):
+    def __init__(self, lines: tuple[str, ...], first_line_delay: float) -> None:
+        self._lines = lines
+        self._first_line_delay = first_line_delay
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        await asyncio.sleep(self._first_line_delay)
+        for line in self._lines:
+            yield f"{line}\n".encode()
+
+
+def _sse_upstream_response(*lines: str, first_line_delay: float = 0.0) -> httpx.Response:
+    return httpx.Response(200, stream=_SSELineStream(lines, first_line_delay))
 
 
 @dataclass(frozen=True, slots=True)
@@ -941,13 +957,7 @@ async def test_task_methods_extract_litellm_params_before_forwarding(method: str
     mock_http_response.json.return_value = upstream_response
     mock_http_response.is_success = True
 
-    async def fake_aiter_lines():
-        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}'
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response('data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}')
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -982,8 +992,8 @@ async def test_task_methods_extract_litellm_params_before_forwarding(method: str
             user_api_key_dict=user_api_key_dict,
         )
         if method == "tasks/resubscribe":
-            async for _ in response.body_iterator:
-                pass
+            streamed = "".join([chunk async for chunk in response.body_iterator])
+            assert "task-1" in streamed
 
     if method == "tasks/resubscribe":
         forwarded_body = mock_async_client.build_request.call_args.kwargs["json"]
@@ -1007,14 +1017,7 @@ async def test_subscribe_to_task_returns_sse_stream():
         'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}',
     ]
 
-    async def fake_aiter_lines():
-        for line in sse_lines:
-            yield line
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response(*sse_lines)
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -1064,13 +1067,9 @@ async def test_subscribe_to_task_calls_pre_call_hook():
     mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
-    async def fake_aiter_lines():
-        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}'
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response(
+        'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}'
+    )
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -1117,9 +1116,9 @@ async def test_subscribe_to_task_calls_pre_call_hook():
         )
 
         assert response.media_type == "text/event-stream"
-        async for _ in response.body_iterator:
-            pass
+        streamed = "".join([chunk async for chunk in response.body_iterator])
 
+    assert "completed" in streamed
     mock_proxy_logging.pre_call_hook.assert_awaited_once()
     call_kwargs = mock_proxy_logging.pre_call_hook.await_args.kwargs
     assert call_kwargs.get("call_type") == "asend_message"
@@ -1149,16 +1148,10 @@ async def test_subscribe_to_task_runs_post_call_streaming_guardrail():
     mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
-    async def fake_aiter_lines():
-        yield (
-            'data: {"jsonrpc":"2.0","id":"req-1","result":'
-            '{"kind":"message","parts":[{"kind":"text","text":"resubscribe-secret"}]}}'
-        )
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response(
+        'data: {"jsonrpc":"2.0","id":"req-1","result":'
+        '{"kind":"message","parts":[{"kind":"text","text":"resubscribe-secret"}]}}'
+    )
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -1600,14 +1593,7 @@ async def test_pascal_method_names_normalize_to_wire_format(pascal_method: str, 
     mock_http_response.is_success = True
     mock_http_response.raise_for_status = MagicMock()
 
-    async def _empty_aiter_lines():
-        return
-        yield  # make it an async generator
-
-    mock_sse_resp = AsyncMock()
-    mock_sse_resp.is_success = True
-    mock_sse_resp.aiter_lines = _empty_aiter_lines
-    mock_sse_resp.aclose = AsyncMock()
+    mock_sse_resp = _sse_upstream_response()
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -2349,13 +2335,7 @@ async def test_task_methods_forward_trace_header(method: str):
     mock_http_response.json.return_value = upstream_response
     mock_http_response.is_success = True
 
-    async def fake_aiter_lines():
-        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}'
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response('data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}')
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -2390,8 +2370,8 @@ async def test_task_methods_forward_trace_header(method: str):
             user_api_key_dict=user_api_key_dict,
         )
         if method == "tasks/resubscribe":
-            async for _ in response.body_iterator:
-                pass
+            streamed = "".join([chunk async for chunk in response.body_iterator])
+            assert "task-1" in streamed
 
     if method == "tasks/resubscribe":
         forwarded_headers = mock_async_client.build_request.call_args.kwargs["headers"]
@@ -2646,17 +2626,12 @@ def test_served_version_falls_back_to_header_when_unconfigured():
     assert _served_version(_agent(None), _request_with_a2a_header(None)) == "0.3"
 
 
-def _sse_agent_handler(lines):
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = lines
-    mock_resp.aclose = AsyncMock()
-
-    mock_async_client = MagicMock()
+def _sse_agent_handler(upstream_response: httpx.Response) -> MagicMock:
+    mock_async_client: Final = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
-    mock_async_client.send = AsyncMock(return_value=mock_resp)
+    mock_async_client.send = AsyncMock(return_value=upstream_response)
 
-    mock_handler = MagicMock()
+    mock_handler: Final = MagicMock()
     mock_handler.client = mock_async_client
     return mock_handler
 
@@ -2685,13 +2660,13 @@ async def test_forward_jsonrpc_sse_pings_while_the_upstream_agent_is_still_silen
 
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
 
-    async def _slow_lines():
-        await asyncio.sleep(0.3)
-        yield 'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}'
+    slow_upstream = _sse_upstream_response(
+        'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}', first_line_delay=0.3
+    )
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
-        return_value=_sse_agent_handler(_slow_lines),
+        return_value=_sse_agent_handler(slow_upstream),
     ):
         response = await _resubscribe_response()
         assert response.headers["x-accel-buffering"] == "no"
@@ -2713,12 +2688,11 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
 
-    async def _lines():
-        yield 'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}'
-
     with patch(
         "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
-        return_value=_sse_agent_handler(_lines),
+        return_value=_sse_agent_handler(
+            _sse_upstream_response('data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}')
+        ),
     ):
         response = await _resubscribe_response()
         assert "x-accel-buffering" not in response.headers
@@ -2726,6 +2700,28 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
     assert not any(chunk.startswith(":") for chunk in chunks)
     assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
+    separated_text: Final = "before\u2028between\u2029after"
+    event: Final = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"kind": "message", "parts": [{"kind": "text", "text": separated_text}]},
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=_sse_agent_handler(_sse_upstream_response(f"data: {json.dumps(event, ensure_ascii=False)}")),
+    ):
+        response: Final = await _resubscribe_response()
+        chunks: Final = [chunk async for chunk in response.body_iterator]
+
+    assert [json.loads(chunk.removeprefix("data: "))["result"]["parts"][0]["text"] for chunk in chunks] == [
+        separated_text
+    ]
 
 
 async def _stream_message_response():
