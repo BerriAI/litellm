@@ -350,13 +350,6 @@ def claude_count_options(
     context_management: CountContextManagement | None,
     deployment: Mapping[str, object] | None,
 ) -> ClaudeCountOptions | ChatCountTranslationError:
-    """The thinking, tool_choice, output_config and context_management a Claude count sends, with the
-    anthropic-beta values they need, after the deployment's own /v1/messages transform rewrites them.
-
-    The transform runs without messages and with a max_tokens above any thinking budget, so it never
-    caps a budget the caller's real max_tokens would allow. An error it raises is the error inference
-    answers for the same body.
-    """
     sent: Final = {
         **{name: value for name, value in request_options.items() if value is not None},
         **({} if context_management is None else {"context_management": context_management.spec}),

@@ -349,8 +349,6 @@ def _beta_header_values(side: str | Sequence[str] | None) -> tuple[str, ...]:
 
 
 def context_management_betas(context_management: JsonValue) -> frozenset[str]:
-    """The anthropic-beta values a ``context_management`` body needs: the compact beta for a
-    ``compact_20260112`` edit and the context-management beta for every other edit."""
     edits: Final = context_management.get("edits") if isinstance(context_management, dict) else None
     if not isinstance(edits, list):
         return frozenset()

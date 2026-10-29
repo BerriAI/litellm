@@ -389,8 +389,6 @@ async def _messages_inference_and_count(deployment_model: str, model_to_use: str
 async def test_runtime_count_sends_the_options_and_context_edits_invoke_inference_sends(
     deployment_model: str, model_to_use: str
 ) -> None:
-    """Bedrock invoke inference drops edits InvokeModel rejects and sends its betas in the body, so a count
-    that skips either counts a prompt inference never sends, or gets the 400 inference avoids."""
     inference, bedrock = await _messages_inference_and_count(deployment_model, model_to_use)
 
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)

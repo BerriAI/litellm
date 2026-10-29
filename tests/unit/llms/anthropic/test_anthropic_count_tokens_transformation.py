@@ -942,8 +942,6 @@ async def test_counter_sends_the_options_and_context_edits_messages_inference_se
     request_options: dict[str, JsonValue],
     context_management: dict[str, JsonValue] | None,
 ) -> None:
-    """A /v1/messages count that drops thinking, tool_choice, output_config or context_management
-    counts a different prompt than inference bills, so it carries them the way inference sends them."""
     inference: Final = await _messages_inference_request(
         counter_type,
         count_endpoint.removesuffix("/count_tokens"),
