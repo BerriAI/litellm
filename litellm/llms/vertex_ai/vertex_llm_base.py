@@ -57,6 +57,7 @@ class PublisherModelLocation:
     parent_url: str
     project: str
     location: str
+    model: str
 
 
 def publisher_model_location(api_base: str) -> PublisherModelLocation | None:
@@ -64,7 +65,12 @@ def publisher_model_location(api_base: str) -> PublisherModelLocation | None:
     if match is None:
         return None
     _, _, project, _, location = match.group().rsplit("/", 4)
-    return PublisherModelLocation(parent_url=match.group(), project=project, location=location)
+    return PublisherModelLocation(
+        parent_url=match.group(),
+        project=project,
+        location=location,
+        model=api_base.rstrip("/").rsplit("/", 1)[-1],
+    )
 
 
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
