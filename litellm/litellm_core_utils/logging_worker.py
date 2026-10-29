@@ -423,13 +423,11 @@ class LoggingWorker:
                 return
 
             extracted_tasks: Final = self._extract_tasks_from_queue()
-            runs: Final = [self._process_single_task(task) for task in extracted_tasks]
-            if new_task is not None:
-                try:
-                    self._queue.put_nowait(new_task)
-                except asyncio.QueueFull:
-                    self._track_dequeued(new_task)
-                    runs.append(self._process_single_task(new_task, counted=False))
+            uncounted: Final = None if new_task is None or self._requeue(new_task) else new_task
+            runs: Final = (
+                *(self._process_single_task(task) for task in extracted_tasks),
+                *(() if uncounted is None else (self._process_single_task(uncounted, counted=False),)),
+            )
             if runs:
                 await asyncio.gather(*runs)
         except Exception as e:
@@ -437,6 +435,17 @@ class LoggingWorker:
         finally:
             # Always reset the flag even if an error occurs
             self._aggressive_clear_in_progress = False
+
+    def _requeue(self, task: LoggingTask) -> bool:
+        """Put a rejected task back on the queue once the clear made room; track it as dequeued otherwise."""
+        if self._queue is None:
+            return False
+        try:
+            self._queue.put_nowait(task)
+        except asyncio.QueueFull:
+            self._track_dequeued(task)
+            return False
+        return True
 
     async def _process_single_task(self, task: LoggingTask, *, counted: bool = True) -> None:
         """Process a single task; ``counted`` is False for a task the full queue never accepted."""

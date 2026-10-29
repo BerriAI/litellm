@@ -167,9 +167,9 @@ async def test_overflow_callback_does_not_undercount_the_unfinished_queue() -> N
     queue.task_done() it never contributed, otherwise flush() returns while a real callback is still
     running and the shutdown drain cancels it with budget to spare.
     """
-    worker = LoggingWorker(timeout=5.0, max_queue_size=2, concurrency=1)
-    gates = {name: asyncio.Event() for name in ("first", "second", "third")}
-    completed: list[str] = []
+    worker: Final = LoggingWorker(timeout=5.0, max_queue_size=2, concurrency=1)
+    gates: Final = {name: asyncio.Event() for name in ("first", "second", "third")}
+    completed: Final[list[str]] = []
 
     async def gated(name: str) -> None:
         await gates[name].wait()
