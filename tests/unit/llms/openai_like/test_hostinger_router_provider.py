@@ -1,3 +1,4 @@
+import copy
 import json
 from typing import Final
 
@@ -265,6 +266,40 @@ def test_hostinger_router_embeddings_send_numeric_extra_headers_as_text(configur
     assert route.calls.last.request.headers.get_list("x-org-id") == [sent]
 
 
+@pytest.mark.parametrize("configured", [True, None, ["a", "b"]])
+def test_hostinger_router_embeddings_refuse_non_text_extra_headers(configured: object):
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        with pytest.raises(litellm.UnsupportedParamsError, match="X-Debug") as refused:
+            litellm.embedding(
+                model="hostinger_router/text-embedding-3-small",
+                input=["Say hello"],
+                api_key="hostinger-test-key",
+                extra_headers={"X-Debug": configured},
+            )
+
+    assert refused.value.status_code == 400
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize("configured", [True, None, ["a", "b"]])
+def test_hostinger_router_embeddings_drop_non_text_extra_headers_under_drop_params(configured: object):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            extra_headers={"X-Debug": configured, "X-Trace-Id": "trace-1"},
+            drop_params=True,
+        )
+
+    request: Final = route.calls.last.request
+    assert "x-debug" not in request.headers
+    assert request.headers.get_list("x-trace-id") == ["trace-1"]
+    assert set(json.loads(request.content)) == {"model", "input"}
+
+
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("HOSTINGER_ROUTER_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_LIKE_API_KEY", "other-provider-key")
@@ -393,3 +428,95 @@ def test_hostinger_router_responses_bridge_models_without_native_responses():
     assert chat.call_count == 1
     assert json.loads(chat.calls.last.request.content)["model"] == "claude-sonnet-5"
     assert response.output[0].content[0].text == "Hello from Hostinger Router"
+
+
+ANTHROPIC_MESSAGE_RESPONSE: Final = {
+    "id": "msg_hostinger",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5",
+    "content": [{"type": "text", "text": "Hello from Hostinger Router"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 4, "output_tokens": 3},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sibling_model_info",
+    [
+        {"supported_endpoints": ["/v1/chat/completions", "/v1/messages", "/v1/responses"]},
+        {"supported_endpoints": "/v1/messages"},
+    ],
+)
+async def test_hostinger_router_endpoint_opt_in_stays_with_its_own_deployment(
+    sibling_model_info: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    deployment_params: Final = {"model": "hostinger_router/gpt-5-nano", "api_key": "hostinger-test-key"}
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "opted-in", "litellm_params": deployment_params, "model_info": sibling_model_info},
+            {"model_name": "plain", "litellm_params": deployment_params},
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        native_messages: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
+            403, json=UNSUPPORTED_ENDPOINT
+        )
+        native_responses: Final = upstream.post("https://router.hostinger.com/v1/responses").respond(
+            403, json=UNSUPPORTED_ENDPOINT
+        )
+        chat: Final = upstream.post("https://router.hostinger.com/v1/chat/completions").respond(
+            200, json=CHAT_COMPLETION_RESPONSE
+        )
+        messages_response: Final = await router.aanthropic_messages(
+            model="plain", messages=[{"role": "user", "content": "Say hello"}], max_tokens=32
+        )
+        responses_response: Final = await router.aresponses(model="plain", input="Say hello")
+
+    assert native_messages.call_count == 0
+    assert native_responses.call_count == 0
+    assert chat.call_count == 2
+    assert messages_response["content"][0]["text"] == "Hello from Hostinger Router"
+    assert responses_response.output[0].content[0].text == "Hello from Hostinger Router"
+
+
+@pytest.mark.asyncio
+async def test_hostinger_router_deployment_cache_ttl_opt_in_keeps_one_hour_ttl(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "opted-in",
+                "litellm_params": {
+                    "model": "hostinger_router/claude-haiku-4-5",
+                    "api_base": "https://router.hostinger.com/v1",
+                    "api_key": "hostinger-test-key",
+                },
+                "model_info": {"supported_endpoints": ["/v1/messages"], "cache_control_ttl": True},
+            }
+        ]
+    )
+    one_hour_cache: Final = {"type": "ephemeral", "ttl": "1h"}
+
+    with respx.mock() as upstream:
+        native: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
+            200, json=ANTHROPIC_MESSAGE_RESPONSE
+        )
+        await router.aanthropic_messages(
+            model="opted-in",
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "Say hello", "cache_control": one_hour_cache}]}
+            ],
+            max_tokens=32,
+        )
+
+    body: Final = json.loads(native.calls.last.request.content)
+    assert body["messages"][0]["content"][0]["cache_control"] == one_hour_cache

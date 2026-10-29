@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import StrictFloat, StrictInt, StrictStr, TypeAdapter
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -20,11 +20,26 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
 
-_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, StrictStr | StrictInt | StrictFloat])
+_KEY_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def _as_header_text(headers: Mapping[str, str | int | float]) -> Mapping[str, str]:
-    return MappingProxyType({name: str(value) for name, value in headers.items()})
+def _header_text(value: object) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    return str(value)
+
+
+def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, str]:
+    texts: Final = MappingProxyType({name: _header_text(value) for name, value in extra_headers.items()})
+    malformed: Final = sorted(name for name, text in texts.items() if text is None)
+    if malformed and not drop_params:
+        raise litellm.UnsupportedParamsError(
+            message=f"extra_headers {', '.join(malformed)} must be text or a number. "
+            "To drop them from the call, set `litellm.drop_params = True`.",
+            model=model,
+        )
+    return MappingProxyType({name: text for name, text in texts.items() if text is not None})
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
@@ -103,6 +118,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         aembedding=None,
         custom_endpoint: bool | None = None,
         headers: dict | None = None,
+        drop_params: bool = False,
     ) -> EmbeddingResponse:
         api_base, headers = self._validate_environment(
             api_base=api_base,
@@ -117,10 +133,10 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             "input": input,
             **{k: v for k, v in optional_params.items() if k != "extra_headers" and v not in (None, "")},
         }
-        extra_headers: Final = _as_header_text(
-            _HEADERS_ADAPTER.validate_python(optional_params.get("extra_headers") or {})
+        extra_headers: Final = _extra_headers_as_text(
+            _EXTRA_HEADERS_ADAPTER.validate_python(optional_params.get("extra_headers") or {}), model, drop_params
         )
-        key_headers: Final = _as_header_text(_HEADERS_ADAPTER.validate_python(headers))
+        key_headers: Final = _KEY_HEADERS_ADAPTER.validate_python(headers)
         extra_header_names: Final = frozenset(name.lower() for name in extra_headers)
         request_headers: Final = {
             **{name: value for name, value in key_headers.items() if name.lower() not in extra_header_names},

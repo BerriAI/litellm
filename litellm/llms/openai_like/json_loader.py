@@ -14,8 +14,7 @@ from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
-_MODEL_ROW_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
 
 
 class SimpleProviderConfig:
@@ -33,6 +32,9 @@ class SimpleProviderConfig:
             data.get("special_handling", {})
         )
         self.supported_endpoints: Sequence[str] = data.get("supported_endpoints", [])
+        self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
+            data.get("model_supported_endpoints", {})
+        )
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
@@ -104,23 +106,15 @@ class JSONProviderRegistry:
         provider: Final = cls._providers.get(slug)
         if provider is None:
             return False
-        return endpoint in provider.supported_endpoints or endpoint in _model_supported_endpoints(slug, model)
+        model_endpoints: Final = (
+            provider.model_supported_endpoints.get(model.removeprefix(f"{slug}/"), ()) if model else ()
+        )
+        return endpoint in provider.supported_endpoints or endpoint in model_endpoints
 
     @classmethod
     def list_providers(cls) -> list:
         """List all registered provider slugs"""
         return list(cls._providers.keys())
-
-
-def _model_supported_endpoints(slug: str, model: str | None) -> tuple[str, ...]:
-    import litellm
-
-    if not model:
-        return ()
-    row: Final = _MODEL_ROW_ADAPTER.validate_python(
-        litellm.model_cost.get(f"{slug}/{model.removeprefix(f'{slug}/')}", {})
-    )
-    return _ENDPOINTS_ADAPTER.validate_python(row.get("supported_endpoints") or ())
 
 
 # Load on import

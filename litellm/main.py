@@ -7173,6 +7173,7 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                drop_params=drop_unsupported_params,
             )
         elif custom_llm_provider == "oci":
             if headers is None:
