@@ -2813,7 +2813,7 @@ _NATIVE_RESPONSES_BASE: Final = {
 }
 
 
-def _responses_function(tool: Mapping[str, object], **strict: bool) -> dict[str, object]:
+def _responses_function(tool: Mapping[str, object], **strict: bool | None) -> dict[str, object]:
     return {
         "type": "function",
         "name": tool["name"],
@@ -2978,23 +2978,25 @@ async def test_a_custom_deployment_name_counts_like_the_base_model_it_names(
 
 
 # usage.input_tokens that POST /v1/responses billed through Azure AI Foundry grok-4-1-fast-reasoning on 2026-10-29 for
-# the input "What is the weather in Paris?" with these function tools, strict left unset or sent as false
+# the input "What is the weather in Paris?" with these function tools, strict left unset or sent as false or null
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tools", "strict", "billed_prompt_tokens"),
     [
         ((_GET_WEATHER,), {}, 159),
         ((_GET_WEATHER,), {"strict": False}, 155),
+        ((_GET_WEATHER,), {"strict": None}, 155),
         (_THREE_TOOLS, {}, 257),
         (_get_weather_copies(5), {}, 345),
         (_get_weather_copies(10), {}, 575),
         (_get_weather_copies(10), {"strict": False}, 535),
+        (_get_weather_copies(10), {"strict": None}, 535),
     ],
 )
 async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_as_function_tools_are_added(
     monkeypatch: pytest.MonkeyPatch,
     tools: tuple[dict[str, object], ...],
-    strict: dict[str, bool],
+    strict: dict[str, bool | None],
     billed_prompt_tokens: int,
 ):
     router: Final = _single_deployment_router(

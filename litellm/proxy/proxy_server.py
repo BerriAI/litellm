@@ -15387,8 +15387,7 @@ def _serves_native_responses(deployment: _TokenCountDeployment, request_model: s
 
 def _with_strict_by_default(tools: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
     return tuple(
-        {**tool, "strict": True} if tool.get("type") == "function" and tool.get("strict") is None else tool
-        for tool in tools
+        {**tool, "strict": True} if tool.get("type") == "function" and "strict" not in tool else tool for tool in tools
     )
 
 
