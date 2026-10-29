@@ -6,9 +6,8 @@ from urllib.parse import quote, urlencode
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BedrockError, bedrock_control_plane_base_url
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.bedrock import AwsAuthParams
 
@@ -51,6 +50,9 @@ class BedrockModelLister(BaseAWSLLM):
         super().__init__()
         self._aws_params: Final = dict(deployment)
         self._aws_region_name: Final = self._get_aws_region_name(optional_params=self._aws_params)
+        self._control_plane_base_url: Final = bedrock_control_plane_base_url(
+            deployment.get("aws_bedrock_control_plane_endpoint"), self._aws_region_name
+        )
         api_key: Final = deployment.get("api_key")
         self._bearer_token: Final = bedrock_bearer_token(api_key if isinstance(api_key, str) else None)
         self._client: Final = client
@@ -91,8 +93,7 @@ class BedrockModelLister(BaseAWSLLM):
         )
 
     def _get_json(self, path: str, query: QueryPairs) -> object:
-        host: Final = f"bedrock.{self._aws_region_name}.{get_aws_dns_suffix(self._aws_region_name)}"
-        url: Final = f"https://{host}{path}?{urlencode(query, quote_via=quote)}"
+        url: Final = f"{self._control_plane_base_url}{path}?{urlencode(query, quote_via=quote)}"
         response: Final = self._client.get(url=url, headers=self._auth_headers(url), timeout=LIST_MODELS_TIMEOUT)
         try:
             response.raise_for_status()

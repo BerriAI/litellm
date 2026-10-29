@@ -18,6 +18,8 @@ SECRET_KEY: Final = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 REGION: Final = "eu-central-1"
 BEARER_TOKEN: Final = "bedrock-api-key-for-tests"
 SECOND_PAGE_TOKEN: Final = "page2+token/with=reserved chars"
+REGIONAL_HOST: Final = f"bedrock.{REGION}.amazonaws.com"
+VPC_ENDPOINT_HOST: Final = f"vpce-0a1b2c3d4e5f67890-abcdefgh.bedrock.{REGION}.vpce.amazonaws.com"
 
 ON_DEMAND_MODELS: Final = (
     {"modelId": "anthropic.claude-3-haiku-20240307-v1:0", "inferenceTypesSupported": ["ON_DEMAND"]},
@@ -98,9 +100,11 @@ def _authorized(request: httpx.Request, bearer_token: str | None) -> bool:
     return signed.group(2) == _sigv4_signature_as_aws_computes_it(request, signed_headers)
 
 
-def _control_plane(bearer_token: str | None = None) -> Callable[[httpx.Request], httpx.Response]:
+def _control_plane(
+    bearer_token: str | None = None, host: str = REGIONAL_HOST
+) -> Callable[[httpx.Request], httpx.Response]:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host != f"bedrock.{REGION}.amazonaws.com":
+        if request.url.host != host:
             return httpx.Response(404, json={"message": f"no Bedrock at {request.url.host}"})
         if not _authorized(request, bearer_token):
             return httpx.Response(403, json={"message": "not signed for this account, region and service"})
@@ -121,13 +125,16 @@ def _bedrock(handler: Callable[[httpx.Request], httpx.Response]) -> BedrockModel
     return BedrockModelInfo(client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
 
 
-def _deployment(region: str = REGION, api_key: str | None = None) -> Mapping[str, object]:
+def _deployment(
+    region: str = REGION, api_key: str | None = None, control_plane_endpoint: str | None = None
+) -> Mapping[str, object]:
     return LiteLLM_Params(
         model="bedrock/*",
         aws_access_key_id=ACCESS_KEY,
         aws_secret_access_key=SECRET_KEY,
         aws_region_name=region,
         api_key=api_key,
+        aws_bedrock_control_plane_endpoint=control_plane_endpoint,
     ).model_dump(exclude_none=True)
 
 
@@ -140,6 +147,18 @@ def test_lists_in_the_deployment_region_not_the_ambient_one(monkeypatch: pytest.
 
     with pytest.raises(BedrockError, match=r"us-west-2.*404"):
         _bedrock(_control_plane()).discover_models(_deployment(region="us-west-2"))
+
+
+@pytest.mark.parametrize("api_key", [None, BEARER_TOKEN], ids=["sigv4", "bearer"])
+def test_lists_through_the_configured_control_plane_endpoint_only(api_key: str | None) -> None:
+    endpoint_only: Final = _bedrock(_control_plane(bearer_token=api_key, host=VPC_ENDPOINT_HOST))
+
+    assert (
+        endpoint_only.discover_models(
+            _deployment(api_key=api_key, control_plane_endpoint=f" https://{VPC_ENDPOINT_HOST}/ ")
+        )
+        == EXPECTED_MODELS
+    )
 
 
 def test_bearer_token_api_key_replaces_sigv4() -> None:
