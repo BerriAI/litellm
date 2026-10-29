@@ -359,21 +359,45 @@ async def _build_admitted_mcp_logging_obj(
 
 async def _build_virtual_call_logging_obj(
     name: str,
-    arguments: dict[str, object],  # mutable-ok: existing virtual-call request payload
+    arguments: dict[str, object],
     user_api_key_auth: UserAPIKeyAuth,
     logging_auth: UserAPIKeyAuth | None = None,
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
 ) -> LiteLLMLoggingObj | None:
-    """Run the pre-call pipeline for a virtual ``mcp_tool_call``."""
-    return await _build_admitted_mcp_logging_obj(
-        name=name,
-        arguments=arguments,
-        user_api_key_auth=user_api_key_auth,
-        logging_auth=logging_auth,
+    """Run the pre-call pipeline (guardrails + logging setup) for a virtual
+    mcp_tool_call so the SSE path spend-logs like the REST path."""
+    from litellm.proxy.common_request_processing import (
+        ProxyBaseLLMRequestProcessing,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        proxy_logging_obj,
+    )
+
+    request: Final = build_synthetic_mcp_request(
+        path="/mcp/tools/call",
         raw_headers=raw_headers,
         client_ip=client_ip,
     )
+    pre_call_result: Final = await ProxyBaseLLMRequestProcessing(
+        data={"name": name, "arguments": arguments}
+    ).common_processing_pre_call_logic(
+        request=request,
+        user_api_key_dict=user_api_key_auth,
+        proxy_config=proxy_config,
+        route_type=CallTypes.call_mcp_tool.value,
+        proxy_logging_obj=proxy_logging_obj,
+        general_settings=general_settings,
+        logging_auth=logging_auth,
+    )
+    _, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
+    if not isinstance(logging_candidate, LiteLLMLoggingObj):
+        verbose_logger.warning("MCP request processing did not return a logging object")
+        return None
+    virtual_logging_obj: Final = logging_candidate
+    return virtual_logging_obj
 
 
 async def _build_keyword_search_logging_obj(

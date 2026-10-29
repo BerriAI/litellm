@@ -1077,8 +1077,6 @@ class TestDispatchVirtualMcpTool:
 
     @pytest.mark.asyncio
     async def test_routes_agent_search_to_its_handler(self) -> None:
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(  # test-quality-ok: dispatch routing is the subject; the handler is faked like its siblings here
             "litellm.proxy.mcp_server.tool_search.handle_agent_search",
@@ -1112,8 +1110,6 @@ class TestDispatchVirtualMcpTool:
 
     @pytest.mark.asyncio
     async def test_routes_call_with_client_ip(self) -> None:
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
             "litellm.proxy.mcp_server.tool_search.handle_mcp_tool_call",
@@ -1145,8 +1141,6 @@ class TestDispatchVirtualMcpTool:
         """Regression: the SSE dispatch must run the pre-call pipeline and forward
         the resulting logging object to handle_mcp_tool_call, otherwise mcp_tool_call
         over /mcp/ skips spend logging and guardrails (unlike the REST path)."""
-        from litellm.proxy.mcp_server import server as srv
-
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         sentinel_logging_obj = object()
         with (
