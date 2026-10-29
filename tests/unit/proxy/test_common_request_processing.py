@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
 )
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
-from litellm.types.utils import CachingDetails, CallTypesLiteral, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -205,24 +205,6 @@ def test_include_guardrail_response_requested_is_false_without_exact_true():
         {"metadata": {"include_guardrail_response": "true"}, "litellm_metadata": {}}
     ) is False
     assert include_guardrail_response_requested({}) is False
-
-
-class _RecordsDeferral(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.deferred: list[bool] = []
-
-    async def async_pre_call_hook(
-        self,
-        user_api_key_dict: ProxyUserAPIKeyAuth,
-        cache: DualCache,
-        data: dict[str, object],
-        call_type: CallTypesLiteral,
-    ) -> dict[str, object]:
-        logging_obj: Final = data["litellm_logging_obj"]
-        assert isinstance(logging_obj, LiteLLMLoggingObj)
-        self.deferred.append(logging_obj.defer_async_logging)
-        return data
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -500,30 +482,6 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("defer_async_logging", [False, True])
-    async def test_common_processing_pre_call_logic_defers_the_success_log_before_pre_call_hook_runs(
-        self, monkeypatch: pytest.MonkeyPatch, defer_async_logging: bool
-    ) -> None:
-        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
-
-        recorder: Final = _RecordsDeferral()
-        monkeypatch.setattr(litellm, "callbacks", [recorder])
-
-        await ProxyBaseLLMRequestProcessing(
-            data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
-        ).common_processing_pre_call_logic(
-            request=Request(scope={"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}),
-            general_settings={},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-            proxy_config=RealProxyConfig(),
-            route_type="acompletion",
-            defer_async_logging=defer_async_logging,
-        )
-
-        assert recorder.deferred == [defer_async_logging]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
@@ -7543,12 +7501,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
 
         call_count = 0
-        deferred_per_call: Final[list[bool]] = []
 
         async def mock_pre_call_logic(**kwargs):
             nonlocal call_count
             call_count += 1
-            deferred_per_call.append(kwargs["defer_async_logging"])
             model_in_data = processor.data.get("model")
             if model_in_data == primary_model:
                 raise ProxyRateLimitError(
@@ -7581,12 +7537,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 model=primary_model,
                 route_type="acompletion",
                 llm_router=mock_router,
-                defer_async_logging=True,
             )
 
         assert processor.data["model"] == fallback_model
         assert call_count == 2
-        assert deferred_per_call == [True, True]
 
     @pytest.mark.asyncio
     async def test_raises_when_no_fallbacks_configured(self):

@@ -7,6 +7,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -17,7 +18,7 @@ import openai
 import pytest
 import yaml
 
-from tests.integration._support.client import Gateway, eventually, gateway_from_environment, object_value
+from tests.integration._support.client import Gateway, JsonValue, eventually, gateway_from_environment, object_value
 from tests.integration._support.otlp_sink import Span, SpanSinks, recorded_spans
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.upstream import aws_event_stream_frame
@@ -43,6 +44,7 @@ _STOPS_AFTER_FIRST: Final = "stops-after-first"
 _RUNS_EVERY_STEP: Final = "runs-every-step"
 _BLOCKS_AT_FIRST: Final = "blocks-at-first"
 _RESPONSE_STOPS_AFTER_FIRST: Final = "response-stops-after-first"
+_RESPONSE_RUNS_EVERY_STEP: Final = "response-runs-every-step"
 _SHIELDS_THEN_CHECKS: Final = "shields-then-checks"
 _MOVES_PAST_FIRST: Final = "moves-past-first"
 _RESPONSE_MOVES_PAST_FIRST: Final = "response-moves-past-first"
@@ -62,6 +64,58 @@ class _Rig:
     upstream: Wire
     model: str
     traces: str
+    sync_success_log: Path
+
+
+_GEMINI_RESPONSE: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "guarded"}]}, "finishReason": "STOP", "index": 0}],
+    "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 4},
+    "modelVersion": "gemini-2.0-flash",
+}
+_FINE_TUNING_JOB: Final[dict[str, JsonValue]] = {
+    "id": "ftjob-pipeline",
+    "object": "fine_tuning.job",
+    "created_at": 1700000000,
+    "error": None,
+    "fine_tuned_model": None,
+    "finished_at": None,
+    "hyperparameters": {"n_epochs": 3},
+    "model": "gpt-4o-mini-2024-07-18",
+    "organization_id": "org-pipeline",
+    "result_files": [],
+    "seed": 1,
+    "status": "queued",
+    "trained_tokens": None,
+    "training_file": "file-pipeline",
+    "validation_file": None,
+}
+_VIDEO: Final = {
+    "id": "video_pipeline",
+    "object": "video",
+    "model": "sora-2",
+    "status": "queued",
+    "created_at": 1,
+    "progress": 0,
+    "seconds": "4",
+    "size": "720x1280",
+}
+_SYNC_SUCCESS_RECORDER: Final = """
+import json
+from pathlib import Path
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class SyncSuccessRecorder(CustomLogger):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        metadata = (kwargs.get("standard_logging_object") or {{}}).get("metadata") or {{}}
+        row = {{"team": metadata.get("user_api_key_team_id"), "applied": metadata.get("applied_guardrails")}}
+        with Path({path!r}).open("a") as sink:
+            sink.write(json.dumps(row) + "\\n")
+
+
+recorder = SyncSuccessRecorder()
+"""
 
 
 def _completion_chunk(identity: str, delta: dict[str, str], finish_reason: str | None) -> bytes:
@@ -183,8 +237,14 @@ def _completion(request: Request) -> Reply:
         return _bedrock_reply(request)
     if request.target == "/v1/responses":
         return _responses_reply(request)
-    if request.target == "/v1/images/generations":
+    if request.target in ("/v1/images/generations", "/v1/images/edits"):
         return Reply(body=json.dumps({"created": 1, "data": [{"b64_json": "aW1n", "revised_prompt": None}]}).encode())
+    if request.target == "/v1/videos":
+        return Reply(body=json.dumps(_VIDEO).encode())
+    if request.target == "/v1/fine_tuning/jobs":
+        return Reply(body=json.dumps(_FINE_TUNING_JOB).encode())
+    if request.target.split("?", 1)[0].endswith(":generateContent"):
+        return Reply(body=json.dumps(_GEMINI_RESPONSE).encode())
     assert request.target == "/v1/chat/completions", request.target
     identity: Final = f"chatcmpl-{uuid.uuid4().hex}"
     if json.loads(request.body).get("stream") is True:
@@ -265,8 +325,17 @@ def _policy(mode: str, steps: tuple[tuple[str, str, str], ...], *, on_error: str
 
 
 def _config(directory: Path, vendor: Wire, upstream: Wire) -> Path:
+    (directory / "sync_success_recorder.py").write_text(
+        _SYNC_SUCCESS_RECORDER.format(path=str(directory / "sync-success-log.jsonl"))
+    )
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    configuration["litellm_settings"] = {**configuration.get("litellm_settings", {}), "callbacks": ["otel"]}
+    configuration["litellm_settings"] = {
+        **configuration.get("litellm_settings", {}),
+        "callbacks": ["otel", "sync_success_recorder.recorder"],
+    }
+    configuration["finetune_settings"] = [
+        {"custom_llm_provider": "openai", "api_key": "sk-fixture", "api_base": f"{upstream.url}/v1"}
+    ]
     configuration["model_list"] = [
         *configuration.get("model_list", []),
         {
@@ -347,6 +416,9 @@ def _config(directory: Path, vendor: Wire, upstream: Wire) -> Path:
         _RESPONSE_STOPS_AFTER_FIRST: _policy(
             "post_call", ((_RESPONSE_FIRST, "allow", "block"), (_RESPONSE_SECOND, "next", "block"))
         ),
+        _RESPONSE_RUNS_EVERY_STEP: _policy(
+            "post_call", ((_RESPONSE_FIRST, "next", "block"), (_RESPONSE_SECOND, "next", "block"))
+        ),
         _SHIELDS_THEN_CHECKS: _policy(
             "pre_call", ((_PROMPT_SHIELD, "next", "block"), (_REQUEST_FIRST, "next", "block"))
         ),
@@ -388,7 +460,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory, audit_sinks: SpanSinks) -> Ite
         owned.scenario() as scenario,
     ):
         model: Final = scenario.model(api_base=f"{upstream.url}/v1", api_key="sk-fixture")
-        yield _Rig(owned, vendor, upstream, model, audit_sinks.operator)
+        yield _Rig(owned, vendor, upstream, model, audit_sinks.operator, directory / "sync-success-log.jsonl")
 
 
 def _body(path: str, model: str, stream: bool) -> dict[str, object]:
@@ -706,6 +778,190 @@ def test_an_image_generation_names_its_response_pipeline_up_front_because_its_sp
         _RESPONSE_FIRST,
         _RESPONSE_SECOND,
     ], rows
+
+
+def _applied_in_header_spend_log_and_trace(
+    rig: _Rig, since: int, team: str, response: httpx.Response, *, rows_expected: int = 1
+) -> tuple[list[str], list[list[str]], list[list[str]]]:
+    rows: Final = eventually(
+        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda found: len(found) == rows_expected,
+        seconds=70,
+    )
+    spans: Final = eventually(
+        lambda: _spans_naming_guardrails(rig, since, team), lambda found: len(found) >= rows_expected, seconds=30
+    )
+    return (
+        sorted(name for name in response.headers.get(_HEADER, "").split(",") if name),
+        [sorted(object_value(row["metadata"]).get("applied_guardrails") or []) for row in rows],
+        [sorted(ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"]))) for span in spans],
+    )
+
+
+def _cache_hits_and_metadata_logged(rig: _Rig, team: str, count: int) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: rig.gateway.rows(
+            'SELECT cache_hit, metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s ORDER BY "startTime"', (team,)
+        ),
+        lambda found: len(found) == count,
+        seconds=70,
+    )
+
+
+def test_a_cache_hit_names_every_response_step_that_ran_in_the_spend_log_and_the_trace(rig: _Rig) -> None:
+    since: Final = recorded_spans(rig.traces)[0]
+    rig.vendor.drain()
+    body: Final = {"model": rig.model, "messages": [{"role": "user", "content": f"cache me {uuid.uuid4().hex}"}]}
+    with rig.gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"tags": [_RESPONSE_RUNS_EVERY_STEP]})
+        key: Final = scenario.key(team_id=team)
+        first: Final = rig.gateway.request("POST", "/v1/chat/completions", body, key=key)
+        _cache_hits_and_metadata_logged(rig, team, 1)
+        cached: Final = rig.gateway.request("POST", "/v1/chat/completions", body, key=key)
+        rows: Final = _cache_hits_and_metadata_logged(rig, team, 2)
+    spans: Final = eventually(lambda: _spans_naming_guardrails(rig, since, team), lambda found: len(found) >= 2)
+    expected: Final = [_RESPONSE_FIRST, _RESPONSE_SECOND]
+    assert [first.status_code, cached.status_code] == [200, 200], (first.text, cached.text)
+    assert _steps_that_ran(rig) == (_RESPONSE_FIRST, _RESPONSE_SECOND) * 2
+    assert [row["cache_hit"] for row in rows] == ["False", "True"], rows
+    assert [sorted(response.headers.get(_HEADER, "").split(",")) for response in (first, cached)] == [expected] * 2
+    assert [sorted(object_value(row["metadata"]).get("applied_guardrails") or []) for row in rows] == [expected] * 2
+    assert [sorted(ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"]))) for span in spans] == [
+        expected
+    ] * len(spans), spans
+
+
+def test_a_sync_success_callback_sees_every_response_step_that_ran(rig: _Rig) -> None:
+    team, response = _ask_as_new_team(rig, _RESPONSE_RUNS_EVERY_STEP)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_RESPONSE_FIRST, _RESPONSE_SECOND)
+    logged: Final = eventually(
+        lambda: (
+            [row for row in map(json.loads, rig.sync_success_log.read_text().splitlines()) if row["team"] == team]
+            if rig.sync_success_log.exists()
+            else []
+        ),
+        lambda found: len(found) == 1,
+        seconds=30,
+    )
+    assert sorted(logged[0]["applied"] or []) == [_RESPONSE_FIRST, _RESPONSE_SECOND], logged
+
+
+def _image_edit(rig: _Rig, scenario_model: Callable[..., str], key: str) -> httpx.Response:
+    return rig.gateway.request_multipart(
+        "/v1/images/edits",
+        {"model": scenario_model(model="openai/gpt-image-1"), "prompt": f"a cat {uuid.uuid4().hex}"},
+        {"image": ("cat.png", _PNG, "image/png")},
+        key=key,
+    )
+
+
+def _video(rig: _Rig, scenario_model: Callable[..., str], key: str) -> httpx.Response:
+    return rig.gateway.request(
+        "POST",
+        "/v1/videos",
+        {"model": scenario_model(model="openai/sora-2"), "prompt": f"a cat {uuid.uuid4().hex}"},
+        key=key,
+    )
+
+
+def _generate_content(rig: _Rig, scenario_model: Callable[..., str], key: str) -> httpx.Response:
+    return rig.gateway.request(
+        "POST",
+        f"/v1beta/models/{rig.model}:generateContent",
+        {"contents": [{"role": "user", "parts": [{"text": f"hello {uuid.uuid4().hex}"}]}]},
+        key=key,
+    )
+
+
+def _stream_generate_content(rig: _Rig, scenario_model: Callable[..., str], key: str) -> httpx.Response:
+    return rig.gateway.request(
+        "POST",
+        f"/v1beta/models/{rig.model}:streamGenerateContent",
+        {"contents": [{"role": "user", "parts": [{"text": f"hello {uuid.uuid4().hex}"}]}]},
+        key=key,
+        params={"alt": "sse"},
+    )
+
+
+def _native_generate_content(rig: _Rig, scenario_model: Callable[..., str], key: str) -> httpx.Response:
+    model: Final = scenario_model(model="gemini/gemini-2.0-flash", api_base=rig.upstream.url)
+    return rig.gateway.request(
+        "POST",
+        f"/v1beta/models/{model}:generateContent",
+        {"contents": [{"role": "user", "parts": [{"text": f"hello {uuid.uuid4().hex}"}]}]},
+        key=key,
+    )
+
+
+_PNG: Final = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
+)
+_ROUTES: Final = (
+    pytest.param(_image_edit, id="image-edit"),
+    pytest.param(_video, id="video"),
+    pytest.param(_generate_content, id="generate-content"),
+    pytest.param(_stream_generate_content, id="stream-generate-content"),
+    pytest.param(_native_generate_content, id="native-generate-content"),
+)
+
+
+@pytest.mark.parametrize("send", _ROUTES)
+def test_a_response_pipeline_that_runs_every_step_names_both_steps_on_every_route(
+    rig: _Rig, send: Callable[[_Rig, Callable[..., str], str], httpx.Response]
+) -> None:
+    since: Final = recorded_spans(rig.traces)[0]
+    with rig.gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"tags": [_RESPONSE_RUNS_EVERY_STEP]})
+        response: Final = send(
+            rig,
+            partial(scenario.model, api_base=f"{rig.upstream.url}/v1", api_key="sk-fixture"),
+            scenario.key(team_id=team),
+        )
+    assert response.status_code == 200, response.text
+    expected: Final = [_RESPONSE_FIRST, _RESPONSE_SECOND]
+    header, rows, spans = _applied_in_header_spend_log_and_trace(rig, since, team, response)
+    assert (header, rows, spans) == (expected, [expected], [expected] * len(spans))
+
+
+@pytest.mark.parametrize("send", _ROUTES)
+def test_a_response_pipeline_that_stops_early_names_the_same_steps_in_the_header_and_the_spend_log_on_every_route(
+    rig: _Rig, send: Callable[[_Rig, Callable[..., str], str], httpx.Response]
+) -> None:
+    since: Final = recorded_spans(rig.traces)[0]
+    with rig.gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"tags": [_RESPONSE_STOPS_AFTER_FIRST]})
+        response: Final = send(
+            rig,
+            partial(scenario.model, api_base=f"{rig.upstream.url}/v1", api_key="sk-fixture"),
+            scenario.key(team_id=team),
+        )
+    assert response.status_code == 200, response.text
+    header, rows, spans = _applied_in_header_spend_log_and_trace(rig, since, team, response)
+    assert _RESPONSE_FIRST in header, header
+    assert (rows, spans) == ([header], [header] * len(spans))
+
+
+def test_a_fine_tuning_job_with_a_method_object_and_a_guardrail_is_created(rig: _Rig) -> None:
+    rig.upstream.drain()
+    method: Final = {"type": "dpo", "dpo": {"hyperparameters": {"beta": 0.1}}}
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(team_id=scenario.team(metadata={"tags": [_STOPS_AFTER_FIRST]}))
+        response: Final = rig.gateway.request(
+            "POST",
+            "/v1/fine_tuning/jobs",
+            {
+                "model": "gpt-4o-mini-2024-07-18",
+                "training_file": "file-pipeline",
+                "custom_llm_provider": "openai",
+                "method": method,
+                "guardrails": [_REQUEST_FIRST],
+            },
+            key=key,
+        )
+    assert response.status_code == 200, response.text
+    assert [request.target for request in rig.upstream.drain()] == ["/v1/fine_tuning/jobs"]
 
 
 def _agent_card(name: str, url: str) -> dict[str, object]:

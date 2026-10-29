@@ -179,7 +179,6 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.a2a.version_convert import A2A_STREAMING_METHODS
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
@@ -722,56 +721,77 @@ def _ran_or_runs_outside_pipelines(
     )
 
 
-def _success_log_waits_for_response_hooks(data: Mapping[str, object]) -> bool:
+def _runs_only_in_pipelines(
+    name: str, data: Mapping[str, object], pre_call: frozenset[str], post_call: frozenset[str]
+) -> bool:
+    return not _ran_or_runs_outside_pipelines(
+        PipelineExecutor.find_guardrail_callback(name),
+        data,
+        frozenset(mode for mode, names in (("pre_call", pre_call), ("post_call", post_call)) if name in names),
+    )
+
+
+def _request_steps_that_have_not_run(data: Mapping[str, object]) -> frozenset[str]:
+    """Pre_call policy pipeline steps a pipeline skipped, whose guardrail nothing else ran or runs for this request."""
+    pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
+    return frozenset(name for name in pre_call if _runs_only_in_pipelines(name, data, pre_call, frozenset()))
+
+
+def _steps_that_ran(result: PipelineExecutionResult) -> frozenset[str]:
+    return frozenset(step.guardrail_name for step in result.step_results if step.outcome != "skip")
+
+
+def _whole_response_log_waits_for_its_pipelines(data: Mapping[str, object], call_type: str) -> bool:
+    """
+    The success log is parked until the response hooks finish, and the headers are built
+    after them, except on the LLM pass-through route.
+    """
     logging_obj: Final = data.get("litellm_logging_obj")
-    return isinstance(logging_obj, Logging) and logging_obj.defer_async_logging
+    return (
+        call_type != CallTypes.allm_passthrough_route.value
+        and isinstance(logging_obj, Logging)
+        and logging_obj.enqueue_deferred_logging is not None
+    )
 
 
-def _post_call_steps_named_before_headers(
-    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: str
-) -> frozenset[str]:
+def _stream_log_waits_for_its_pipelines(data: Mapping[str, object]) -> bool:
+    return getattr(data.get("litellm_logging_obj"), "_on_deferred_stream_complete", None) is not None
+
+
+def _drop_response_steps_that_did_not_run(
+    data: dict[str, object],  # mutable-ok: the request's applied guardrails are trimmed in place
+    steps: Sequence["PipelineStep"],
+    steps_that_ran: frozenset[str],
+) -> None:
     """
-    Post_call pipeline steps the executor names, as it runs them, before the response
-    headers go out and the success log is built: every step of a whole response whose
-    success log waits for the response hooks, and of a streamed one the steps of the
-    pipelines that hold the stream until they finish. The LLM pass-through route builds
-    its headers before any response step runs, so none of its steps.
-    """
-    if call_type == CallTypes.allm_passthrough_route.value:
-        return frozenset()
-    if data.get("stream") is not True and data.get("method") not in A2A_STREAMING_METHODS:
-        return (
-            pipeline_managed_guardrail_names(data, "post_call")
-            if _success_log_waits_for_response_hooks(data)
-            else frozenset()
-        )
-    gated: Final = _stream_gated_pipelines(data, user_api_key_dict)
-    return frozenset() if _pipelines_stream_live(gated) else _pipeline_step_guardrail_names(gated)
-
-
-def _pipeline_steps_that_have_not_run(
-    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, call_type: str
-) -> frozenset[str]:
-    """
-    Guardrails only policy pipelines run whose pre_call hook has not run for this request:
-    pre_call steps a pipeline skipped and the post_call steps the executor names when it
-    runs them. A stream runs a pipeline it cannot hold as guardrails on their own, and one
-    whose steps all stream live after the headers go out, the LLM pass-through route runs
-    its response steps after its headers are built, and a route whose success log does not
-    wait for the response hooks builds that log first, so those steps are named up front
-    like any other guardrail.
+    Drop from the applied guardrails the steps of a response pipeline that no pipeline ran,
+    unless their guardrail also runs outside pipelines. Every step is named up front, so a
+    log built before the pipeline finished, such as a cache hit's, still lists the steps
+    that ran. The list is trimmed in place, since a route's logging object may hold a
+    shallow copy of the metadata.
     """
     pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
-    post_call: Final = _post_call_steps_named_before_headers(data, user_api_key_dict, call_type)
-    return frozenset(
-        name
-        for name in pre_call | post_call
-        if not _ran_or_runs_outside_pipelines(
-            PipelineExecutor.find_guardrail_callback(name),
-            data,
-            frozenset(mode for mode, names in (("pre_call", pre_call), ("post_call", post_call)) if name in names),
-        )
+    post_call: Final = frozenset(step.guardrail for step in steps)
+    not_run: Final = frozenset(
+        name for name in post_call - steps_that_ran if _runs_only_in_pipelines(name, data, pre_call, post_call)
     )
+    if not not_run:
+        return
+    for bucket_key in ("metadata", "litellm_metadata"):
+        _drop_applied_guardrails_in_place(data.get(bucket_key), not_run)
+
+
+def _drop_applied_guardrails_in_place(bucket: object, names: frozenset[str]) -> None:
+    if not isinstance(bucket, dict):
+        return
+    metadata: Final = cast("dict[str, object]", bucket)  # cast-ok: metadata buckets are str-keyed
+    applied: Final = metadata.get("applied_guardrails")
+    if not isinstance(applied, list):
+        return
+    entries: Final = cast("list[object]", applied)  # cast-ok: entries are only compared with names
+    entries[:] = [name for name in entries if name not in names]
+    if not entries:
+        metadata.pop("applied_guardrails")
 
 
 def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple[CustomLogger, ...]]:
@@ -995,23 +1015,19 @@ def _streaming_pipeline_translation(user_api_key_dict: UserAPIKeyAuth) -> "BaseT
     return None if resolved is None else resolved[1]
 
 
-def _stream_gated_pipelines(
-    request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
-) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
-    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
-    if translation is None:
-        return ()
-    return tuple(
-        (policy_name, pipeline)
-        for policy_name, pipeline in _post_call_pipelines(request_data)
-        if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
-    )
-
-
 def stream_gated_guardrail_names(
     request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
 ) -> frozenset[str]:
-    return _pipeline_step_guardrail_names(_stream_gated_pipelines(request_data, user_api_key_dict))
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if translation is None:
+        return frozenset()
+    return _pipeline_step_guardrail_names(
+        tuple(
+            (policy_name, pipeline)
+            for policy_name, pipeline in _post_call_pipelines(request_data)
+            if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
+        )
+    )
 
 
 def _streamable_post_call_pipelines(
@@ -2711,7 +2727,7 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: str) -> None:
+    def _process_guardrail_metadata(self, data: dict) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -2736,10 +2752,8 @@ class ProxyLogging:
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
 
-            not_run: Final = _pipeline_steps_that_have_not_run(
-                cast(dict[str, object], data),  # cast-ok: request payload
-                user_api_key_dict,
-                call_type,
+            not_run: Final = _request_steps_that_have_not_run(
+                cast(dict[str, object], data)  # cast-ok: request payload
             )
             for guardrail_name in guardrails_in_metadata:
                 if (
@@ -2778,6 +2792,9 @@ class ProxyLogging:
             return data, None
 
         current_response = response  # rebind-ok: chains each pipeline's replacement response into the next
+        steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
+        request: Final = cast(dict[str, object], data)  # cast-ok: request payload, updated in place by every pipeline
+        log_waits: Final = event_hook == "post_call" and _whole_response_log_waits_for_its_pipelines(request, call_type)
         for policy_name, pipeline in pipelines:
             if pipeline.mode != event_hook:
                 continue
@@ -2793,6 +2810,10 @@ class ProxyLogging:
                 policy_name=policy_name,
                 raw_request_snapshot=raw_request_snapshot,
             )
+
+            steps_that_ran = steps_that_ran | _steps_that_ran(result)
+            if log_waits:
+                _drop_response_steps_that_did_not_run(request, pipeline.steps, steps_that_ran)
 
             data = self._handle_pipeline_result(
                 result=result,
@@ -3033,7 +3054,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
-                    self._process_guardrail_metadata(data, user_api_key_dict, call_type)
+                    self._process_guardrail_metadata(data)
                 return data
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
@@ -3137,17 +3158,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data, user_api_key_dict, call_type)
+                self._process_guardrail_metadata(data)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data, user_api_key_dict, call_type)
+                self._process_guardrail_metadata(data)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data, user_api_key_dict, call_type)
+                self._process_guardrail_metadata(data)
             raise
 
     async def _run_parallel_pre_call_guardrails(
@@ -4711,6 +4732,7 @@ class ProxyLogging:
 
         call_type, endpoint_translation = translation
 
+        steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
         for policy_name, pipeline in pipelines:
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
@@ -4722,6 +4744,9 @@ class ProxyLogging:
                 streaming_chunks=buffered,
                 endpoint_translation=endpoint_translation,
             )
+            steps_that_ran = steps_that_ran | _steps_that_ran(result)
+            if _stream_log_waits_for_its_pipelines(request_data):
+                _drop_response_steps_that_did_not_run(request_data, pipeline.steps, steps_that_ran)
             try:
                 ProxyLogging._handle_pipeline_result(
                     result, data=request_data, policy_name=policy_name, original_response=buffered

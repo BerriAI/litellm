@@ -281,7 +281,7 @@ def test_process_guardrail_metadata_calls_header_helper(proxy_logging, monkeypat
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"]}}
-    proxy_logging._process_guardrail_metadata(data, UserAPIKeyAuth(), "completion")
+    proxy_logging._process_guardrail_metadata(data)
     snapshot = {
         "call_count": len(calls),
         "first_name": calls[0]["name"],
@@ -306,7 +306,7 @@ def test_process_guardrail_metadata_skips_already_applied(proxy_logging, monkeyp
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g1"]}}
-    proxy_logging._process_guardrail_metadata(data, UserAPIKeyAuth(), "completion")
+    proxy_logging._process_guardrail_metadata(data)
     assert calls == ["g2"]
 
 
@@ -318,12 +318,12 @@ def test_process_guardrail_metadata_no_metadata_is_noop(proxy_logging, monkeypat
         "add_guardrail_to_applied_guardrails_header",
         MagicMock(side_effect=AssertionError("should not be called")),
     )
-    proxy_logging._process_guardrail_metadata({}, UserAPIKeyAuth(), "completion")
+    proxy_logging._process_guardrail_metadata({})
 
 
 def test_process_guardrail_metadata_invalid_data_raises(proxy_logging):
     with pytest.raises(AttributeError):
-        proxy_logging._process_guardrail_metadata(None, UserAPIKeyAuth(), "completion")  # type: ignore[arg-type]
+        proxy_logging._process_guardrail_metadata(None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -1204,22 +1204,19 @@ def _two_step_pipeline_data(
     }
 
 
-def _logging_obj(*, defer: bool) -> LiteLLMLoggingObj:
+def _logging_obj(*, log_parked: bool, call_type: str = "acompletion") -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="m",
         messages=[],
         stream=False,
-        call_type="acompletion",
+        call_type=call_type,
         start_time=None,
         litellm_call_id="call-1",
         function_id="fn-1",
     )
-    logging_obj.defer_async_logging = defer
+    logging_obj.defer_async_logging = True
+    logging_obj.enqueue_deferred_logging = (lambda: None) if log_parked else None
     return logging_obj
-
-
-def _logged_after_response_hooks(data: dict[str, object]) -> dict[str, object]:
-    return {**data, "litellm_logging_obj": _logging_obj(defer=True)}
 
 
 @pytest.mark.asyncio
@@ -1360,27 +1357,205 @@ async def test_pre_call_hook_names_a_step_that_ran_in_the_litellm_metadata_a_lat
 
 
 @pytest.mark.asyncio
-async def test_post_call_pipeline_steps_are_named_only_once_they_run(
-    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("log_parked", "call_type", "bucket", "expected_after_response"),
+    [
+        pytest.param(True, "acompletion", "metadata", ["first"], id="success-log-waits-for-the-response-hooks"),
+        pytest.param(True, "acompletion", "litellm_metadata", ["first"], id="success-log-waits-litellm-metadata"),
+        pytest.param(False, "acompletion", "metadata", ["first", "second"], id="success-log-already-built"),
+        pytest.param(
+            True, "allm_passthrough_route", "metadata", ["first", "second"], id="pass-through-headers-already-out"
+        ),
+    ],
+)
+async def test_post_call_pipeline_drops_the_steps_that_did_not_run_only_while_nothing_has_read_them(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    log_parked: bool,
+    call_type: str,
+    bucket: str,
+    expected_after_response: list[str],
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "post_call")
     second: Final = _PipelineStepGuardrail("second", "post_call")
     monkeypatch.setattr(litellm, "callbacks", [first, second])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    request: Final = _two_step_pipeline_data("post_call", "allow")
 
     data: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
-        data=_logged_after_response_hooks(_two_step_pipeline_data("post_call", "allow")),
+        data={
+            "model": request["model"],
+            "messages": request["messages"],
+            bucket: request["metadata"],
+            "litellm_logging_obj": _logging_obj(log_parked=log_parked, call_type=call_type),
+        },
         call_type="completion",
     )
-    assert "applied_guardrails" not in data["metadata"]
+    assert data[bucket]["applied_guardrails"] == ["first", "second"]
+    logged_metadata: Final = data[bucket].copy()
 
     await proxy_logging.post_call_success_hook(
         data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
     )
 
     assert (first.calls, second.calls) == (1, 0)
-    assert data["metadata"]["applied_guardrails"] == ["first"]
+    assert data[bucket]["applied_guardrails"] == expected_after_response
+    assert logged_metadata["applied_guardrails"] == expected_after_response
+
+
+def _three_step_two_pipeline_data() -> dict[str, object]:
+    runs_second: Final = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(guardrail="first", on_pass="next", on_fail="block"),
+            PipelineStep(guardrail="second", on_pass="next", on_fail="block"),
+        ],
+    )
+    stops_before_second: Final = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(guardrail="third", on_pass="allow", on_fail="block"),
+            PipelineStep(guardrail="second", on_pass="next", on_fail="block"),
+        ],
+    )
+    return {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "guardrails": ["first", "second", "third"],
+            "_guardrail_pipelines": [("runs-second", runs_second), ("stops-before-second", stops_before_second)],
+            "_pipeline_managed_guardrails": {"first", "second", "third"},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_keeps_a_step_an_earlier_pipeline_ran_that_a_later_one_never_reached(
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second", "third")]
+    monkeypatch.setattr(litellm, "callbacks", guardrails)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={
+            **_three_step_two_pipeline_data(),
+            "litellm_logging_obj": _logging_obj(log_parked=True),
+        },
+        call_type="completion",
+    )
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert [guardrail.calls for guardrail in guardrails] == [1, 1, 1]
+    assert data["metadata"]["applied_guardrails"] == ["first", "second", "third"]
+
+
+@pytest.mark.asyncio
+async def test_held_stream_pipeline_keeps_a_step_an_earlier_pipeline_ran_that_a_later_one_never_reached(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second", "third")]
+    monkeypatch.setattr(litellm, "callbacks", guardrails)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    logging_obj: Final = _logging_obj(log_parked=False)
+
+    async def stream_log(*args: object) -> None:
+        return None
+
+    logging_obj._on_deferred_stream_complete = stream_log
+    auth: Final = make_user_api_key_auth(request_route="/v1/chat/completions")
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=auth,
+        data={
+            **_three_step_two_pipeline_data(),
+            "stream": True,
+            "litellm_logging_obj": logging_obj,
+        },
+        call_type="completion",
+    )
+
+    delivered: Final[list[object]] = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=_async_chunk_iter(_stream_chunks()), request_data=data
+        )
+    ]
+
+    assert len(delivered) == 2
+    assert [guardrail.calls for guardrail in guardrails] == [1, 1, 1]
+    assert data["metadata"]["applied_guardrails"] == ["first", "second", "third"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_pipeline_keeps_a_step_that_never_ran_whose_guardrail_ran_outside_the_pipeline(
+    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first: Final = _PipelineStepGuardrail("first", "post_call")
+    second: Final = _PipelineStepGuardrail("second", ["pre_call", "post_call"])
+    monkeypatch.setattr(litellm, "callbacks", [first, second])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={**_two_step_pipeline_data("post_call", "allow"), "litellm_logging_obj": _logging_obj(log_parked=True)},
+        call_type="completion",
+    )
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert (first.calls, second.calls) == (1, 1)
+    assert data["metadata"]["applied_guardrails"] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("steps", "expected"),
+    [(("first", "second"), ["second"]), (("first",), None)],
+    ids=["skipped-then-ran", "only-step-skipped"],
+)
+async def test_post_call_pipeline_drops_a_step_its_guardrail_skips_on_a_whole_response(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    steps: tuple[str, ...],
+    expected: list[str] | None,
+) -> None:
+    guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in steps]
+    guardrails[0].apply_stream_scope("streaming")
+    monkeypatch.setattr(litellm, "callbacks", guardrails)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    pipeline: Final = GuardrailPipeline(
+        mode="post_call", steps=[PipelineStep(guardrail=name, on_pass="next", on_fail="block") for name in steps]
+    )
+
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {
+                "guardrails": list(steps),
+                "_guardrail_pipelines": [("governance", pipeline)],
+                "_pipeline_managed_guardrails": set(steps),
+            },
+            "litellm_logging_obj": _logging_obj(log_parked=True),
+        },
+        call_type="completion",
+    )
+    await proxy_logging.post_call_success_hook(
+        data=data, response=litellm.ModelResponse(), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert [guardrail.calls for guardrail in guardrails] == [0, 1][: len(steps)]
+    assert data["metadata"].get("applied_guardrails") == expected
 
 
 class _OpensLitellmMetadataOnResponseGuardrail(_PipelineStepGuardrail):
@@ -1402,7 +1577,7 @@ async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_
 
     data: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
-        data=_logged_after_response_hooks(_two_step_pipeline_data("post_call", "next")),
+        data={**_two_step_pipeline_data("post_call", "next"), "litellm_logging_obj": _logging_obj(log_parked=True)},
         call_type="completion",
     )
     await proxy_logging.post_call_success_hook(
@@ -1415,78 +1590,47 @@ async def test_post_call_pipeline_names_every_step_that_ran_in_metadata_after_a_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("asks_for", "request_route", "streams_live", "expected_header"),
-    [
-        pytest.param({"stream": False}, "/custom/stream", False, None, id="whole-response"),
-        pytest.param(
-            {"litellm_logging_obj": None},
-            "/v1/images/generations",
-            False,
-            ["first", "second"],
-            id="whole-response-logged-before-it-runs",
-        ),
-        pytest.param(
-            {"litellm_logging_obj": _logging_obj(defer=False)},
-            "/v1/chat/completions",
-            False,
-            ["first", "second"],
-            id="whole-response-log-not-deferred",
-        ),
-        pytest.param({"stream": True}, "/v1/chat/completions", False, None, id="stream-held-for-the-pipeline"),
-        pytest.param({"stream": True}, "/v1/chat/completions", True, ["first", "second"], id="stream-released-live"),
-        pytest.param(
-            {"stream": True}, "/custom/stream", False, ["first", "second"], id="stream-runs-steps-on-their-own"
-        ),
-        pytest.param({"method": "message/send"}, "/a2a/agent", False, None, id="a2a-whole-response"),
-        pytest.param({"method": "message/stream"}, "/a2a/agent", False, ["first", "second"], id="a2a-stream"),
-        pytest.param({"method": "SubscribeToTask"}, "/a2a/agent", False, ["first", "second"], id="a2a-v1-resubscribe"),
-    ],
+    ("log_waits", "expected_after_stream"),
+    [(True, ["first"]), (False, ["first", "second"])],
+    ids=["stream-log-waits-for-the-pipeline", "stream-log-not-deferred"],
 )
-async def test_pre_call_hook_names_up_front_the_post_call_steps_a_stream_runs_after_its_headers(
-    proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
-    asks_for: dict[str, object],
-    request_route: str,
-    streams_live: bool,
-    expected_header: list[str] | None,
-) -> None:
-    guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second")]
-    for guardrail in guardrails:
-        guardrail.streaming_buffer_until_moderated = not streams_live
-    monkeypatch.setattr(litellm, "callbacks", guardrails)
-    data: Final = _logged_after_response_hooks(
-        _two_step_pipeline_data("post_call", "next", first_on_fail="next", second_on_fail="next")
-    )
-    data.update(asks_for)
-
-    result: Final = await proxy_logging.pre_call_hook(
-        user_api_key_dict=make_user_api_key_auth(request_route=request_route),
-        data=data,
-        call_type="completion",
-    )
-
-    assert result["metadata"].get("applied_guardrails") == expected_header
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True], ids=["whole-response", "stream"])
-async def test_pre_call_hook_names_up_front_the_post_call_steps_the_llm_pass_through_route_runs_after_its_headers(
+async def test_held_stream_pipeline_drops_the_steps_that_did_not_run_only_while_its_log_waits(
     proxy_logging: ProxyLogging,
     make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
     monkeypatch: pytest.MonkeyPatch,
-    stream: bool,
+    log_waits: bool,
+    expected_after_stream: list[str],
 ) -> None:
-    guardrails: Final = [_PipelineStepGuardrail(name, "post_call") for name in ("first", "second")]
-    monkeypatch.setattr(litellm, "callbacks", guardrails)
-    data: Final = _logged_after_response_hooks(_two_step_pipeline_data("post_call", "allow"))
-    data["stream"] = stream
+    first: Final = _PipelineStepGuardrail("first", "post_call")
+    second: Final = _PipelineStepGuardrail("second", "post_call")
+    monkeypatch.setattr(litellm, "callbacks", [first, second])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    logging_obj: Final = _logging_obj(log_parked=False)
 
-    result: Final = await proxy_logging.pre_call_hook(
-        user_api_key_dict=make_user_api_key_auth(request_route="/bedrock/model/m/converse"),
-        data=data,
-        call_type="allm_passthrough_route",
+    async def stream_log(*args: object) -> None:
+        return None
+
+    logging_obj._on_deferred_stream_complete = stream_log if log_waits else None
+    auth: Final = make_user_api_key_auth(request_route="/v1/chat/completions")
+    data: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=auth,
+        data={**_two_step_pipeline_data("post_call", "allow"), "stream": True, "litellm_logging_obj": logging_obj},
+        call_type="completion",
     )
+    assert data["metadata"]["applied_guardrails"] == ["first", "second"]
+    logged_metadata: Final = data["metadata"].copy()
 
-    assert result["metadata"].get("applied_guardrails") == ["first", "second"]
+    delivered: Final[list[object]] = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=_async_chunk_iter(_stream_chunks()), request_data=data
+        )
+    ]
+
+    assert len(delivered) == 2
+    assert (first.calls, second.calls) == (1, 0)
+    assert data["metadata"]["applied_guardrails"] == expected_after_stream
+    assert logged_metadata["applied_guardrails"] == expected_after_stream
 
 
 @pytest.mark.asyncio
