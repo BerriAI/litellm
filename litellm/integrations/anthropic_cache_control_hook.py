@@ -332,6 +332,16 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
     return message.get("role") != "assistant"
 
 
+_SYSTEM_PROMPT_ROLES: Final = ("system", "developer")
+
+
+def _has_targeted_role(message: Mapping[str, object], targeted_role: str) -> bool:
+    role: Final = message.get("role")
+    if targeted_role == "system":
+        return role in _SYSTEM_PROMPT_ROLES
+    return role == targeted_role
+
+
 # Set by a caller whose message list is not the one that goes upstream -- today the
 # Responses API layer, whose `instructions` only becomes a system message further down.
 # Tells this hook to hand role-targeted points to the pass holding the final messages
@@ -705,7 +715,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Case 2: Target by role
         targetted_role: Final = point.get("role", None)
         if targetted_role is not None:
-            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targetted_role]
+            return [idx for idx, msg in enumerate(messages) if _has_targeted_role(msg, targetted_role)]
 
         return []
 
