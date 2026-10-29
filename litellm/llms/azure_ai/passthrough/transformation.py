@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
-import litellm
+from litellm._lazy_imports import get_default_encoding
 from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
@@ -23,7 +23,7 @@ from litellm.llms.base_llm.passthrough.transformation import (
     relayed_body,
     strip_leading_model_segment,
 )
-from litellm.llms.cohere.embed.transformation import cohere_embedding_response
+from litellm.llms.cohere.embed.transformation import CohereImageTokenBilling, cohere_embedding_response
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_PASSTHROUGH_RESPONSE, NativeOcrPassthroughResponse
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.rerank import RerankResponse
@@ -88,13 +88,23 @@ def relay_query_params(
     return MappingProxyType({**(request_query_params or EMPTY_QUERY), "api-version": api_version})
 
 
+def echoed_texts(body: Mapping[str, object]) -> tuple[str, ...]:
+    try:
+        return ECHOED_TEXTS.validate_python(body.get("texts"))
+    except ValidationError:
+        return ()
+
+
 def cohere_embed_relay_response(body: Mapping[str, object]) -> EmbeddingResponse:
-    return cohere_embedding_response(body, None, litellm.encoding, ECHOED_TEXTS.validate_python(body.get("texts", ())))
+    return cohere_embedding_response(
+        body, None, get_default_encoding(), echoed_texts(body), CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS
+    )
 
 
 FOUNDRY_RELAY_SHAPES: Final = (
     RelayShape("/rerank", CallTypes.arerank, RerankResponse.model_validate),
     RelayShape("/providers/blackforestlabs/v1/flux-2-pro", CallTypes.aimage_generation, ImageResponse.model_validate),
+    RelayShape("/providers/cohere/v1/embed", CallTypes.aembedding, cohere_embed_relay_response),
     RelayShape("/providers/cohere/v2/embed", CallTypes.aembedding, cohere_embed_relay_response),
 )
 

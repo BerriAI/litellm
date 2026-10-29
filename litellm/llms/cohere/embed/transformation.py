@@ -11,11 +11,12 @@ Docs - https://docs.cohere.com/v2/reference/embed
 """
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
+from enum import Enum
 from itertools import chain
-from typing import Final, Protocol, cast
+from typing import Final, Protocol, TypeAlias, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, TypeAdapter
 
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
@@ -39,14 +40,19 @@ _DECODED_JSON: Final = TypeAdapter(object)
 class _SupportsEncode(Protocol):
     """Tokenizer handle: the embedding usage path only encodes text to measure its token length."""
 
-    def encode(self, text: str, /) -> Sized: ...
+    def encode_ordinary(self, text: str, /) -> Sized: ...
+
+
+class CohereImageTokenBilling(Enum):
+    SEPARATE_FROM_INPUT_TOKENS = "separate_from_input_tokens"
+    FOLDED_INTO_INPUT_TOKENS = "folded_into_input_tokens"
 
 
 class _CohereBilledUnits(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     input_tokens: int | None = None
-    images: int | None = None
+    image_tokens: int | None = Field(default=None, validation_alias=AliasChoices("image_tokens", "images"))
 
 
 class _CohereEmbedMeta(BaseModel):
@@ -55,10 +61,13 @@ class _CohereEmbedMeta(BaseModel):
     billed_units: _CohereBilledUnits = Field(default_factory=_CohereBilledUnits)
 
 
+_CohereEmbeddings: TypeAlias = Mapping[str, Sequence[object]] | Sequence[object]
+
+
 class _CohereEmbedBody(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
-    embeddings: Mapping[str, Sequence[object]]
+    embeddings: _CohereEmbeddings
     meta: _CohereEmbedMeta = Field(default_factory=_CohereEmbedMeta)
 
 
@@ -66,32 +75,55 @@ def _embedding_rows(vectors: Sequence[object]) -> Iterator[Mapping[str, object]]
     return ({"object": "embedding", "index": index, "embedding": vector} for index, vector in enumerate(vectors))
 
 
-def _cohere_embed_usage(
-    billed_units: _CohereBilledUnits, input_texts: Iterable[str], encoding: _SupportsEncode
-) -> Usage:
-    if billed_units.input_tokens is None and billed_units.images is None:
-        encoded_tokens: Final = sum(len(encoding.encode(text)) for text in input_texts)
-        return Usage(prompt_tokens=encoded_tokens, completion_tokens=0, total_tokens=encoded_tokens)
-    billed_tokens: Final = (billed_units.input_tokens or 0) + (billed_units.images or 0)
+def _vector_lists(embeddings: _CohereEmbeddings) -> Iterable[Sequence[object]]:
+    return embeddings.values() if isinstance(embeddings, Mapping) else (embeddings,)
+
+
+def _prompt_usage(prompt_tokens: int, prompt_tokens_details: PromptTokensDetailsWrapper | None) -> Usage:
     return Usage(
-        prompt_tokens=billed_tokens,
+        prompt_tokens=prompt_tokens,
         completion_tokens=0,
-        total_tokens=billed_tokens,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            image_tokens=billed_units.images,
-            text_tokens=billed_units.input_tokens,
-        ),
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=prompt_tokens_details,
     )
 
 
+def _billed_usage(billed_units: _CohereBilledUnits, image_billing: CohereImageTokenBilling) -> Usage:
+    match image_billing:
+        case CohereImageTokenBilling.SEPARATE_FROM_INPUT_TOKENS:
+            return _prompt_usage(
+                (billed_units.input_tokens or 0) + (billed_units.image_tokens or 0),
+                PromptTokensDetailsWrapper(
+                    text_tokens=billed_units.input_tokens, image_tokens=billed_units.image_tokens
+                ),
+            )
+        case CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS:
+            return _prompt_usage(billed_units.input_tokens or 0, None)
+
+
+def _cohere_embed_usage(
+    billed_units: _CohereBilledUnits,
+    input_texts: Iterable[str],
+    encoding: _SupportsEncode,
+    image_billing: CohereImageTokenBilling,
+) -> Usage:
+    if billed_units.input_tokens is None and billed_units.image_tokens is None:
+        return _prompt_usage(sum(len(encoding.encode_ordinary(text)) for text in input_texts), None)
+    return _billed_usage(billed_units, image_billing)
+
+
 def cohere_embedding_response(
-    body: Mapping[str, object], model: str | None, encoding: _SupportsEncode, input_texts: Iterable[str]
+    body: Mapping[str, object],
+    model: str | None,
+    encoding: _SupportsEncode,
+    input_texts: Iterable[str],
+    image_billing: CohereImageTokenBilling,
 ) -> EmbeddingResponse:
     cohere_body: Final = _CohereEmbedBody.model_validate(body)
     return EmbeddingResponse(
         model=model,
-        data=list(chain.from_iterable(map(_embedding_rows, cohere_body.embeddings.values()))),
-        usage=_cohere_embed_usage(cohere_body.meta.billed_units, input_texts, encoding),
+        data=list(chain.from_iterable(map(_embedding_rows, _vector_lists(cohere_body.embeddings)))),
+        usage=_cohere_embed_usage(cohere_body.meta.billed_units, input_texts, encoding, image_billing),
     )
 
 
@@ -198,15 +230,15 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             ),
         )
 
-    def _transform_response(
+    def transform_native_embed_response(
         self,
         response: httpx.Response,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        data: dict | CohereEmbeddingRequest,
+        data: Mapping[str, object] | CohereEmbeddingRequest,
         model: str,
         encoding: _SupportsEncode,
-        input: list,
+        input: Sequence[str],
     ) -> EmbeddingResponse:
         response_json: Final = _DECODED_JSON.validate_python(response.json())
         ## LOGGING
@@ -216,7 +248,13 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             additional_args={"complete_input_dict": data},
             original_response=response_json,
         )
-        return cohere_embedding_response(_JSON_OBJECT.validate_python(response_json), model, encoding, input)
+        return cohere_embedding_response(
+            _JSON_OBJECT.validate_python(response_json),
+            model,
+            encoding,
+            input,
+            CohereImageTokenBilling.SEPARATE_FROM_INPUT_TOKENS,
+        )
 
     def transform_embedding_response(
         self,
@@ -229,7 +267,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
-        return self._transform_response(
+        return self.transform_native_embed_response(
             response=raw_response,
             api_key=api_key,
             logging_obj=logging_obj,

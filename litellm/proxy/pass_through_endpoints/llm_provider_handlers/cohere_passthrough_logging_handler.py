@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Final
+from urllib.parse import urlparse
 
 import httpx
 
@@ -16,7 +17,7 @@ from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from litellm.llms.cohere.common_utils import (
     ModelResponseIterator as CohereModelResponseIterator,
 )
-from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
+from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
@@ -28,6 +29,12 @@ from litellm.types.utils import (
 )
 
 from .base_passthrough_logging_handler import BasePassthroughLoggingHandler
+
+COHERE_EMBED_PATHS: Final = ("/v1/embed", "/v2/embed")
+
+
+def is_cohere_embed_route(url_route: str) -> bool:
+    return urlparse(url_route).path.rstrip("/").endswith(COHERE_EMBED_PATHS)
 
 
 class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
@@ -82,25 +89,20 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         Handle Cohere passthrough logging with route detection and cost tracking.
         """
-        # Check if this is an embed endpoint
-        if "/v1/embed" in url_route and "/v1/embeddings" not in url_route:
+        if is_cohere_embed_route(url_route):
             model: Final = request_body.get("model", response_body.get("model", ""))
             try:
-                cohere_embed_config: Final = CohereEmbeddingConfig()
-                litellm_model_response = litellm.EmbeddingResponse()
                 handler_instance: Final = CoherePassthroughLoggingHandler()
 
                 input_texts = request_body.get("texts", [])
                 if not input_texts:
                     input_texts = request_body.get("input", [])
 
-                # Transform the response
-                litellm_model_response = cohere_embed_config.transform_response(
+                litellm_model_response: Final = CohereEmbeddingConfig().transform_native_embed_response(
                     response=httpx_response,
                     api_key="",
                     logging_obj=logging_obj,
                     data=request_body,
-                    model_response=litellm_model_response,
                     model=model,
                     encoding=litellm.encoding,
                     input=input_texts,
