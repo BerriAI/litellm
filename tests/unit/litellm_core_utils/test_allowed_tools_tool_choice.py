@@ -57,7 +57,6 @@ def test_responses_layout_leaves_the_caller_dict_untouched():
     [{"type": "function"}, {"type": "function", "function": {}}, {"type": "custom", "custom": {"name": ""}}],
 )
 def test_responses_layout_refuses_to_rewrite_an_entry_without_a_name(tool: dict[str, object]):
-    """A half-rewritten restriction could mean something looser, so the caller sends the original instead."""
     tool_choice: Final[dict[str, object]] = {
         "type": "allowed_tools",
         "allowed_tools": {"mode": "required", "tools": [tool]},

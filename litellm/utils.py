@@ -9082,8 +9082,8 @@ def validate_chat_completion_tool_choice(
         ):
             raise BadRequestError(
                 message=(
-                    f"Invalid tool choice, tool_choice={tool_choice}. On chat completions allowed_tools is "
-                    f"{CHAT_ALLOWED_TOOLS_LAYOUT}; the flat Responses API layout is not accepted here"
+                    f"Invalid tool choice, tool_choice={tool_choice}. On chat completions an allowed_tools "
+                    f"tool_choice must be {CHAT_ALLOWED_TOOLS_LAYOUT}"
                 ),
                 model=model,
                 llm_provider="",
