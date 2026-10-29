@@ -13,7 +13,6 @@ import litellm
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
-    REALTIME_HEALTH_CHECK_FIRST_EVENT_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
 )
@@ -32,7 +31,7 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager, resolve_api_key_secret_reference
+from litellm.utils import ProviderConfigManager, get_model_cost_key, resolve_api_key_secret_reference
 
 from ..litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
@@ -787,7 +786,6 @@ async def realtime_health_check(
     api_version: str | None = None,
     realtime_protocol: str | None = None,
     model_params: Mapping[str, object] | None = None,
-    first_event_timeout_seconds: float = REALTIME_HEALTH_CHECK_FIRST_EVENT_TIMEOUT_SECONDS,
 ) -> bool:
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -805,11 +803,10 @@ async def realtime_health_check(
     Returns:
         bool - True once the connection is open, and on OpenAI's own hosts once the first server event is not an
             error, since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
-            the failure in its first server event. An `invalid_model` error also counts as healthy: OpenAI checks
-            the key first, and Live and transcription models are served through other endpoints
+            the failure in its first server event. An `invalid_model` error for a model litellm knows also counts as
+            healthy: OpenAI checks the key first, and Live and transcription models are served through other endpoints
     Raises:
-        Exception - if the connection is not successful, if OpenAI's first server event is any other error, or if
-            OpenAI sends no server event within first_event_timeout_seconds
+        Exception - if the connection is not successful or if OpenAI's first server event is any other error
     """
     import websockets
 
@@ -829,10 +826,11 @@ async def realtime_health_check(
         str | None, api_version or resolved_params.get("api_version")
     )
     url: str | None = None
+    openai_api_base: Final = resolved_api_base or litellm.api_base or "https://api.openai.com/"
     health_check_api_key: Final = (
         await resolve_openai_bearer_token_async(
             static_api_key=openai_static_api_key(resolved_api_key),
-            api_base=resolved_api_base,
+            api_base=openai_api_base,
             litellm_params=resolved_params,
         )
         if custom_llm_provider == LlmProviders.OPENAI.value
@@ -857,10 +855,7 @@ async def realtime_health_check(
             query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
-        url = openai_realtime.construct_url(
-            api_base=resolved_api_base or "https://api.openai.com/",
-            query_params={"model": model},
-        )
+        url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
     elif custom_llm_provider == "xai":
         url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
@@ -909,7 +904,9 @@ async def realtime_health_check(
     ) as connection:
         if custom_llm_provider != "openai" or not is_openai_backed_api_base(url):
             return True
-        return await confirm_session_started(connection, model, first_event_timeout_seconds)
+        return await confirm_session_started(
+            connection, model, sent_credentials=bool(auth_headers), model_is_known=get_model_cost_key(model) is not None
+        )
 
 
 _realtime_health_check = realtime_health_check

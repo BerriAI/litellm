@@ -4,7 +4,6 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-import asyncio
 import ssl
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
@@ -14,7 +13,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-from litellm.exceptions import Timeout
+from litellm.exceptions import AuthenticationError
 from litellm.responses.streaming_iterator import map_stream_error_to_exception
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -36,6 +35,7 @@ if TYPE_CHECKING:
 
 _SERVER_EVENT_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL: Final = "invalid_model"
+_CREDENTIALS_REJECTED: Final = "invalid_api_key"
 
 
 def first_event_error(first_event: str | bytes) -> RealtimeError | None:
@@ -45,18 +45,14 @@ def first_event_error(first_event: str | bytes) -> RealtimeError | None:
     return RealtimeErrorEvent.model_validate(event).error
 
 
-async def confirm_session_started(connection: "ClientConnection", model: str, timeout_seconds: float) -> Literal[True]:
-    try:
-        first_event: Final = await asyncio.wait_for(connection.recv(), timeout_seconds)
-    except asyncio.TimeoutError:
-        raise Timeout(
-            message=f"OpenAI realtime sent no server event within {timeout_seconds} seconds of the handshake",
-            model=model,
-            llm_provider="openai",
-        ) from None
-    error: Final = first_event_error(first_event)
-    if error is None or error.code == _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL:
+async def confirm_session_started(
+    connection: "ClientConnection", model: str, sent_credentials: bool, model_is_known: bool
+) -> Literal[True]:
+    error: Final = first_event_error(await connection.recv())
+    if error is None or (error.code == _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL and model_is_known):
         return True
+    if error.code == _CREDENTIALS_REJECTED or not sent_credentials:
+        raise AuthenticationError(message=error.message, llm_provider="openai", model=model)
     raise map_stream_error_to_exception(error, model=model, custom_llm_provider="openai")
 
 
