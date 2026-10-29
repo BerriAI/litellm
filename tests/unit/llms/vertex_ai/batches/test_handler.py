@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -257,6 +259,46 @@ def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
     assert get_kwargs["headers"]["Authorization"] == f"Bearer {TOKEN}"
     sent = json.loads(client.post.call_args.kwargs["data"])
     assert sent["model"] == TUNED_MODEL_RESOURCE
+
+
+@pytest.mark.parametrize(
+    "create_data, model",
+    [
+        (CREATE_DATA, "publishers/google/models/gemini-1.5-flash-001"),
+        (ENDPOINT_CREATE_DATA, TUNED_MODEL_RESOURCE),
+    ],
+    ids=["publisher-model", "fine-tuned-endpoint"],
+)
+def test_create_batch_labels_the_job_from_litellm_metadata_never_metadata(
+    create_data: Mapping[str, str], model: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", ["user_api_key_alias", "user_api_key_team_alias"])
+    h: Final = _make_handler()
+    client: Final = MagicMock()
+    client.post.return_value = _http_response()
+
+    with (
+        patch(f"{HMOD}.get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response()),
+    ):
+        h.create_batch(
+            _is_async=False,
+            create_batch_data=create_data,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location=LOCATION,
+            timeout=600.0,
+            max_retries=None,
+            litellm_params={
+                "metadata": {"user_api_key_alias": "forged"},
+                "litellm_metadata": {"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"},
+            },
+        )
+
+    sent: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert sent["model"] == model
+    assert sent["labels"] == {"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"}
 
 
 @pytest.mark.parametrize(
