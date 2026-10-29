@@ -139,7 +139,7 @@ def _router_estimator_models(model_group: str) -> tuple[EstimatorModel, ...]:
 
     if llm_router is None:
         return ()
-    deployments: Final = llm_router.get_model_list(model_name=model_group) or ()
+    deployments: Final = llm_router.registry().deployments(model_group) or ()
     return _estimator_models_from_deployments(deployments)
 
 
@@ -179,8 +179,9 @@ def _router_estimator_choices() -> tuple[ROIEstimatorModel, ...]:
 
     if llm_router is None:
         return ()
-    names: Final = frozenset(llm_router.get_model_names())
-    choices: Final = _estimator_choices_from_deployments(llm_router.get_model_list() or ())
+    registry: Final = llm_router.registry()
+    names: Final = frozenset(registry.names())
+    choices: Final = _estimator_choices_from_deployments(registry.deployments() or ())
     return tuple(choice for choice in choices if choice.model_name in names)
 
 

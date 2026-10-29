@@ -28,6 +28,7 @@ import textwrap
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from functools import lru_cache, partial, wraps
@@ -477,11 +478,14 @@ from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.secret_managers.main import (
-    LOCAL_OIDC_SECRET_PREFIXES,
+    API_KEY_OIDC_SECRET_PREFIXES,
+    GOOGLE_OIDC_SECRET_PREFIX,
+    OidcResolver,
     UnresolvableSecretReference,
+    cached_oidc_token,
     get_secret,
     oidc_reference_kind,
-    resolve_local_oidc_reference,
+    resolve_api_key_oidc_reference,
 )
 
 from ._logging import is_debugging_on, verbose_logger
@@ -784,27 +788,97 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
     )
 
 
-def resolve_api_key_secret_reference(
+async def aresolve_api_key_secret_reference(
     api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
 ) -> str | None:
     if not isinstance(api_key, AdminApiKeySecretReference):
         return api_key
-    return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider, upstream=upstream)
+    return await _resolved_off_the_event_loop(
+        partial(_secret_behind_api_key_reference, api_key, model, llm_provider, upstream), api_key
+    )
+
+
+_OIDC_TOKEN_FETCH_EXECUTOR: Final = ThreadPoolExecutor(thread_name_prefix="litellm-oidc-token-fetch")
+_PASS_THROUGH_CALL_TYPES: Final = frozenset(
+    {CallTypes.allm_passthrough_route.value, CallTypes.llm_passthrough_route.value}
+)
+_Resolved: Final = TypeVar("_Resolved")
+
+
+async def _resolved_off_the_event_loop(resolve: Callable[[OidcResolver], _Resolved], api_key: object) -> _Resolved:
+    if not isinstance(api_key, AdminApiKeySecretReference) or not api_key.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        return resolve(resolve_api_key_oidc_reference)
+    match cached_oidc_token(api_key):
+        case str() as token:
+            return resolve(lambda _reference: token)
+        case None:
+            _raise_if_the_reference_may_not_be_used(resolve)
+            fetched: Final = await asyncio.shield(
+                _google_token_fetch(asyncio.get_running_loop(), api_key).start_or_join()
+            )
+            return resolve(lambda _reference: fetched)
+
+
+def _raise_if_the_reference_may_not_be_used(resolve: Callable[[OidcResolver], object]) -> None:
+    _ = resolve(lambda _reference: "")
+
+
+@dataclass(slots=True)
+class _GoogleTokenFetch:
+    reference: str
+    in_flight: asyncio.Future[str | UnresolvableSecretReference] | None = None
+
+    def start_or_join(self) -> asyncio.Future[str | UnresolvableSecretReference]:
+        if self.in_flight is not None:
+            return self.in_flight
+        caller_context: Final = contextvars.copy_context()
+        fetch: Final = asyncio.get_running_loop().run_in_executor(
+            _OIDC_TOKEN_FETCH_EXECUTOR, lambda: caller_context.run(resolve_api_key_oidc_reference, self.reference)
+        )
+        fetch.add_done_callback(self._land)
+        self.in_flight = fetch
+        return fetch
+
+    def _land(self, _fetch: asyncio.Future[str | UnresolvableSecretReference]) -> None:
+        self.in_flight = None
+
+
+@lru_cache(maxsize=256)
+def _google_token_fetch(loop: asyncio.AbstractEventLoop, reference: str) -> _GoogleTokenFetch:
+    return _GoogleTokenFetch(reference)
 
 
 def _secret_behind_api_key_reference(
-    reference: AdminApiKeySecretReference, model: object, llm_provider: object, upstream: Mapping[str, object]
+    reference: AdminApiKeySecretReference,
+    model: object,
+    llm_provider: object,
+    upstream: Mapping[str, object],
+    resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
+    call_type: str | None = None,
 ) -> str:
     if not reference.may_reach(upstream):
         raise _secret_reference_error(_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model)
-    if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
+    if not reference.startswith(API_KEY_OIDC_SECRET_PREFIXES):
         raise _secret_reference_error(
             f"api_key is an {oidc_reference_kind(reference)} secret reference, a kind api_key does not support. "
-            "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
+            "Use oidc/file/<absolute path>, oidc/env/<VARIABLE_NAME> or oidc/google/<audience>.",
             llm_provider=llm_provider,
             model=model,
         )
-    match resolve_local_oidc_reference(reference):
+    if call_type in _PASS_THROUGH_CALL_TYPES and reference.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        raise _secret_reference_error(
+            "api_key oidc/google secret reference could not be resolved: pass-through routes do not fetch Google ID "
+            "tokens. Use a static key, oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
+            llm_provider=llm_provider,
+            model=model,
+        )
+    match resolve_oidc(reference):
+        case UnresolvableSecretReference(kind=kind, reason=reason, retryable=True):
+            raise ServiceUnavailableError(
+                message=f"api_key {kind} secret reference could not be resolved: {reason}",
+                llm_provider=llm_provider,
+                model=model,
+            )
         case UnresolvableSecretReference(kind=kind, reason=reason):
             raise _secret_reference_error(
                 f"api_key {kind} secret reference could not be resolved: {reason}",
@@ -836,21 +910,39 @@ def with_named_credential(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     return {**kwargs, **_named_credential_values(kwargs)}
 
 
-def load_credentials_from_list(kwargs: dict[str, object]) -> None:
+def load_credentials_from_list(kwargs: dict[str, object], call_type: str | None = None) -> None:
     """
     Updates kwargs with the credentials if credential_name in kwarg, then swaps an admin-configured oidc/ api_key
     reference for the secret it points to, read now so a rotated token is used on the next call
     """
-    kwargs.update(_credential_updates(kwargs))
+    kwargs.update(_credential_updates(kwargs, _named_credential_values(kwargs), call_type=call_type))
 
 
-def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+async def acredential_updates(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
     credential_values: Final = _named_credential_values(kwargs)
-    api_key: Final = kwargs.get("api_key", credential_values.get("api_key"))
+    return await _resolved_off_the_event_loop(
+        partial(_credential_updates, kwargs, credential_values, call_type=call_type),
+        _api_key_after_credentials(kwargs, credential_values),
+    )
+
+
+def _api_key_after_credentials(kwargs: Mapping[str, object], credential_values: Mapping[str, object]) -> object:
+    return kwargs.get("api_key", credential_values.get("api_key"))
+
+
+def _credential_updates(
+    kwargs: Mapping[str, object],
+    credential_values: Mapping[str, object],
+    resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
+    call_type: str | None = None,
+) -> Mapping[str, object]:
+    api_key: Final = _api_key_after_credentials(kwargs, credential_values)
     if not isinstance(api_key, AdminApiKeySecretReference):
         return credential_values
     secret: Final = _secret_behind_api_key_reference(
         api_key,
+        resolve_oidc=resolve_oidc,
+        call_type=call_type,
         model=kwargs.get("model"),
         llm_provider=kwargs.get("custom_llm_provider"),
         upstream=MappingProxyType(
@@ -1540,15 +1632,19 @@ def _schedule_async_success_logging(
         return
 
     def _enqueue_async_logging() -> None:
+        from litellm.responses.streaming_iterator import spawn_logging_task
+
         logging_obj.mark_async_success_log_enqueued()
-        asyncio.create_task(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
             _client_async_logging_helper(
                 logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,
                 end_time=end_time,
                 is_completion_with_fallbacks=is_completion_with_fallbacks,
-            )
+            ),
+            task_name="success callback enqueue",
         )
 
     if not logging_obj.defer_async_logging:
@@ -1936,7 +2032,7 @@ def client(original_function):
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
 
             ## LOAD CREDENTIALS
-            load_credentials_from_list(kwargs)
+            load_credentials_from_list(kwargs, call_type)
             from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
 
             attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
@@ -2230,7 +2326,7 @@ def client(original_function):
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
-            load_credentials_from_list(kwargs)
+            kwargs.update(await acredential_updates(kwargs, call_type))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is the untyped request dict
             from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
 
             await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
@@ -9956,6 +10052,12 @@ class ProviderConfigManager:
             )
 
             return TencentAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.messages.transformation import (
+                DashScopeAnthropicMessagesConfig,
+            )
+
+            return DashScopeAnthropicMessagesConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             if "claude" in model_lower:
                 from litellm.llms.github_copilot.messages.transformation import (
@@ -10461,6 +10563,22 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def _get_vertex_ai_vector_stores_config(api_type: str | None) -> BaseVectorStoreConfig | None:
+        if api_type == "rag_api" or api_type is None:
+            from litellm.llms.vertex_ai.vector_stores.rag_api.transformation import (
+                VertexVectorStoreConfig,
+            )
+
+            return VertexVectorStoreConfig()
+        if api_type == "search_api":
+            from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
+                vertex_search_api_vector_store_config,
+            )
+
+            return vertex_search_api_vector_store_config
+        return None
+
+    @staticmethod
     def get_provider_vector_stores_config(
         provider: LlmProviders,
         api_type: str | None = None,
@@ -10481,18 +10599,7 @@ class ProviderConfigManager:
 
             return AzureOpenAIVectorStoreConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if api_type == "rag_api" or api_type is None:  # default to rag_api
-                from litellm.llms.vertex_ai.vector_stores.rag_api.transformation import (
-                    VertexVectorStoreConfig,
-                )
-
-                return VertexVectorStoreConfig()
-            elif api_type == "search_api":
-                from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
-                    VertexSearchAPIVectorStoreConfig,
-                )
-
-                return VertexSearchAPIVectorStoreConfig()
+            return ProviderConfigManager._get_vertex_ai_vector_stores_config(api_type)
         elif litellm.LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.vector_stores.transformation import (
                 BedrockVectorStoreConfig,
@@ -10547,6 +10654,12 @@ class ProviderConfigManager:
             )
 
             return MongoDBVectorStoreConfig()
+        elif litellm.LlmProviders.OPENSEARCH == provider:
+            from litellm.llms.opensearch.vector_stores.transformation import (
+                OpenSearchVectorStoreConfig,
+            )
+
+            return OpenSearchVectorStoreConfig()
         return None
 
     @staticmethod
@@ -10759,6 +10872,7 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] = MappingProxyType({}),
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -10768,6 +10882,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig(drop_params=drop_params)
+        if LlmProviders.SONIOX == provider:
+            from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+
+            return SonioxRealtimeConfig.from_litellm_params(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod

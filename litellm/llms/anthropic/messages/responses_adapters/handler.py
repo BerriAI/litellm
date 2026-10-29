@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.tool_fields import check_mcp_servers_droppable
+from litellm.litellm_core_utils.tool_fields import tools_without_mcp_servers
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -164,8 +164,9 @@ def _build_responses_kwargs(
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    check_mcp_servers_droppable(
+    request_tools: Final = tools_without_mcp_servers(
         forwarded_kwargs.get("mcp_servers"),
+        tools or (),
         model=model,
         route=target_provider if isinstance(target_provider, str) else "this route",
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
@@ -202,10 +203,10 @@ def _build_responses_kwargs(
         request_data["temperature"] = temperature
     if thinking:
         request_data["thinking"] = thinking
-    if tool_choice:
+    if tool_choice and (request_tools or not tools):
         request_data["tool_choice"] = tool_choice
-    if tools:
-        request_data["tools"] = tools
+    if request_tools:
+        request_data["tools"] = list(request_tools)
     if top_p is not None:
         request_data["top_p"] = top_p
     if output_format:

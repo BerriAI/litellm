@@ -214,7 +214,12 @@ def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, dr
 
 
 MCP_SERVERS_DROP_WARNING: Final = (
-    "Dropping mcp_servers %s for model=%s on %s (drop_params=True) because this route cannot run an MCP server."
+    "Dropping mcp_servers %s and their mcp_toolset tools for model=%s on %s (drop_params=True) because LiteLLM "
+    "cannot pass mcp_servers to this route."
+)
+
+ROUTES_WITHOUT_MCP_SERVERS: Final = frozenset(
+    {"bedrock", "databricks", "deepseek", "gemini", "gigachat", "ollama", "ollama_chat", "vertex_ai", "vertex_ai_beta"}
 )
 
 
@@ -234,20 +239,31 @@ def _mcp_server_names(mcp_servers: object) -> tuple[str, ...]:
     return tuple(map(_mcp_server_name, _TOOLS.validate_python(mcp_servers)))
 
 
-def check_mcp_servers_droppable(mcp_servers: object, model: str, route: str, drop_params: bool) -> None:
+def _is_mcp_toolset(tool: object) -> bool:
+    match tool:
+        case {"type": "mcp_toolset"}:
+            return True
+        case _:
+            return False
+
+
+def tools_without_mcp_servers(
+    mcp_servers: object, tools: Sequence[_ToolT], model: str, route: str, drop_params: bool
+) -> Sequence[_ToolT]:
     server_names: Final = _mcp_server_names(mcp_servers)
     if not server_names:
-        return
+        return tools
     named_servers: Final = ", ".join(f"`{name}`" for name in server_names)
     if not drops_unsupported_params(drop_params):
         raise _unrunnable_mcp_error(
-            f"{model} on {route} cannot run the MCP server {named_servers} from `mcp_servers`. To have LiteLLM run "
-            'it for this model, register it on the LiteLLM MCP gateway and send a `type: "mcp"` tool with '
-            '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("`mcp_servers`"),
+            f"LiteLLM cannot pass `mcp_servers` to {model} on {route}, so the MCP server {named_servers} would not "
+            'run. To have LiteLLM run it for this model, register it on the LiteLLM MCP gateway and send a `type: "mcp"` '
+            'tool with `server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("`mcp_servers`"),
             model=model,
             route=route,
         )
     verbose_logger.warning(MCP_SERVERS_DROP_WARNING, named_servers, model, route)
+    return [tool for tool in tools if not _is_mcp_toolset(tool)]
 
 
 _TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
