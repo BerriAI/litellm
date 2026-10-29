@@ -601,6 +601,7 @@ async def test_azure_transcription_reads_max_retries_as_a_non_negative_number_an
     [
         pytest.param("abc", id="non-numeric"),
         pytest.param([1, 2], id="list"),
+        pytest.param(-1, id="negative"),
         pytest.param("1" * 400, id="not-finite"),
     ],
 )
@@ -638,6 +639,7 @@ async def test_azure_speech_with_an_unusable_timeout_keeps_the_sdk_default(
         pytest.param(None, None, DEFAULT_TIMEOUT.read, id="nothing-set-keeps-sdk-default"),
         pytest.param(None, 30.0, 30.0, id="configured-request-timeout"),
         pytest.param(0.5, None, 0.5, id="caller-timeout"),
+        pytest.param(0, None, 0, id="zero-caller-timeout"),
     ],
 )
 def test_azure_speech_timeout_follows_caller_then_configured_setting_then_sdk_default(

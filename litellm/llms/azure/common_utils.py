@@ -61,7 +61,7 @@ class _AzureClientLimits(TypedDict, total=False):
 
 _AZURE_CLIENT_LIMITS_ADAPTER: Final = TypeAdapter(_AzureClientLimits)
 _AZURE_CLIENT_MAX_RETRIES_ADAPTER: Final = TypeAdapter(NonNegativeInt)
-_AZURE_CLIENT_TIMEOUT_ADAPTER: Final = TypeAdapter(Annotated[float, Field(gt=0, allow_inf_nan=False)])
+_AZURE_CLIENT_TIMEOUT_ADAPTER: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
 
 
 def _azure_client_max_retries(configured: object) -> int:
