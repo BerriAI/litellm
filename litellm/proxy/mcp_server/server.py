@@ -2104,7 +2104,6 @@ if MCP_AVAILABLE:
         url: str,
         auth_header: str,
         timeout: float = 5.0,
-        headers: Mapping[str, str] | None = None,
     ) -> tuple[int, str | None]:
         """JSON-RPC initialize-probe the upstream URL to check whether the token is accepted.
 
@@ -2137,7 +2136,6 @@ if MCP_AVAILABLE:
         probe_headers: Final = {
             "Accept": "application/json, text/event-stream",
             **({"Authorization": auth_header} if auth_header else {}),
-            **(headers or {}),
         }
         try:
             resp: Final = await client.post(
@@ -2155,30 +2153,6 @@ if MCP_AVAILABLE:
         except Exception as exc:
             verbose_logger.debug("_probe_upstream_auth: probe to %s failed (%s), allowing request through", url, exc)
             return 200, None
-
-    async def _probe_with_outbound_headers(
-        server: MCPServer,
-        auth_header: str,
-        caller_headers: Mapping[str, str],
-        user_api_key_auth: UserAPIKeyAuth | None,
-    ) -> tuple[int, str | None]:
-        """Probe with the headers a real tool call sends: the caller's prepared headers with the server's
-        resolved static headers on top, so a static ``Authorization`` wins here too. When those cannot be
-        resolved yet, such as a per-user variable the caller has not set, the probe fails open like a network
-        error and leaves the error to the call."""
-        try:
-            static_headers: Final = await global_mcp_server_manager.resolved_static_headers(server, user_api_key_auth)
-        except Exception as exc:  # noqa: BLE001  # the probe fails open on anything it cannot reproduce
-            verbose_logger.debug("Skipping upstream auth probe for %s (%s)", server.name, type(exc).__name__)
-            return 200, None
-        outbound: Final = merge_mcp_headers(extra_headers=caller_headers, static_headers=static_headers) or {}
-        authorization: Final = next(
-            (value for name, value in reversed(outbound.items()) if name.lower() == "authorization"), auth_header
-        )
-        companion_headers: Final = {name: value for name, value in outbound.items() if name.lower() != "authorization"}
-        if not companion_headers:
-            return await _probe_upstream_auth(server.url or "", authorization)
-        return await _probe_upstream_auth(server.url or "", authorization, headers=companion_headers)
 
     async def _check_passthrough_upstream_auth(
         scope: Scope,
@@ -2257,13 +2231,8 @@ if MCP_AVAILABLE:
             )
             for srv, (auth, extra) in prepared_headers
         )
-        probe_targets: Final[tuple[tuple[MCPServer, str, str, Mapping[str, str]], ...]] = tuple(
-            (
-                srv,
-                auth_header,
-                srv.name if srv.is_oauth_passthrough else single_requested_name or srv.name,
-                headers or {},
-            )
+        probe_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
+            (srv, auth_header, srv.name if srv.is_oauth_passthrough else single_requested_name or srv.name)
             for srv, headers in probe_headers
             if (
                 auth_header := next(
@@ -2275,12 +2244,9 @@ if MCP_AVAILABLE:
             return
 
         probe_results: Final = await asyncio.gather(
-            *[
-                _probe_with_outbound_headers(srv, auth_header, headers, user_api_key_auth)
-                for srv, auth_header, _, headers in probe_targets
-            ]
+            *[_probe_upstream_auth(srv.url or "", auth_header) for srv, auth_header, _ in probe_targets]
         )
-        for (_srv, _, challenge_server_name, _), (probe_status, _) in zip(probe_targets, probe_results):
+        for (_srv, _, challenge_server_name), (probe_status, _) in zip(probe_targets, probe_results):
             if probe_status == 401:
                 # Token is missing or expired: keep pass-through clients on the
                 # protected-resource discovery flow so they re-authorize against

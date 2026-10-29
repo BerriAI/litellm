@@ -4176,12 +4176,6 @@ class MCPServerManager:
         referenced: Final = collect_env_var_references(strings=static_headers.values())
         return bool(referenced & user_var_names)
 
-    async def resolved_static_headers(
-        self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None
-    ) -> dict[str, str] | None:
-        """``server.static_headers`` interpolated exactly as a tool call sends them."""
-        return await self._resolve_static_headers_with_env_vars(server, user_api_key_auth)
-
     async def _resolve_static_headers_with_env_vars(
         self,
         server: MCPServer,
