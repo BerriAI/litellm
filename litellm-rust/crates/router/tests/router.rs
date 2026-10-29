@@ -2,8 +2,15 @@ use std::time::Duration;
 
 use litellm_config::Config;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_model_catalog::Catalog;
 use litellm_router::{Deployment, Router};
 use rstest::rstest;
+
+fn catalog() -> Catalog {
+    Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
+        .unwrap()
+        .value
+}
 
 #[rstest]
 #[case::minimal("")]
@@ -16,7 +23,7 @@ fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
         "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      {parameters}"
     ))
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None);
+    let router = Router::from_config(&config, &|_: &str| None, &catalog());
     let deployment = router.get(&config.model_list[0].model_name).unwrap();
     let params = &config.model_list[0].litellm_params;
 
@@ -44,7 +51,7 @@ fn configuration_types_the_provider_params_of_a_deployment() {
       azure_ad_token: ignored-by-every-group",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None);
+    let router = Router::from_config(&config, &|_: &str| None, &catalog());
     let params = &router.get("public-model").unwrap().litellm_params;
 
     assert_eq!(
@@ -74,7 +81,7 @@ fn lookup_uses_public_names(#[case] name: &str, #[case] expected: Option<&str>) 
       model: provider/b",
     )
     .unwrap();
-    let router = Router::from_config(&config, &|_: &str| None);
+    let router = Router::from_config(&config, &|_: &str| None, &catalog());
 
     assert_eq!(router.get(name).map(|entry| entry.model.as_str()), expected);
 }
@@ -84,7 +91,7 @@ fn empty_configuration_has_no_deployment() {
     let config = Config::from_yaml("model_list: []").unwrap();
 
     assert!(
-        Router::from_config(&config, &|_: &str| None)
+        Router::from_config(&config, &|_: &str| None, &catalog())
             .get("")
             .is_none()
     );

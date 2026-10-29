@@ -24,6 +24,7 @@ litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-model-catalog.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
@@ -40,3 +41,4 @@ rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }
+wiremock.workspace = true

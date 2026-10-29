@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 bytes.workspace = true
+fancy-regex.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
@@ -17,6 +18,7 @@ litellm-http.workspace = true
 litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
+litellm-model-catalog.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true

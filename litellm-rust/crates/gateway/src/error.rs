@@ -21,4 +21,6 @@ pub enum Error {
     RedisConnect(#[from] litellm_redis_client::ConnectError),
     #[error("MCP requires working gateway authentication")]
     Auth(#[from] litellm_gateway_auth::Error),
+    #[error(transparent)]
+    ModelCatalog(#[from] litellm_model_catalog::Error),
 }

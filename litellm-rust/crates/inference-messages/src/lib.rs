@@ -1,6 +1,7 @@
 mod common_utils;
 mod constants;
 mod handler;
+mod model_capabilities;
 pub mod route;
 mod types;
 
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use crate::common_utils::messages_provider;
 
 pub use litellm_inference::Error;
+pub use model_capabilities::anthropic_model_capabilities;
 pub use types::{
     MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, litellm_params,
     messages_body,

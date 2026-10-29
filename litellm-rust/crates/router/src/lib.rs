@@ -4,7 +4,8 @@ use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
 use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
-use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_inference_messages::{MessagesSettings, MessagesShaping, anthropic_model_capabilities};
+use litellm_model_catalog::Catalog;
 
 pub use deployment::Deployment;
 
@@ -25,7 +26,7 @@ fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
 }
 
 impl Router {
-    pub fn from_config(config: &Config, env: &impl Lookup) -> Self {
+    pub fn from_config(config: &Config, env: &impl Lookup, catalog: &Catalog) -> Self {
         let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref(), env);
         config
             .model_list
@@ -49,7 +50,11 @@ impl Router {
                                     || is_on(model.litellm_params.drop_params.as_ref(), env),
                                 ..MessagesSettings::default()
                             },
-                            ..MessagesShaping::default()
+                            capabilities: anthropic_model_capabilities(
+                                catalog,
+                                &model.litellm_params.model,
+                                model.litellm_params.custom_llm_provider.as_deref(),
+                            ),
                         },
                         ..Deployment::default()
                     },
@@ -72,6 +77,7 @@ impl FromIterator<(String, Deployment)> for Router {
 #[cfg(test)]
 mod tests {
     use litellm_config::Config;
+    use litellm_model_catalog::Catalog;
     use rstest::rstest;
 
     use super::Router;
@@ -114,8 +120,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            Router::from_config(&config, &|name: &str| (name == "DROP_PARAMS_FLAG")
-                .then(|| " Yes ".to_owned()))
+            Router::from_config(
+                &config,
+                &|name: &str| (name == "DROP_PARAMS_FLAG").then(|| " Yes ".to_owned()),
+                &Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
+                    .unwrap()
+                    .value
+            )
             .get("public-model")
             .unwrap()
             .shaping

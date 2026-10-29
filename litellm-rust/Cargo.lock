@@ -3815,6 +3815,7 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-model-catalog",
  "litellm-redis-client",
  "litellm-redis-testing",
  "litellm-secrets",
@@ -3830,6 +3831,7 @@ dependencies = [
  "tower-sessions-moka-store",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -4108,6 +4110,7 @@ name = "litellm-inference-messages"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "fancy-regex 0.19.2",
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
@@ -4123,6 +4126,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-router-types",
  "litellm-secrets",
  "litellm-tracing",
@@ -4286,6 +4290,7 @@ dependencies = [
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
+ "fancy-regex 0.19.2",
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
@@ -4418,6 +4423,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-inference",
  "litellm-inference-messages",
+ "litellm-model-catalog",
  "litellm-router-types",
  "rstest",
 ]
