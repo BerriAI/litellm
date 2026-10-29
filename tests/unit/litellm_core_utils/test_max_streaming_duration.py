@@ -80,6 +80,7 @@ class TestCustomStreamWrapperMaxDuration:
         while time.time() < deadline and wrapper.logging_obj.failure_handler.call_count == 0:
             time.sleep(0.01)
         wrapper.logging_obj.failure_handler.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_should_raise_on_async_anext_when_exceeded(self):
         """__anext__ checks the limit before iterating and schedules failure logging."""
