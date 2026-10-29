@@ -262,7 +262,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if file_id is not None:
             base64_data: Final = convert_url_to_base64(file_id)
             content_copy["file_data"] = base64_data
-            content_copy["filename"] = "my_file.pdf"
             content_copy.pop("file_id")
         return content_copy
 
@@ -271,7 +270,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if file_id is not None:  # check for file id being url done in _handle_pdf_url
             base64_data: Final = await async_convert_url_to_base64(file_id)
             content_item["file_data"] = base64_data
-            content_item["filename"] = "my_file.pdf"
             content_item.pop("file_id")
         return content_item
 

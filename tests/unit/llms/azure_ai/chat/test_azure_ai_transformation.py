@@ -1,5 +1,7 @@
+import base64
 import json
 import traceback
+import uuid
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1116,6 +1118,50 @@ def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text() -> None:
     )
 
     assert request["messages"] == [{"role": "user", "content": content}]
+
+
+def test_azure_ai_inlines_a_remote_pdf_file_part(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    pdf_bytes: Final = b"%PDF-1.4 azure_ai remote file fixture"
+    pdf_url: Final = f"https://docs.example/{uuid.uuid4().hex}.pdf"
+    respx_mock.get(pdf_url).mock(return_value=Response(200, content=pdf_bytes, headers={"Content-Type": "application/pdf"}))
+    question: Final = {"type": "text", "text": "What is the codeword?"}
+    remote_file: Final = {"file_id": pdf_url, "filename": "report.pdf", "format": "application/pdf"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Kimi-K2.6",
+        messages=[{"role": "user", "content": [{"type": "file", "file": remote_file}, question]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    inlined_file: Final = {
+        "filename": "report.pdf",
+        "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}",
+    }
+    assert request["messages"] == [{"role": "user", "content": [{"type": "file", "file": inlined_file}, question]}]
+
+
+def test_azure_ai_keeps_a_pdf_file_id_part_without_the_litellm_format_hint() -> None:
+    question: Final = {"type": "text", "text": "What is the codeword?"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-5.6-sol",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_id": "file-abc", "format": "application/pdf"}}, question],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [
+        {"role": "user", "content": [{"type": "file", "file": {"file_id": "file-abc"}}, question]}
+    ]
 
 
 def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge() -> None:

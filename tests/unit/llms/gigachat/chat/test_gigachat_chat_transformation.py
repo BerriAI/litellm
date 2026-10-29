@@ -513,17 +513,33 @@ class TestTransformMessages:
         assert result[0]["content"] == "look"
         assert "file-456" in result[0]["attachments"]
 
-    def test_list_content_with_pdf_file_part_uploads_it_as_an_attachment(self) -> None:
-        pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    @pytest.mark.parametrize(
+        ("file", "upload_source"),
+        [
+            pytest.param(
+                {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+                "data:application/pdf;base64,JVBERi0xLjQK",
+                id="data_url",
+            ),
+            pytest.param(
+                {"filename": "report.pdf", "file_id": "https://example.com/report.pdf", "format": "application/pdf"},
+                "https://example.com/report.pdf",
+                id="remote_url",
+            ),
+        ],
+    )
+    def test_list_content_with_pdf_file_part_uploads_it_as_an_attachment(
+        self, file: dict[str, str], upload_source: str
+    ) -> None:
         content: Final = [
             {"type": "text", "text": "summarize"},
-            {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+            {"type": "file", "file": file},
         ]
         with patch.object(self.config, "_upload_image", return_value="file-789") as upload:
             result: Final = self.config._transform_messages([
                 {"role": "user", "content": content}
             ])
-        upload.assert_called_once_with(pdf_data_url)
+        upload.assert_called_once_with(upload_source)
         assert result[0]["content"] == "summarize"
         assert result[0]["attachments"] == ["file-789"]
 

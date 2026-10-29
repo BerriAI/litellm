@@ -1,6 +1,7 @@
 import base64
 import functools
 import json
+import uuid
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, cast
@@ -5305,6 +5306,80 @@ def test_user_pdf_document_reaches_openai_compatible_providers_as_file_part(
     ]
 
 
+URL_PDF_BYTES: Final = b"%PDF-1.4 url-source regression fixture"
+
+
+def _served_pdf_url(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    pdf_url: Final = f"https://docs.example/{uuid.uuid4().hex}.pdf"
+    respx_mock.get(pdf_url).mock(
+        return_value=httpx.Response(200, content=URL_PDF_BYTES, headers={"Content-Type": "application/pdf"})
+    )
+    return pdf_url
+
+
+def _url_pdf_question(pdf_url: str, title: str | None) -> list[AnthropicMessagesUserMessageParam]:
+    document: Final = {"type": "document", "source": {"type": "url", "url": pdf_url}} | (
+        {"title": title} if title else {}
+    )
+    return [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[document, {"type": "text", "text": "What is the codeword?"}],
+        )
+    ]
+
+
+def _inlined_url_pdf_question(filename: str) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": filename,
+                        "file_data": f"data:application/pdf;base64,{base64.b64encode(URL_PDF_BYTES).decode()}",
+                    },
+                },
+                {"type": "text", "text": "What is the codeword?"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_filename"),
+    [(None, "document.pdf"), ("Quarterly report", "Quarterly report")],
+)
+def test_user_url_pdf_document_reaches_openai_compatible_providers_as_inlined_file_part(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, title: str | None, expected_filename: str
+) -> None:
+    pdf_url: Final = _served_pdf_url(respx_mock, monkeypatch)
+
+    request_messages: Final = _run_chat_completions_pipeline(_url_pdf_question(pdf_url, title))
+
+    assert request_messages == _inlined_url_pdf_question(expected_filename)
+
+
+def test_cloud_storage_url_pdf_document_keeps_its_image_url_part_for_providers_that_read_it() -> None:
+    gcs_uri: Final = "gs://litellm-docs/report.pdf"
+
+    translated: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=_url_pdf_question(gcs_uri, None)
+    )
+
+    assert translated == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": gcs_uri}},
+                {"type": "text", "text": "What is the codeword?"},
+            ],
+        }
+    ]
+
+
 _CHAT_BRIDGE_MODEL: Final = "azure/gpt-5.6"
 _CHAT_BRIDGE_API_BASE: Final = "https://tool-result-text.openai.azure.com"
 _CHAT_BRIDGE_URL: Final = r".*tool-result-text\.openai\.azure\.com/openai/deployments/gpt-5\.6/chat/completions.*"
@@ -5453,3 +5528,22 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_chat_bridge_url_pdf_document_reaches_azure_as_inlined_file_part(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pdf_url: Final = _served_pdf_url(respx_mock, monkeypatch)
+    route: Final = _chat_bridge_route(respx_mock)
+
+    await litellm.anthropic.messages.acreate(
+        model=_CHAT_BRIDGE_MODEL,
+        api_base=_CHAT_BRIDGE_API_BASE,
+        api_key="fake-key",
+        max_tokens=64,
+        messages=_url_pdf_question(pdf_url, "Quarterly report"),
+    )
+
+    assert json.loads(route.calls.last.request.read())["messages"] == _inlined_url_pdf_question("Quarterly report")

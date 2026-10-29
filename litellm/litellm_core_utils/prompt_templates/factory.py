@@ -62,6 +62,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    REMOTE_URL_PREFIXES,
     as_openai_image_part,
     converse_redacted_content,
     convert_content_list_to_str,
@@ -2243,6 +2244,12 @@ def anthropic_infer_file_id_content_type(
         return "container_upload"
 
 
+def _anthropic_file_id_source(file_id: str) -> AnthropicContentParamSourceFileId | AnthropicContentParamSourceUrl:
+    if file_id.startswith(REMOTE_URL_PREFIXES):
+        return AnthropicContentParamSourceUrl(type="url", url=file_id)
+    return AnthropicContentParamSourceFileId(type="file", file_id=file_id)
+
+
 def anthropic_process_openai_file_message(
     message: ChatCompletionFileObject,
 ) -> AnthropicMessagesDocumentParam | AnthropicMessagesImageParam | AnthropicMessagesContainerUploadParam:
@@ -2283,10 +2290,7 @@ def anthropic_process_openai_file_message(
         if content_block_type == "document":
             return_block_param = AnthropicMessagesDocumentParam(
                 type="document",
-                source=AnthropicContentParamSourceFileId(
-                    type="file",
-                    file_id=file_id,
-                ),
+                source=_anthropic_file_id_source(file_id),
             )
         elif content_block_type == "document_url":
             return_block_param = AnthropicMessagesDocumentParam(
@@ -2299,10 +2303,7 @@ def anthropic_process_openai_file_message(
         elif content_block_type == "image":
             return_block_param = AnthropicMessagesImageParam(
                 type="image",
-                source=AnthropicContentParamSourceFileId(
-                    type="file",
-                    file_id=file_id,
-                ),
+                source=_anthropic_file_id_source(file_id),
             )
         elif content_block_type == "container_upload":
             return_block_param = AnthropicMessagesContainerUploadParam(type="container_upload", file_id=file_id)

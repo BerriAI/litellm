@@ -284,15 +284,36 @@ def _document_media_type(source: object) -> str:
             return "application/pdf"
 
 
+REMOTE_URL_PREFIXES: Final = ("http://", "https://")
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteDocument:
+    filename: str
+    url: str
+
+
+def _document_filename(document: Mapping[str, object]) -> str:
+    title: Final = document.get("title")
+    return title if isinstance(title, str) and title else "document.pdf"
+
+
 def anthropic_inline_document(document: Mapping[str, object]) -> InlineDocument | None:
     source: Final = document.get("source")
     match source:
         case {"type": "base64", "data": str() as data} if data:
-            title: Final = document.get("title")
             return InlineDocument(
-                filename=title if isinstance(title, str) and title else "document.pdf",
+                filename=_document_filename(document),
                 file_data=f"data:{_document_media_type(source)};base64,{data}",
             )
+        case _:
+            return None
+
+
+def anthropic_remote_document(document: Mapping[str, object]) -> RemoteDocument | None:
+    match document.get("source"):
+        case {"type": "url", "url": str() as url} if url.startswith(REMOTE_URL_PREFIXES):
+            return RemoteDocument(filename=_document_filename(document), url=url)
         case _:
             return None
 
@@ -346,16 +367,39 @@ def messages_without_pdf_file_parts(messages: Sequence[AllMessageValues]) -> tup
 _CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
 
 
+def _image_url_part(part: object, url: str) -> Mapping[str, object]:
+    fields: Final = _CONTENT_PART.validate_python(part)
+    return {key: value for key, value in fields.items() if key != "file"} | {
+        "type": "image_url",
+        "image_url": {"url": url},
+    }
+
+
 def _file_part_as_image_url(part: object) -> object:
     match part:
         case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
-            fields: Final = _CONTENT_PART.validate_python(part)
-            return {key: value for key, value in fields.items() if key != "file"} | {
-                "type": "image_url",
-                "image_url": {"url": file_data},
-            }
+            return _image_url_part(part, file_data)
+        case {"type": "file", "file": {"file_id": str() as file_id}} if file_id.startswith(REMOTE_URL_PREFIXES):
+            return _image_url_part(part, file_id)
         case _:
             return part
+
+
+def _file_part_without_format(part: object) -> object:
+    match part:
+        case {"type": "file", "file": {"format": str()}}:
+            fields: Final = _CONTENT_PART.validate_python(part)
+            file_fields: Final = _CONTENT_PART.validate_python(fields["file"])
+            return {**fields, "file": {key: value for key, value in file_fields.items() if key != "format"}}
+        case _:
+            return part
+
+
+def message_without_file_formats(message: Mapping[str, object]) -> Mapping[str, object]:
+    parts: Final = content_parts(message)
+    if not parts:
+        return message
+    return {**message, "content": [_file_part_without_format(part) for part in parts]}
 
 
 def message_with_file_parts_as_image_urls(message: Mapping[str, object]) -> Mapping[str, object]:
