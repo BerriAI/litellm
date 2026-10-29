@@ -19,9 +19,10 @@ from typing import Final, Protocol, TypeAlias
 from litellm._logging import verbose_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_convert_url_to_base64
-from litellm.types.integrations.image_description_interception import ImageDescriptionInterceptionConfig
-from litellm.types.utils import CallTypes, Choices, ModelResponse
+from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import CallTypes, ModelResponse
 from litellm.utils import is_vision_explicitly_disabled
 
 DEFAULT_IMAGE_DESCRIPTION_PROMPT: Final = """You are an image-to-evidence extractor. A text-only model will read your output instead of the image. It cannot see the image and cannot check you. A wrong value is worse than a missing value.
@@ -69,9 +70,7 @@ DescriptionResult: TypeAlias = Described | DescriptionFailed
 
 
 class ImageDescriber(Protocol):
-    async def __call__(
-        self, model: str, messages: Sequence[Mapping[str, object]], timeout: float
-    ) -> DescriptionResult: ...
+    async def __call__(self, model: str, prompt: str, image_data_uri: str, timeout: float) -> DescriptionResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,17 +86,22 @@ class _ImagePart:
     url: str | None
 
 
-async def describe_with_proxy_router(
-    model: str, messages: Sequence[Mapping[str, object]], timeout: float
-) -> DescriptionResult:
+async def describe_with_proxy_router(model: str, prompt: str, image_data_uri: str, timeout: float) -> DescriptionResult:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
         return DescriptionFailed("the proxy router is not initialized")
+    message: Final = ChatCompletionUserMessage(
+        role="user",
+        content=[
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image_data_uri}},
+        ],
+    )
     try:
-        response: Final = await llm_router.acompletion(
+        response: Final = await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads take untyped kwargs
             model=model,
-            messages=list(messages),
+            messages=[message],
             temperature=0,
             max_tokens=_DESCRIPTION_MAX_TOKENS,
             timeout=timeout,
@@ -110,16 +114,14 @@ async def describe_with_proxy_router(
 def _description_from_response(response: object) -> DescriptionResult:
     if not isinstance(response, ModelResponse) or not response.choices:
         return DescriptionFailed("unexpected response shape")
-    choice: Final = response.choices[0]
-    content: Final = choice.message.content if isinstance(choice, Choices) else None
+    content: Final = response.choices[0].message.content
     if not isinstance(content, str) or not content.strip():
         return DescriptionFailed("empty description")
     return Described(content.strip())
 
 
 def _deployment_is_text_only(kwargs: Mapping[str, object]) -> bool:
-    raw_model_info: Final = kwargs.get("model_info")
-    model_info: Final[Mapping[str, object]] = raw_model_info if isinstance(raw_model_info, Mapping) else {}
+    model_info: Final = as_str_mapping(kwargs.get("model_info")) or {}
     declared: Final = model_info.get("supports_vision")
     if declared is not None:
         return declared is False
@@ -131,33 +133,37 @@ def _deployment_is_text_only(kwargs: Mapping[str, object]) -> bool:
     return is_vision_explicitly_disabled(model, provider if isinstance(provider, str) else None)
 
 
+def _is_list(value: object) -> bool:
+    return isinstance(value, list)
+
+
+def _list_items(value: object) -> tuple[object, ...] | None:
+    return tuple(iter_items(value)) if _is_list(value) else None
+
+
 def _chat_messages(value: object) -> tuple[Mapping[str, object], ...] | None:
-    if not isinstance(value, list):
+    items: Final = _list_items(value)
+    if items is None:
         return None
-    messages: Final = tuple(message for message in value if isinstance(message, Mapping))
-    return messages if len(messages) == len(value) else None
+    messages: Final = tuple(message for item in items if (message := as_str_mapping(item)) is not None)
+    return messages if len(messages) == len(items) else None
 
 
 def _image_url(part: Mapping[str, object]) -> str | None:
     image_url: Final = part.get("image_url")
     if isinstance(image_url, str):
         return image_url
-    if isinstance(image_url, Mapping):
-        url: Final = image_url.get("url")
-        return url if isinstance(url, str) else None
-    return None
+    url: Final = (as_str_mapping(image_url) or {}).get("url")
+    return url if isinstance(url, str) else None
 
 
 def _image_parts_of(message_index: int, message: Mapping[str, object]) -> tuple[_ImagePart, ...]:
-    content: Final = message.get("content")
-    if not isinstance(content, list):
-        return ()
-    image_parts: Final = (
-        (part_index, part)
-        for part_index, part in enumerate(content)
-        if isinstance(part, Mapping) and part.get("type") == "image_url"
+    parts: Final = tuple(enumerate(as_str_mapping(item) for item in _list_items(message.get("content")) or ()))
+    return tuple(
+        _ImagePart(message_index, part_index, _image_url(part))
+        for part_index, part in parts
+        if part is not None and part.get("type") == "image_url"
     )
-    return tuple(_ImagePart(message_index, part_index, _image_url(part)) for part_index, part in image_parts)
 
 
 def _image_parts(messages: Sequence[Mapping[str, object]]) -> tuple[_ImagePart, ...]:
@@ -167,8 +173,8 @@ def _image_parts(messages: Sequence[Mapping[str, object]]) -> tuple[_ImagePart, 
 def _with_text_parts(
     message_index: int, message: Mapping[str, object], replacements: Mapping[tuple[int, int], str]
 ) -> Mapping[str, object]:
-    content: Final = message.get("content")
-    if not isinstance(content, list):
+    content: Final = _list_items(message.get("content"))
+    if content is None:
         return message
     return {
         **message,
@@ -205,7 +211,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
         prompt: str = DEFAULT_IMAGE_DESCRIPTION_PROMPT,
         timeout: float = DEFAULT_IMAGE_DESCRIPTION_TIMEOUT_SECONDS,
     ) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # base callback constructor accepts untyped kwargs
         self.image_model = image_model
         self.describer = describer
         self.cache = cache if cache is not None else DualCache(default_in_memory_ttl=_CACHE_TTL_SECONDS)
@@ -218,29 +224,21 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
     def initialize_from_proxy_config(
         callback_specific_params: Mapping[str, object],
     ) -> "ImageDescriptionInterceptionLogger":
-        raw_params: Final = callback_specific_params.get("image_description_interception")
-        params: Final[ImageDescriptionInterceptionConfig] = (
-            {
-                "image_model": image_model,
-                **({"prompt": prompt} if isinstance(prompt := raw_params.get("prompt"), str) else {}),
-                **(
-                    {"timeout": float(timeout)}
-                    if isinstance(timeout := raw_params.get("timeout"), int | float) and not isinstance(timeout, bool)
-                    else {}
-                ),
-            }
-            if isinstance(raw_params, Mapping) and isinstance(image_model := raw_params.get("image_model"), str)
-            else {}
-        )
-        if "image_model" not in params or not params["image_model"]:
+        params: Final = as_str_mapping(callback_specific_params.get("image_description_interception")) or {}
+        image_model: Final = params.get("image_model")
+        prompt: Final = params.get("prompt")
+        timeout: Final = params.get("timeout")
+        if not isinstance(image_model, str) or not image_model:
             raise ValueError(
                 "image_description_interception needs callback_settings.image_description_interception.image_model, "
                 "the model group that describes images"
             )
         return ImageDescriptionInterceptionLogger(
-            image_model=params["image_model"],
-            prompt=params.get("prompt", DEFAULT_IMAGE_DESCRIPTION_PROMPT),
-            timeout=params.get("timeout", DEFAULT_IMAGE_DESCRIPTION_TIMEOUT_SECONDS),
+            image_model=image_model,
+            prompt=prompt if isinstance(prompt, str) else DEFAULT_IMAGE_DESCRIPTION_PROMPT,
+            timeout=float(timeout)
+            if isinstance(timeout, int | float) and not isinstance(timeout, bool)
+            else DEFAULT_IMAGE_DESCRIPTION_TIMEOUT_SECONDS,
         )
 
     async def async_pre_call_deployment_hook(
@@ -285,7 +283,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
 
     async def _describe_cached(self, image: _LoadedImage) -> DescriptionResult:
         key: Final = f"image_description:{self.image_model}:{self._prompt_hash}:{image.sha256}"
-        cached: Final = await self.cache.async_get_cache(key)
+        cached: Final[object] = await self.cache.async_get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the legacy DualCache API is untyped
         if isinstance(cached, str):
             return Described(cached)
         in_flight: Final = self._in_flight.get(key)
@@ -300,19 +298,7 @@ class ImageDescriptionInterceptionLogger(CustomLogger):
 
     async def _describe_and_store(self, key: str, image: _LoadedImage) -> DescriptionResult:
         _describing_image.set(True)
-        result: Final = await self.describer(
-            self.image_model,
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": self.prompt},
-                        {"type": "image_url", "image_url": {"url": image.data_uri}},
-                    ],
-                }
-            ],
-            self.timeout,
-        )
+        result: Final = await self.describer(self.image_model, self.prompt, image.data_uri, self.timeout)
         if isinstance(result, Described):
-            await self.cache.async_set_cache(key, result.text, ttl=_CACHE_TTL_SECONDS)
+            await self.cache.async_set_cache(key, result.text, ttl=_CACHE_TTL_SECONDS)  # pyright: ignore[reportUnknownMemberType]  # the legacy DualCache API is untyped
         return result
