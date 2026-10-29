@@ -897,6 +897,45 @@ func TestResourceKeyReadDropsMissingKeyFromState(t *testing.T) {
 	}
 }
 
+func TestResourceKeyReadDropsArchivedDeletedKeyFromState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key":"sk-archived","info":{"key":"sk-archived","token_id":"tok-1","status":"deleted"}}`))
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "archived"})
+	d.SetId("deleted-outside-terraform")
+
+	diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("read of an archived deleted key must not error, got: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Errorf("Id = %q, want empty so Terraform plans a recreate instead of trusting a 200 for a deleted key", d.Id())
+	}
+}
+
+func TestResourceKeyDeleteTreatsNotFoundAsGone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":{"message":"{'error': 'No keys found'}","type":"internal_server_error","param":null,"code":"404"}}`))
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "already-gone"})
+	d.SetId("deleted-outside-terraform")
+
+	diags := resourceKeyDelete(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("destroy of an already-deleted key must succeed, got: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Errorf("Id = %q, want empty so destroy completes without state rm", d.Id())
+	}
+}
+
 func TestResourceKeyReadStillFailsOnNon404Errors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
