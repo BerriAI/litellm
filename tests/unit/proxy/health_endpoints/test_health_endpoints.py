@@ -1,8 +1,9 @@
 import asyncio
 import copy
+import itertools
 import json
 import time
-from collections.abc import Awaitable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from importlib import import_module
@@ -22,7 +23,7 @@ import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
-from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
@@ -4293,7 +4294,7 @@ async def test_health_endpoint_keeps_a_team_only_public_name_off_a_team_less_key
     probe.assert_not_awaited()
 
 
-_PROVIDER_PREFIXED_MODEL_LIST = [
+_PROVIDER_PREFIXED_MODEL_LIST: Final = [
     {
         "model_name": "openai/gpt-5.4-nano",
         "litellm_params": {"model": "openai/gpt-5.4-nano"},
@@ -4310,7 +4311,7 @@ _PROVIDER_PREFIXED_MODEL_LIST = [
         "model_info": {"id": "id-haiku"},
     },
 ]
-_PROVIDER_PREFIXED_CACHED_RESULTS = {
+_PROVIDER_PREFIXED_CACHED_RESULTS: Final = {
     "healthy_endpoints": [
         {"model": "openai/gpt-5.4-nano", "model_id": "id-prefixed-nano"},
         {"model": "openai/gpt-5.4-mini", "model_id": "id-mini"},
@@ -4320,8 +4321,8 @@ _PROVIDER_PREFIXED_CACHED_RESULTS = {
     "healthy_count": 3,
     "unhealthy_count": 0,
 }
-_PROVIDER_WILDCARD_KEY = UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/*"])
-_RESTRICTED_TEAM_KEY = UserAPIKeyAuth(
+_PROVIDER_WILDCARD_KEY: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=["openai/*"])
+_RESTRICTED_TEAM_KEY: Final = UserAPIKeyAuth(
     api_key="hashed-test-key", models=[], team_id="team-a", team_models=["gpt-5.4-mini"]
 )
 
@@ -4334,7 +4335,7 @@ _RESTRICTED_TEAM_KEY = UserAPIKeyAuth(
 async def test_health_endpoint_probes_the_deployments_auth_lets_the_key_request(
     caller: UserAPIKeyAuth, expected_ids: set[str]
 ):
-    probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
+    probed: Final = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
 
     assert probed == expected_ids
 
@@ -4357,7 +4358,7 @@ async def test_health_endpoint_returns_the_deployments_auth_lets_the_key_request
         use_background_health_checks=True,
         health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
     ):
-        result = await health_endpoint(response=Response(), user_api_key_dict=caller, model=None, model_id=None)
+        result: Final = await health_endpoint(response=Response(), user_api_key_dict=caller, model=None, model_id=None)
 
     assert [ep["model_id"] for ep in result["healthy_endpoints"]] == expected_ids
 
@@ -4389,17 +4390,17 @@ async def test_health_endpoint_refuses_a_deployment_the_team_allowlist_forbids(u
     probe.assert_not_awaited()
 
 
-_KEY_ALIASED_AWAY_FROM_HAIKU = UserAPIKeyAuth(
+_KEY_ALIASED_AWAY_FROM_HAIKU: Final = UserAPIKeyAuth(
     api_key="hashed-test-key", models=["gpt-5.4-mini"], aliases={"claude-haiku-5-5": "gpt-5.4-mini"}
 )
-_TEAM_ALIASED_AWAY_FROM_HAIKU = UserAPIKeyAuth(
+_TEAM_ALIASED_AWAY_FROM_HAIKU: Final = UserAPIKeyAuth(
     api_key="hashed-test-key",
     models=["claude-haiku-5-5"],
     team_id="team-a",
     team_model_aliases={"claude-haiku-5-5": "gpt-5.4-mini"},
 )
-_MINI_ONLY_KEY = UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"])
-_ALIAS_SHADOW_CASES = [
+_MINI_ONLY_KEY: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini"])
+_ALIAS_SHADOW_CASES: Final = [
     pytest.param(_KEY_ALIASED_AWAY_FROM_HAIKU, {}, id="key-alias"),
     pytest.param(_TEAM_ALIASED_AWAY_FROM_HAIKU, {}, id="team-alias"),
     pytest.param(_MINI_ONLY_KEY, {"claude-haiku-5-5": "gpt-5.4-mini"}, id="router-alias"),
@@ -4415,7 +4416,7 @@ def _router_with_aliases(model_group_alias: Mapping[str, str]) -> Router:
 async def test_health_endpoint_probes_the_deployment_an_alias_sends_the_key_to_not_the_one_it_shadows(
     caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
 ):
-    probed = await _live_probed_model_ids(
+    probed: Final = await _live_probed_model_ids(
         _PROVIDER_PREFIXED_MODEL_LIST, caller, llm_router=_router_with_aliases(model_group_alias)
     )
 
@@ -4437,7 +4438,7 @@ async def test_health_endpoint_returns_the_deployment_an_alias_sends_the_key_to_
         use_background_health_checks=True,
         health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
     ):
-        result = await health_endpoint(response=Response(), user_api_key_dict=caller, model=None, model_id=None)
+        result: Final = await health_endpoint(response=Response(), user_api_key_dict=caller, model=None, model_id=None)
 
     assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-mini"]
 
@@ -4474,7 +4475,7 @@ async def test_health_endpoint_refuses_the_deployment_a_key_alias_shadows(use_ba
 async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_key_to(
     caller: UserAPIKeyAuth, model_group_alias: Mapping[str, str]
 ):
-    probed = await _live_narrowed_model_ids(
+    probed: Final = await _live_narrowed_model_ids(
         _PROVIDER_PREFIXED_MODEL_LIST,
         caller,
         model="claude-haiku-5-5",
@@ -4499,7 +4500,7 @@ async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_ke
         use_background_health_checks=True,
         health_check_results=_PROVIDER_PREFIXED_CACHED_RESULTS,
     ):
-        result = await health_endpoint(
+        result: Final = await health_endpoint(
             response=Response(), user_api_key_dict=caller, model="claude-haiku-5-5", model_id=None
         )
 
@@ -4508,9 +4509,9 @@ async def test_health_endpoint_targets_the_deployment_an_alias_name_sends_the_ke
 
 @pytest.mark.asyncio
 async def test_health_endpoint_never_probes_a_deployment_without_a_model_name_for_a_restricted_key():
-    nameless_deployment = {"litellm_params": {"model": "openai/gpt-5.4-mini"}, "model_info": {"id": "id-nameless"}}
+    nameless_deployment: Final = {"litellm_params": {"model": "openai/gpt-5.4-mini"}, "model_info": {"id": "id-nameless"}}
 
-    probed = await _live_probed_model_ids(
+    probed: Final = await _live_probed_model_ids(
         [*_PROVIDER_PREFIXED_MODEL_LIST, nameless_deployment],
         _MINI_ONLY_KEY,
         llm_router=_router_for(_PROVIDER_PREFIXED_MODEL_LIST),
@@ -4521,20 +4522,20 @@ async def test_health_endpoint_never_probes_a_deployment_without_a_model_name_fo
 
 @pytest.mark.asyncio
 async def test_health_endpoint_never_probes_the_deployment_a_keys_router_alias_sends_it_to_but_forbids():
-    caller = UserAPIKeyAuth(
+    caller: Final = UserAPIKeyAuth(
         api_key="hashed-test-key",
         models=["gpt-5.4-mini", "openai/gpt-5.4-nano"],
         router_settings={"model_group_alias": {"gpt-5.4-mini": "claude-haiku-5-5"}},
     )
 
-    probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
+    probed: Final = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller)
 
     assert probed == {"id-prefixed-nano"}
 
 
-_WILDCARD_DEPLOYMENT = {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "id-wild"}}
-_CATCH_ALL_DEPLOYMENT = {"model_name": "*", "litellm_params": {"model": "*"}, "model_info": {"id": "id-star"}}
-_TEAM_WILDCARD_DEPLOYMENT = {
+_WILDCARD_DEPLOYMENT: Final = {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "id-wild"}}
+_CATCH_ALL_DEPLOYMENT: Final = {"model_name": "*", "litellm_params": {"model": "*"}, "model_info": {"id": "id-star"}}
+_TEAM_WILDCARD_DEPLOYMENT: Final = {
     "model_name": "openai-wild_team-a_7c1e",
     "litellm_params": {"model": "openai/*"},
     "model_info": {"id": "id-team-wild", "team_id": "team-a", "team_public_model_name": "openai/*"},
@@ -4605,12 +4606,12 @@ async def test_health_endpoint_probes_every_deployment_the_callers_allowed_names
     caller: UserAPIKeyAuth,
     expected_ids: set[str],
 ):
-    llm_router = Router(
+    llm_router: Final = Router(
         model_list=copy.deepcopy([dict(deployment) for deployment in model_list]),
         model_group_alias=dict(model_group_alias),
     )
 
-    probed = await _live_probed_model_ids(model_list, caller, llm_router=llm_router)
+    probed: Final = await _live_probed_model_ids(model_list, caller, llm_router=llm_router)
 
     assert probed == expected_ids
 
@@ -4628,16 +4629,154 @@ async def test_health_endpoint_probes_every_deployment_the_callers_allowed_names
 async def test_health_endpoint_never_probes_the_default_fallback_for_a_granted_name_no_deployment_serves(
     caller: UserAPIKeyAuth,
 ) -> None:
-    llm_router = Router(
+    llm_router: Final = Router(
         model_list=copy.deepcopy(_PROVIDER_PREFIXED_MODEL_LIST), default_fallbacks=["claude-haiku-5-5"]
     )
 
-    probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller, llm_router=llm_router)
+    probed: Final = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller, llm_router=llm_router)
 
     assert probed == {"id-mini"}
 
 
-_ACCESS_GROUP_SPLIT_MODEL_LIST = [
+def _personal_key_whose_owner_may_call(models: list[str]) -> UserAPIKeyAuth:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    owner_id: Final = "health-scope-owner-" + "-".join(models)
+    user_api_key_cache.set_cache(key=owner_id, value=LiteLLM_UserTable(user_id=owner_id, models=models))
+    return UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id=owner_id)
+
+
+def _managed_agent_key_granted(models: list[str]) -> UserAPIKeyAuth:
+    from litellm.types.agents import AgentResponse
+
+    caller: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=[])
+    caller.managed_agent_policy = AgentResponse(
+        agent_id="managed", agent_name="Managed", agent_card_params={}, object_permission={"models": models}
+    )
+    return caller
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("make_caller", "models", "expected_ids"),
+    [
+        pytest.param(_personal_key_whose_owner_may_call, ["gpt-5.4-mini"], {"id-mini"}, id="key-owners-models"),
+        pytest.param(_managed_agent_key_granted, ["gpt-5.4-mini"], {"id-mini"}, id="managed-agents-models"),
+        pytest.param(_managed_agent_key_granted, [], set(), id="managed-agent-without-model-grants"),
+    ],
+)
+async def test_health_endpoint_probes_only_the_models_the_keys_user_or_agent_may_call(
+    make_caller: Callable[[list[str]], UserAPIKeyAuth], models: list[str], expected_ids: set[str]
+):
+    probed: Final = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, make_caller(models))
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_refuses_a_model_id_the_keys_owner_may_not_call():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(_PROVIDER_PREFIXED_MODEL_LIST, _router_for(_PROVIDER_PREFIXED_MODEL_LIST)),
+        patch(  # test-quality-ok: the probe must never run; the endpoint has no injection seam for it
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save", new_callable=AsyncMock
+        ) as probe,
+        pytest.raises(HTTPException) as refused,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=_personal_key_whose_owner_may_call(["gpt-5.4-mini"]),
+            model=None,
+            model_id="id-prefixed-nano",
+        )
+
+    assert refused.value.status_code == 403
+    probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_lets_other_requests_run_while_it_scopes_a_large_model_list():
+    model_list: Final = [
+        {"model_name": f"model-{n}", "litellm_params": {"model": f"openai/model-{n}"}, "model_info": {"id": f"id-{n}"}}
+        for n in range(50)
+    ]
+    other_request_turns: Final = itertools.count()
+    scoping_done: Final = asyncio.Event()
+
+    async def scope() -> set[str]:
+        try:
+            return await _live_probed_model_ids(
+                model_list, UserAPIKeyAuth(api_key="hashed-test-key", models=["model-0"])
+            )
+        finally:
+            scoping_done.set()
+
+    async def other_request() -> None:
+        while not scoping_done.is_set():
+            next(other_request_turns)
+            await asyncio.sleep(0)
+
+    probed, _ = await asyncio.gather(scope(), other_request())
+
+    assert probed == {"id-0"}
+    assert next(other_request_turns) >= len(model_list)
+
+
+_WILDCARD_CACHED_RESULTS: Final = {
+    "healthy_endpoints": [
+        {"model": "openai/gpt-5.6", "model_id": "id-wild"},
+        {"model": "openai/gpt-5.6", "model_id": "id-team-wild"},
+        {"model": "anthropic/claude-haiku-5-5", "model_id": "id-haiku"},
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 3,
+    "unhealthy_count": 0,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [False, True])
+@pytest.mark.parametrize(
+    ("wildcard_deployment", "expected_id"),
+    [
+        pytest.param(_WILDCARD_DEPLOYMENT, "id-wild", id="proxy-wildcard"),
+        pytest.param(_TEAM_WILDCARD_DEPLOYMENT, "id-team-wild", id="teams-own-wildcard"),
+    ],
+)
+async def test_health_endpoint_model_param_reaches_the_wildcard_serving_a_team_allowed_name(
+    wildcard_deployment: Mapping[str, object], expected_id: str, use_background_health_checks: bool
+):
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list: Final = [wildcard_deployment, _PROVIDER_PREFIXED_MODEL_LIST[2]]
+
+    async def fake_probe(model_list, details=True, max_concurrency=None, instrumentation_context=None):
+        return [{"model": m["litellm_params"]["model"], "model_id": m["model_info"]["id"]} for m in model_list], [], {}
+
+    with (
+        _proxy_health_globals(
+            model_list,
+            _router_for(model_list),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=_WILDCARD_CACHED_RESULTS,
+        ),
+        patch(  # test-quality-ok: the probe is the provider edge; which deployments reach it is the assertion
+            "litellm.proxy.health_check._perform_health_check", side_effect=fake_probe
+        ),
+    ):
+        result: Final = await health_endpoint(
+            response=Response(), user_api_key_dict=_team_key(["openai/gpt-5.6"]), model="openai/gpt-5.6", model_id=None
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == [expected_id]
+
+
+_ACCESS_GROUP_SPLIT_MODEL_LIST: Final = [
     {
         "model_name": "gpt-5.4-mini",
         "litellm_params": {"model": "openai/gpt-5.4-mini"},
@@ -4653,9 +4792,9 @@ _ACCESS_GROUP_SPLIT_MODEL_LIST = [
 
 @pytest.mark.asyncio
 async def test_health_endpoint_probes_only_the_access_groups_deployments_of_a_shared_name() -> None:
-    caller = UserAPIKeyAuth(api_key="hashed-test-key", models=["premium"])
+    caller: Final = UserAPIKeyAuth(api_key="hashed-test-key", models=["premium"])
 
-    probed = await _live_probed_model_ids(_ACCESS_GROUP_SPLIT_MODEL_LIST, caller)
+    probed: Final = await _live_probed_model_ids(_ACCESS_GROUP_SPLIT_MODEL_LIST, caller)
 
     assert probed == {"id-mini-premium"}
 
