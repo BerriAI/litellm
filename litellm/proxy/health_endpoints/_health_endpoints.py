@@ -1131,19 +1131,36 @@ def _ids_by_requested_name(llm_model_list: Sequence[object], team_id: str | None
     )
 
 
+def _ids_of(deployments: Iterable[object]) -> frozenset[str]:
+    return frozenset(model_id for model_id in map(_deployment_id, deployments) if model_id is not None)
+
+
+def _holds_access_group(user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None) -> bool:
+    if llm_router is None:
+        return False
+    access_groups: Final = llm_router.get_model_access_groups(team_id=user_api_key_dict.team_id)
+    return not _granted_names(user_api_key_dict).isdisjoint(access_groups)
+
+
 def _ids_serving_group(
     group: str,
     ids_by_name: Mapping[str, frozenset[str]],
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router | None,
+    narrow_by_access_group: bool,
 ) -> frozenset[str]:
     named: Final = ids_by_name.get(group)
-    if named is not None or llm_router is None:
+    if llm_router is None:
         return named or frozenset()
+    if named is None:
+        return _ids_of(llm_router.wildcard_route_deployments(group, user_api_key_dict.team_id))
+    if not narrow_by_access_group:
+        return named
     routed: Final = llm_router.get_routable_deployments(
-        group, {"metadata": {"user_api_key_team_id": user_api_key_dict.team_id}}
+        group,
+        {"metadata": {"user_api_key_team_id": user_api_key_dict.team_id, "user_api_key_auth": user_api_key_dict}},
     )
-    return frozenset(model_id for model_id in map(_deployment_id, routed) if model_id is not None)
+    return named & _ids_of(routed)
 
 
 async def _names_key_may_request(
@@ -1164,8 +1181,12 @@ def _ids_serving(
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router | None,
 ) -> frozenset[str]:
+    narrow_by_access_group: Final = _holds_access_group(user_api_key_dict, llm_router)
     return frozenset[str]().union(
-        *(_ids_serving_group(group, ids_by_name, user_api_key_dict, llm_router) for group in groups)
+        *(
+            _ids_serving_group(group, ids_by_name, user_api_key_dict, llm_router, narrow_by_access_group)
+            for group in groups
+        )
     )
 
 

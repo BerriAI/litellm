@@ -4577,6 +4577,51 @@ async def test_health_endpoint_probes_every_deployment_the_callers_allowed_names
     assert probed == expected_ids
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller",
+    [
+        pytest.param(
+            UserAPIKeyAuth(api_key="hashed-test-key", models=["gpt-5.4-mini", "gpt-4-retired"]), id="key-grant"
+        ),
+        pytest.param(_team_key(["gpt-5.4-mini", "gpt-4-retired"]), id="team-grant"),
+    ],
+)
+async def test_health_endpoint_never_probes_the_default_fallback_for_a_granted_name_no_deployment_serves(
+    caller: UserAPIKeyAuth,
+) -> None:
+    llm_router = Router(
+        model_list=copy.deepcopy(_PROVIDER_PREFIXED_MODEL_LIST), default_fallbacks=["claude-haiku-5-5"]
+    )
+
+    probed = await _live_probed_model_ids(_PROVIDER_PREFIXED_MODEL_LIST, caller, llm_router=llm_router)
+
+    assert probed == {"id-mini"}
+
+
+_ACCESS_GROUP_SPLIT_MODEL_LIST = [
+    {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-mini-premium", "access_groups": ["premium"]},
+    },
+    {
+        "model_name": "gpt-5.4-mini",
+        "litellm_params": {"model": "openai/gpt-5.4-mini"},
+        "model_info": {"id": "id-mini-standard"},
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_probes_only_the_access_groups_deployments_of_a_shared_name() -> None:
+    caller = UserAPIKeyAuth(api_key="hashed-test-key", models=["premium"])
+
+    probed = await _live_probed_model_ids(_ACCESS_GROUP_SPLIT_MODEL_LIST, caller)
+
+    assert probed == {"id-mini-premium"}
+
+
 def test_resolve_targeted_model_ids_lets_model_id_win_over_model():
     resolve = _health_endpoints_module._resolve_targeted_model_ids
 
