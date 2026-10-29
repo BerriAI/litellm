@@ -62,17 +62,21 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    BEDROCK_TOOLS_MAX_INLINED_BYTES,
     as_openai_image_part,
     converse_redacted_content,
     convert_content_list_to_str,
     has_blank_redacted_data,
     infer_content_type_from_url_and_content,
+    inline_legacy_defs,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
     native_redacted_thinking_data,
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
+    schema_with_root_ref_resolved,
+    unpack_defs,
 )
 from .image_handling import convert_url_to_base64
 
@@ -5736,8 +5740,9 @@ def _bedrock_tools_pt(
         }
     ]
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
     from litellm.llms.bedrock.common_utils import (
+        BedrockError,
+        bedrock_converse_resolves_tool_schema_defs,
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
@@ -5749,7 +5754,9 @@ def _bedrock_tools_pt(
     # maps toolSpec to the native Anthropic tool shape, which has no strict
     # field, even though Anthropic's native API accepts it as a top-level key.
     supports_strict_tools: Final = bool(model and bedrock_converse_supports_strict_tools(model))
+    resolves_schema_defs: Final = bedrock_converse_resolves_tool_schema_defs(model)
     tool_block_list: Final[list[BedrockToolBlock]] = []
+    inlined_bytes = 0  # rebind-ok: the inlining budget is shared by every tool in the request
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
@@ -5784,13 +5791,26 @@ def _bedrock_tools_pt(
         else:
             description = name
 
-        defs = parameters.pop("$defs", {})
-        defs_copy = copy.deepcopy(defs) if isinstance(defs, dict) else {}
-        # Expand $ref references in parameters using the definitions
-        # Note: We don't pre-flatten defs as that causes exponential memory growth
-        # with circular references (see issue #19098). unpack_defs handles nested
-        # refs recursively and correctly detects/skips circular references.
-        unpack_defs(parameters, defs_copy)
+        remaining_inline_bytes = BEDROCK_TOOLS_MAX_INLINED_BYTES - inlined_bytes
+        try:
+            if resolves_schema_defs:
+                tool_inlined_bytes = inline_legacy_defs(parameters, remaining_inline_bytes)
+                parameters = dict(schema_with_root_ref_resolved(parameters))
+            else:
+                defs = parameters.pop("$defs", {})
+                defs_copy = copy.deepcopy(defs) if isinstance(defs, dict) else {}
+                # Expand $ref references in parameters using the definitions
+                # Note: We don't pre-flatten defs as that causes exponential memory growth
+                # with circular references (see issue #19098). unpack_defs handles nested
+                # refs recursively and correctly detects/skips circular references.
+                tool_inlined_bytes = unpack_defs(parameters, defs_copy, max_inlined_bytes=remaining_inline_bytes)
+        except ValueError as e:
+            raise BedrockError(
+                status_code=400,
+                message=f"Inlining the $ref definitions of tool '{raw_name}' pushes the request's tool schemas past "
+                f"{BEDROCK_TOOLS_MAX_INLINED_BYTES:,} bytes. Reference shared $defs less often or flatten the schema.",
+            ) from e
+        inlined_bytes += tool_inlined_bytes
         normalize_json_schema_custom_types_to_object(parameters)
         if not (isinstance(root_type := parameters.get("type"), str) and root_type in _valid_json_schema_root_types):
             parameters["type"] = "object"

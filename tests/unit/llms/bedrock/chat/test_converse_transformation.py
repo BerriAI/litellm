@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -23,6 +23,7 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import BEDROCK_TOOLS_MAX_INLINED_BYTES
 from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
@@ -5326,6 +5327,85 @@ def test_defs_that_double_at_every_level_reach_native_output_without_being_expan
     sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
     assert sent["$defs"].keys() == schema["$defs"].keys()
     assert sent["properties"]["root"] == {"$ref": "#/$defs/Level0"}
+
+
+def _tool(name: str, parameters: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": parameters}}
+
+
+def _completion_with_tools(model: str, tools: Sequence[Mapping[str, object]], client: HTTPHandler) -> None:
+    litellm.completion(
+        model=f"bedrock/converse/{model}",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=tools,
+        aws_access_key_id="AKIATOOLSCHEMAKEY",
+        aws_secret_access_key="tool-schema-secret",
+        aws_region_name="us-west-2",
+        client=client,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "keeps_refs"),
+    [("us.anthropic.claude-sonnet-5-5", True), ("us.amazon.nova-2-lite-v1:0", False)],
+    ids=["claude-resolves-defs", "nova-needs-inlining"],
+)
+def test_shared_tool_defs_stay_references_only_for_models_that_resolve_them(model, keeps_refs):
+    schema: Final = _doubling_defs_schema(8)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Call a tool."}],
+        optional_params={"tools": [_tool("walk_tree", schema)]},
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]
+    assert (sent.get("$defs") == schema["$defs"]) is keeps_refs
+    assert (sent["properties"] == schema["properties"]) is keeps_refs
+    assert ("$ref" in _schema_keys(sent)) is keeps_refs
+
+
+@pytest.mark.timeout(30)
+def test_tool_defs_that_double_at_every_level_fail_fast_with_a_400_naming_the_tool():
+    client: Final = HTTPHandler()
+
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'walk_tree'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", [_tool("walk_tree", _doubling_defs_schema(17))], client)
+
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def test_tool_defs_inlining_budget_covers_every_tool_in_the_request():
+    description_bytes: Final = BEDROCK_TOOLS_MAX_INLINED_BYTES * 2 // 5
+    tools: Final = [
+        _tool(
+            f"lookup_{index}",
+            {
+                "type": "object",
+                "properties": {"key": {"$ref": "#/$defs/Key"}},
+                "$defs": {"Key": {"type": "string", "description": "k" * description_bytes}},
+            },
+        )
+        for index in range(3)
+    ]
+    client: Final = HTTPHandler()
+
+    sent_alone: Final = _bedrock_tools_pt(tools[-1:], model="us.amazon.nova-2-lite-v1:0")
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'lookup_2'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", tools, client)
+
+    assert sent_alone[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["type"] == "string"
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
 
 
 @pytest.mark.parametrize(

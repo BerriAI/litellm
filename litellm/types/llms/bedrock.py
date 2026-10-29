@@ -256,11 +256,17 @@ class ConverseResponseBlock(TypedDict, total=False):
     serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
 
-class ToolJsonSchemaBlock(TypedDict, total=False):
-    type: Literal["object"]
-    properties: dict
-    required: list[str]
-    additionalProperties: bool
+ToolJsonSchemaBlock: Final = TypedDict(
+    "ToolJsonSchemaBlock",
+    {
+        "type": ReadOnly[Literal["object"]],
+        "properties": ReadOnly[dict],
+        "required": ReadOnly[list[str]],
+        "additionalProperties": ReadOnly[bool],
+        "$defs": ReadOnly[Mapping[str, object]],
+    },
+    total=False,
+)
 
 
 class ToolInputSchemaBlock(TypedDict):
@@ -305,14 +311,21 @@ class BedrockToolSpec(dict):
         strict: bool | None,
         supports_strict_tools: bool,
     ) -> None:
+        additional_properties: Final = parameters.get("additionalProperties")
+        defs: Final = parameters.get("$defs")
+        strict_fields: Final[ToolJsonSchemaBlock] = (
+            {"additionalProperties": additional_properties}
+            if supports_strict_tools and additional_properties is not None
+            else {}
+        )
+        defs_fields: Final[ToolJsonSchemaBlock] = {"$defs": defs} if isinstance(defs, dict) else {}
         json_schema: Final[ToolJsonSchemaBlock] = {
             "type": parameters["type"],
             "properties": parameters.get("properties", {}),
             "required": parameters.get("required", []),
+            **strict_fields,
+            **defs_fields,
         }
-        additional_properties: Final = parameters.get("additionalProperties")
-        if supports_strict_tools and additional_properties is not None:
-            json_schema["additionalProperties"] = additional_properties
 
         tool_spec: Final[ToolSpecBlock] = {
             "inputSchema": {"json": json_schema},

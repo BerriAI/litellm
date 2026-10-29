@@ -1151,16 +1151,17 @@ def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
-) -> None:
+) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
     resolves references hidden under any keyword – ``items``, ``allOf``,
     ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
 
-    It mutates *schema* in-place and does **not** return anything.  The helper
-    keeps memory overhead low by resolving nodes as it encounters them rather
-    than materialising a fully dereferenced copy first.
+    It mutates *schema* in-place and returns the JSON-byte size it inlined,
+    counted only when ``max_inlined_bytes`` is set.  The helper keeps memory
+    overhead low by resolving nodes as it encounters them rather than
+    materialising a fully dereferenced copy first.
 
     ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
     that has been inlined and is checked *before* each ``copy.deepcopy``, so
@@ -1269,6 +1270,8 @@ def unpack_defs(
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
 
+    return inlined_bytes
+
 
 def _has_legacy_defs(schema: object) -> bool:
     if not isinstance(schema, dict):
@@ -1286,6 +1289,7 @@ def _has_legacy_defs(schema: object) -> bool:
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
+BEDROCK_TOOLS_MAX_INLINED_BYTES: Final = 1_000_000
 
 
 def unpack_legacy_defs(
@@ -1313,14 +1317,20 @@ def unpack_legacy_defs(
         import copy as _copy
 
         schema = _copy.deepcopy(schema)
+    inline_legacy_defs(schema, max_inlined_bytes)
+    return schema
+
+
+def inline_legacy_defs(schema: dict, max_inlined_bytes: int) -> int:
+    if not _has_legacy_defs(schema):
+        return 0
     # On key collision, ``definitions`` wins over ``components.schemas`` --
     # ``unpack_defs`` keys refs by last path segment so a single name can only
     # resolve to one body, and ``definitions`` is the JSON-Schema-native
     # namespace.
     defs: Final = schema.pop("components", {}).get("schemas") or {}
     defs.update(schema.pop("definitions", None) or {})
-    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
-    return schema
+    return unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
 
 
 def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
@@ -1394,6 +1404,14 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
         return None
     target: Final = definitions.get(ref[len(prefix) :])
     return target if isinstance(target, dict) else None
+
+
+def schema_with_root_ref_resolved(schema: Mapping[str, object]) -> Mapping[str, object]:
+    ref: Final = schema.get("$ref")
+    target: Final = _resolve_local_schema_ref(schema, ref) if isinstance(ref, str) else None
+    if target is None:
+        return schema
+    return {**target, **{key: value for key, value in schema.items() if key != "$ref"}}
 
 
 def _mergeable_branch(

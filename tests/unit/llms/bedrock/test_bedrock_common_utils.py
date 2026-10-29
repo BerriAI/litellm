@@ -14,6 +14,7 @@ from litellm.llms.bedrock.common_utils import(
     get_bedrock_base_model,
     get_bedrock_cross_region_inference_regions,
     is_bedrock_native_output_rejection,
+    normalize_json_schema_custom_types_to_object,
     strip_bedrock_routing_prefix,
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
@@ -2229,3 +2230,27 @@ def test_bedrock_strict_tools_fallback_retries_only_when_the_request_sent_strict
     fallback: Final = bedrock_strict_tools_fallback(model, {"tools": tools}, litellm_params)
 
     assert (fallback is not None) == sent_strict
+
+
+def test_normalize_json_schema_custom_types_to_object_reaches_subschemas_under_defs():
+    def tool_schema(custom_type: str) -> dict[str, object]:
+        return {
+            "type": custom_type,
+            "properties": {"args": {"type": "array", "items": {"type": custom_type}}},
+            "additionalProperties": {"type": custom_type},
+            "anyOf": [{"type": custom_type}, {"type": "string"}],
+        }
+
+    schema: Final = {
+        "type": "custom",
+        "properties": {"tool": {"$ref": "#/$defs/Tool"}},
+        "$defs": {"Tool": tool_schema("custom")},
+    }
+
+    normalize_json_schema_custom_types_to_object(schema)
+
+    assert schema == {
+        "type": "object",
+        "properties": {"tool": {"$ref": "#/$defs/Tool"}},
+        "$defs": {"Tool": tool_schema("object")},
+    }

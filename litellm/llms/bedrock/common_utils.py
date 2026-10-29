@@ -612,7 +612,11 @@ def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> S
     return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
 
 
-def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
+def _schema_node(value: object) -> dict[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def normalize_json_schema_custom_types_to_object(schema: object) -> None:
     """
     In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
 
@@ -624,32 +628,19 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     stack: Final[list[object]] = [schema]
     seen: Final[set[int]] = set()
     while stack:
-        node = stack.pop()
-        if not isinstance(node, dict):
+        node = _schema_node(stack.pop())
+        if node is None or id(node) in seen:
             continue
-        node_id = id(node)
-        if node_id in seen:
-            continue
-        seen.add(node_id)
+        seen.add(id(node))
         if node.get("type") == "custom":
             node["type"] = "object"
-        items = node.get("items")
-        if isinstance(items, dict):
-            stack.append(items)
-        addl = node.get("additionalProperties")
-        if isinstance(addl, dict):
-            stack.append(addl)
-        props = node.get("properties")
-        if isinstance(props, dict):
-            for sub in props.values():
-                if isinstance(sub, dict):
-                    stack.append(sub)
+        stack.extend((node.get("items"), node.get("additionalProperties")))
+        for container in ("properties", "$defs"):
+            stack.extend((_schema_node(node.get(container)) or {}).values())
         for combiner in ("allOf", "anyOf", "oneOf"):
-            arr = node.get(combiner)
-            if isinstance(arr, list):
-                for sub in arr:
-                    if isinstance(sub, dict):
-                        stack.append(sub)
+            branches = node.get(combiner)
+            if isinstance(branches, list):
+                stack.extend(branches)
 
 
 def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
@@ -1420,6 +1411,10 @@ def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | Non
 
 def _is_claude(model: str) -> bool:
     return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
+def bedrock_converse_resolves_tool_schema_defs(model: str | None) -> bool:
+    return model is not None and _is_claude(model)
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
