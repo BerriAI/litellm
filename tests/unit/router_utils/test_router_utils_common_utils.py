@@ -15,6 +15,7 @@ from litellm.router_utils.common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    prefer_web_search_deployments,
     format_content_policy_no_fallback_note,
     format_fallback_outcome_message,
     provider_for_generic_call,
@@ -327,7 +328,7 @@ class TestFilterWebSearchDeployments:
     def test_native_web_search_tools_filter_unsupported(
         self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
     ) -> None:
-        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
+        result: Final = prefer_web_search_deployments(sample_deployments, {"tools": [tool]})
         assert result == sample_deployments[:2]
 
     @pytest.mark.parametrize(
@@ -344,7 +345,7 @@ class TestFilterWebSearchDeployments:
     def test_non_web_search_tools_preserve_deployments(
         self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
     ) -> None:
-        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
+        result: Final = prefer_web_search_deployments(sample_deployments, {"tools": [tool]})
         assert result == sample_deployments
 
     def test_web_search_with_other_tools(self, sample_deployments):
@@ -384,30 +385,29 @@ class TestFilterWebSearchDeployments:
             {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
             {"tools": [{"type": "web_search_2025_08_26"}]},
             {"tools": [{"googleSearch": {}}]},
+            {"tools": [{"type": "web_search"}]},
             {"web_search_options": {}},
         ],
     )
-    def test_no_deployment_supporting_other_web_search_keeps_every_deployment(
-        self, request_kwargs: dict[str, object]
-    ) -> None:
-        deployments: Final = [
+    def test_no_deployment_supporting_web_search_keeps_every_deployment(self, request_kwargs: dict[str, object]) -> None:
+        deployments: Final[list[dict[str, object]]] = [
             {"model_info": {"id": "d1", "supports_web_search": False}},
             {"model_info": {"id": "d2", "supports_web_search": False}},
         ]
-        assert filter_web_search_deployments(deployments, request_kwargs) == deployments
+        assert prefer_web_search_deployments(deployments, request_kwargs) == deployments
 
     def test_a_tool_that_is_not_an_object_is_no_web_search_request(
         self, sample_deployments: list[dict[str, object]]
     ) -> None:
-        result: Final = filter_web_search_deployments(sample_deployments, {"tools": ["web_search", None]})
+        result: Final = prefer_web_search_deployments(sample_deployments, {"tools": ["web_search", None]})
         assert result == sample_deployments
 
     def test_web_search_options_filter_unsupported(self, sample_deployments: list[dict[str, object]]) -> None:
-        result: Final = filter_web_search_deployments(sample_deployments, {"web_search_options": {}})
+        result: Final = prefer_web_search_deployments(sample_deployments, {"web_search_options": {}})
         assert result == sample_deployments[:2]
 
     def test_null_web_search_options_preserve_deployments(self, sample_deployments: list[dict[str, object]]) -> None:
-        result: Final = filter_web_search_deployments(sample_deployments, {"web_search_options": None})
+        result: Final = prefer_web_search_deployments(sample_deployments, {"web_search_options": None})
         assert result == sample_deployments
 
     def test_missing_config_defaults_to_supported(self):
@@ -534,6 +534,92 @@ async def test_legacy_usage_based_async_pick_skips_deployments_without_web_searc
         for _ in range(20)
     }
     assert picks == {"search"}
+
+
+def _router_with_a_mixed_web_search_group(enable_tag_filtering: bool) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "tags": ["cheap"], "order": 1},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "tags": ["premium"], "order": 2},
+                "model_info": {"id": "search"},
+            },
+        ],
+        enable_tag_filtering=enable_tag_filtering,
+    )
+
+
+def _cool_down(router: Router, model_ids: tuple[str, ...]) -> None:
+    for model_id in model_ids:
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id, original_exception=Exception("rate limited"), exception_status=429, cooldown_time=300
+        )
+
+
+_LATER_FILTER_CASES: Final = pytest.mark.parametrize(
+    ("enable_tag_filtering", "cooled_down", "request_kwargs", "expected_id"),
+    [
+        (False, (), _ANTHROPIC_WEB_SEARCH_REQUEST, "search"),
+        (False, (), {"web_search_options": {}}, "search"),
+        (False, ("search",), _ANTHROPIC_WEB_SEARCH_REQUEST, "no-search"),
+        (False, ("search",), {"web_search_options": {}}, "no-search"),
+        (False, (), {**_ANTHROPIC_WEB_SEARCH_REQUEST, "_excluded_deployment_ids": ["search"]}, "no-search"),
+        (False, (), {**_ANTHROPIC_WEB_SEARCH_REQUEST, "_retry_skipped_deployment_ids": ("search",)}, "no-search"),
+    ],
+    ids=["order", "order-options", "cooldown", "cooldown-options", "weighted-failover", "retry-skip"],
+)
+
+
+@pytest.mark.asyncio
+@_LATER_FILTER_CASES
+async def test_async_pick_prefers_web_search_until_later_filters_leave_none_that_can(
+    enable_tag_filtering: bool, cooled_down: tuple[str, ...], request_kwargs: dict[str, object], expected_id: str
+) -> None:
+    router: Final = _router_with_a_mixed_web_search_group(enable_tag_filtering)
+    _cool_down(router, cooled_down)
+    deployment: Final = await router.async_get_available_deployment(
+        model="mixed", messages=[{"role": "user", "content": "hi"}], request_kwargs=dict(request_kwargs)
+    )
+    assert deployment["model_info"]["id"] == expected_id
+
+
+@_LATER_FILTER_CASES
+def test_sync_pick_prefers_web_search_until_later_filters_leave_none_that_can(
+    enable_tag_filtering: bool, cooled_down: tuple[str, ...], request_kwargs: dict[str, object], expected_id: str
+) -> None:
+    router: Final = _router_with_a_mixed_web_search_group(enable_tag_filtering)
+    _cool_down(router, cooled_down)
+    deployment: Final = router.get_available_deployment(
+        model="mixed", messages=[{"role": "user", "content": "hi"}], request_kwargs=dict(request_kwargs)
+    )
+    assert deployment["model_info"]["id"] == expected_id
+
+
+@pytest.mark.asyncio
+async def test_tag_routing_to_a_deployment_without_web_search_keeps_it() -> None:
+    deployment: Final = await _router_with_a_mixed_web_search_group(True).async_get_available_deployment(
+        model="mixed",
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"web_search_options": {}, "metadata": {"tags": ["cheap"]}},
+    )
+    assert deployment["model_info"]["id"] == "no-search"
+
+
+@pytest.mark.asyncio
+async def test_openai_web_search_still_finds_no_deployment_while_the_only_one_that_can_search_cools_down() -> None:
+    router: Final = _router_with_a_mixed_web_search_group(False)
+    _cool_down(router, ("search",))
+    with pytest.raises(litellm.RouterRateLimitError):
+        await router.async_get_available_deployment(
+            model="mixed",
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={"tools": [{"type": "web_search"}]},
+        )
 
 
 def test_invalidate_model_group_info_cache():

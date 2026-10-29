@@ -245,6 +245,7 @@ from litellm.router_utils.common_utils import (
     format_no_fallback_group_message,
     get_request_team_id,
     is_proxy_admin_request,
+    prefer_web_search_deployments,
     provider_for_generic_call,
     request_user_api_key_auth,
     resolve_model_group_alias,
@@ -15245,10 +15246,13 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
-            model,
-            messages,
+        batch_candidates: Final = prefer_web_search_deployments(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
@@ -16416,11 +16420,7 @@ class Router:
         )
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
             self._without_deployments_that_cannot_serve_route(
-                filter_web_search_deployments(
-                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
-                    request_kwargs,
-                    empty_for_openai_web_search=False,
-                ),
+                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
                 model,
             )
         )
@@ -16481,10 +16481,13 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
-            model,
-            messages,
+        batch_candidates: Final = prefer_web_search_deployments(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(

@@ -457,48 +457,61 @@ def _is_web_search_request(tools: object, web_search_options: object) -> bool:
     return web_search_options is not None or any(_is_web_search_tool(tool) for tool in optional_sequence(tools) or ())
 
 
-def _is_openai_web_search_tool(tool: object) -> bool:
-    tool_fields: Final = as_str_mapping(tool)
-    return (
-        tool_fields is not None
-        and isinstance(tool_type := tool_fields.get("type"), str)
-        and tool_type in _OPENAI_WEB_SEARCH_TOOL_TYPES
-    )
-
-
-def _has_openai_web_search_tool(tools: object) -> bool:
-    tool_list: Final = optional_sequence(tools)
-    return tool_list is not None and any(_is_openai_web_search_tool(tool) for tool in tool_list)
-
-
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
-    *,
-    empty_for_openai_web_search: bool = True,
 ) -> list[dict] | dict:
     """
     If the request is websearch, filter out deployments that don't support web search
     """
-    request_fields: Final = as_str_mapping(request_kwargs)
-    if request_fields is None:
+    if request_kwargs is None:
         return healthy_deployments
     # When a specific deployment was already chosen, it's returned as a dict
     # rather than a list - nothing to filter, just pass through
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    tools: Final = request_fields.get("tools")
-    web_search_options: Final = request_fields.get("web_search_options")
-    if not _is_web_search_request(tools, web_search_options):
+    tools: Final[object] = request_kwargs.get("tools")
+    is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
+        isinstance(tool, dict)
+        and isinstance(tool_type := tool.get("type"), str)
+        and tool_type in _OPENAI_WEB_SEARCH_TOOL_TYPES
+        for tool in tools
+    )
+    if not is_web_search_request:
         return healthy_deployments
 
     # Filter out deployments that don't support web search
     final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    empties_group: Final = empty_for_openai_web_search and _has_openai_web_search_tool(tools)
-    if healthy_deployments and not final_deployments and empties_group:
+    if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
-    return final_deployments if final_deployments or empties_group else healthy_deployments
+    return final_deployments
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> object:
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    return None if model_info is None else model_info.get("id")
+
+
+def prefer_web_search_deployments(
+    deployments: list[dict[str, object]],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
+    if request_kwargs is None or not _is_web_search_request(
+        request_kwargs.get("tools"), request_kwargs.get("web_search_options")
+    ):
+        return deployments
+    tried: Final = frozenset(
+        (
+            *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
+            *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
+        )
+    )
+    capable: Final = [d for d in deployments if _deployment_supports_web_search(d)]
+    if any(_deployment_id(d) not in tried for d in capable):
+        return capable
+    verbose_router_logger.debug("No deployment left for this web search request supports web search, so all stay")
+    return deployments
 
 
 # Credential params that only one provider family reads, paired with the providers
