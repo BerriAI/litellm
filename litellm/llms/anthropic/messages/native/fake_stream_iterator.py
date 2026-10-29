@@ -93,7 +93,7 @@ class FakeAnthropicMessagesStreamIterator:
             content_block_start = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {"type": "redacted_thinking"},
+                "content_block": block_dict,
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
 
@@ -102,10 +102,8 @@ class FakeAnthropicMessagesStreamIterator:
                 "type": "content_block_start",
                 "index": index,
                 "content_block": {
-                    "type": "tool_use",
-                    "id": block_dict.get("id"),
-                    "name": block_dict.get("name"),
-                    "input": {},
+                    **block_dict,
+                    "input": dict[str, object](),
                 },
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())

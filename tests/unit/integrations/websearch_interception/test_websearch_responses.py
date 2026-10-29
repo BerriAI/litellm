@@ -6,11 +6,16 @@ tool calls returned by /v1/responses, executes the search server-side, and
 builds a Responses-format follow-up request.
 """
 
+import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
@@ -247,7 +252,7 @@ async def test_build_responses_plan_produces_responses_input():
     }
 
     assert patch_obj.tools == [{"type": "function", "name": "litellm_web_search"}]
-    assert "tool_choice" not in patch_obj.optional_params
+    assert patch_obj.optional_params["tool_choice"] == "auto"
     assert "_agentic_loop_api_surface" not in patch_obj.kwargs
     assert patch_obj.model == "openai/gpt-4o"
 
@@ -316,3 +321,169 @@ async def test_deployment_hook_responses_converts_stream_to_non_stream():
     assert result is not None
     assert result["stream"] is False
     assert result["_websearch_interception_converted_stream"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("search_type", ["web_search", "web_search_preview", "web_search_preview_2025_03_11"])
+async def test_forced_responses_search_names_the_converted_function(search_type: str, stream: bool) -> None:
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK])
+    choice: Final = {"type": search_type}
+    result: Final = await logger.async_pre_call_deployment_hook(
+        kwargs={
+            "model": "us.openai.gpt-6.1-sol",
+            "custom_llm_provider": "bedrock",
+            "tools": [{"type": search_type}],
+            "tool_choice": choice,
+            "stream": stream,
+        },
+        call_type=CallTypes.aresponses,
+    )
+
+    assert result is not None
+    assert result["tool_choice"] == {"type": "function", "name": result["tools"][0]["name"]}
+    assert result["stream"] is False
+    assert choice == {"type": search_type}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "choice",
+    [
+        None,
+        "auto",
+        "none",
+        "required",
+        {"type": "function", "name": "get_weather"},
+        {"type": "function", "name": "litellm_web_search"},
+    ],
+)
+async def test_responses_search_conversion_preserves_other_tool_choices(choice: object) -> None:
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK])
+    weather: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+    result: Final = await logger.async_pre_call_deployment_hook(
+        kwargs={
+            "model": "us.openai.gpt-6.1-sol",
+            "custom_llm_provider": "bedrock",
+            "tools": [{"type": "web_search"}, weather],
+            "tool_choice": choice,
+        },
+        call_type=CallTypes.aresponses,
+    )
+
+    assert result is not None
+    assert result["tool_choice"] == choice
+    assert result["tools"][1] is weather
+
+
+@pytest.mark.asyncio
+async def test_forced_responses_search_executes_once_then_allows_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("TAVILY_API_BASE", "https://search.example.test")
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "search-canary",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-6.1-sol",
+                    "api_key": "synthetic-bedrock-bearer",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ],
+        search_tools=[
+            {
+                "search_tool_name": "fixture-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "synthetic-search-key",
+                    "api_base": "https://search.example.test",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    common: Final = {
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "us.openai.gpt-6.1-sol",
+        "usage": {"input_tokens": 11, "output_tokens": 5, "total_tokens": 16},
+    }
+    with respx.mock as upstream:
+        search: Final = upstream.post("https://search.example.test/search").respond(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "Synthetic search",
+                        "url": "https://example.test/search",
+                        "content": "Fixture evidence",
+                    }
+                ]
+            },
+        )
+        responses_route: Final = upstream.post(
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/responses"
+        ).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        **common,
+                        "id": "resp_search",
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "id": "fc_search",
+                                "call_id": "call_search",
+                                "name": "litellm_web_search",
+                                "arguments": '{"query":"synthetic query"}',
+                                "status": "completed",
+                            }
+                        ],
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        **common,
+                        "id": "resp_answer",
+                        "output": [
+                            {
+                                "type": "message",
+                                "id": "msg_answer",
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": [{"type": "output_text", "text": "Answer from search", "annotations": []}],
+                            }
+                        ],
+                    },
+                ),
+            ]
+        )
+        result: Final = await router.aresponses(
+            model="search-canary",
+            input="Search for synthetic evidence",
+            max_output_tokens=100,
+            tools=[{"type": "web_search"}],
+            tool_choice={"type": "web_search"},
+        )
+
+    assert result.output[0].content[0].text == "Answer from search"
+    assert len(responses_route.calls) == 2
+    first: Final = json.loads(responses_route.calls[0].request.content)
+    followup: Final = json.loads(responses_route.calls[1].request.content)
+    assert first["tool_choice"] == {"type": "function", "name": first["tools"][0]["name"]}
+    assert followup["tool_choice"] == "auto"
+    assert followup["input"][-1] == {
+        "type": "function_call_output",
+        "call_id": "call_search",
+        "output": "Title: Synthetic search\nURL: https://example.test/search\nSnippet: Fixture evidence",
+    }
+    assert len(search.calls) == 1
+    assert json.loads(search.calls[0].request.content)["query"] == "synthetic query"
