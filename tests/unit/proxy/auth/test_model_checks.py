@@ -999,7 +999,7 @@ VERTEX_COST_MAP_LABELS: Final = (
 
 
 @contextmanager
-def _registered_vertex_rows(label_per_key: Mapping[str, str]) -> Generator[None, None, None]:
+def _registered_rows(label_per_key: Mapping[str, str]) -> Generator[None, None, None]:
     import litellm
 
     try:
@@ -1022,7 +1022,7 @@ def test_vertex_wildcard_lists_a_row_registered_under_any_vertex_label(label: st
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
     key: Final = f"vertex_ai/fake-{label}-row"
-    with _registered_vertex_rows({key: label}):
+    with _registered_rows({key: label}):
         listed: Final = get_known_models_from_wildcard("vertex_ai/*")
 
     assert key in listed
@@ -1036,7 +1036,7 @@ def test_wildcard_keeps_a_publisher_segment_that_names_another_provider(wildcard
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
-    with _registered_vertex_rows(
+    with _registered_rows(
         {
             "vertex_ai/openai/fake-publisher-maas": "vertex_ai-openai_models",
             "vertex_ai/meta/fake-publisher-maas": "vertex_ai-llama_models",
@@ -1050,6 +1050,17 @@ def test_wildcard_keeps_a_publisher_segment_that_names_another_provider(wildcard
     assert f"{listed_prefix}/openai/fake-publisher-maas" in listed
     assert f"{listed_prefix}/meta/fake-publisher-maas" in listed
     assert f"{listed_prefix}/fake-publisher-maas" not in listed
+
+
+@pytest.mark.parametrize("provider", ["replicate", "wandb"])
+def test_wildcard_lists_each_model_once_under_its_full_owner_id(provider: str):
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    full_ids: Final = {f"{provider}/{model.removeprefix(f'{provider}/')}" for model in litellm.models_by_provider[provider]}
+    assert any(model.count("/") > 1 for model in full_ids)
+
+    assert sorted(get_known_models_from_wildcard(f"{provider}/*")) == sorted(full_ids)
 
 
 def test_get_complete_model_list_drops_no_default_models_sentinel():

@@ -1565,6 +1565,12 @@ CHAT_COMPLETION_BODY: Final = MappingProxyType(
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
 )
+GEMINI_GENERATE_CONTENT_BODY: Final = MappingProxyType(
+    {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+)
 
 
 async def test_vertex_wildcard_health_check_only_calls_vertex_hosts(
@@ -1575,7 +1581,7 @@ async def test_vertex_wildcard_health_check_only_calls_vertex_hosts(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     vertex_route: Final = respx_mock.route(host__regex=r".*aiplatform\.googleapis\.com$").respond(
-        json=dict(CHAT_COMPLETION_BODY)
+        json=dict(GEMINI_GENERATE_CONTENT_BODY)
     )
     other_hosts: Final = respx_mock.route().respond(json=dict(CHAT_COMPLETION_BODY))
 

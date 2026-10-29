@@ -1,9 +1,9 @@
 from collections.abc import Iterable, Iterator, Mapping
+from itertools import islice
 from typing import Final, cast
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.types.utils import ModelInfo
 
 
 def _form_field_value(value: object) -> str:
@@ -155,13 +155,11 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
         return []
 
     known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
-    chat_rows: Final = _chat_row_costs(known_models, custom_llm_provider)
-    return [
-        model for model, _, _ in sorted(chat_rows, key=_cheapest_per_token_with_per_character_rows_first_on_ties)[:n]
-    ]
+    cheapest_first: Final = sorted(_chat_row_costs(known_models, custom_llm_provider), key=lambda row: row[1])
+    return list(islice((model for model, _ in cheapest_first if _routes_to(model, custom_llm_provider)), n))
 
 
-def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float, bool]]:
+def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float]]:
     for model in models:
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
@@ -169,21 +167,15 @@ def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator
             continue
         if model_info.get("mode") != "chat":
             continue
-        cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
-        yield model, cost, _billed_per_character(model_info)
+        yield model, (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
 
 
-def _billed_per_character(model_info: ModelInfo) -> bool:
-    input_rate: Final = model_info.get("input_cost_per_character") or 0.0
-    output_rate: Final = model_info.get("output_cost_per_character") or 0.0
-    return input_rate > 0 or output_rate > 0
-
-
-def _cheapest_per_token_with_per_character_rows_first_on_ties(
-    model_cost: tuple[str, float, bool],
-) -> tuple[float, bool]:
-    _, cost, billed_per_character = model_cost
-    return (cost, not billed_per_character)
+def _routes_to(model: str, custom_llm_provider: str) -> bool:
+    try:
+        _, routed_provider, _, _ = litellm.get_llm_provider(model=model)
+    except litellm.BadRequestError:
+        return False
+    return routed_provider == custom_llm_provider
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:
