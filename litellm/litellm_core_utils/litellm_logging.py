@@ -23,7 +23,7 @@ from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
-from litellm._internal_context import post_response_phase
+from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
 from litellm._logging import (
     is_debugging_on,
     redact_string,
@@ -164,9 +164,10 @@ from litellm.types.llms.openai import (
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import RouterRateLimitError
+from litellm.types.router import RouterRateLimitError, SilentExperimentFlag
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
+    AgenticLoopParams,
     CachingDetails,
     CallTypes,
     CostBreakdown,
@@ -316,7 +317,7 @@ else:
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
-    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY)
+    ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY, "is_silent_experiment")
 )
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
@@ -810,6 +811,7 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
+        self.is_silent_experiment: Final = in_mirrored_call()
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
@@ -1159,6 +1161,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
+        self.model_call_details["agentic_loop_params"] = params
 
     def record_applied_timeout(self, timeout: float | Timeout) -> None:
         self.applied_timeout = timeout
@@ -1939,10 +1944,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def set_cost_breakdown(
         self,
-        input_cost: float,
-        output_cost: float,
+        input_cost: float | None,
+        output_cost: float | None,
         total_cost: float,
-        cost_for_built_in_tools_cost_usd_dollar: float,
+        cost_for_built_in_tools_cost_usd_dollar: float | None,
         additional_costs: dict | None = None,
         original_cost: float | None = None,
         discount_percent: float | None = None,
@@ -1981,14 +1986,17 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.billed_token_rates = billed_token_rates
         self.cost_breakdown = CostBreakdown(
-            input_cost=input_cost,
-            output_cost=output_cost,
             total_cost=total_cost,
-            tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
             service_tier=service_tier,
             data_residency=data_residency,
             vertex_location=vertex_location,
         )
+        if input_cost is not None:
+            self.cost_breakdown["input_cost"] = input_cost
+        if output_cost is not None:
+            self.cost_breakdown["output_cost"] = output_cost
+        if cost_for_built_in_tools_cost_usd_dollar is not None:
+            self.cost_breakdown["tool_usage_cost"] = cost_for_built_in_tools_cost_usd_dollar
         if cache_read_cost is not None and cache_read_cost > 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
         if cache_creation_cost is not None and cache_creation_cost > 0:
@@ -3260,7 +3268,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase():
+            with post_response_phase(), outside_mirrored_call():
                 return self._success_handler_body(
                     result=result,
                     start_time=start_time,
@@ -3760,7 +3768,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase():
+            with post_response_phase(), outside_mirrored_call():
                 return await self._async_success_handler_body(
                     result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                 )
@@ -4277,13 +4285,14 @@ class Logging(LiteLLMLoggingBaseClass):
         ``for_async_request`` marks the sync run of a failure whose async run also logs it, so a
         CustomLogger that gets ``async_log_failure_event`` from that async run skips its sync hook."""
         try:
-            return self._failure_handler_body(
-                exception=exception,
-                traceback_exception=traceback_exception,
-                start_time=start_time,
-                end_time=end_time,
-                for_async_request=for_async_request,
-            )
+            with outside_mirrored_call():
+                return self._failure_handler_body(
+                    exception=exception,
+                    traceback_exception=traceback_exception,
+                    start_time=start_time,
+                    end_time=end_time,
+                    for_async_request=for_async_request,
+                )
         finally:
             self._restore_correlation_context()
 
@@ -4476,12 +4485,13 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            return await self._async_failure_handler_body(
-                exception=exception,
-                traceback_exception=traceback_exception,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            with outside_mirrored_call():
+                return await self._async_failure_handler_body(
+                    exception=exception,
+                    traceback_exception=traceback_exception,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
         finally:
             self._restore_correlation_context()
 
@@ -6570,6 +6580,7 @@ class StandardLoggingPayloadSetup:
         start_time: dt_object | None = None,
         response_id: str | None = None,
         custom_llm_provider: str | None = None,
+        is_silent_experiment: bool = False,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -6643,6 +6654,7 @@ class StandardLoggingPayloadSetup:
                 proxy_stamped_used_client_oauth_token(metadata, litellm_params),
                 custom_llm_provider,
             ),
+            **(SilentExperimentFlag(is_silent_experiment=True) if is_silent_experiment else SilentExperimentFlag()),
         )
         if isinstance(metadata, dict):
             for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
@@ -7443,6 +7455,7 @@ def get_standard_logging_object_payload(
             start_time=start_time,
             response_id=id,
             custom_llm_provider=selected_provider if isinstance(selected_provider, str) else None,
+            is_silent_experiment=logging_obj.is_silent_experiment is True,
         )
         _request_body: Final = proxy_server_request.get("body", {})
         end_user_id: Final = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
@@ -7735,9 +7748,8 @@ def get_standard_logging_metadata(
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
-        for key in StandardLoggingMetadata.__annotations__:
-            if key in metadata:
-                clean_metadata[key] = metadata[key]
+        for key in (metadata.keys() & StandardLoggingMetadata.__annotations__.keys()) - {"is_silent_experiment"}:
+            clean_metadata[key] = metadata[key]
 
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):

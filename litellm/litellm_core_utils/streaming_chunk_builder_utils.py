@@ -12,12 +12,18 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import chunk_usage, finite_cost, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    USAGE_COST_BILLED_PROVIDERS,
+    chunk_usage,
+    finite_cost,
+    provider_reported_usage_cost,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
+from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantContentValue,
@@ -51,7 +57,7 @@ from litellm.types.utils import (
     UnreportedUsage,
     Usage,
 )
-from litellm.utils import print_verbose, token_counter
+from litellm.utils import get_base_model_from_metadata, print_verbose, token_counter
 
 if TYPE_CHECKING:
     from openai.types.completion_usage import CompletionUsage
@@ -1353,7 +1359,7 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value}) | USAGE_COST_BILLED_PROVIDERS
 
 
 def _logged_provider(logging_obj: Optional["Logging"]) -> object:
@@ -1554,6 +1560,9 @@ def stream_chunk_builder(
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
+        usage_model: Final = usage_tokenizer_model(
+            model, get_base_model_from_metadata(logging_obj.model_call_details) if logging_obj is not None else None
+        )
         # Initialize the response dictionary
         response: Final = processor.build_base_response(chunks)
 
@@ -1577,7 +1586,7 @@ def stream_chunk_builder(
             completion_output = get_content_from_model_response(response)
             usage = processor.calculate_usage(
                 chunks=chunks,
-                model=model,
+                model=usage_model,
                 completion_output=completion_output,
                 messages=messages,
                 reasoning_tokens=0,
@@ -1768,7 +1777,7 @@ def stream_chunk_builder(
 
         usage = processor.calculate_usage(
             chunks=chunks,
-            model=model,
+            model=usage_model,
             completion_output=completion_output,
             messages=messages,
             reasoning_tokens=reasoning_tokens,
