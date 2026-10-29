@@ -581,6 +581,30 @@ def test_completion_cost_bills_requested_model_from_hidden_params_when_no_model_
     assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], usage))
 
 
+def test_completion_cost_bills_requested_model_regional_row_when_response_names_an_unmapped_display_name(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/sol-regional-test",
+        {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/eu-central-1/sol-regional-test",
+        {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 5e-6, "output_cost_per_token": 11e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model="Sol Regional Display", choices=[], usage=usage)
+    response._hidden_params.update(
+        {"litellm_model_name": "bedrock/sol-regional-test", "region_name": "eu-central-1", "custom_llm_provider": "bedrock"}
+    )
+
+    cost: Final = completion_cost(completion_response=response)
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["bedrock/eu-central-1/sol-regional-test"], usage))
+
+
 def test_completion_cost_orders_candidates_without_extra_huggingface_config_requests(
     _local_model_cost_map: None,
 ) -> None:

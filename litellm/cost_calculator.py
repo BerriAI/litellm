@@ -1032,8 +1032,16 @@ def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_nam
     return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
 
 
+def _cost_map_row_key(model: str, custom_llm_provider: str | None) -> str | None:
+    try:
+        return cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)["key"]
+    except Exception:
+        return None
+
+
 def _row_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
-    return _declares_rates(_cost_map_model_info(model, custom_llm_provider))
+    key: Final = _cost_map_row_key(model, custom_llm_provider)
+    return key is not None and cost_map_key_prices_anything(key)
 
 
 def _rule_declares_rates(model: str, custom_llm_provider: str | None) -> bool:
@@ -3491,7 +3499,7 @@ def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) 
     lookups cannot strip that prefix, so a zero-rated override read as declaring nothing, and a
     session that should bill nothing fell through to the public rates instead.
     """
-    resolved: Final = _get_model_info_or_none(model_name, custom_llm_provider)
+    resolved: Final = _cost_map_model_info(model_name, custom_llm_provider)
     entries: Final = (
         litellm.model_cost.get(resolved.get("key")) if resolved is not None else None,
         litellm.model_cost.get(model_name),
@@ -3687,9 +3695,9 @@ def handle_realtime_transcription_cost_calculation(
         return 0.0
 
     model_name: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
-    model_info: Final = _get_model_info_or_none(model_name, custom_llm_provider)
+    model_info: Final = _cost_map_model_info(model_name, custom_llm_provider)
     override_info: Final = (
-        _get_model_info_or_none(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
+        _cost_map_model_info(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
 
     total_cost = 0.0
@@ -3718,13 +3726,6 @@ def _get_transcription_model_name_from_results(
             if model:
                 return model
     return None
-
-
-def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo | None:
-    try:
-        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        return None
 
 
 _TranscriptionRateKey: TypeAlias = Literal[
