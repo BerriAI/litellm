@@ -20,13 +20,12 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
-from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
+from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS, USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY
 from litellm.proxy._types import (
     DailyTagSpendTransaction,
     Litellm_EntityType,
     SpendLogsPayload,
     SpendUpdateQueueItem,
-    UserAPIKeyAuth,
 )
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
@@ -1501,37 +1500,34 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
             )
 
 
-def _validated_key(**fields: str | bool | None) -> UserAPIKeyAuth:
-    return UserAPIKeyAuth(api_key="a" * 64, team_id="team-a").model_copy(update={"via_virtual_key": True, **fields})
-
-
 @pytest.mark.parametrize(
-    ("bucket", "auth", "expected"),
+    ("bucket", "marker", "team_id", "expected"),
     [
-        ("metadata", _validated_key(), "team-a"),
-        ("litellm_metadata", _validated_key(), "team-a"),
-        ("metadata", _validated_key(team_id=None), ""),
-        ("metadata", _validated_key(via_virtual_key=False), ""),
-        ("metadata", _validated_key(is_session_token=True), ""),
-        ("metadata", {"via_virtual_key": True, "team_id": "team-a"}, ""),
-        ("metadata", None, ""),
+        ("metadata", True, "team-a", "team-a"),
+        ("litellm_metadata", True, "team-a", "team-a"),
+        ("metadata", True, None, ""),
+        ("metadata", False, "team-a", ""),
+        ("metadata", "true", "team-a", ""),
+        ("metadata", None, "team-a", ""),
     ],
     ids=[
         "virtual-key",
         "virtual-key-litellm-metadata",
         "virtual-key-without-team",
         "jwt-or-custom-auth",
-        "ui-session",
-        "forged-metadata",
-        "no-auth",
+        "non-boolean-marker",
+        "no-marker",
     ],
 )
-def test_tag_team_comes_only_from_a_proxy_validated_team_virtual_key(
-    bucket: str, auth: UserAPIKeyAuth | dict[str, object] | None, expected: str
+def test_tag_team_comes_only_from_a_request_marked_as_a_virtual_key(
+    bucket: str, marker: object, team_id: str | None, expected: str
 ) -> None:
-    kwargs: Final = {"litellm_params": {bucket: {"user_api_key_auth": auth, "user_api_key_team_id": "team-a"}}}
+    metadata: Final = {
+        "user_api_key_team_id": team_id,
+        **({USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: marker} if marker is not None else {}),
+    }
 
-    assert _virtual_key_team_id(kwargs) == expected
+    assert _virtual_key_team_id({"litellm_params": {bucket: metadata}}) == expected
 
 
 @pytest.mark.asyncio

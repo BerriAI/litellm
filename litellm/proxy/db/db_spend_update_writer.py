@@ -33,6 +33,7 @@ from litellm.constants import (
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
@@ -52,7 +53,6 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
-    UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
 from litellm.proxy.db.daily_spend_bulk_upsert import (
@@ -356,14 +356,14 @@ def _virtual_key_team_id(kwargs: Mapping[str, object]) -> str:
     """The team of the virtual key that authenticated the request, or "" for JWT, custom auth, OAuth2,
     UI sessions, the master key and team-less keys, whose api_key does not pin a tag row to one team."""
     params: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs.get("litellm_params") or {})
-    candidates: Final = tuple(
-        _SPEND_METADATA_ADAPTER.validate_python(params.get(bucket) or {}).get("user_api_key_auth")
-        for bucket in ("litellm_metadata", "metadata")
+    buckets: Final = tuple(
+        _SPEND_METADATA_ADAPTER.validate_python(params.get(bucket) or {}) for bucket in ("litellm_metadata", "metadata")
     )
-    auth: Final = next((found for found in candidates if isinstance(found, UserAPIKeyAuth)), None)
-    if auth is None or not auth.via_virtual_key or auth.is_session_token:
-        return ""
-    return auth.team_id or ""
+    marked: Final = next(
+        (bucket for bucket in buckets if bucket.get(USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY) is True), None
+    )
+    team_id: Final = marked.get("user_api_key_team_id") if marked is not None else None
+    return team_id if isinstance(team_id, str) else ""
 
 
 def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:

@@ -12,19 +12,45 @@ from typing import Final
 from pydantic import TypeAdapter
 
 Schema = Mapping[str, Mapping[str, str]]
+UniqueKeys = Mapping[str, frozenset[str]]
 MODELS: Final = re.compile(r"^[ \t]*model\s+(\w+)\s*\{(.*?)^[ \t]*\}", re.MULTILINE | re.DOTALL)
 
 
+def _without_comment(tokens: list[str]) -> list[str]:
+    return tokens[: next((i for i, token in enumerate(tokens) if token.startswith("//")), len(tokens))]
+
+
 def _is_field(part: list[str]) -> bool:
-    return len(part) >= 2 and not part[0].startswith(("@@", "//"))
+    return len(part) >= 2 and not part[0].startswith("@@")
 
 
 def parse_model_fields(schema: str) -> Schema:
     def fields(body: str) -> Mapping[str, str]:
-        parts: Final = tuple(line.split() for line in body.splitlines())
+        parts: Final = tuple(_without_comment(line.split()) for line in body.splitlines())
         return MappingProxyType({part[0]: " ".join(part[1:]) for part in parts if _is_field(part)})
 
     return MappingProxyType({match[1]: fields(match[2]) for match in MODELS.finditer(schema)})
+
+
+def parse_unique_keys(schema: str) -> UniqueKeys:
+    def unique_keys(body: str) -> frozenset[str]:
+        parts: Final = tuple(_without_comment(line.split()) for line in body.splitlines())
+        return frozenset(" ".join(part) for part in parts if part and part[0].startswith("@@unique"))
+
+    return MappingProxyType({match[1]: unique_keys(match[2]) for match in MODELS.finditer(schema)})
+
+
+def check_unique_key_changes(old_keys: UniqueKeys, new_keys: UniqueKeys) -> tuple[str, ...]:
+    """An older proxy's upsert names its unique key in ON CONFLICT, so dropping or changing one breaks it."""
+
+    def changes() -> Iterator[str]:
+        for model, keys in old_keys.items():
+            if model not in new_keys:
+                continue
+            for key in sorted(keys - new_keys[model]):
+                yield f"Breaking: Unique key {model}.{key} was removed or changed"
+
+    return tuple(changes())
 
 
 def _field_changes(model: str, field: str, old_type: str, new_fields: Mapping[str, str]) -> Iterator[str]:
@@ -67,8 +93,10 @@ def main() -> int:
     previous: Final = subprocess.run(
         ("git", "show", f"{base}:schema.prisma"), capture_output=True, text=True, check=True
     ).stdout
-    changes: Final = check_breaking_changes(
-        parse_model_fields(previous), parse_model_fields(Path("schema.prisma").read_text())
+    current: Final = Path("schema.prisma").read_text()
+    changes: Final = (
+        *check_breaking_changes(parse_model_fields(previous), parse_model_fields(current)),
+        *check_unique_key_changes(parse_unique_keys(previous), parse_unique_keys(current)),
     )
     if changes:
         sys.stderr.write("\n".join(changes) + "\n")

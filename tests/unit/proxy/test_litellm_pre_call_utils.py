@@ -597,6 +597,46 @@ async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys()
     assert attacker_leaks == [], f"Unexpected leaked keys: {attacker_leaks}"
 
 
+@pytest.mark.parametrize(
+    ("auth_fields", "expected"),
+    [
+        ({"via_virtual_key": True}, True),
+        ({}, False),
+        ({"via_virtual_key": True, "is_session_token": True}, False),
+    ],
+    ids=["virtual-key", "jwt-or-custom-auth", "ui-session"],
+)
+@pytest.mark.asyncio
+async def test_only_the_proxy_marks_a_request_as_made_with_a_virtual_key(
+    auth_fields: dict[str, bool], expected: bool
+) -> None:
+    from litellm.constants import USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    forged: Final = {USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: True, "user_api_key_team_id": "victim-team"}
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo", "metadata": {**forged}, "litellm_metadata": {**forged}},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="a" * 64, team_id="team-a").model_copy(update=auth_fields),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["metadata"][USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY] is expected
+    assert updated["metadata"]["user_api_key_team_id"] == "team-a"
+    assert USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY not in (updated.get("litellm_metadata") or {})
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_string_metadata_does_not_crash():
     """Regression: pre-strip code that pre-populated data['metadata'][k]=v
