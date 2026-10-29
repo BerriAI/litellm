@@ -577,7 +577,7 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
 
 
 def test_serialize_streaming_chunk_keeps_provider_choice_fields():
-    chunk = _simple_chunk(content="1,2,3,4")
+    chunk: Final = _simple_chunk(content="1,2,3,4")
     chunk.choices[0]["stop_reason"] = ",5"
     chunk.choices[0]["token_ids"] = [20]
 

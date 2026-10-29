@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -401,7 +402,7 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
 
 
 def _transform_vllm_chat_response(choice_extras: dict[str, object]) -> ModelResponse:
-    payload = {
+    payload: Final = {
         "id": "chatcmpl-1",
         "object": "chat.completion",
         "created": 1,
@@ -417,7 +418,7 @@ def _transform_vllm_chat_response(choice_extras: dict[str, object]) -> ModelResp
         ],
         "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
     }
-    raw_response = httpx.Response(
+    raw_response: Final = httpx.Response(
         200, json=payload, request=httpx.Request("POST", "http://vllm.local/v1/chat/completions")
     )
     return HostedVLLMChatConfig().transform_response(
@@ -442,17 +443,17 @@ def _transform_vllm_chat_response(choice_extras: dict[str, object]) -> ModelResp
     ],
 )
 def test_hosted_vllm_keeps_vllm_choice_fields_on_the_choice(choice_extras: dict[str, object]):
-    response = _transform_vllm_chat_response(choice_extras)
+    response: Final = _transform_vllm_chat_response(choice_extras)
 
-    dumped_choice: dict[str, dict[str, object]] = json.loads(response.model_dump_json())["choices"][0]
+    dumped_choice: Final[dict[str, dict[str, object]]] = json.loads(response.model_dump_json())["choices"][0]
     for field, value in choice_extras.items():
         assert dumped_choice[field] == value
         assert dumped_choice["provider_specific_fields"][field] == value
 
 
 def test_hosted_vllm_does_not_invent_vllm_choice_fields():
-    response = _transform_vllm_chat_response({})
+    response: Final = _transform_vllm_chat_response({})
 
-    dumped_choice: dict[str, object] = json.loads(response.model_dump_json())["choices"][0]
+    dumped_choice: Final[dict[str, object]] = json.loads(response.model_dump_json())["choices"][0]
     assert "stop_reason" not in dumped_choice
     assert "token_ids" not in dumped_choice

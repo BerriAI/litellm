@@ -6094,6 +6094,25 @@ def test_hosted_vllm_stream_keeps_stop_reason_and_every_token_id(
     assert list(chain.from_iterable(choice.get("token_ids") or () for choice in emitted)) == [16, 11, 17, 20]
 
 
+def test_hosted_vllm_stream_keeps_held_back_token_ids_on_their_own_choice(logging_obj: Logging) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [17]},
+            {"index": 1, "delta": {"content": "2"}, "finish_reason": None, "token_ids": [18]},
+        ),
+    )
+
+    assert [(choice["index"], choice.get("token_ids")) for choice in emitted if choice.get("token_ids")] == [
+        (1, [16]),
+        (0, [17]),
+        (1, [18]),
+    ]
+
+
 def _held_back_stop_string_stream(token_ids: Mapping[str, None]) -> tuple[Mapping[str, object], ...]:
     return (
         {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},

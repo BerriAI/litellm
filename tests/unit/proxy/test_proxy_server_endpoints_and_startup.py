@@ -13605,12 +13605,12 @@ def test_is_injected_stream_usage_artifact():
 
     assert _is_injected_stream_usage_artifact({"usage": {"prompt_tokens": 1}}) is False
 
-    held_back_token_ids_chunk = ModelResponseStream(
+    held_back_token_ids_chunk: Final = ModelResponseStream(
         model="qwen3", choices=[StreamingChoices(delta=Delta(content=None), token_ids=[16])]
     )
     assert _is_injected_stream_usage_artifact(held_back_token_ids_chunk) is False
 
-    null_token_ids_chunk = ModelResponseStream(
+    null_token_ids_chunk: Final = ModelResponseStream(
         model="qwen3", choices=[StreamingChoices(delta=Delta(content=None), token_ids=None)]
     )
     assert _is_injected_stream_usage_artifact(null_token_ids_chunk) is True

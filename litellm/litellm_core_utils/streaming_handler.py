@@ -117,13 +117,25 @@ def _prepend_upstream_choice_extras(
 _NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
+def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
     match getattr(upstream_chunk, "choices", None):
         case [BaseModel() as first_choice, *_]:
-            upstream_extras: Final[Mapping[str, object]] = first_choice.model_extra or {}
-            return MappingProxyType({field: upstream_extras[field] for field in fields if field in upstream_extras})
+            return first_choice
         case _:
-            return _NO_UPSTREAM_CHOICE_FIELDS
+            return None
+
+
+def _upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
+    first_choice: Final = _upstream_first_choice(upstream_chunk)
+    if first_choice is None:
+        return _NO_UPSTREAM_CHOICE_FIELDS
+    upstream_extras: Final[Mapping[str, object]] = first_choice.model_extra or {}
+    return MappingProxyType({field: upstream_extras[field] for field in fields if field in upstream_extras})
+
+
+def _upstream_choice_index(upstream_chunk: object) -> int:
+    upstream_index: Final[object] = getattr(_upstream_first_choice(upstream_chunk), "index", 0)
+    return upstream_index if isinstance(upstream_index, int) else 0
 
 
 def _non_null_upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
@@ -1308,7 +1320,9 @@ class CustomStreamWrapper:
         elif upstream_chunk_fields := _non_null_upstream_choice_fields(
             response_obj.get("original_chunk"), STREAM_CHUNK_CHOICE_FIELDS
         ):
+            upstream_index: Final = _upstream_choice_index(response_obj.get("original_chunk"))
             model_response.choices[0].delta = Delta(content=None)  # rebind-ok: chunks are built in place here
+            model_response.choices[0].index = upstream_index  # rebind-ok: chunks are built in place here
             _apply_choice_fields(model_response.choices[0], upstream_chunk_fields)
             return model_response
         else:
