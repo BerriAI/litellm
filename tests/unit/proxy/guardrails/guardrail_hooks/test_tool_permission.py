@@ -1362,6 +1362,202 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert [tool["name"] for tool in result["tools"]] == ["Bash"]
         assert result["tool_choice"] == expected_tool_choice
 
+    def _pre_call(
+        self,
+        rules: list[dict[str, str]],
+        on_disallowed_action: Literal["block", "rewrite"],
+        default_action: Literal["allow", "deny"] = "allow",
+    ) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name=f"request-shapes-{on_disallowed_action}",
+            rules=rules,
+            default_action=default_action,
+            on_disallowed_action=on_disallowed_action,
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    async def _run_pre_call(
+        self, guardrail: ToolPermissionGuardrail, data: dict[str, object], call_type: CallTypesLiteral
+    ) -> dict[str, object]:
+        return await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(default_in_memory_ttl=1),
+            data=data,
+            call_type=call_type,
+        )
+
+    def _namespace(self, *member_names: str) -> dict[str, object]:
+        return {
+            "type": "namespace",
+            "name": "mcp__everything",
+            "tools": [{"type": "function", "name": name, "parameters": {"type": "object"}} for name in member_names],
+        }
+
+    @pytest.mark.asyncio
+    async def test_pre_call_blocks_a_denied_tool_inside_a_responses_namespace(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "deny_sum", "tool_name": r"^mcp__everything__get_sum$", "decision": "deny"}], "block"
+        )
+        data = {"model": "gpt-5", "input": "add 2 and 3", "tools": [self._namespace("echo", "get_sum")]}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "responses")
+
+        assert excinfo.value.detail["detection_message"] == "Tool 'mcp__everything__get_sum' denied by rule 'deny_sum'"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_drops_denied_namespace_members_and_empty_namespaces(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_sum", "tool_name": r"^.*get_sum$", "decision": "deny"}], "rewrite")
+        partly_denied = {**self._namespace("echo", "get_sum"), "name": "mcp__kept"}
+        data = {"model": "gpt-5", "input": "add", "tools": [partly_denied, self._namespace("get_sum")]}
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == [{**partly_denied, "tools": partly_denied["tools"][:1]}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rule", "tool", "call_type", "detection_message"),
+        [
+            (
+                {"id": "deny_mcp", "tool_type": r"^mcp$", "decision": "deny"},
+                {"type": "mcp", "server_label": "weather", "server_url": "https://mcp.example.com"},
+                "responses",
+                "Tool 'mcp' denied by rule 'deny_mcp'",
+            ),
+            (
+                {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "allow"},
+                {"type": "mcp_toolset", "mcp_server_name": "weather"},
+                "anthropic_messages",
+                "Tool 'mcp_toolset' denied by default action",
+            ),
+            (
+                {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"},
+                {"type": "custom", "custom": {"name": "Read"}},
+                "acompletion",
+                "Tool 'Read' denied by rule 'deny_read'",
+            ),
+        ],
+        ids=["responses_mcp_by_type", "anthropic_mcp_toolset_by_default", "chat_custom_nested_name"],
+    )
+    async def test_pre_call_checks_tools_that_carry_no_top_level_name(
+        self, rule: dict[str, str], tool: dict[str, object], call_type: CallTypesLiteral, detection_message: str
+    ) -> None:
+        guardrail = self._pre_call([rule], "block", default_action="deny")
+        data = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "input": "hi", "tools": [tool]}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, call_type)
+
+        assert excinfo.value.detail["detection_message"] == detection_message
+
+    @pytest.mark.asyncio
+    async def test_pre_call_passes_a_tool_no_rule_could_ever_match(self) -> None:
+        guardrail = self._pre_call(self.rules, "block", default_action="deny")
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [{"googleSearch": {}}]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [{"googleSearch": {}}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tools", "tool_choice", "call_type", "expected_tool_choice"),
+        [
+            (
+                [{"type": "custom", "name": "Bash"}, {"type": "custom", "name": "Read"}],
+                {"type": "custom", "name": "Read"},
+                "responses",
+                "none",
+            ),
+            (
+                [{"type": "function", "name": "Bash"}, {"type": "function", "name": "Read"}],
+                {
+                    "type": "allowed_tools",
+                    "mode": "required",
+                    "tools": [{"type": "function", "name": "Read"}, {"type": "function", "name": "Bash"}],
+                },
+                "responses",
+                {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "Bash"}]},
+            ),
+            (
+                [{"type": "function", "name": "Bash"}, {"type": "function", "name": "Read"}],
+                {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "Read"}]},
+                "responses",
+                "none",
+            ),
+            (
+                [
+                    {"type": "function", "function": {"name": "Bash"}},
+                    {"type": "function", "function": {"name": "Read"}},
+                ],
+                {
+                    "type": "allowed_tools",
+                    "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "Read"}}]},
+                },
+                "acompletion",
+                "none",
+            ),
+            (
+                [{"name": "Read", "input_schema": {"type": "object"}}],
+                {"type": "any"},
+                "anthropic_messages",
+                {"type": "none"},
+            ),
+            (
+                [
+                    {"name": "Bash", "input_schema": {"type": "object"}},
+                    {"name": "Read", "input_schema": {"type": "object"}},
+                ],
+                {"type": "any"},
+                "anthropic_messages",
+                {"type": "any"},
+            ),
+        ],
+        ids=[
+            "responses_custom_choice",
+            "responses_allowed_tools_keeps_the_rest",
+            "responses_allowed_tools_all_denied",
+            "chat_allowed_tools_all_denied",
+            "anthropic_any_with_no_tools_left",
+            "anthropic_any_with_a_tool_left",
+        ],
+    )
+    async def test_pre_call_rewrite_leaves_no_tool_choice_that_needs_a_removed_tool(
+        self,
+        tools: list[dict[str, object]],
+        tool_choice: dict[str, object],
+        call_type: CallTypesLiteral,
+        expected_tool_choice: dict[str, object] | str,
+    ) -> None:
+        guardrail = self._pre_call(self.rules, "rewrite")
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert result["tool_choice"] == expected_tool_choice
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_relaxes_a_choice_for_a_tool_a_type_rule_removed(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_custom", "tool_type": r"^custom$", "decision": "deny"}], "rewrite")
+        data = {
+            "model": "gpt-5",
+            "input": "patch it",
+            "tools": [{"type": "function", "name": "Bash"}, {"type": "custom", "name": "apply_patch"}],
+            "tool_choice": {"type": "custom", "name": "apply_patch"},
+        }
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == [{"type": "function", "name": "Bash"}]
+        assert result["tool_choice"] == "none"
+
     @pytest.mark.asyncio
     async def test_denied_anthropic_tool_use_is_blocked(self):
         response = self._response({"type": "text", "text": "reading"}, self._tool_use("Read"))

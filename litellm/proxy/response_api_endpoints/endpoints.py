@@ -2048,7 +2048,7 @@ _WS_FRAME: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
 _PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
-_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools", "tool_choice")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 # the guardrail list is merged from key, team and the admission frame; a later frame cannot shrink it
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
@@ -2092,7 +2092,7 @@ def _responses_ws_frame_guard(
         nested: Final = frame_obj.get("response")
         if isinstance(nested, dict) and any(key in frame_obj for key in _GUARDED_FRAME_FIELDS):
             raise ValueError(
-                "response.create carries input, instructions or tools both at the top level and under response"
+                "response.create carries input, instructions, tools or tool_choice both at the top level and under response"
             )
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
         frame_data: Final = {

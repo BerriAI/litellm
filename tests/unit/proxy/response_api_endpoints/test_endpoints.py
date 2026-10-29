@@ -2180,6 +2180,31 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [True, False])
+    async def test_frame_guard_forwards_the_tool_choice_a_guardrail_rewrote(self, nested: bool):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return {**data, "tools": [], "tool_choice": "none"}
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+        body = {
+            "input": "hi",
+            "tools": [{"type": "function", "name": "a"}],
+            "tool_choice": {"type": "function", "name": "a"},
+        }
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        guarded = json.loads((await guard(json.dumps(frame))).frame)
+
+        sent = guarded["response"] if nested else guarded
+        assert (sent["tools"], sent["tool_choice"]) == ([], "none")
+
+    @pytest.mark.asyncio
     async def test_frame_guard_strips_the_proxy_owned_metadata_keys_a_client_sends(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
