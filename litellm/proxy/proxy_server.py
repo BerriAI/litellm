@@ -524,6 +524,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    proxy_exception_for,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -12390,6 +12391,12 @@ async def model_list(
 
     hidden_names: Final = blocked_names | unhealthy_names
 
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
+
+    asks_for_allowlist_names: Final = (
+        include_model_access_groups is True and return_wildcard_routes is True and only_model_access_groups is not True
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -12410,7 +12417,10 @@ async def model_list(
         all_models = get_complete_model_list(
             key_models=[],
             team_models=[],
-            proxy_model_list=proxy_model_list,
+            proxy_model_list=[
+                *proxy_model_list,
+                *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
+            ],
             user_model=None,
             infer_model_from_keys=False,
             return_wildcard_routes=include_wildcard_routes,
@@ -12471,7 +12481,7 @@ async def model_list(
 
     # Otherwise, use the normal behavior (current implementation)
     # Get available models for the user
-    all_models = await get_available_models_for_user(
+    available_models: Final = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
         general_settings=general_settings,
@@ -12484,6 +12494,11 @@ async def model_list(
         return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
+    offers_typesafe_allowlist_names: Final = (
+        asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
+    )
+    typesafe_names_to_offer: Final = typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else ()
+    all_models = [*available_models, *(name for name in typesafe_names_to_offer if name not in available_models)]
 
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
@@ -18437,7 +18452,6 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug("receiving data: %s", data)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -18523,25 +18537,13 @@ async def async_queue_request(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        elif isinstance(e, litellm.BadRequestError):
+        if isinstance(e, litellm.BadRequestError):
             raise ProxyException(
                 message=e.message, type="invalid_request_error", param=getattr(e, "param", None), code=e.status_code
-            )
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+            ) from e
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @app.get("/fallback/login", tags=["experimental"], include_in_schema=False)
@@ -19820,21 +19822,9 @@ async def update_config(
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.update_config(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 ### CONFIG GENERAL SETTINGS
@@ -21017,21 +21007,9 @@ async def get_config(
         }
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.get_config(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 @router.get(
