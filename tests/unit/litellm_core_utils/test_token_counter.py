@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.token_counter import (
     calculate_img_tokens,
     estimate_image_tokens,
     high_detail_image_token_upper_bound,
+    is_openai_model,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
@@ -699,6 +700,7 @@ def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
         _anthropic_tool(_WEATHER_FUNCTION),
         {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
         {**_anthropic_tool(_WEATHER_FUNCTION), "defer_loading": True, "input_examples": [{"location": "Paris"}]},
+        {**_anthropic_tool(_WEATHER_FUNCTION), "custom": {"eager_input_streaming": True}},
         _anthropic_tool(_WEB_SEARCH_FUNCTION),
     ],
 )
@@ -2600,3 +2602,95 @@ def test_get_modified_max_tokens_leaves_a_gemini_4_long_decode_budget_alone(monk
         )
         == 200_000
     )
+
+
+_MULTILINGUAL_SAMPLE: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+        "azure/gpt-41",
+        "azure/gpt-5.1",
+        "openai/gpt-5.1",
+        "openai/gpt-4o",
+        "gpt-41",
+        "eu/gpt-6.1-sol",
+        "azure/eu/gpt-6.1-sol",
+        "azure/gpt-5.1-chat",
+        "azure/gpt-6.1-sol-2026-09-29",
+        "openai/gpt-6.1-sol-2026-09-29",
+        "azure_ai/gpt-6.1-sol",
+        "chatgpt/gpt-6.1-sol",
+        "perplexity/openai/gpt-5",
+    ],
+)
+def test_token_counter_counts_openai_models_newer_than_tiktokens_table_with_o200k(model: str):
+    expected: Final = len(tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE))
+
+    assert expected != len(tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE))
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == expected, (
+        f"{model} should count with o200k_base. OpenAI's /v1/responses/input_tokens gave gpt-5, gpt-5.1, gpt-6-sol, "
+        "gpt-6-luna, gpt-6-astra, gpt-6.1-sol and gpt-6.1-terra the same count on this sample, checked 2026-10-28"
+    )
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.9", "chatgpt/gpt-5.3-instant", "azure/gpt-5.9-mini"])
+def test_token_counter_counts_unlisted_openai_names_with_the_encoding_tiktoken_gives_them(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.encoding_for_model(model.rsplit("/", 1)[-1]).encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize("model", ["gpt-6.2", "openai/gpt-6.2", "azure/gpt-6.2-mini", "azure/eu/o9-mini", "gpt-10"])
+def test_token_counter_counts_unlisted_names_of_newer_openai_releases_with_o200k(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.get_encoding("o200k_base").encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "groq/qwen3-32b",
+        "openai/my-llama",
+        "text-embedding-ada-002-v2",
+        "azure/gpt-4",
+        "azure/my-deployment",
+        "azure/ada",
+        "azure/mistral-large-latest",
+        "azure/command-r-plus",
+        "azure_ai/mistral-large-latest",
+    ],
+)
+def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k_models(model: str):
+    assert litellm.token_counter(model=model, text=_MULTILINGUAL_SAMPLE) == len(
+        tiktoken.get_encoding("cl100k_base").encode(_MULTILINGUAL_SAMPLE)
+    )
+
+
+def test_openai_model_check_holds_while_openai_models_are_registered_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "azure/azure-only-chat-model", {"litellm_provider": "azure", "mode": "chat"})
+    registered: Final = tuple(f"concurrently-registered-model-{index}" for index in range(200))
+    checked: Final = threading.Semaphore(0)
+
+    def register() -> None:
+        for name in registered:
+            if not checked.acquire(timeout=10):
+                return
+            litellm.open_ai_chat_completion_models.add(name)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            registering: Final = pool.submit(register)
+            while not registering.done():
+                assert not is_openai_model("azure-only-chat-model")
+                checked.release()
+            registering.result()
+    finally:
+        litellm.open_ai_chat_completion_models.difference_update(registered)

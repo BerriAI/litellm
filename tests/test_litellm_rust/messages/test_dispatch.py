@@ -474,6 +474,12 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
             {},
         ),
         (
+            Feature.TOOL_CUSTOM_FIELD,
+            "anthropic/claude-sonnet-4-5",
+            {"tools": [{"name": "a", "input_schema": {"type": "object"}, "custom": {"eager_input_streaming": True}}]},
+            {},
+        ),
+        (
             Feature.STREAM_COST_INJECTION,
             "anthropic/claude-sonnet-4-5",
             {"stream": True},
