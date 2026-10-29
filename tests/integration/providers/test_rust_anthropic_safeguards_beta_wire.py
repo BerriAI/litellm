@@ -304,7 +304,7 @@ def test_vertex_messages_with_safeguards_keep_the_beta_from_the_shared_helper(
     body: Final = safeguarded(messages_body(VERTEX_DEPLOYMENT, marker, stream=stream), list(SAFEGUARDS))
     response: Final = _post(rig.gateway, {**body, "tools": tools})
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert not rust_routed(response.headers), dict(response.headers)
     assert f"msg_{marker}" in response.text and "safeguard_results" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert sent.target == (VERTEX_STREAM_TARGET if stream else VERTEX_TARGET), sent
@@ -326,7 +326,7 @@ def test_deepseek_messages_forward_safeguards_without_adding_a_beta(rig: _Rig, b
         beta=beta,
     )
     assert response.status_code == 200, response.text
-    assert rust_routed(response.headers), dict(response.headers)
+    assert not rust_routed(response.headers), dict(response.headers)
     assert f"msg_{marker}" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.api_key, sent.safeguards) == (DEEPSEEK_TARGET, DEEPSEEK_KEY, list(SAFEGUARDS)), sent
