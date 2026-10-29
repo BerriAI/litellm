@@ -206,7 +206,7 @@ _NON_INTEGER_BUDGET_REASON: Final = (
     "Gemini takes budget_tokens only as an integer, so it uses its default thinking budget."
 )
 _LEVEL_ONLY_BUDGET_REASON: Final = (
-    "Gemini 3 and later set reasoning by thinking level, not budget, so it uses its default level. "
+    "Gemini 3 and later set reasoning by thinking level, not budget, so litellm does not send the budget. "
     "Send reasoning_effort to pick a level."
 )
 _sampling_deprecation_lock: Final = threading.Lock()

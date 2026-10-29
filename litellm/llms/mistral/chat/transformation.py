@@ -14,6 +14,7 @@ import httpx
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -59,6 +60,17 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
 
 _NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
 _REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
+_DOCUMENTED_MAGISTRAL_EFFORTS: Final = frozenset({"low", "medium", "high"})
+_REASONING_ON_THINKING_TYPES: Final = frozenset({"enabled", "adaptive"})
+
+
+def _warn_unless_reasoning_prompt_honors(param: str, value: object, model: str) -> None:
+    if param == "reasoning_effort" and isinstance(value, str) and value in _DOCUMENTED_MAGISTRAL_EFFORTS:
+        return
+    thinking: Final = as_str_mapping(value)
+    if param == "thinking" and thinking is not None and thinking.get("type") in _REASONING_ON_THINKING_TYPES:
+        return
+    warn_dropped_reasoning(param, value, model, _REASONING_PROMPT_REASON, drop_params_gated=False)
 
 
 def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a decoded JSON array is a list
@@ -218,9 +230,7 @@ class MistralConfig(OpenAIGPTConfig):
             if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
-                warn_dropped_reasoning(
-                    param, OPAQUE_VALUE.validate_python(value), model, _REASONING_PROMPT_REASON, drop_params_gated=False
-                )
+                _warn_unless_reasoning_prompt_honors(param, OPAQUE_VALUE.validate_python(value), model)
             if param == "parallel_tool_calls":
                 optional_params["parallel_tool_calls"] = value
         return optional_params

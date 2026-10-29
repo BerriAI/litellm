@@ -14,7 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_images_from_message,
     extract_reasoning_content,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -30,7 +30,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
-from ..common_utils import OllamaError
+from ..common_utils import OllamaError, ollama_think
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -39,9 +39,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-_THINK_ON_EFFORTS: Final = frozenset({"low", "medium", "high"})
-_THINK_OFF_REASON: Final = "Ollama takes think only as on or off, and litellm maps this level to off."
 
 
 class OllamaChatConfig(BaseConfig):
@@ -176,14 +173,7 @@ class OllamaChatConfig(BaseConfig):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             if param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in _THINK_ON_EFFORTS
-                    if isinstance(value, str) and value not in _THINK_ON_EFFORTS and value != "none":
-                        warn_dropped_reasoning(
-                            "reasoning_effort", value, model, _THINK_OFF_REASON, drop_params_gated=False
-                        )
+                optional_params["think"] = ollama_think(model, OPAQUE_VALUE.validate_python(value))
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection

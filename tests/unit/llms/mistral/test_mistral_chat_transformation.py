@@ -1676,7 +1676,8 @@ def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str,
 
 
 @pytest.mark.parametrize(
-    "param, value", (("reasoning_effort", "none"), ("thinking", {"type": "enabled", "budget_tokens": 1024}))
+    "param, value",
+    (("reasoning_effort", "none"), ("reasoning_effort", "xhigh"), ("thinking", {"type": "disabled"})),
 )
 def test_magistral_reasoning_request_replaced_by_prompt_warns_once(
     param: str, value: object, caplog: pytest.LogCaptureFixture
@@ -1693,6 +1694,30 @@ def test_magistral_reasoning_request_replaced_by_prompt_warns_once(
     assert result["_add_reasoning_prompt"] is True
     assert len(warnings) == 1
     assert "magistral-medium-latest" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "param, value",
+    (
+        ("reasoning_effort", "low"),
+        ("reasoning_effort", "medium"),
+        ("reasoning_effort", "high"),
+        ("thinking", {"type": "enabled", "budget_tokens": 1024}),
+    ),
+)
+def test_magistral_reasoning_request_the_prompt_honors_does_not_warn(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["_add_reasoning_prompt"] is True
+    assert _warnings_naming(caplog, param) == ()
 
 
 def test_non_magistral_reasoning_effort_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
