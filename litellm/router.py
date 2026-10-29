@@ -4940,6 +4940,8 @@ class Router:
             if isinstance(raw_deployment_params, LiteLLM_Params)
             else raw_deployment_params
         )
+        if self._deployment_sets_litellm_param(deployment_context, "model_id"):
+            kwargs.pop("model_id", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
         deployment_provider: Final = (

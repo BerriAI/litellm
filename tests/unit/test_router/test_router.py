@@ -4,6 +4,7 @@ import copy
 import functools
 import gc
 import itertools
+import io
 import json
 import linecache
 import logging
@@ -31276,3 +31277,80 @@ def test_router_keeps_supported_fallback_shapes(
     router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
 
     assert router.fallbacks == expected_fallbacks
+
+
+_SAGEMAKER_ROUTER_CREDENTIALS: Final = MappingProxyType(
+    {"aws_region_name": "us-east-1", "aws_access_key_id": "test-key", "aws_secret_access_key": "test-secret"}
+)
+
+_INFERENCE_COMPONENT_PRECEDENCE: Final = pytest.mark.parametrize(
+    ("deployment_component", "sent_component"),
+    [("deployment-component", "deployment-component"), (None, "client-component")],
+    ids=["deployment_pins_the_component", "deployment_leaves_the_component_to_the_client"],
+)
+
+
+def _sagemaker_router(model: str, deployment_component: str | None, mode: str) -> Router:
+    pinned_component: Final = {} if deployment_component is None else {"model_id": deployment_component}
+    return Router(
+        model_list=[
+            {
+                "model_name": "sagemaker-model",
+                "litellm_params": {"model": model, **_SAGEMAKER_ROUTER_CREDENTIALS, **pinned_component},
+                "model_info": {"mode": mode},
+            }
+        ]
+    )
+
+
+@_INFERENCE_COMPONENT_PRECEDENCE
+@pytest.mark.asyncio
+async def test_a_client_model_id_cannot_move_a_sagemaker_chat_call_off_the_deployments_component(
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+    deployment_component: str | None,
+    sent_component: str,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/chat-endpoint/invocations"
+    ).respond(
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "served-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    router: Final = _sagemaker_router("sagemaker_chat/chat-endpoint", deployment_component, "chat")
+
+    await router.acompletion(
+        model="sagemaker-model", messages=[{"role": "user", "content": "hi"}], model_id="client-component"
+    )
+
+    assert route.calls.last.request.headers["X-Amzn-SageMaker-Inference-Component"] == sent_component
+
+
+@_INFERENCE_COMPONENT_PRECEDENCE
+@pytest.mark.asyncio
+async def test_a_client_model_id_cannot_move_a_sagemaker_embedding_call_off_the_deployments_component(
+    deployment_component: str | None, sent_component: str
+) -> None:
+    component_embeddings: Final = MappingProxyType({"deployment-component": [0.1], "client-component": [0.2]})
+
+    def invoke_endpoint(**request: str | bytes) -> Mapping[str, io.BytesIO]:
+        served: Final = component_embeddings[str(request["InferenceComponentName"])]
+        return {
+            "Body": io.BytesIO(
+                json.dumps({"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": served}]}).encode()
+            )
+        }
+
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+    router: Final = _sagemaker_router("sagemaker/openai/embed-endpoint", deployment_component, "embedding")
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        response: Final = await router.aembedding(model="sagemaker-model", input=["hello"], model_id="client-component")
+
+    assert response.data[0]["embedding"] == component_embeddings[sent_component]
