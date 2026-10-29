@@ -193,6 +193,7 @@ GEMINI_SYSTEM_PARTS: Final = ("Answer tersely", "Use British spelling")
     (
         ({"generationConfig": {"maxOutputTokens": 5}}, {"max_tokens": 5}),
         ({"generationConfig": {"maxOutputTokens": 5, "candidateCount": 3}}, {"max_tokens": 5, "n": 3}),
+        ({"generation_config": {"max_output_tokens": 5, "candidate_count": 3}}, {"max_tokens": 5, "n": 3}),
         ({}, {}),
     ),
 )
@@ -217,7 +218,7 @@ def test_gemini_generate_content_body_reserves_the_prompt_not_the_context_window
         request_body={
             "model": "gemini-3.8-flash",
             "messages": [
-                {"role": "system", "content": [{"type": "text", "text": text} for text in system_texts]},
+                {"role": "system", "content": "\n".join(system_texts)},
                 {"role": "user", "content": GEMINI_PROMPT},
             ],
             **chat_output_limit,
@@ -228,6 +229,66 @@ def test_gemini_generate_content_body_reserves_the_prompt_not_the_context_window
     )
     assert native_cost is not None
     assert native_cost == chat_cost
+
+
+GEMINI_ROUTE: Final = "/v1beta/models/gemini-3.8-flash:generateContent"
+GEMINI_TEXT_CONTENT: Final = {"role": "user", "parts": [{"text": GEMINI_PROMPT}]}
+GEMINI_AUDIO_PART: Final = {"inlineData": {"mimeType": "audio/wav", "data": "UklGRg" * 40_000}}
+
+
+def _gemini_hold(body: dict[str, object], input_tokens: int | None = None) -> float | None:
+    return estimate_request_max_cost(
+        request_body=body,
+        route=GEMINI_ROUTE,
+        llm_router=None,
+        input_token_counts={} if input_tokens is None else {"gemini-3.8-flash": input_tokens},
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        {"contents": [{"role": "user", "parts": [{"text": GEMINI_PROMPT}, GEMINI_AUDIO_PART]}]},
+        {"contents": [{"role": "user", "parts": [{"fileData": {"mimeType": "video/mp4", "fileUri": "gs://b/v.mp4"}}]}]},
+        {"contents": [{"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": "iVBORw0K"}}]}]},
+        {"contents": [{"role": "model", "parts": [{"executableCode": {"language": "PYTHON", "code": "print(1)"}}]}]},
+        {"contents": [GEMINI_TEXT_CONTENT, {"role": "function", "parts": [{"text": GEMINI_PROMPT * 500}]}]},
+        {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": "listen", "response": {}, "parts": [GEMINI_AUDIO_PART]}}],
+                }
+            ]
+        },
+        {"systemInstruction": {"parts": [GEMINI_AUDIO_PART]}, "contents": [GEMINI_TEXT_CONTENT]},
+        {"tools": [{"function_declarations": [{"name": "lookup"}]}], "contents": [GEMINI_TEXT_CONTENT]},
+        {"tools": [{"googleSearch": {}}], "contents": [GEMINI_TEXT_CONTENT]},
+        {"cachedContent": "cachedContents/abc", "contents": [GEMINI_TEXT_CONTENT]},
+    ),
+)
+def test_gemini_body_the_prompt_count_cannot_see_whole_keeps_the_context_window_hold(body: dict[str, object]) -> None:
+    context_window: Final = litellm.get_model_info("gemini-3.8-flash")["max_input_tokens"]
+    assert context_window is not None
+    assert _gemini_hold(body) == _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]}, input_tokens=context_window)
+
+
+def test_gemini_tool_turns_and_thought_signatures_count_as_prompt() -> None:
+    context_window: Final = litellm.get_model_info("gemini-3.8-flash")["max_input_tokens"]
+    assert context_window is not None
+    tool_turns: Final = {
+        "tools": [{"functionDeclarations": [{"name": "lookup", "parameters": {"type": "object"}}]}],
+        "contents": [
+            GEMINI_TEXT_CONTENT,
+            {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {}}, "thoughtSignature": "c2ln"}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "lookup", "response": {"answer": "hi"}}}]},
+        ],
+    }
+    text_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
+    tool_turns_hold: Final = _gemini_hold(tool_turns)
+    context_window_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]}, input_tokens=context_window)
+    assert text_hold is not None and tool_turns_hold is not None and context_window_hold is not None
+    assert text_hold < tool_turns_hold < context_window_hold
 
 
 def _tiered_deployment(input_cost_per_token: float) -> Deployment:

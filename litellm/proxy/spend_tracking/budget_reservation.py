@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import product
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
@@ -1651,6 +1652,7 @@ def _estimate_output_tokens(
 
 
 _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+_GEMINI_CONFIG_FIELDS: Final = ("generationConfig", "generation_config")
 
 
 def _nested_field(request_body: Mapping[str, object], config_field: str, field: str) -> object:
@@ -1658,11 +1660,18 @@ def _nested_field(request_body: Mapping[str, object], config_field: str, field: 
     return config.get(field) if config is not None else None
 
 
+def _gemini_config_values(request_body: Mapping[str, object], *fields: str) -> tuple[object, ...]:
+    return tuple(
+        _nested_field(request_body, config_field, field)
+        for config_field, field in product(_GEMINI_CONFIG_FIELDS, fields)
+    )
+
+
 def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         _nested_field(request_body, "inferenceConfig", "maxTokens"),
-        _nested_field(request_body, "generationConfig", "maxOutputTokens"),
+        *_gemini_config_values(request_body, "maxOutputTokens", "max_output_tokens"),
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 
@@ -1671,7 +1680,7 @@ def _get_output_multiplier(request_body: Mapping[str, object]) -> int:
     candidates: Final = (
         request_body.get("n"),
         request_body.get("best_of"),
-        _nested_field(request_body, "generationConfig", "candidateCount"),
+        *_gemini_config_values(request_body, "candidateCount", "candidate_count"),
     )
     return max((1, *(count for count in map(_to_int, candidates) if count is not None)))
 

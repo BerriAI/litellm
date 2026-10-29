@@ -22,6 +22,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     billable_input_since_newest_compaction,
     holds_compaction_summary,
@@ -39,6 +40,16 @@ from litellm.rust_bridge.token_counter import (
 TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
 _GEMINI_SYSTEM_INSTRUCTION_FIELDS: Final = ("systemInstruction", "system_instruction")
+_GEMINI_CACHED_CONTENT_FIELDS: Final = ("cachedContent", "cached_content")
+_GEMINI_FUNCTION_RESPONSE_FIELDS: Final = ("functionResponse", "function_response")
+_GEMINI_TEXT_PART_FIELDS: Final = frozenset({"text", "thought", "thoughtSignature", "thought_signature"})
+_GEMINI_COUNTED_PART_FIELDS: Final = _GEMINI_TEXT_PART_FIELDS | {
+    "functionCall",
+    "function_call",
+    *_GEMINI_FUNCTION_RESPONSE_FIELDS,
+}
+_GEMINI_COUNTED_ROLES: Final = frozenset({"user", "model"})
+_GEMINI_COUNTED_TOOL_FIELDS: Final = frozenset({"functionDeclarations"})
 _GeminiContents: TypeAlias = list[dict[str, object]] | dict[str, object]
 _GEMINI_CONTENTS: Final = TypeAdapter[_GeminiContents](_GeminiContents)
 _INPUT_SIZE_FIELDS: Final = (
@@ -182,14 +193,58 @@ def _count_gemini_input_tokens(request_body: Mapping[str, object], model: str) -
     system_instruction: Final = next(
         (request_body[field] for field in _GEMINI_SYSTEM_INSTRUCTION_FIELDS if field in request_body), None
     )
+    contents: Final = _GEMINI_CONTENTS.validate_python(request_body["contents"])
+    tools: Final = request_body.get("tools")
+    if not _gemini_body_is_countable(request_body, contents, system_instruction, tools):
+        return None
     translate: Final = GoogleGenAIAdapter().translate_generate_content_to_completion  # pyright: ignore[reportUnknownMemberType]  # adapter's **kwargs is untyped
-    chat_request: Final = translate(
-        model=model,
-        contents=_GEMINI_CONTENTS.validate_python(request_body["contents"]),
-        systemInstruction=system_instruction,
-        tools=request_body.get("tools"),
-    )
+    chat_request: Final = translate(model=model, contents=contents, systemInstruction=system_instruction, tools=tools)
     return count_input_tokens_for_model(request_body=chat_request, model=model)
+
+
+def _gemini_body_is_countable(
+    request_body: Mapping[str, object],
+    contents: _GeminiContents,
+    system_instruction: object,
+    tools: object,
+) -> bool:
+    content_items: Final = contents if isinstance(contents, list) else (contents,)
+    system: Final = as_str_mapping(system_instruction)
+    return (
+        not any(field in request_body for field in _GEMINI_CACHED_CONTENT_FIELDS)
+        and all(_gemini_content_is_countable(content) for content in content_items)
+        and (
+            system_instruction is None
+            or (system is not None and _gemini_parts_are_countable(system.get("parts", ()), _GEMINI_TEXT_PART_FIELDS))
+        )
+        and all(_gemini_tool_is_countable(tool) for tool in iter_items(tools or ()))
+    )
+
+
+def _gemini_content_is_countable(content: Mapping[str, object]) -> bool:
+    return content.get("role", "user") in _GEMINI_COUNTED_ROLES and _gemini_parts_are_countable(
+        content.get("parts", ()), _GEMINI_COUNTED_PART_FIELDS
+    )
+
+
+def _gemini_parts_are_countable(parts: object, fields: frozenset[str]) -> bool:
+    return all(_gemini_part_is_countable(part, fields) for part in iter_items(parts))
+
+
+def _gemini_part_is_countable(part: object, fields: frozenset[str]) -> bool:
+    if isinstance(part, str):
+        return True
+    mapping: Final = as_str_mapping(part)
+    return (
+        mapping is not None
+        and mapping.keys() <= fields
+        and not any("parts" in (as_str_mapping(mapping.get(field)) or ()) for field in _GEMINI_FUNCTION_RESPONSE_FIELDS)
+    )
+
+
+def _gemini_tool_is_countable(tool: object) -> bool:
+    mapping: Final = as_str_mapping(tool)
+    return mapping is not None and mapping.keys() <= _GEMINI_COUNTED_TOOL_FIELDS
 
 
 def _count_text_tokens(model: str, text: object) -> int:

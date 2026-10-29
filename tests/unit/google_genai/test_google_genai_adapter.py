@@ -186,14 +186,11 @@ def test_native_function_call_preserves_arguments_and_matching_response(args: ob
     ("system_texts", "expected_content"),
     [
         (("Answer tersely",), "Answer tersely"),
-        (
-            ("Answer tersely", "Use British spelling"),
-            [{"type": "text", "text": "Answer tersely"}, {"type": "text", "text": "Use British spelling"}],
-        ),
+        (("Answer tersely", "Use British spelling"), "Answer tersely\nUse British spelling"),
     ],
 )
 def test_every_system_instruction_text_part_reaches_the_system_message(
-    system_texts: tuple[str, ...], expected_content: str | list[dict[str, str]]
+    system_texts: tuple[str, ...], expected_content: str
 ) -> None:
     request: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
         model="gemini/gemini-3.8-flash",

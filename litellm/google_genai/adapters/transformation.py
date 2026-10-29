@@ -629,13 +629,8 @@ class GoogleGenAIAdapter:
         """Transform Google GenAI contents to OpenAI messages format"""
         system_parts: Final = system_instruction.get("parts", ()) if system_instruction else ()
         system_texts: Final = tuple(part["text"] for part in system_parts if "text" in part)
-        system_content: Final = (
-            system_texts[0]
-            if len(system_texts) == 1
-            else [ChatCompletionTextObject(type="text", text=text) for text in system_texts]
-        )
         system_messages: Final = (
-            (ChatCompletionSystemMessage(role="system", content=system_content),) if system_texts else ()
+            (ChatCompletionSystemMessage(role="system", content="\n".join(system_texts)),) if system_texts else ()
         )
         return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
 
