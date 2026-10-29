@@ -13751,8 +13751,9 @@ def _window_spend_enqueue_env(cached_objects: dict, prisma_client=None):
         WindowSpendUpdateQueue,
     )
 
-    user_api_key_cache = MagicMock()
-    user_api_key_cache.async_get_cache = AsyncMock(side_effect=lambda key, **_: cached_objects.get(key))
+    user_api_key_cache = DualCache()
+    for key, value in cached_objects.items():
+        user_api_key_cache.set_cache(key=key, value=value)
 
     queue = WindowSpendUpdateQueue()
     proxy_logging_obj = MagicMock()
@@ -13968,6 +13969,7 @@ def _prisma_with_rows(keys: dict | None = None, teams: dict | None = None):
 async def test_key_window_is_charged_when_the_cached_key_expired_before_the_request_ended():
     """A stream that outlives user_api_key_cache_ttl finds no cached key when its
     cost lands. Its spend still belongs to the key's budget windows."""
+    import litellm.proxy.proxy_server as ps
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
@@ -13977,6 +13979,7 @@ async def test_key_window_is_charged_when_the_cached_key_expired_before_the_requ
     with _window_spend_enqueue_env({}, prisma_client=_prisma_with_rows(keys={"hashed-token": row})) as queue:
         await increment_spend_counters(token="hashed-token", team_id=None, user_id=None, response_cost=0.25)
         enqueued = await _drain(queue)
+        assert await ps.user_api_key_cache.async_get_cache(key="hashed-token") is None
 
     assert [(item["entity_type"], item["entity_id"], item["window_duration"]) for item in enqueued] == [
         ("key", "hashed-token", "30d")
@@ -13986,6 +13989,7 @@ async def test_key_window_is_charged_when_the_cached_key_expired_before_the_requ
 
 @pytest.mark.asyncio
 async def test_team_window_is_charged_when_the_cached_team_expired_before_the_request_ended():
+    import litellm.proxy.proxy_server as ps
     from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=3)
@@ -13995,6 +13999,7 @@ async def test_team_window_is_charged_when_the_cached_team_expired_before_the_re
     with _window_spend_enqueue_env({}, prisma_client=_prisma_with_rows(teams={"team-1": row})) as queue:
         await increment_spend_counters(token=None, team_id="team-1", user_id=None, response_cost=1.5)
         enqueued = await _drain(queue)
+        assert await ps.user_api_key_cache.async_get_cache(key="team_id:team-1") is None
 
     assert [(item["entity_type"], item["entity_id"], item["window_duration"]) for item in enqueued] == [
         ("team", "team-1", "7d")

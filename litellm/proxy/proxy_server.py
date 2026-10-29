@@ -3513,9 +3513,7 @@ def _cached_budget_limits(cached: object) -> object:
 
 
 async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
-    """budget_limits from the key or team row, for a request that outlived the
-    cached object (user_api_key_cache_ttl). Read only: re-caching here could race
-    a delete and put a just-deleted key back into the auth cache."""
+    """Read only: caching the row here could race a delete and put a just-deleted key back into the auth cache."""
     if prisma_client is None:
         return None
     try:
