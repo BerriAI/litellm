@@ -12,6 +12,7 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
     is_non_conversational_call_type,
+    is_non_conversational_request,
     is_string_batch_input,
     iter_message_text,
     iter_tool_json_text,
@@ -817,6 +818,30 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
     """A call type this module has never heard of must still be inspected —
     failing closed is the point of the deny-list."""
     assert is_non_conversational_call_type("some_future_call_type") is False
+
+
+@pytest.mark.parametrize(
+    ("call_type", "endpoint", "expected"),
+    [
+        ("aembedding", None, True),
+        ("allm_passthrough_route", "embeddings", True),
+        ("allm_passthrough_route", "/v1/embeddings/", True),
+        ("allm_passthrough_route", "chat/completions", False),
+        ("allm_passthrough_route", "model/amazon.titan-embed-text-v2:0/invoke", False),
+        ("allm_passthrough_route", "fine_tuned_embeddings_jobs", False),
+        ("allm_passthrough_route", "chat/completions#embeddings", False),
+        ("allm_passthrough_route", "chat/completions?x=embeddings", False),
+        ("allm_passthrough_route", "chat/completions;embeddings", False),
+        ("allm_passthrough_route", None, False),
+        ("acompletion", "embeddings", False),
+    ],
+)
+def test_is_non_conversational_request_skips_only_embeddings_requests(
+    call_type: str, endpoint: str | None, expected: bool
+):
+    data: Final[dict[str, object]] = {"endpoint": endpoint} if endpoint is not None else {}
+
+    assert is_non_conversational_request(call_type, data) is expected
 
 
 @pytest.mark.parametrize(
