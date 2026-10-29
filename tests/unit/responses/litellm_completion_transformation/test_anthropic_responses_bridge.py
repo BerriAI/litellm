@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.responses.litellm_completion_transformation.session_handler import StoredTurns
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -55,6 +56,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         request_kwargs: Mapping[str, object] | None = None,
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
+        stored_turns: StoredTurns | None = None,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
@@ -118,8 +120,10 @@ async def test_aresponses_forwards_timeout_to_acompletion():
 class _FakeSpendLogsDB:
     def __init__(self, spend_logs: Sequence[Mapping[str, object]]) -> None:
         self._spend_logs = spend_logs
+        self.queries = 0
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        self.queries += 1
         return self._spend_logs
 
 
@@ -1534,8 +1538,9 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
     search_turn: Mapping[str, object],
 ) -> None:
     anthropic: Final = _RecordingRawAnthropicMessages()
+    prisma_client: Final = _FakePrismaClient([search_turn, _CALENDAR_TURN])
 
-    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([search_turn, _CALENDAR_TURN])):
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
         await litellm.aresponses(
             model=_MODEL,
             previous_response_id="chatcmpl-calendar-turn",
@@ -1563,3 +1568,4 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
         [("tool_use", "toolu_standup")],
         [("tool_result", "toolu_standup"), ("text", None)],
     ]
+    assert prisma_client.db.queries == 1

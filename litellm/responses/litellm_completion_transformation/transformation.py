@@ -64,6 +64,7 @@ from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
 from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    StoredTurns,
 )
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
@@ -1298,6 +1299,7 @@ class LiteLLMCompletionResponsesConfig:
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
+        stored_turns: StoredTurns | None = None,
     ) -> dict[str, object]:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1313,6 +1315,7 @@ class LiteLLMCompletionResponsesConfig:
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
             client_response_ids=previous_response_client_ids,
+            stored_turns=stored_turns,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)

@@ -12,7 +12,7 @@ import litellm
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
-from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -151,14 +151,19 @@ class LiteLLMCompletionTransformationHandler:
         extra_headers: Mapping[str, object] | None,
         request_kwargs: Mapping[str, object],
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-        loaded_earlier: Final = (
-            await ResponsesSessionHandler.get_client_tool_search_loaded_tools_for_previous_response_id(
-                previous_response_id, previous_response_client_ids
-            )
+        stored_turns: Final = await ResponsesSessionHandler.get_stored_turns_for_previous_response_id(
+            previous_response_id, previous_response_client_ids
         )
-        bridged: Final = _bridged_request(hoisted, responses_api_request, loaded_earlier)
+        bridged: Final = _bridged_request(
+            hoisted,
+            responses_api_request,
+            ResponsesSessionHandler.client_tool_search_tools_loaded_before(
+                stored_turns, previous_response_id, previous_response_client_ids
+            ),
+        )
         return await self.async_response_api_handler(
             previous_response_client_ids,
+            stored_turns,
             litellm_completion_request=(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                     model=model,
@@ -178,6 +183,7 @@ class LiteLLMCompletionTransformationHandler:
     async def async_response_api_handler(
         self,
         previous_response_client_ids: tuple[str, ...] = (),
+        stored_turns: StoredTurns | None = None,
         /,
         *,
         litellm_completion_request: dict,
@@ -193,6 +199,7 @@ class LiteLLMCompletionTransformationHandler:
                 instructions=responses_api_request.get("instructions"),
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
                 previous_response_client_ids=previous_response_client_ids,
+                stored_turns=stored_turns,
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
 

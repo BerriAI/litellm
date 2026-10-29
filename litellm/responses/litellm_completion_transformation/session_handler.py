@@ -92,6 +92,12 @@ class _ReplayStart:
     at_output: bool
 
 
+@dataclass(frozen=True, slots=True)
+class StoredTurns:
+    spend_logs: tuple["SpendLogsPayload", ...]
+    proxy_server_requests: tuple[Mapping[str, object] | None, ...]
+
+
 def _compaction_point(
     index: int, spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
 ) -> _ReplayStart | None:
@@ -194,6 +200,7 @@ class ResponsesSessionHandler:
         previous_response_id: str,
         item_cache_control: bool = False,
         client_response_ids: tuple[str, ...] = (),
+        stored_turns: StoredTurns | None = None,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -204,23 +211,21 @@ class ResponsesSessionHandler:
         )
 
         verbose_proxy_logger.debug("inside get_chat_completion_message_history_for_previous_response_id")
-        all_spend_logs: Final = [
-            spend_log
-            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        turns: Final = (
+            stored_turns
+            if stored_turns is not None
+            else await ResponsesSessionHandler.get_stored_turns_for_previous_response_id(
                 previous_response_id, client_response_ids
             )
-            if _is_a_conversation_turn(spend_log)
-        ]
+        )
+        all_spend_logs: Final = turns.spend_logs
         verbose_proxy_logger.debug("found %s spend logs for this response id", len(all_spend_logs))
 
         litellm_session_id: str | None = None
         if len(all_spend_logs) > 0:
             litellm_session_id = all_spend_logs[0].get("session_id")
 
-        proxy_server_requests: Final = [
-            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
-            for spend_log in all_spend_logs
-        ]
+        proxy_server_requests: Final = turns.proxy_server_requests
         replayable_turns: Final = _turns_through_referenced_response(
             all_spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
         )
@@ -257,28 +262,40 @@ class ResponsesSessionHandler:
         )
 
     @staticmethod
-    async def get_client_tool_search_loaded_tools_for_previous_response_id(
+    async def get_stored_turns_for_previous_response_id(
         previous_response_id: str,
         client_response_ids: tuple[str, ...] = (),
-    ) -> tuple[Mapping[str, object], ...]:
-        spend_logs: Final = [
+    ) -> StoredTurns:
+        spend_logs: Final = tuple(
             spend_log
             for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
                 previous_response_id, client_response_ids
             )
             if _is_a_conversation_turn(spend_log)
-        ]
-        turns: Final = _turns_through_referenced_response(
-            spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
         )
-        proxy_server_requests: Final = [
-            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
-            for spend_log in spend_logs[:turns]
-        ]
+        return StoredTurns(
+            spend_logs=spend_logs,
+            proxy_server_requests=tuple(
+                [
+                    await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
+                    for spend_log in spend_logs
+                ]
+            ),
+        )
+
+    @staticmethod
+    def client_tool_search_tools_loaded_before(
+        stored_turns: StoredTurns,
+        previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
+    ) -> tuple[Mapping[str, object], ...]:
+        turns: Final = _turns_through_referenced_response(
+            stored_turns.spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        )
         return tuple(
             chain.from_iterable(
                 client_tool_search_loaded_tools(request.get("input"))
-                for request in proxy_server_requests
+                for request in stored_turns.proxy_server_requests[:turns]
                 if request is not None
             )
         )
