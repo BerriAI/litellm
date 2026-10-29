@@ -14686,6 +14686,15 @@ def _with_client_oauth_token(
     return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
 
 
+def _count_model_counter(settings: TokenCountSettings) -> BaseTokenCounter | None:
+    count_model: Final = settings.count_model
+    if count_model is None or count_model.litellm_provider != "xai":
+        return None
+    from litellm.llms.xai.count_tokens.token_counter import XAITokenCounter
+
+    return XAITokenCounter()
+
+
 def _get_provider_token_counter(
     deployment: dict, model_to_use: str
 ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
@@ -14879,6 +14888,7 @@ async def _provider_token_count(
     request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
+    added_framing: int = 0,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -14896,9 +14906,12 @@ async def _provider_token_count(
     if counted is None:
         return None
     if isinstance(counted, TokenCountResponse):
+        total_tokens: Final = counted.total_tokens + added_framing
         if count_model is None:
-            return counted.model_copy(update={"count_source": "provider"})
-        return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
+            return counted.model_copy(update={"total_tokens": total_tokens, "count_source": "provider"})
+        return counted.model_copy(
+            update={"total_tokens": total_tokens, "count_source": "token_count_model", "model_used": count_model.model}
+        )
     pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
     region_hint: Final = (
         None
@@ -15422,7 +15435,9 @@ async def _count_request_tokens(
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
-        provider_counter = _with_client_oauth_token(routed_counter, client_oauth_token)
+        provider_counter = _with_client_oauth_token(
+            _count_model_counter(settings) or routed_counter, client_oauth_token
+        )
         if _model is not None:
             model_to_use = _model
 
@@ -15493,6 +15508,7 @@ async def _count_request_tokens(
             request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
+            added_framing=0 if provider_counter.includes_framing else settings.framing or 0,
         )
     )
     if isinstance(ladder, TokenCountResponse):

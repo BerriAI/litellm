@@ -47,6 +47,15 @@ def _in_us_west_2() -> str:
             ),
         ),
         (
+            {"token_count_model": {"model": "grok-4-1-fast-reasoning", "litellm_provider": "xai"}},
+            TokenCountSettings(
+                framing=97,
+                count_model=TokenCountModel(
+                    model="grok-4-1-fast-reasoning", region=None, litellm_provider="xai", configured=True
+                ),
+            ),
+        ),
+        (
             {"token_count_model": {"model": "custom-model"}},
             TokenCountSettings(
                 framing=97, count_model=TokenCountModel(model="custom-model", region=None, configured=True)

@@ -6,7 +6,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
@@ -83,6 +83,11 @@ class XAIModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_base_model(model: str) -> str | None:
         return model.replace("xai/", "")
+
+    def get_token_counter(self) -> BaseTokenCounter | None:
+        from litellm.llms.xai.count_tokens.token_counter import XAITokenCounter
+
+        return XAITokenCounter()
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = self.get_api_base(api_base)

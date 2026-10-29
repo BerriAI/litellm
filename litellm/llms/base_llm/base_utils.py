@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
@@ -28,6 +28,8 @@ from litellm.types.utils import (
 
 
 class BaseTokenCounter(ABC):
+    includes_framing: ClassVar[bool] = True
+
     @abstractmethod
     async def count_tokens(
         self,

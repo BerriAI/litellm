@@ -1607,6 +1607,95 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
     assert sent["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "build ok"}]
 
 
+_AZURE_GROK: Final = MappingProxyType(
+    {
+        "model_name": "azure-grok",
+        "litellm_params": {
+            "model": "azure_ai/grok-4-1-fast-reasoning",
+            "api_key": "azure-key",
+            "api_base": "https://grok.services.ai.azure.com/models",
+        },
+    }
+)
+
+
+def _xai_token_ids(count: int) -> httpx.Response:
+    return httpx.Response(200, json={"token_ids": [{"token_id": i} for i in range(count)]})
+
+
+def _cost_map_framing(model: str) -> int:
+    framing: Final = litellm.get_model_info(model)["token_count_framing"]
+    assert isinstance(framing, int) and framing > 0
+    return framing
+
+
+async def _count_with_xai_mocked(
+    monkeypatch: pytest.MonkeyPatch, deployment: Mapping[str, object], token_ids: int
+) -> tuple[JSONResponse | dict[str, JsonValue], respx.Route]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[dict(deployment)]))
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = _json_request(
+        {"model": deployment["model_name"], "messages": [{"role": "user", "content": "hi"}]}, "python-httpx/0.28.1"
+    )
+    with respx.mock:
+        route: Final = respx.post("https://api.x.ai/v1/tokenize-text").mock(return_value=_xai_token_ids(token_ids))
+        return await anthropic_count_tokens(request, UserAPIKeyAuth()), route
+
+
+@pytest.mark.asyncio
+async def test_xai_deployment_counts_the_rendered_prompt_with_xai_plus_its_cost_map_framing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    deployment: Final = {
+        "model_name": "grok",
+        "litellm_params": {"model": "xai/grok-4.7", "api_key": "xai-deployment-key"},
+    }
+
+    response, route = await _count_with_xai_mocked(monkeypatch, deployment, token_ids=7)
+
+    assert response == {"input_tokens": 7 + _cost_map_framing("xai/grok-4.7"), "litellm_count_source": "provider"}
+    assert json.loads(route.calls.last.request.content) == {"text": "Human: hi<|separator|>\n\n", "model": "grok-4.7"}
+    assert route.calls.last.request.headers["Authorization"] == "Bearer xai-deployment-key"
+
+
+@pytest.mark.asyncio
+async def test_azure_grok_with_an_xai_token_count_model_counts_with_xai_and_the_proxy_xai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XAI_API_KEY", "xai-env-key")
+    deployment: Final = {
+        **_AZURE_GROK,
+        "model_info": {"token_count_model": {"model": "grok-4-1-fast-reasoning", "litellm_provider": "xai"}},
+    }
+
+    response, route = await _count_with_xai_mocked(monkeypatch, deployment, token_ids=5)
+
+    assert response == {
+        "input_tokens": 5 + _cost_map_framing("azure_ai/grok-4-1-fast-reasoning"),
+        "litellm_count_source": "token_count_model",
+        "litellm_count_model": "grok-4-1-fast-reasoning",
+    }
+    assert json.loads(route.calls.last.request.content)["model"] == "grok-4-1-fast-reasoning"
+    assert route.calls.last.request.headers["Authorization"] == "Bearer xai-env-key"
+
+
+@pytest.mark.asyncio
+async def test_azure_grok_without_an_xai_token_count_model_never_sends_the_prompt_to_xai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XAI_API_KEY", "xai-env-key")
+
+    response, route = await _count_with_xai_mocked(monkeypatch, _AZURE_GROK, token_ids=5)
+
+    assert route.call_count == 0
+    assert isinstance(response, dict)
+    assert response["litellm_count_source"] == "local_estimate"
+
+
 class _ScriptedCounter(BaseTokenCounter):
     def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies

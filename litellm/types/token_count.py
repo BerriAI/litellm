@@ -4,7 +4,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 TokenCountSource: TypeAlias = Literal["provider", "token_count_model", "local_estimate"]
 TokenCountTokenizer: TypeAlias = Literal["kimi_k3"]
-TokenCountProvider: TypeAlias = Literal["bedrock", "bedrock_mantle"]
+TokenCountProvider: TypeAlias = Literal["bedrock", "bedrock_mantle", "xai"]
 
 
 class TokenCountModelInfo(TypedDict):

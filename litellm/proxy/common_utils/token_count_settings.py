@@ -115,6 +115,8 @@ def _count_provider(value: object) -> TokenCountProvider | None:
             return "bedrock"
         case "bedrock_mantle":
             return "bedrock_mantle"
+        case "xai":
+            return "xai"
         case _:
             return None
 
