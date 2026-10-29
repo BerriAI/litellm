@@ -2297,7 +2297,7 @@ def _cloudflare_image_requests(count: int) -> tuple[tuple[str, Mapping[str, obje
 def test_more_images_than_cloudflare_takes_are_refused_before_any_download_or_http(
     api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(litellm, "drop_params", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
 
     with pytest.raises(litellm.BadRequestError, match="at most 4 images per request, got 5") as caught:
@@ -2435,6 +2435,10 @@ def _png_object(decoded_bytes: int) -> Mapping[str, object]:
     return {"content_type": "image/png", "base64": base64.b64encode(bytes(decoded_bytes)).decode()}
 
 
+def _distinct_png_data_urls(count: int) -> tuple[str, ...]:
+    return tuple(f"data:image/png;base64,{base64.b64encode(bytes((index,))).decode()}" for index in range(count))
+
+
 _OVERSIZED_IMAGES: Final[tuple[tuple[Sequence[object], str], ...]] = (
     ((_png_data_url(4 * _MIB + 1),), "images of at most 4,194,304 bytes (4 MiB) each, got one of 4,194,305 bytes"),
     ((_png_object(4 * _MIB + 1),), "images of at most 4,194,304 bytes (4 MiB) each, got one of 4,194,305 bytes"),
@@ -2445,27 +2449,60 @@ _OVERSIZED_IMAGES: Final[tuple[tuple[Sequence[object], str], ...]] = (
 )
 
 
+_OVERSIZED_IMAGE_IDS: Final = ("data_url_over_4mib", "object_over_4mib", "total_over_8mib")
+
+
 @pytest.mark.usefixtures("cloudflare_account")
-@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
-@pytest.mark.parametrize(
-    ("images", "refusal"), _OVERSIZED_IMAGES, ids=("data_url_over_4mib", "object_over_4mib", "total_over_8mib")
-)
+@pytest.mark.parametrize(("images", "refusal"), _OVERSIZED_IMAGES, ids=_OVERSIZED_IMAGE_IDS)
 def test_images_over_cloudflares_size_limits_are_refused_before_http(
-    images: Sequence[object], refusal: str, drop_params: bool, respx_mock: respx.MockRouter
+    images: Sequence[object], refusal: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
 
     with pytest.raises(litellm.BadRequestError, match=re.escape(f"cloudflare takes {refusal}")) as caught:
-        litellm.systemone(
-            model="cloudflare/clef",
-            state=_SCREEN_TEXT,
-            questions=_SYSTEMONE_PREDICATE,
-            images=images,
-            drop_params=drop_params,
-        )
+        litellm.systemone(model="cloudflare/clef", state=_SCREEN_TEXT, questions=_SYSTEMONE_PREDICATE, images=images)
 
     assert caught.value.status_code == 400
     assert not route.called
+
+
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize(
+    ("images", "kept_count"),
+    tuple(zip((images for images, _ in _OVERSIZED_IMAGES), (0, 0, 2), strict=True)),
+    ids=_OVERSIZED_IMAGE_IDS,
+)
+def test_images_over_cloudflares_size_limits_are_dropped_under_drop_params(
+    images: Sequence[object], kept_count: int, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model="cloudflare/clef",
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=images,
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content).get("images", []) == list(images[:kept_count])
+
+
+@pytest.mark.usefixtures("cloudflare_account")
+def test_images_past_cloudflares_limit_are_dropped_under_drop_params(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    images: Final = _distinct_png_data_urls(5)
+
+    litellm.systemone(
+        model="cloudflare/clef",
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=list(images),
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content)["images"] == list(images[:4])
 
 
 @pytest.mark.asyncio
@@ -4124,7 +4161,7 @@ def test_systemone_moves_images_into_state(
         model=model,
         state={"ticket": 1234},
         questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
-        images=["data:IMAGE/JPEG;name=shot.jpg;base64,A-_A", {"content_type": "image/webp", "base64": "B-_B"}],
+        images=["data:IMAGE/JPG;name=shot.jpg;base64,A-_AB-", {"content_type": "image/webp", "base64": "B-_B"}],
         api_key="caller-key",
     )
 
@@ -4132,7 +4169,7 @@ def test_systemone_moves_images_into_state(
         "model": upstream_model,
         "state": [
             {"ticket": 1234},
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,A+/A"}},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,A+/AB+=="}},
             {"type": "image_url", "image_url": {"url": "data:image/webp;base64,B+/B"}},
         ],
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
@@ -4160,17 +4197,19 @@ def test_a_list_state_keeps_its_items_ahead_of_the_images(
     ]
 
 
-@pytest.mark.parametrize(
-    ("model", "url", "max_images"),
-    (
-        ("perplexity/pplx-decider-v1.2", "https://api.perplexity.ai/v1/decisions", 8),
-        ("openrouter/cloudflare/clef-flash", "https://openrouter.ai/api/alpha/decisions", 4),
-    ),
-    ids=("perplexity", "openrouter-clef"),
+_STATE_IMAGE_LIMITS: Final = (
+    ("perplexity/pplx-decider-v1.2", "https://api.perplexity.ai/v1/decisions", 8),
+    ("openrouter/cloudflare/clef-flash", "https://openrouter.ai/api/alpha/decisions", 4),
+    ("openrouter/perplexity/pplx-decider-v1.2", "https://openrouter.ai/api/alpha/decisions", 8),
 )
+_STATE_IMAGE_LIMIT_IDS: Final = ("perplexity", "openrouter-clef", "openrouter-perplexity")
+
+
+@pytest.mark.parametrize(("model", "url", "max_images"), _STATE_IMAGE_LIMITS, ids=_STATE_IMAGE_LIMIT_IDS)
 def test_more_images_than_the_model_takes_are_refused_before_http(
-    model: str, url: str, max_images: int, respx_mock: respx.MockRouter
+    model: str, url: str, max_images: int, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
     litellm.systemone(
@@ -4193,6 +4232,28 @@ def test_more_images_than_the_model_takes_are_refused_before_http(
         )
 
     assert route.call_count == 1
+
+
+@pytest.mark.parametrize(("model", "url", "max_images"), _STATE_IMAGE_LIMITS, ids=_STATE_IMAGE_LIMIT_IDS)
+def test_images_past_the_models_limit_are_dropped_under_drop_params(
+    model: str, url: str, max_images: int, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+    images: Final = _distinct_png_data_urls(max_images + 2)
+
+    litellm.systemone(
+        model=model,
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=list(images),
+        api_key="k",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content)["state"] == [
+        _SCREEN_TEXT,
+        *({"type": "image_url", "image_url": {"url": image}} for image in images[:max_images]),
+    ]
 
 
 def test_an_image_over_the_clef_size_limit_is_refused_before_the_openrouter_call(respx_mock: respx.MockRouter) -> None:

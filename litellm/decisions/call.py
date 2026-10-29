@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
+from itertools import accumulate
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -621,14 +622,27 @@ def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
     )
     if not unsupported:
         return call
-    supported: Final = with_images_where(call.ir_request.input, partial(_has_media_type_in, media_types))
-    if _drops_params(call.litellm_params) and not _leaves_no_input(supported):
-        return replace(call, ir_request=replace(call.ir_request, input=supported))
+    return _dropped_or_refused(
+        call,
+        with_images_where(call.ir_request.input, partial(_has_media_type_in, media_types)),
+        f"takes only {', '.join(sorted(media_types))} images, got {', '.join(unsupported)}",
+    )
+
+
+def _with_images_kept(
+    decision_input: DecisionsIRState | DecisionsIRMessages, kept: Sequence[bool]
+) -> DecisionsIRState | DecisionsIRMessages:
+    flags: Final = iter(kept)
+    return with_images_where(decision_input, lambda _image: next(flags))
+
+
+def _dropped_or_refused(
+    call: DecisionsCall, kept_input: DecisionsIRState | DecisionsIRMessages, refusal: str
+) -> DecisionsCall:
+    if _drops_params(call.litellm_params) and not _leaves_no_input(kept_input):
+        return replace(call, ir_request=replace(call.ir_request, input=kept_input))
     raise litellm.BadRequestError(
-        message=(
-            f"{call.custom_llm_provider} takes only {', '.join(sorted(media_types))} images, "
-            f"got {', '.join(unsupported)}"
-        ),
+        message=f"{call.custom_llm_provider} {refusal}",
         model=call.requested_model,
         llm_provider=call.custom_llm_provider,
     )
@@ -639,10 +653,10 @@ def _checked_image_count(call: DecisionsCall) -> DecisionsCall:
     image_count: Final = len(input_images(call.ir_request.input))
     if max_images is None or image_count <= max_images:
         return call
-    raise litellm.BadRequestError(
-        message=f"{call.custom_llm_provider} takes at most {max_images} images per request, got {image_count}",
-        model=call.requested_model,
-        llm_provider=call.custom_llm_provider,
+    return _dropped_or_refused(
+        call,
+        _with_images_kept(call.ir_request.input, tuple(index < max_images for index in range(image_count))),
+        f"takes at most {max_images} images per request, got {image_count}",
     )
 
 
@@ -657,12 +671,8 @@ def _byte_limit(limit: int) -> str:
     return f"{limit:,} bytes ({limit / (1024 * 1024):g} MiB)"
 
 
-def _image_size_error(call: DecisionsCall) -> str | None:
-    sizes: Final = tuple(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+def _image_size_error(sizes: Sequence[int], per_image: int | None, total: int | None) -> str | None:
     largest: Final = max(sizes, default=0)
-    rules: Final = call.provider_config.image_rules_for(call.model)
-    per_image: Final = rules.max_image_bytes
-    total: Final = rules.max_total_image_bytes
     if per_image is not None and largest > per_image:
         return f"takes images of at most {_byte_limit(per_image)} each, got one of {largest:,} bytes"
     if total is not None and sum(sizes) > total:
@@ -670,14 +680,26 @@ def _image_size_error(call: DecisionsCall) -> str | None:
     return None
 
 
+def _kept_within_sizes(sizes: Sequence[int], per_image: int | None, total: int | None) -> tuple[bool, ...]:
+    fits: Final = tuple(per_image is None or size <= per_image for size in sizes)
+    spent: Final = accumulate(size if fit else 0 for size, fit in zip(sizes, fits, strict=True))
+    return tuple(
+        fit and (total is None or bytes_so_far <= total) for fit, bytes_so_far in zip(fits, spent, strict=True)
+    )
+
+
 def _checked_image_sizes(call: DecisionsCall) -> DecisionsCall:
-    error: Final = _image_size_error(call)
+    sizes: Final = tuple(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+    rules: Final = call.provider_config.image_rules_for(call.model)
+    error: Final = _image_size_error(sizes, rules.max_image_bytes, rules.max_total_image_bytes)
     if error is None:
         return call
-    raise litellm.BadRequestError(
-        message=f"{call.custom_llm_provider} {error}",
-        model=call.requested_model,
-        llm_provider=call.custom_llm_provider,
+    return _dropped_or_refused(
+        call,
+        _with_images_kept(
+            call.ir_request.input, _kept_within_sizes(sizes, rules.max_image_bytes, rules.max_total_image_bytes)
+        ),
+        error,
     )
 
 

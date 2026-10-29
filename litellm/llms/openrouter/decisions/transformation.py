@@ -4,11 +4,16 @@ from typing import Final
 
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
+from litellm.llms.perplexity.decisions.transformation import PerplexityDecisionsConfig
 from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
 from litellm.types.decisions import DecisionsIRResponse
 
 _ORG_IMAGE_RULES: Final[Mapping[str, BaseDecisionsConfig]] = MappingProxyType(
-    {"typesafe": TypeSafeDecisionsConfig(), "cloudflare": CloudflareDecisionsConfig()}
+    {
+        "typesafe": TypeSafeDecisionsConfig(),
+        "cloudflare": CloudflareDecisionsConfig(),
+        "perplexity": PerplexityDecisionsConfig(),
+    }
 )
 
 

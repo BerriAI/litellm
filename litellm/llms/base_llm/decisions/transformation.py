@@ -66,6 +66,7 @@ _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
 _DATA_URL_PREFIX: Final = "data:"
 _URL_SAFE_TO_STANDARD_BASE64: Final = str.maketrans("-_", "+/")
+_MEDIA_TYPE_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"image/jpg": "image/jpeg"})
 
 _StateItem: TypeAlias = str | Mapping[str, object]
 
@@ -261,16 +262,25 @@ def image_media_type(image: DecisionsImage) -> str | None:
 def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
     if isinstance(image, DecisionsBase64Image):
         return {"content_type": image_media_type(image), "base64": image.base64}
-    return _data_url(image)
+    media_type: Final = image_media_type(image)
+    if media_type is None:
+        return image
+    return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
+
+
+def _standard_data_url(media_type: str, payload: str) -> str:
+    padding: Final = "=" * (-len(payload) % 4)
+    standard_type: Final = _MEDIA_TYPE_ALIASES.get(media_type, media_type)
+    return f"{_DATA_URL_PREFIX}{standard_type};base64,{standard_base64(payload)}{padding}"
 
 
 def _data_url(image: DecisionsImage) -> str:
-    media_type: Final = image_media_type(image)
     if isinstance(image, DecisionsBase64Image):
-        return f"{_DATA_URL_PREFIX}{media_type};base64,{standard_base64(image.base64)}"
+        return _standard_data_url(_media_type(image.content_type), image.base64)
+    media_type: Final = image_media_type(image)
     if media_type is None:
         return image
-    return f"{_DATA_URL_PREFIX}{media_type};base64,{standard_base64(image.partition(',')[2])}"
+    return _standard_data_url(media_type, image.partition(",")[2])
 
 
 def _image_item(image: DecisionsImage) -> _StateItem:
