@@ -11,7 +11,9 @@ from prisma.errors import DataError
 
 import litellm
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy.common_request_processing import proxy_exception_from_route_error
 from litellm.proxy.utils import get_error_message_str, handle_exception_on_proxy
+from litellm.types.router import RouterErrors
 
 
 def normalize(value):
@@ -187,7 +189,7 @@ def test_handle_exception_on_proxy_error_path_none_input_wraps_as_500():
         (401, "authentication_error"),
         (403, "permission_error"),
         (404, "invalid_request_error"),
-        (408, ProxyErrorTypes.internal_server_error.value),
+        (408, "invalid_request_error"),
         (409, "invalid_request_error"),
         (422, "invalid_request_error"),
         (429, "rate_limit_error"),
@@ -218,7 +220,7 @@ def _exception_carrying_status(carried: int | None) -> Exception:
     [
         (400, "invalid_request_error"),
         (404, "invalid_request_error"),
-        (408, ProxyErrorTypes.internal_server_error.value),
+        (408, "invalid_request_error"),
         (429, "rate_limit_error"),
         (500, ProxyErrorTypes.internal_server_error.value),
     ],
@@ -242,29 +244,61 @@ def test_handle_exception_on_proxy_keeps_the_type_the_exception_already_names():
 
 
 @pytest.mark.parametrize(
-    "exc, expected_code",
+    "exc",
     [
-        (
-            openai.InternalServerError(
-                message="upstream down",
-                response=httpx.Response(500, request=httpx.Request("GET", "https://api.openai.com/v1/batches/b")),
-                body={"type": "server_error"},
-            ),
-            "500",
+        openai.InternalServerError(
+            message="upstream down",
+            response=httpx.Response(500, request=httpx.Request("GET", "https://api.openai.com/v1/batches/b")),
+            body={"type": "server_error"},
         ),
-        (litellm.Timeout(message="took too long", model="gpt-6.1-sol", llm_provider="openai"), "408"),
+        litellm.Timeout(message="took too long", model="gpt-6.1-sol", llm_provider="openai"),
+        litellm.RateLimitError(message="slow down", llm_provider="openai", model="gpt-6.1-sol"),
+        litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-6.1-sol"),
+        litellm.BadRequestError(message="bad input", model="gpt-6.1-sol", llm_provider="openai"),
+        HTTPException(status_code=404, detail="no such batch"),
     ],
-    ids=["provider_5xx_naming_its_own_type", "provider_timeout"],
+    ids=["provider_5xx_naming_its_own_type", "timeout", "rate_limit", "bad_key", "bad_request", "http_404"],
 )
-def test_handle_exception_on_proxy_keeps_internal_server_error_for_failures_the_caller_cannot_fix(
-    exc: Exception, expected_code: str
-):
-    """Batch and fine-tuning routes pass provider errors straight through, and a retry loop
-    that treats internal_server_error as transient must keep retrying a provider outage or a
-    timeout instead of reading the provider's own type or a fix-your-request label."""
-    result: Final = handle_exception_on_proxy(exc)
+def test_handle_exception_on_proxy_labels_a_failure_the_way_the_chat_route_does(exc: Exception):
+    """Batch, file, and management routes answer through this handler while chat answers through the route
+    error path, and one client calling both must read the same type for the same failure."""
+    shared: Final = handle_exception_on_proxy(exc)
+    chat: Final = proxy_exception_from_route_error(exc)
 
-    assert (result.code, result.type) == (expected_code, ProxyErrorTypes.internal_server_error.value)
+    assert (shared.code, shared.type) == (chat.code, chat.type)
+
+
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        (f"{RouterErrors.no_deployments_with_provider_budget_routing.value}, try later", ("429", "rate_limit_error")),
+        (f"{RouterErrors.no_deployments_with_tag_routing.value}=['paid']", ("401", "authentication_error")),
+    ],
+    ids=["no_deployment_left", "no_deployment_for_tags"],
+)
+def test_handle_exception_on_proxy_names_a_router_failure_by_the_status_it_answers(
+    message: str, expected: tuple[str, str]
+):
+    """A router failure that carries no status answers the 429 or 401 its message maps to, and a 429 labelled
+    internal_server_error reads as an outage to a client that branches on the type."""
+    result: Final = handle_exception_on_proxy(ValueError(message))
+
+    assert (result.code, result.type) == expected
+
+
+def test_handle_exception_on_proxy_keeps_the_path_a_rejected_request_names():
+    """A provider rejecting a batch input names the caller's own bucket path, and redacting the /tmp part of it
+    leaves the caller nothing to fix their request with."""
+    result: Final = handle_exception_on_proxy(
+        litellm.BadRequestError(
+            message="Invalid input_file_id gs://my-bucket/tmp/batch_input.jsonl",
+            model="gemini-3.1-pro-preview",
+            llm_provider="vertex_ai",
+        )
+    )
+
+    assert result.code == "400"
+    assert "gs://my-bucket/tmp/batch_input.jsonl" in result.message
 
 
 def test_handle_exception_on_proxy_redacts_the_internal_host_an_unreachable_upstream_names():
@@ -275,6 +309,16 @@ def test_handle_exception_on_proxy_redacts_the_internal_host_an_unreachable_upst
     assert result.code == "500"
     assert "Cannot connect to host" in result.message
     assert "10.12.4.7" not in result.message
+
+
+def test_handle_exception_on_proxy_redacts_the_internal_host_a_route_puts_in_a_gateway_failure_detail():
+    """Routes wrap an upstream failure as an HTTPException whose detail is the raw error, so a 5xx detail carries
+    the same private address an unwrapped connection error does."""
+    result: Final = handle_exception_on_proxy(HTTPException(status_code=503, detail="Cannot connect to host 10.0.0.9"))
+
+    assert result.code == "503"
+    assert "Cannot connect to host" in result.message
+    assert "10.0.0.9" not in result.message
 
 
 def test_handle_exception_on_proxy_answers_500_for_an_exception_whose_status_is_none():

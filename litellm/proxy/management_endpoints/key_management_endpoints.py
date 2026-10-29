@@ -7243,10 +7243,10 @@ async def list_keys(
         return response
 
     except Exception as e:
-        verbose_proxy_logger.exception("Error in list_keys: %s", e)
         if isinstance(e, HTTPException):
             raise handle_exception_on_proxy(e)
-        elif isinstance(e, ProxyException):
+        verbose_proxy_logger.exception("Error in list_keys: %s", e)
+        if isinstance(e, ProxyException):
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),

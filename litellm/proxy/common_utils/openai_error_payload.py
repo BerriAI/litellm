@@ -9,7 +9,7 @@ from typing import Final
 from fastapi import status
 
 from litellm.constants import STRINGIFIED_NONE
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyException, router_error_status_code
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
 
@@ -45,10 +45,14 @@ def openai_error_type(exc: object, status_code: int) -> str:
     return openai_error_type_for_status(status_code)
 
 
-def caller_error_type(exc: object, status_code: int) -> str:
-    if status_code == status.HTTP_408_REQUEST_TIMEOUT or status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
-        return "internal_server_error"
-    return openai_error_type(exc, status_code)
+def proxy_error_status_code(exc: object, message: str) -> int:
+    """The status ``ProxyException`` answers ``exc`` with once its router-message rules apply."""
+    routed: Final = router_error_status_code(message)
+    return routed if routed is not None else error_status_code(exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def is_gateway_failure(status_code: int) -> bool:
+    return status_code == status.HTTP_408_REQUEST_TIMEOUT or status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def openai_error_type_for_status(status_code: int) -> str:
