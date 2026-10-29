@@ -18033,3 +18033,41 @@ def test_inferred_custom_tiers_reject_order_dependent_features(setting: str) -> 
                 setting: True,
             }
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defined", [False, True])
+@pytest.mark.parametrize("plan_mode", [False, True])
+@pytest.mark.parametrize(
+    "default_model,planned_model",
+    [("backup", "capable"), ("fast", "capable"), ("capable", "capable"), ("premium-model", "premium-model")],
+)
+async def test_custom_classifier_failure_preserves_plan_floor_and_direct_default(
+    defined: bool, plan_mode: bool, default_model: str, planned_model: str
+) -> None:
+    definitions: Final = (
+        [{"name": name, "description": name} for name in ("quick", "careful", "premium")] if defined else None
+    )
+    router: Final = ComplexityRouter(
+        model_name="auto",
+        litellm_router_instance=litellm.Router(model_list=[]),
+        default_model=default_model,
+        complexity_router_config={
+            "classifier_type": "custom",
+            "classifier_plugin": _RaisingClassifier(),
+            "classifier_fallback": "default_model",
+            "tiers": {"quick": "fast", "careful": "capable", "premium": "premium-model"},
+            "tier_definitions": definitions,
+            "plan_mode_min_tier": "careful",
+        },
+    )
+    prompt: Final = "<system-reminder>Plan mode is active</system-reminder> hello" if plan_mode else "hello"
+    result: Final = await router.async_pre_routing_hook(
+        model="auto", request_kwargs={}, messages=[{"role": "user", "content": prompt}]
+    )
+    assert result is not None
+    assert result.model == (planned_model if plan_mode else default_model)
+    assert result.routing_decision is not None
+    assert result.routing_decision.get("tier") == (
+        ("premium" if planned_model == "premium-model" else "careful") if plan_mode else None
+    )
