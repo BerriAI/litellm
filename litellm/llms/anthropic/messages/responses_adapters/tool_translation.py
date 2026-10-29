@@ -3,10 +3,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Final, TypeAlias
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.integrations.anthropic_cache_control_hook import targets_openai_api
 from litellm.llms.anthropic.messages.utils import json_copy_or_original
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.utils import LlmProviders
 
 _VERSIONED_TOOL_TYPE: Final = re.compile(r"(?P<family>[a-z0-9_]+?)_(?P<version>\d{8})")
 _UNVERSIONED_SERVER_TOOL_TYPES: Final = frozenset({"mcp_toolset", "computer_toolset"})
@@ -298,4 +301,10 @@ def log_dropped_tools(tools: Sequence[UntranslatableTool]) -> None:
 def unforceable_tool_choice_error(name: str) -> UnsupportedParamsError:
     return UnsupportedParamsError(
         message=f"OpenAI cannot force the tool search tool {name} through `tool_choice`. To drop it, {_DROP_PARAMS_HOW_TO}"
+    )
+
+
+def openai_runs_tool_search(model: str, api_base: object) -> bool:
+    return targets_openai_api(api_base) and litellm.supports_tool_search(
+        model=model, custom_llm_provider=LlmProviders.OPENAI.value
     )

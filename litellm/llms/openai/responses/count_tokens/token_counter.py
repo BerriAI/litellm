@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
+from litellm.llms.anthropic.messages.responses_adapters.tool_translation import openai_runs_tool_search
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -118,11 +119,17 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
+        api_base: str | None,
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                    model=model_to_use,
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    output_format=output_format,
+                    maps_tool_search=openai_runs_tool_search(model_to_use, api_base),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
@@ -186,6 +193,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            api_base=resolved.api_base,
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting

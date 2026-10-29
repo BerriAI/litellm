@@ -13,7 +13,6 @@ import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
-    targets_openai_api,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
@@ -38,6 +37,7 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
+from .tool_translation import openai_runs_tool_search
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
@@ -70,8 +70,9 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
 
 
 def _maps_tool_search(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
-    return _resolved_provider(model, forwarded_kwargs.get("custom_llm_provider")) == LlmProviders.OPENAI.value and (
-        targets_openai_api(forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"))
+    provider: Final = _resolved_provider(model, forwarded_kwargs.get("custom_llm_provider"))
+    return provider == LlmProviders.OPENAI.value and openai_runs_tool_search(
+        local_model_name(model, provider), forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url")
     )
 
 

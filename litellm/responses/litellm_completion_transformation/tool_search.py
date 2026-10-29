@@ -1,12 +1,12 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import is_anthropic_tool_search_use
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, OpenAIToolSearchToolParam, ResponseInputParam
+from litellm.types.llms.openai import OpenAIToolSearchToolParam, ResponseInputParam
 from litellm.types.responses.main import OutputToolSearchCall
 from litellm.types.utils import LlmProviders, Message
 
@@ -48,6 +48,7 @@ ANTHROPIC_TOOL_SEARCH_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
 ANTHROPIC_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_regex"
 ToolSearchCallStatus: TypeAlias = Literal["in_progress", "completed", "incomplete"]
 
+_Tool: Final = TypeVar("_Tool", bound=Mapping[str, object])
 _ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MESSAGE_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
@@ -100,8 +101,8 @@ def is_openai_tool_search_tool(tool: object) -> bool:
 
 
 def tools_with_anthropic_tool_search_mapped(
-    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
-) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
+    tools: Sequence[_Tool] | None,
+) -> Sequence[_Tool | OpenAIToolSearchToolParam] | None:
     if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
         return tools
     if any(is_openai_tool_search_tool(tool) for tool in tools):
@@ -118,8 +119,8 @@ def tools_with_anthropic_tool_search_mapped(
 
 
 def tools_without_anthropic_tool_search(
-    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS],
-) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    tools: Sequence[_Tool],
+) -> tuple[_Tool, ...]:
     return tuple(tool for tool in tools if not is_anthropic_tool_search_chat_tool(tool))
 
 

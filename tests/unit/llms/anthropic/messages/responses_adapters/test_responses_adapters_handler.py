@@ -759,6 +759,7 @@ async def _openai_request_for(
     monkeypatch: pytest.MonkeyPatch,
     tools: list[Mapping[str, object]],
     api_base: str = OPENAI_API_BASE,
+    model: str = "openai/gpt-5.6-luna",
     **extra: object,
 ) -> respx.Route:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-typed-tools-test")
@@ -768,7 +769,7 @@ async def _openai_request_for(
     await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
         max_tokens=1024,
         messages=MESSAGES,
-        model="openai/gpt-5.6-luna",
+        model=model,
         tools=[dict(tool) for tool in tools],
         custom_llm_provider="openai",
         api_base=api_base,
@@ -827,6 +828,37 @@ async def test_drop_params_drops_tool_search_and_its_deferral_for_a_responses_se
 ):
     upstream: Final = await _openai_request_for(
         respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER], api_base=OTHER_RESPONSES_API_BASE, drop_params=True
+    )
+
+    assert [(tool["type"], tool["name"], tool.get("defer_loading")) for tool in _tools_sent(upstream)] == [
+        ("function", "get_weather", None)
+    ]
+
+
+MODEL_WITHOUT_TOOL_SEARCH: Final = "openai/a-model-the-cost-map-does-not-mark-for-tool-search"
+
+
+@pytest.mark.asyncio
+async def test_tool_search_on_an_openai_model_that_cannot_run_it_answers_400_naming_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _openai_request_for(
+            respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER], model=MODEL_WITHOUT_TOOL_SEARCH, drop_params=False
+        )
+
+    assert error.value.status_code == 400
+    assert "tool_search_tool_bm25_20251119" in error.value.message
+    assert "drop_params" in error.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_drop_params_drops_tool_search_and_its_deferral_on_an_openai_model_that_cannot_run_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER], model=MODEL_WITHOUT_TOOL_SEARCH, drop_params=True
     )
 
     assert [(tool["type"], tool["name"], tool.get("defer_loading")) for tool in _tools_sent(upstream)] == [

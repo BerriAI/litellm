@@ -194,6 +194,60 @@ async def _sent_count_body(
         return json.loads(route.calls.last.request.content)
 
 
+TOOL_SEARCH_TOOLS: Final[list[dict[str, object]]] = [
+    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+    {
+        "name": "get_weather",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+        "defer_loading": True,
+    },
+]
+
+
+async def _counted_tools(
+    monkeypatch: pytest.MonkeyPatch, model: str, litellm_params: Mapping[str, object]
+) -> list[tuple[object, object, object]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(f"{litellm_params.get('api_base', 'https://api.openai.com/v1')}/responses/input_tokens")
+        route.mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        await OpenAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test", **litellm_params}},
+            request_model=f"openai/{model}",
+            tools=TOOL_SEARCH_TOOLS,
+            messages_format="anthropic",
+        )
+        tools: Final = json.loads(route.calls.last.request.content)["tools"]
+    return [(tool.get("type"), tool.get("name"), tool.get("defer_loading")) for tool in tools]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_tool_search_is_counted_as_the_openai_tool_search_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert await _counted_tools(monkeypatch, "gpt-5.6-luna", {}) == [
+        ("tool_search", None, None),
+        ("function", "get_weather", True),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        pytest.param("a-model-the-cost-map-does-not-mark-for-tool-search", {}, id="model-without-tool-search"),
+        pytest.param("gpt-5.6-luna", {"api_base": "https://responses.example.test/v1"}, id="other-responses-server"),
+    ],
+)
+async def test_anthropic_tool_search_is_left_out_of_the_count_where_inference_cannot_run_it(
+    monkeypatch: pytest.MonkeyPatch, model: str, litellm_params: Mapping[str, object]
+) -> None:
+    assert await _counted_tools(monkeypatch, model, litellm_params) == [("function", "get_weather", None)]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_count_endpoint(
     monkeypatch: pytest.MonkeyPatch,
