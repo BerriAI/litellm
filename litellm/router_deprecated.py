@@ -460,10 +460,10 @@ class DeprecatedRouterMembers:
         return _as_router(self)._core_get_model_list_from_routing_groups(model_name=model_name)
 
     def get_model_list_of_routed_group(
-        self, model_group: str, team_id: str | None = None
+        self, model_group: str
     ) -> "list[DeploymentTypedDict]":  # mutable-ok: the old return type, unchanged
         _note("get_model_list_of_routed_group", "registry().deployments(model_group, source='routed_group')")
-        return _as_router(self)._core_get_model_list_of_routed_group(model_group, team_id)
+        return _as_router(self)._core_get_model_list_of_routed_group(model_group)
 
     def wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
         _note("wildcard_route_deployments", "registry().deployments(model, source='wildcard')")

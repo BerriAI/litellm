@@ -24,7 +24,7 @@ from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentModelListingInfo
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
-from .conftest import normalize  # type: ignore[import-not-found]
+from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
 
 def _stub_model_info_response(model_id: str = "gpt-4", provider: str = "openai") -> dict:
@@ -54,6 +54,7 @@ def patched_models(monkeypatch):
     router.get_configured_service_tiers = MagicMock(return_value=())
     router.get_model_group_info = MagicMock(return_value=None)
     router.get_search_tool_support = MagicMock(return_value=())
+    route_entry_points_to_stubs(router)
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())

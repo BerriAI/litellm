@@ -198,6 +198,7 @@ from litellm.router_api import (
 )
 from litellm.router_api import deployment_id as _deployment_id
 from litellm.router_deprecated import DeprecatedRouterMembers
+from litellm.router_host import router_host
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -11566,10 +11567,6 @@ class Router(DeprecatedRouterMembers):
             return
         if custom_llm_provider != "vertex_ai":
             return
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            passthrough_endpoint_router,
-        )
-
         credential_name: Final = deployment.litellm_params.litellm_credential_name
         credential_values: Final = (
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
@@ -11595,7 +11592,7 @@ class Router(DeprecatedRouterMembers):
             raise ValueError(
                 "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
             )
-        passthrough_endpoint_router.add_vertex_credentials(
+        router_host().add_vertex_pass_through_credentials(
             project_id=vertex_project,
             location=vertex_location,
             vertex_credentials=vertex_credentials,
@@ -16318,7 +16315,6 @@ class Router(DeprecatedRouterMembers):
             )
             return None
 
-        from litellm.proxy.auth.auto_router_checks import authorize_member_auto_router_inference
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 
         marker: Final = self._selected_strategy_marker_deployment(
@@ -16363,21 +16359,15 @@ class Router(DeprecatedRouterMembers):
             messages=messages,
         )
 
-        await authorize_member_auto_router_inference(
+        await router_host().authorize_strategy_inference(
             deployment=marker,
             request_kwargs=request_kwargs,
             llm_router=self,
         )
 
-        from litellm.proxy.guardrails.auto_router_compression import (
-            messages_for_routing,
-            model_hop_compression_armed,
-            policy_for_model,
-        )
-
         # Same tag-aware lookup the proxy's pre-call arming used, so an alias with
         # several tag-scoped markers cannot suppress under one and route under another.
-        compression_policy: Final = policy_for_model(
+        compression_policy: Final = router_host().compression_policy(
             llm_router=self,
             model_alias=registered_model_name,
             request_kwargs=request_kwargs,
@@ -16387,10 +16377,14 @@ class Router(DeprecatedRouterMembers):
         # compressing twice. Conditional on arming having actually happened: only the
         # proxy arms, and on the SDK path the shortcut would skip both hops entirely.
         needs_independent_routing_compression: Final = compression_policy is not None and not (
-            compression_policy.is_same and compression_policy.model is not None and model_hop_compression_armed()
+            compression_policy.is_same
+            and compression_policy.model is not None
+            and router_host().model_hop_compression_armed()
         )
         routing_messages: Final = (
-            await messages_for_routing(policy=compression_policy, messages=messages, request_kwargs=request_kwargs)
+            await router_host().messages_for_routing(
+                policy=compression_policy, messages=messages, request_kwargs=request_kwargs
+            )
             if needs_independent_routing_compression
             else None
         )

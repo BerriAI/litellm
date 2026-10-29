@@ -93,9 +93,12 @@ class RouterVectorStoreEmbeddingExecutor:
 
     def _router_serves(self, model: str) -> bool:
         team_id: Final = self.metadata.get("user_api_key_team_id")
-        resolved: Final = self.router.resolved_litellm_models(model, team_id if isinstance(team_id, str) else None)
+        registry: Final = self.router.registry()
+        resolved: Final = registry.names(
+            model, kind="litellm_models", team_id=team_id if isinstance(team_id, str) else None
+        )
         deployment_models: Final = (
-            deployment.get("litellm_params", {}).get("model") for deployment in self.router.get_model_list() or ()
+            deployment.get("litellm_params", {}).get("model") for deployment in registry.deployments() or ()
         )
         return bool(resolved) or model in deployment_models
 

@@ -283,3 +283,12 @@ def test_direct_search_authorizes_the_requested_tool_over_completion_model(
 
     assert response.status_code == expected_status, response.text
     assert tavily.call_count == (1 if expected_status == 200 else 0)
+
+
+def test_list_search_tools_reads_the_router_search_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", _search_router())
+
+    response: Final = _client(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)).get("/search/tools")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [{"search_tool_name": "search-a", "search_provider": "tavily"}]

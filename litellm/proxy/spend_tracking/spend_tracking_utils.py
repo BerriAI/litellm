@@ -497,7 +497,7 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
         return None
     providers: Final = frozenset(
         provider
-        for deployment in llm_router.get_model_list(model_name=model_group) or ()
+        for deployment in llm_router.registry().deployments(model_group) or ()
         if (provider := _deployment_provider(deployment)) is not None
     )
     return next(iter(providers)) if len(providers) == 1 else None
@@ -506,7 +506,8 @@ def _model_group_provider(model_group: str, llm_router: "Router | None") -> str 
 def _is_configured_model_group(model_group: str, llm_router: "Router | None") -> bool:
     if llm_router is None or not model_group:
         return False
-    return llm_router.is_recognized_model(model_group) or model_group in llm_router.team_public_model_names
+    registry: Final = llm_router.registry()
+    return registry.resolve(model_group, kind="recognized") or model_group in registry.names(kind="team_public")
 
 
 def _looks_like_model_name(model: str) -> bool:

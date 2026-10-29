@@ -36,6 +36,7 @@ from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
+    from litellm.router_api import RouterRegistry
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
@@ -489,26 +490,29 @@ def codex_models_response_json(
 
 
 def _group_reasoning_efforts(
-    row: ModelInfoResponse, lookup_id: str, llm_router: Router | None, team_id: str | None
+    row: ModelInfoResponse, lookup_id: str, registry: RouterRegistry | None, team_id: str | None
 ) -> tuple[str, ...] | None:
-    if llm_router is None or not _codex_can_drive(row["id"], row.get("mode")):
+    if registry is None or not _codex_can_drive(row["id"], row.get("mode")):
         return None
-    group: Final = llm_router.get_model_group_info(lookup_id, include_hidden=True, team_id=team_id)
+    group: Final = registry.group(lookup_id, include_hidden=True, team_id=team_id)
     return group.supported_reasoning_efforts if group is not None else None
 
 
 def _catalog_row(
     row: ModelInfoResponse, lookup_id: str, label_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
+    registry: Final = llm_router.registry() if llm_router is not None else None
     return CodexCatalogRow(
         id=row["id"],
         mode=row.get("mode"),
         max_input_tokens=row.get("max_input_tokens"),
-        upstream_model=llm_router.get_routable_upstream_model(lookup_id, team_id) if llm_router is not None else None,
-        display_name=llm_router.get_configured_display_name(label_id) if llm_router is not None else None,
-        service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
-        supported_reasoning_efforts=_group_reasoning_efforts(row, lookup_id, llm_router, team_id),
-        search_tool_support=llm_router.get_search_tool_support(lookup_id, team_id) if llm_router is not None else (),
+        upstream_model=registry.resolve(lookup_id, kind="upstream", team_id=team_id) if registry is not None else None,
+        display_name=registry.group(label_id, field="display_name") if registry is not None else None,
+        service_tiers=registry.group(lookup_id, field="service_tiers", team_id=team_id) if registry is not None else (),
+        supported_reasoning_efforts=_group_reasoning_efforts(row, lookup_id, registry, team_id),
+        search_tool_support=(
+            registry.resolve(lookup_id, kind="search_tool_support", team_id=team_id) if registry is not None else ()
+        ),
     )
 
 
