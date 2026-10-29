@@ -17,6 +17,7 @@ PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = T
     tuple[Mapping[str, object], ...]
 )
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+PRICE_ENTRY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 SEARCH_MODE_PARAM_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
     {"tavily": "search_depth", "linkup": "depth"}
 )
@@ -32,6 +33,18 @@ def _provider_usage(
         return PROVIDER_USAGE_ADAPTER.validate_python(raw_usage)
     except ValidationError:
         return None
+
+
+def _generic_search_entry(model: str, custom_llm_provider: str | None) -> str:
+    generic_model: Final = f"{custom_llm_provider}/search"
+    return generic_model if model == f"{custom_llm_provider}/{generic_model}" else model
+
+
+def _has_flat_price(entry: str) -> bool:
+    live: Final[object] = litellm.model_cost.get(entry)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # registry is dynamically typed
+    return (
+        isinstance(live, Mapping) and PRICE_ENTRY_ADAPTER.validate_python(live).get("input_cost_per_query") is not None
+    )
 
 
 def _registered_at_runtime(entry: str) -> bool:
@@ -72,7 +85,8 @@ def search_provider_cost_per_query(
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
     Supports tiered pricing based on max_results parameter, and per-mode price entries selected by the
     provider's mode parameter (Tavily `search_depth`, Linkup `depth`). An Exa request is billed the
-    `costDollars.total` Exa reported for it, when there is one.
+    `costDollars.total` Exa reported for it, unless its price entry has an `input_cost_per_query`. LiteLLM ships
+    Exa's entry with tiers only (what older releases bill), so a flat price there is always someone's override.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -95,9 +109,12 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
+    exa_price_set: Final = custom_llm_provider == "exa_ai" and _has_flat_price(
+        _generic_search_entry(model, custom_llm_provider)
+    )
     reported_cost: Final = (
         exa_ai_reported_cost(optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS)
-        if custom_llm_provider == "exa_ai"
+        if custom_llm_provider == "exa_ai" and not exa_price_set
         else None
     )
     if reported_cost is not None:
@@ -110,7 +127,7 @@ def search_provider_cost_per_query(
 
     # Check for tiered pricing (e.g., Exa AI based on max_results)
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if tiered_pricing and isinstance(tiered_pricing, list):
+    if tiered_pricing and isinstance(tiered_pricing, list) and not exa_price_set:
         max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results
         cost_per_query = 0.0
 
