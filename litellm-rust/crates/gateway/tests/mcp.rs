@@ -187,19 +187,20 @@ async fn every_mcp_route_requires_admission_credentials(
     #[future] served: Served,
     #[case] path: &str,
     #[case] method: &str,
+    #[values(&[], &[("x-api-key", "admission-secret")])] headers: &[(&str, &str)],
 ) {
     let served = served.await;
+    let request = headers.iter().fold(
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "localhost"),
+        |request, (name, value)| request.header(*name, *value),
+    );
     let response = served
         .app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header("host", "localhost")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), 401);

@@ -17,7 +17,7 @@ use axum::{
 use http_body_util::BodyExt;
 
 use litellm_config::Config;
-use litellm_gateway_auth::Auth;
+use litellm_gateway_auth::{Auth, BearerOrXApiKey};
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
@@ -129,19 +129,26 @@ pub fn router(
     mcp: Option<Router>,
 ) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
-    let inference = litellm_gateway_inference::router(inference)
-        .merge(mcp.unwrap_or_default())
-        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
-        .route_layer(axum::middleware::from_fn_with_state(
-            auth,
-            litellm_gateway_auth::authenticate,
-        ))
-        .layer(axum::middleware::from_fn(log_request));
+    let inference = authenticated(
+        litellm_gateway_inference::router(inference),
+        auth.clone().with_extractor(Arc::new(BearerOrXApiKey)),
+    )
+    .merge(mcp.map(|mcp| authenticated(mcp, auth)).unwrap_or_default())
+    .layer(axum::middleware::from_fn(log_request));
     let health = Router::new().route("/health/readiness", axum::routing::get(readiness));
     match ui {
         Some(ui) => inference.merge(ui).merge(health),
         None => inference.merge(health),
     }
+}
+
+fn authenticated(routes: Router, auth: Auth) -> Router {
+    routes
+        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+        .route_layer(axum::middleware::from_fn_with_state(
+            auth,
+            litellm_gateway_auth::authenticate,
+        ))
 }
 
 async fn readiness() -> axum::Json<serde_json::Value> {
