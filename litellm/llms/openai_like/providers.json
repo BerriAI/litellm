@@ -292,5 +292,11 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "nokeep": {
+    "base_url": "https://nokeep.ai/v1",
+    "api_key_env": "NOKEEP_API_KEY",
+    "api_base_env": "NOKEEP_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
