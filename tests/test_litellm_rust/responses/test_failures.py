@@ -56,3 +56,16 @@ async def test_provider_failure_is_terminal_and_shared_with_callbacks(
     assert len(failure) == 1
     assert _OBJECT.validate_python(failure[0].kwargs)["exception"] is caught.value
     assert not any("success" in name for name in recorder.names)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_a_native_decline_reaches_the_dispatcher_before_provider_io(
+    server: RecordingServer, asynchronous: bool
+) -> None:
+    server.expected_requests = 0
+
+    with pytest.raises(RuntimeError, match="declined the request: native Python responses streaming"):
+        await call(server, asynchronous=asynchronous, stream=True)
+
+    assert not server.requests

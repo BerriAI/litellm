@@ -203,7 +203,7 @@ class TestNoneLevelPolarity:
     def test_azure_advertisement_matches_the_azure_request_gate(self, model_key):
         """AzureOpenAIGPT5Config raises UnsupportedParamsError on reasoning_effort='none' for models
         it does not flag, so advertising the level there would offer routing a 400."""
-        from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+        from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
         from litellm.utils import get_model_info_helper
 
         model_info = dict(get_model_info_helper(model=model_key.split("/", 1)[1], custom_llm_provider="azure"))

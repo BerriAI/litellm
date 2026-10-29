@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    TOOL_RESULT_MEDIA_BOUNDARY,
+    TOOL_RESULT_MEDIA_PLACEHOLDER,
     add_system_prompt_to_messages,
     cache_control_as_prompt_cache_breakpoint,
     converse_redacted_content,
@@ -36,12 +38,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_has_unresolvable_ref,
     schema_property_count,
     split_concatenated_json_objects,
+    split_media_for_tpm,
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
     update_messages_with_model_file_ids,
     with_prompt_cache_breakpoint,
 )
+from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
@@ -862,18 +866,40 @@ def test_hoist_images_from_tool_messages_bare_data_uri_string_passes_through():
     assert result is messages
 
 
-def test_hoist_images_from_tool_messages_structured_image_part():
-    messages = [
+@pytest.mark.parametrize(
+    "part,placeholder,boundary",
+    [
+        (
+            {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+            TOOL_RESULT_IMAGE_PLACEHOLDER, TOOL_RESULT_IMAGE_BOUNDARY,
+        ),
+        (
+            {"type": "file", "file": {"file_data": "data:application/pdf;base64,cGRm", "filename": "report.pdf"}},
+            TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_BOUNDARY,
+        ),
+        (
+            {"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "wav"}},
+            TOOL_RESULT_MEDIA_PLACEHOLDER, TOOL_RESULT_MEDIA_BOUNDARY,
+        ),
+    ],
+)
+def test_hoist_tool_media_preserves_payload_and_call(
+    part: ChatCompletionImageObject | ChatCompletionFileObject | ChatCompletionAudioObject,
+    placeholder: str, boundary: str,
+) -> None:
+    messages: Final = [
         _assistant_tool_call_msg("call_1"),
-        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+        {**_tool_msg([part]), "cache_control": {"type": "ephemeral"}},
     ]
+    original: Final = copy.deepcopy(messages)
 
-    result = hoist_images_from_tool_messages(messages)
+    result: Final = hoist_images_from_tool_messages(messages)
 
-    assert len(result) == 3
-    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[2]["role"] == "user"
-    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert result == [
+        messages[0], {**messages[1], "content": placeholder},
+        {"role": "user", "content": [{"type": "text", "text": boundary}, part]},
+    ]
+    assert messages == original
 
 
 def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
@@ -893,24 +919,26 @@ def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
     assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 
-def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
-    messages = [
+def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run() -> None:
+    image: Final = {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}
+    file: Final = {"type": "file", "file": {"file_id": "file_report"}}
+    audio: Final = {"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "wav"}}
+    text: Final = {"type": "text", "text": "Report and recording follow"}
+    messages: Final = [
         _assistant_tool_call_msg("call_1", "call_2"),
-        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_1"),
-        _tool_msg([{"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}}], tool_call_id="call_2"),
+        _tool_msg([image], tool_call_id="call_1"),
+        _tool_msg([text, file, audio], tool_call_id="call_2"),
         {"role": "assistant", "content": "looking"},
     ]
 
-    result = hoist_images_from_tool_messages(messages)
+    result: Final = hoist_images_from_tool_messages(messages)
 
-    roles = [m["role"] for m in result]
-    assert roles == ["assistant", "tool", "tool", "user", "assistant"]
-    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[3]["content"] == [
-        BOUNDARY_PART,
-        {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
-        {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
+    assert result == [
+        messages[0],
+        {**messages[1], "content": TOOL_RESULT_IMAGE_PLACEHOLDER},
+        {**messages[2], "content": [text]},
+        {"role": "user", "content": [{"type": "text", "text": TOOL_RESULT_MEDIA_BOUNDARY}, image, file, audio]},
+        messages[3],
     ]
 
 
@@ -949,8 +977,8 @@ def test_hoist_images_from_tool_messages_does_not_mutate_input():
 
 @pytest.mark.parametrize(
     "sibling_content",
-    [None, [{"type": "text", "text": "42 files"}]],
-    ids=["none_content", "text_only_list"],
+    [None, [{"type": "text", "text": "42 files"}], '{"artifact":"ready"}'],
+    ids=["none_content", "text_only_list", "opaque_json"],
 )
 def test_hoist_images_from_tool_messages_imageless_sibling_in_image_run_unchanged(sibling_content):
     imageless_tool_msg = _tool_msg(sibling_content, tool_call_id="call_2")
@@ -2481,3 +2509,140 @@ def test_parse_tool_call_arguments_returns_already_parsed_mapping(arguments):
 def test_parse_tool_call_arguments_rejects_unrepairable_json():
     with pytest.raises(ValueError, match="broken_tool"):
         parse_tool_call_arguments("not valid json{{{", tool_name="broken_tool", context="test")
+
+
+@pytest.mark.parametrize("part_type", ["image_url", "input_image"])
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"image_url": "data:image/png;base64,IMAGE", "detail": "low"},
+        {"image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
+        {"url": "data:image/png;base64,IMAGE", "detail": "low"},
+    ],
+)
+def test_shared_image_url_agrees_with_responses_normalization(
+    part_type: str, fields: Mapping[str, object],
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import as_openai_image_part
+    from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+    part: Final = {"type": part_type, **fields}
+    normalized: Final = LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(part)
+    expected: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE"}}
+    assert as_openai_image_part(part) == expected
+    assert as_openai_image_part(normalized) == expected
+
+
+@pytest.mark.parametrize(
+    "part,projected,media",
+    [
+        (
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
+            {"type": "image_url", "image_url": {"url": "", "detail": "high"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
+        ),
+        (
+            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "low"},
+            {"type": "input_image", "image_url": "", "detail": "low"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "low"}},
+        ),
+        (
+            {"type": "computer_screenshot", "image_url": "data:image/png;base64,IMAGE"},
+            {"type": "computer_screenshot", "image_url": ""},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        ),
+        (
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "IMAGE"}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        ),
+        (
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+            {"type": "input_audio", "input_audio": {"data": "", "format": "wav"}},
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+        ),
+        (
+            {"type": "file", "file": {"file_data": "IMAGE", "format": "image/png", "filename": "image.png"}},
+            {"type": "file", "file": {"file_data": "", "format": "image/png", "filename": "image.png"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        ),
+        (
+            {"type": "input_file", "file_data": "data:audio/wav;base64,AUDIO", "filename": "audio.wav"},
+            {"type": "input_file", "file_data": "", "filename": "audio.wav"},
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+        ),
+    ],
+)
+def test_tpm_projection_blanks_only_declared_media_transport(
+    part: Mapping[str, object], projected: Mapping[str, object], media: Mapping[str, object],
+) -> None:
+    text: Final = {"type": "text", "text": "data:image/png;base64,IMAGE"}
+    request: Final = [{"role": "user", "content": [text, {**part, "cache_control": {"type": "ephemeral"}}]}]
+    original: Final = copy.deepcopy(request)
+    assert split_media_for_tpm(request) == (
+        [{"role": "user", "content": [text, {**projected, "cache_control": {"type": "ephemeral"}}]}],
+        (media,),
+    )
+    assert request == original
+
+
+def test_tpm_projection_retains_nested_and_native_history_around_media() -> None:
+    image: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}}
+    empty_image: Final = {"type": "image_url", "image_url": {"url": "", "detail": "high"}}
+    document: Final = {"type": "document", "title": "keep", "source": {"type": "content", "content": [image]}}
+    empty_document: Final = {**document, "source": {"type": "content", "content": [empty_image]}}
+    tool: Final = {"type": "tool_result", "tool_use_id": "call", "content": [document, {"type": "text", "text": "keep"}]}
+    empty_tool: Final = {**tool, "content": [empty_document, {"type": "text", "text": "keep"}]}
+    request: Final = [
+        {"role": "user", "content": [tool]},
+        {"type": "function_call_output", "call_id": "call", "output": [image]},
+        {"type": "custom_tool_call_output", "call_id": "custom", "output": [image]},
+        {"type": "computer_call_output", "call_id": "computer", "output": {
+            "type": "computer_screenshot", "image_url": "data:image/png;base64,IMAGE",
+        }},
+        {"type": "image_generation_call", "id": "ig", "result": "IMAGE", "status": "completed"},
+        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
+            {"type": "logs", "logs": "keep"}, {"type": "image", "url": "https://example.com/image.png"},
+        ]},
+    ]
+    original: Final = copy.deepcopy(request)
+    projected, media = split_media_for_tpm(request)
+    assert projected == [
+        {"role": "user", "content": [empty_tool]},
+        {"type": "function_call_output", "call_id": "call", "output": [empty_image]},
+        {"type": "custom_tool_call_output", "call_id": "custom", "output": [empty_image]},
+        {"type": "computer_call_output", "call_id": "computer", "output": {
+            "type": "computer_screenshot", "image_url": "",
+        }},
+        {"type": "image_generation_call", "id": "ig", "result": "", "status": "completed"},
+        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
+            {"type": "logs", "logs": "keep"}, {"type": "image", "url": ""},
+        ]},
+    ]
+    assert media == (
+        image, image, image,
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        {"type": "image_url", "image_url": {"url": "data:application/octet-stream;base64,IMAGE", "detail": "auto"}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}},
+    )
+    assert request == original
+
+
+def test_tpm_projection_preserves_non_media_identity_and_opaque_values() -> None:
+    image: Final = {"type": "input_image", "image_url": "data:image/png;base64,OPAQUE"}
+    request: Final = [
+        {"role": "user", "content": json.dumps(image)},
+        {"type": "custom_tool_call_output", "call_id": "call", "output": json.dumps(image)},
+        {"type": "function_call", "call_id": "call", "name": "keep", "arguments": {"content": [image]}},
+        {"type": "file_search_call", "results": [{"text": "keep", "content": [image]}]},
+        {"type": "image_generation_call", "id": "ig", "status": "in_progress", "result": None},
+        {"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "PDF"}},
+            {"type": "document", "source": {"type": "text", "data": json.dumps(image)}},
+            {"type": "file", "file": {"format": "application/pdf", "file_data": "PDF"}},
+            {"type": "text", "text": "keep", "metadata": {"content": [image]}},
+        ]},
+    ]
+    projected, media = split_media_for_tpm(request)
+    assert projected is request
+    assert media == ()

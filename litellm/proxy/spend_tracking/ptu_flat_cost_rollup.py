@@ -21,6 +21,8 @@ from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
+
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -135,6 +137,9 @@ def _public_model_name(row: object, model_info: Mapping[str, object]) -> str:
     return str(getattr(row, "model_name", "") or "")
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _decode_model_info(raw: object) -> "Mapping[str, object] | None":
     """A deployment's model_info as a mapping, decoding a JSON string, else None.
 
@@ -143,7 +148,7 @@ def _decode_model_info(raw: object) -> "Mapping[str, object] | None":
     """
     if isinstance(raw, str):
         try:
-            decoded: Final[object] = json.loads(raw)
+            decoded: Final = _DECODED_JSON.validate_python(json.loads(raw))
         except (TypeError, ValueError):
             return None
         return decoded if isinstance(decoded, dict) else None

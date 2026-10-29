@@ -13,6 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
@@ -177,6 +178,7 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.router_utils.fallback_event_handlers import (
@@ -368,7 +370,7 @@ class _KeyModelBudgetLimiter(Protocol):
 
 class _UserModelBudgetLimiter(Protocol):
     async def is_user_within_model_budget(
-        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str
+        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
     ) -> bool: ...
 
 
@@ -386,11 +388,15 @@ class _EveryModelBudgetLimiter(Protocol):
     async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool: ...
 
     async def is_user_within_model_budget(
-        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str
+        self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
     ) -> bool: ...
 
     async def is_end_user_within_model_budget(
-        self, end_user_id: str, end_user_model_max_budget: Mapping[str, object], model: str
+        self,
+        end_user_id: str,
+        end_user_model_max_budget: Mapping[str, object],
+        model: str,
+        team_id: str | None = None,
     ) -> bool: ...
 
     async def is_team_within_model_budget(
@@ -501,6 +507,7 @@ async def _check_user_model_budget(
             user_id=valid_token.user_id,
             user_model_max_budget=user_model_max_budget,
             model=model_name,
+            team_id=valid_token.team_id,
         )
 
 
@@ -545,6 +552,7 @@ async def _is_within_every_model_budget(
                 user_id=valid_token.user_id,
                 user_model_max_budget=user_model_max_budget,
                 model=model,
+                team_id=valid_token.team_id,
             )
         if (
             valid_token.end_user_id is not None
@@ -555,6 +563,7 @@ async def _is_within_every_model_budget(
                 end_user_id=valid_token.end_user_id,
                 end_user_model_max_budget=end_user_model_max_budget,
                 model=model,
+                team_id=valid_token.team_id,
             )
         if valid_token.team_id is not None and isinstance(team_model_max_budget, Mapping) and team_model_max_budget:
             await model_max_budget_limiter.is_team_within_model_budget(
@@ -1319,7 +1328,7 @@ async def fetch_global_spend_with_event_coordination(
 
     async def _load_global_spend() -> float | None:
         proxy_budget_row: Final = await bounded_db_lookup(
-            prisma_client.db.litellm_usertable.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
+            UserRepository(prisma_client).table.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
             name="proxy_budget",
         )
         return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
@@ -1635,7 +1644,7 @@ async def _auto_register_jwt_mapping(
             if minted:
                 try:
                     async with db_span("delete_orphaned_jwt_key", "LiteLLM_VerificationToken"):
-                        await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
+                        await VerificationTokenRepository(prisma_client).table.delete(where={"token": token_hash})
                 except Exception as delete_err:
                     # Don't fail the request if cleanup fails — the orphan is
                     # unmapped and inert. Log so an operator can prune it later.
@@ -2511,10 +2520,20 @@ async def user_api_key_auth_builder(
                     parent_otel_span=parent_otel_span,
                 )
         elif api_key is None:  # only require api key if master key is set
-            raise Exception("No api key passed in.")
+            raise ProxyException(
+                message="Authentication Error, No api key passed in.",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
         elif api_key == "":
             # missing 'Bearer ' prefix
-            raise Exception("Malformed API Key passed in. Ensure Key has `Bearer ` prefix.")
+            raise ProxyException(
+                message="Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix.",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) is True:
@@ -2693,7 +2712,7 @@ async def user_api_key_auth_builder(
                     and valid_token.last_refreshed_at is not None
                     and team_obj.last_refreshed_at > valid_token.last_refreshed_at
                 ):
-                    team_obj_dict: Final = team_obj.__dict__
+                    team_obj_dict: Final[Mapping[str, object]] = MappingProxyType(team_obj.__dict__)
 
                     for k, v in team_obj_dict.items():
                         field_name = f"team_{k}"
@@ -2750,7 +2769,12 @@ async def user_api_key_auth_builder(
         ## IF it's not a master key
         ## Route should not be in master_key_only_routes
         if route in LiteLLMRoutes.master_key_only_routes.value:
-            raise Exception(f"Tried to access route={route}, which is only for MASTER KEY")
+            raise ProxyException(
+                message=f"Authentication Error, Tried to access route={route}, which is only for MASTER KEY",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
 
         ## Check DB
 
@@ -2878,7 +2902,12 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
         ## base case ## key is disabled
         if valid_token.blocked is True:
-            raise Exception("Key is blocked. Update via `/key/unblock` if you're an admin.")
+            raise ProxyException(
+                message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
@@ -2921,8 +2950,14 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 and isinstance(user_obj.metadata, dict)
                 and user_obj.metadata.get("scim_active") is False
             ):
-                raise Exception(
-                    f"User={valid_token.user_id} has been deactivated via SCIM. Keys owned by this user cannot be used."
+                raise ProxyException(
+                    message=(
+                        f"Authentication Error, User={valid_token.user_id} has been deactivated via SCIM. "
+                        "Keys owned by this user cannot be used."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="None",
+                    code=status.HTTP_401_UNAUTHORIZED,
                 )
 
         # Check 2a. Check if model has zero cost - if so, skip all budget checks
@@ -3126,6 +3161,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                             end_user_id=valid_token.end_user_id,
                             end_user_model_max_budget=end_user_mmb,
                             model=model_name,
+                            team_id=valid_token.team_id,
                         )
 
         # Check 6: Additional Common Checks across jwt + key auth
@@ -3229,8 +3265,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         if valid_token.budget_throttle_pct is not None:
             valid_token_dict["budget_throttle_pct"] = valid_token.budget_throttle_pct
 
-        if _end_user_object is not None:
+        if _end_user_object is not None or litellm.max_end_user_budget_id is not None:
             valid_token_dict.update(end_user_params)
+        if _end_user_object is not None:
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
 
     # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
@@ -3239,7 +3276,12 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
 
     if valid_token is None:
         # No token was found when looking up in the DB
-        raise Exception("Invalid proxy server token passed")
+        raise ProxyException(
+            message="Authentication Error, Invalid proxy server token passed",
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
     if valid_token_dict is not None:
         virtual_key_auth_obj: Final = await _return_user_api_key_auth_obj(
             user_obj=user_obj,
@@ -4699,6 +4741,7 @@ async def _run_post_custom_auth_checks(
                 end_user_id=valid_token.end_user_id,
                 end_user_model_max_budget=end_user_mmb,
                 model=model_name,
+                team_id=valid_token.team_id,
             )
 
     # team / user / end_user / project context objects are fetched by

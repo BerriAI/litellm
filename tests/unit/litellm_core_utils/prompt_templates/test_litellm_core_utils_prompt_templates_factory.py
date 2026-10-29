@@ -8,7 +8,7 @@ import time
 import types
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from typing import Final, List, TypeAlias
+from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -1868,6 +1868,106 @@ def test_convert_gemini_tool_call_result_with_image_url():
     inline_parts = _get_gemini_function_response_inline_data_parts(result2)
     assert len(inline_parts) == 1
 
+
+@pytest.mark.parametrize(
+    ("content", "mime_type"),
+    [
+        ({"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "flac"}}, "audio/flac"),
+        ({"type": "input_audio", "input_audio": {"data": "c291bmQ=", "format": "audio/flac"}}, "audio/flac"),
+        (
+            {"type": "file", "file": {"file_data": "c291bmQ=", "file_id": "opaque-id", "format": "audio/wav"}},
+            "audio/wav",
+        ),
+        ({"type": "file", "file": {"file_data": "c291bmQ=", "format": "application/pdf"}}, "application/pdf"),
+        (
+            {
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,c291bmQ=",
+                "file": {"filename": "report.pdf"},
+            },
+            "application/pdf",
+        ),
+        (
+            {"type": "input_file", "file_data": "data:video/mp4;base64,c291bmQ=", "file_id": "gs://bucket/media"},
+            "video/mp4",
+        ),
+        (
+            {
+                "type": "file",
+                "file": {"file_data": "data:application/octet-stream;base64,c291bmQ=", "format": "audio/wav"},
+            },
+            "audio/wav",
+        ),
+        (
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:application/octet-stream;base64,c291bmQ=", "format": "image/png"},
+            },
+            "image/png",
+        ),
+    ],
+)
+def test_gemini_tool_media_preserves_inline_payload_precedence_and_mime(
+    content: Mapping[str, object], mime_type: str
+) -> None:
+    message: Final = cast(  # cast-ok: exercise canonical and Responses tool-content representations
+        ChatCompletionToolMessage,
+        {"role": "tool", "name": "get_media", "content": [{"type": "text", "text": '{"ok":true}'}, content]},
+    )
+    with respx.mock:
+        result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="vertex_ai")
+
+    # Nested inlineData contract checked 2026-10-26: https://ai.google.dev/api/generate-content#FunctionResponsePart
+    assert result == [
+        {
+            "function_response": {
+                "name": "get_media",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "c291bmQ=", "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("inline_data", "reference"), [(None, "https://example.com/image.png"), ("", "gs://bucket/image.png")]
+)
+def test_gemini_tool_media_keeps_vertex_reference_when_inline_data_is_absent(
+    inline_data: object,
+    reference: str,
+) -> None:
+    file: Final = {"file_id": reference, "file_data": inline_data, "format": "image/png"}
+    message: Final = cast(  # cast-ok: exercise missing and malformed optional runtime file_data values
+        ChatCompletionToolMessage,
+        {"role": "tool", "name": "get_media", "content": [{"type": "file", "file": file}]},
+    )
+
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="vertex_ai")
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [{"file_data": {"file_uri": reference, "mime_type": "image/png"}}],
+            }
+        }
+    ]
+
+
+
+def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
+    message: Final = ChatCompletionToolMessage(
+        role="tool", name="lookup", content=[
+            {"type": "text", "text": '{"ok":true}'},
+            {"type": "image_url", "image_url": {"url": "https://8.8.8.8/unavailable.png"}},
+        ],
+    )
+    with respx.mock as router:
+        router.get("https://8.8.8.8/unavailable.png").respond(404)
+        result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
+    assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
@@ -9280,3 +9380,119 @@ def test_anthropic_messages_pt_rejects_a_text_attachment_it_cannot_decode():
 
     assert "utf-8" in str(raised.value)
     assert undeclared_latin1.split(",", 1)[1] not in str(raised.value)
+
+
+@pytest.mark.parametrize("native_input", [{"city": "lyon"}, "[1, 2]"])
+def test_anthropic_messages_pt_sends_tool_calls_arguments_over_a_native_tool_use_with_the_same_id(native_input):
+    messages: Final = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": native_input}],
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+@pytest.mark.parametrize(("drop_params", "expected_input"), [(True, {}), (False, [1, 2])])
+def test_anthropic_messages_pt_tool_call_arguments_that_are_not_an_object_follow_drop_params(
+    drop_params, expected_input
+):
+    messages: Final = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "[1, 2]"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result: Final = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic", drop_params=drop_params
+    )
+
+    assert result[1]["content"][0]["input"] == expected_input
+
+
+_PDF_PAYLOAD: Final = _PDF_DATA_URI.split(",", 1)[1]
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "file", "file": {"file_data": "data:application/octet-stream;base64," + _PDF_PAYLOAD}},
+        {"type": "file", "file": {"file_data": "data:image/png;base64," + _PDF_PAYLOAD}},
+        {"type": "file", "file": {"file_data": _PDF_DATA_URI, "format": "text/plain"}},
+        {"type": "image_url", "image_url": {"url": _PDF_DATA_URI, "format": "text/plain"}},
+    ],
+    ids=["file-octet-stream", "file-image-png", "file-format-text", "image-url-format-text"],
+)
+def test_anthropic_messages_pt_sends_pdf_bytes_as_a_pdf_document_whatever_the_label(block):
+    result: Final = anthropic_messages_pt(
+        messages=[{"role": "user", "content": [block]}], model="claude-sonnet-5-5", llm_provider="anthropic"
+    )
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_PAYLOAD}}
+    ]
+
+
+def test_gemini_inline_data_carries_the_format_it_was_given():
+    text_data_uri: Final = "data:text/plain;charset=utf-8;base64," + base64.b64encode(b"MANGO").decode()
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": text_data_uri, "format": "text/plain"}}]}
+    ]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash")
+
+    assert contents[0]["parts"][0]["inline_data"]["mime_type"] == "text/plain"
+
+
+def _parallel_native_tool_use_seconds(calls: int) -> float:
+    answers: Final = tuple(
+        {"role": "tool", "tool_call_id": f"functions.get_weather:{index}", "content": "sunny"} for index in range(calls)
+    )
+    messages: Final = [
+        {"role": "user", "content": "weather everywhere"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": f"functions.get_weather:{index}", "name": "get_weather", "input": {}}
+                for index in range(calls)
+            ],
+        },
+        *answers,
+    ]
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+        elapsed: Final = time.perf_counter() - started
+        assert [block["id"] for block in result[1]["content"]] == [
+            f"functions_get_weather_{index}" for index in range(calls)
+        ]
+        return elapsed
+
+    return min(once() for _ in range(3))
+
+
+def test_anthropic_messages_pt_cost_grows_linearly_with_parallel_native_tool_uses():
+    growth: Final = _parallel_native_tool_use_seconds(1600) / _parallel_native_tool_use_seconds(400)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool uses"

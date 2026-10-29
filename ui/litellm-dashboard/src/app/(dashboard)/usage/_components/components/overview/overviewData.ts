@@ -40,6 +40,20 @@ export const rollUpBreakdown = (results: readonly DailyData[], dimension: Breakd
   return [...totals.values()].sort((a, b) => b.spend - a.spend);
 };
 
+export const modelColorMap = (results: readonly DailyData[]): ReadonlyMap<string, string> => {
+  const groups = rollUpBreakdown(results, "model_groups");
+  const models = rollUpBreakdown(results, "models");
+  const names = [...new Set([...groups, ...models].map((row) => row.key))];
+  return new Map(names.map((name, index) => [name, stackedUsageColor(index)]));
+};
+
+export const colorForModel = (model: string, colorByModel: ReadonlyMap<string, string>): string => {
+  const assignedColor = colorByModel.get(model);
+  if (assignedColor) return assignedColor;
+  const hash = Array.from(model).reduce((value, character) => (value * 31 + character.charCodeAt(0)) >>> 0, 0);
+  return stackedUsageColor(hash);
+};
+
 export const OTHER_COLOR = "#94a3b8";
 const OTHER_SERIES = "Other";
 
@@ -93,8 +107,9 @@ export const seriesBy = (
   results: readonly DailyData[],
   dimension: BreakdownDimension,
   metric: UsageMetric,
-  top = 6,
+  options: number | { top?: number; colorByKey?: ReadonlyMap<string, string> } = 6,
 ): Series => {
+  const { top = 6, colorByKey } = typeof options === "number" ? { top: options } : options;
   const leaders = rollUpBreakdown(results, dimension)
     .filter((row) => rankValue(row, metric) > 0)
     .sort((a, b) => rankValue(b, metric) - rankValue(a, metric))
@@ -118,9 +133,10 @@ export const seriesBy = (
     label: formatDayLabel(day.date),
     ...Object.fromEntries((hasOther ? [...values, other] : values).map((value, index) => [keys[index], value])),
   }));
-  const colors = labels.map((label, index) =>
-    hasOther && index === labels.length - 1 ? OTHER_COLOR : stackedUsageColor(index),
-  );
+  const colors = labels.map((label, index) => {
+    if (hasOther && index === labels.length - 1) return OTHER_COLOR;
+    return colorByKey ? colorForModel(label, colorByKey) : stackedUsageColor(index);
+  });
   return { data, keys, labels, colors };
 };
 

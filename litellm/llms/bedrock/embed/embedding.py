@@ -12,6 +12,7 @@ import httpx
 
 import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -512,9 +513,9 @@ class BedrockEmbedding(BaseAWSLLM):
             aws_region_name=aws_region_name,
         )
         if has_async_invoke:
-            endpoint_url = f"{endpoint_url}/async-invoke"
+            endpoint_url = join_api_base(endpoint_url, "async-invoke")
         else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
+            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/invoke")
 
         if batch_data is not None:
             if aembedding:
@@ -611,7 +612,7 @@ class BedrockEmbedding(BaseAWSLLM):
 
         # Encode the ARN for use in URL path
         encoded_arn: Final = quote(invocation_arn, safe="")
-        status_url: Final = f"{endpoint_url.rstrip('/')}/async-invoke/{encoded_arn}"
+        status_url: Final = join_api_base(endpoint_url, f"async-invoke/{encoded_arn}")
 
         # Prepare headers for GET request
         headers: Final = {"Content-Type": "application/json"}

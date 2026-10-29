@@ -278,7 +278,7 @@ def native_tool_use_id(block: object) -> str:
 
 
 def tool_use_is_answered(tool_use_id: str, answered: frozenset[str]) -> bool:
-    return any(sanitize_anthropic_tool_use_id(answer_id) == tool_use_id for answer_id in answered)
+    return tool_use_id in answered
 
 
 def _assistant_part_renders(part: object, answered: frozenset[str]) -> bool:
@@ -322,6 +322,7 @@ def _tool_result_ids(answers: Iterable[object]) -> Iterator[str]:
     for message in answers:
         if isinstance(tool_call_id := message_field(message, "tool_call_id"), str) and tool_call_id:
             yield tool_call_id
+            yield sanitize_anthropic_tool_use_id(tool_call_id)
 
 
 def answered_tool_call_ids(messages: Sequence[object], assistant_index: int) -> frozenset[str]:
@@ -496,7 +497,7 @@ def _runs_by_anchor(
 ) -> Mapping[int, tuple[tuple[int, ...], ...]]:
     anchored: Final = tuple(sorted(((anchor, run) for run, anchor in anchors if anchor is not None), key=itemgetter(0)))
     return MappingProxyType(
-        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=itemgetter(0))}
+        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=lambda entry: entry[0])}
     )
 
 
