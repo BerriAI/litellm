@@ -732,9 +732,10 @@ class LakeraV2GuardrailConfigModel(LiteLLMBaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
+    on_flagged: Literal["block", "mask", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        description="Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only "
+        "detections and allow, block anything else), 'monitor' (log only), "
         "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
     )
     advisory_system_message: str | None = Field(

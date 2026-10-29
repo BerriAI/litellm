@@ -37,6 +37,7 @@ else:
         pass
 
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.router_api import ChangeSet
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -112,19 +113,19 @@ def apply_content_policy_fallbacks(llm_router: "Router", rules: object) -> None:
             litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
         ),
     )
-    if layered_rules == llm_router.content_policy_fallbacks:  # pyright: ignore[reportUnknownMemberType]  # untyped Router list
+    if layered_rules == llm_router.settings().content_policy_fallbacks:  # pyright: ignore[reportUnknownMemberType]  # untyped RouterSettings list
         return
     for rule, result in checked_rules:
         if isinstance(result, ValidationError):
             _log_ignored_content_policy_rules(rule, result)
-    llm_router.update_settings(content_policy_fallbacks=layered_rules)  # pyright: ignore[reportUnknownMemberType]  # untyped kwargs
+    llm_router.apply(ChangeSet(settings={"content_policy_fallbacks": layered_rules}))
 
 
 def _apply_fallback_rules(llm_router: "Router", fallback_key: str, rules: Sequence[StoredFallback]) -> None:
     if fallback_key == "content_policy_fallbacks":
         apply_content_policy_fallbacks(llm_router, rules)
         return
-    setattr(llm_router, fallback_key, rules)
+    llm_router.apply(ChangeSet(assign={fallback_key: rules}))
 
 
 async def _reload_config_file_ownership(proxy_config: "ProxyConfig") -> None:
@@ -163,7 +164,7 @@ async def _write_rules(
         section_name=ROUTER_SETTINGS_PARAM, changed_keys={fallback_key: _JSON_RULES.validate_python(rules)}
     )
     if proxy_config.router_settings.owned_by_config(fallback_key):
-        setattr(llm_router, fallback_key, rules)
+        llm_router.apply(ChangeSet(assign={fallback_key: rules}))
         return
     await _persist_router_settings(prisma_client, {**stored_settings, fallback_key: rules})
     _apply_fallback_rules(llm_router, fallback_key, rules)
@@ -228,7 +229,8 @@ async def create_fallback(
             )
 
         # Validate that the model exists in the router
-        known_model_names: Final = frozenset(llm_router.model_names) | llm_router.team_public_model_names
+        registry: Final = llm_router.registry()
+        known_model_names: Final = frozenset(registry.names(kind="group_set")) | registry.names(kind="team_public")
         if data.model not in known_model_names:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
