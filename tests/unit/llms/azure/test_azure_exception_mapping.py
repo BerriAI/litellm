@@ -635,6 +635,8 @@ def test_azure_content_policy_wins_over_context_length_code(monkeypatch: pytest.
 
 
 _AZURE_REFUSAL_BODY: Final = '{"error":{"message":"azure refused","type":"upstream_refusal","code":"refused"}}'
+_AZURE_DEPLOYMENT_NOT_FOUND_BODY: Final = '{"error":{"code":"DeploymentNotFound","message":"no such deployment"}}'
+_AZURE_INTERNAL_ERROR_BODY: Final = '{"error":{"code":"InternalServerError","message":"Internal server error"}}'
 _AZURE_KEY: Final = "azure-provider-secret"
 _AZURE_BASE: Final = "https://azure-upstream.openai.azure.com"
 _AZURE_ARGS: Final = {"api_base": _AZURE_BASE, "api_version": "2024-10-21", "api_key": _AZURE_KEY, "max_retries": 0}
@@ -690,27 +692,50 @@ async def _azure_image_generation() -> None:
     ),
     ids=lambda route: route.__name__.removeprefix("_azure_"),
 )
-@pytest.mark.parametrize(("status_code", "mapped_error"), ((400, BadRequestError), (403, litellm.APIError)))
+@pytest.mark.parametrize(
+    ("status_code", "body", "mapped_error"),
+    (
+        (400, _AZURE_REFUSAL_BODY, BadRequestError),
+        (403, _AZURE_REFUSAL_BODY, litellm.APIError),
+        (404, _AZURE_DEPLOYMENT_NOT_FOUND_BODY, litellm.NotFoundError),
+        (500, _AZURE_INTERNAL_ERROR_BODY, openai.APIError),
+        (502, _AZURE_REFUSAL_BODY, litellm.BadGatewayError),
+        (504, _AZURE_REFUSAL_BODY, litellm.Timeout),
+    ),
+)
 @respx.mock
 async def test_azure_error_keeps_the_upstream_body_without_the_api_key(
     route: Callable[[], Awaitable[None]],
     status_code: int,
+    body: str,
     mapped_error: type[Exception],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
-        return_value=httpx.Response(
-            status_code, content=_AZURE_REFUSAL_BODY, headers={"content-type": "application/json"}
-        )
+        return_value=httpx.Response(status_code, content=body, headers={"content-type": "application/json"})
     )
 
     with pytest.raises(mapped_error) as raised:
         await route()
 
     error_response: Final = getattr(raised.value, "response")
-    assert error_response.text == _AZURE_REFUSAL_BODY
-    assert error_response.json() == json.loads(_AZURE_REFUSAL_BODY)
+    assert error_response.status_code == status_code
+    assert error_response.text == body
+    assert error_response.json() == json.loads(body)
     for exposed in (error_response.request, getattr(raised.value, "request")):
         assert _AZURE_KEY not in str(exposed.headers)
         assert exposed.content == b""
+
+
+def test_azure_client_side_missing_key_error_keeps_the_empty_placeholder_response() -> None:
+    missing_key: Final = openai.OpenAIError(
+        "The api_key client option must be set either by passing api_key to the client or by setting the "
+        "OPENAI_API_KEY environment variable"
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as raised:
+        exception_type(model="azure/gpt-4.1-mini", original_exception=missing_key, custom_llm_provider="azure")
+
+    assert raised.value.response.status_code == 401
+    assert raised.value.response.text == ""
