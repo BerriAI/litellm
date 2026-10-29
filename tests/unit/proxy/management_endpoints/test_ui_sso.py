@@ -4049,8 +4049,8 @@ class TestCLIKeyRegenerationFlow:
         assert (
             '<select id="team_id" name="team_id" required>'
             '<option value="" disabled selected>Choose a team</option>'
-            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
             '<option value="team-claude">team-claude</option>'
+            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
             '<option value="team-ops-us">Ops &lt;eu&gt; (team-ops-us)</option>'
             "</select>"
         ) in page
