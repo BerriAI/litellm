@@ -2546,6 +2546,22 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_load_config_refuses_allowed_ips_without_a_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    config_file: Final = tmp_path / "allowed_ips.yaml"
+    config_file.write_text('model_list: []\nlitellm_settings: {}\ngeneral_settings:\n  allowed_ips: ["127.0.0.1"]\n')
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    expected_message: Final = (
+        "allowed_ips is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your environment."
+    )
+    with pytest.raises(ValueError, match=f"^{re.escape(expected_message)}$"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
 @pytest.mark.parametrize(("yaml_value", "expected"), [("true", True), ("false", False)])
 async def test_load_config_yaml_deny_by_default_is_boolean(
