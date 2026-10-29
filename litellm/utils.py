@@ -82,6 +82,10 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    CHAT_ALLOWED_TOOLS_LAYOUT,
+    parse_chat_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
@@ -9064,6 +9068,17 @@ def validate_chat_completion_tool_choice(
         tool_choice_type = tool_choice.get("type")
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
+        if tool_choice_type == "allowed_tools":
+            if parse_chat_allowed_tools_tool_choice(tool_choice) is None:
+                raise BadRequestError(
+                    message=(
+                        f"Invalid tool choice, tool_choice={tool_choice}. On chat completions allowed_tools is "
+                        f"{CHAT_ALLOWED_TOOLS_LAYOUT}; the flat Responses API layout is not accepted here"
+                    ),
+                    model=model,
+                    llm_provider="",
+                )
+            return tool_choice
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:

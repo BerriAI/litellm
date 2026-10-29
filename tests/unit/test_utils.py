@@ -933,21 +933,11 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_creation_input_token_cost": {"type": "number"},
             "cache_creation_input_token_cost_above_1hr": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr": {"type": "number"},
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {
-                "type": "number"
-            },
-            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {
-                "type": "number"
-            },
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": {"type": "number"},
+            "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_flex": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_priority": {"type": "number"},
             "cache_creation_input_token_cost_above_12hr_batches": {"type": "number"},
@@ -7419,9 +7409,7 @@ async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
     try:
         with respx.mock(assert_all_called=True) as upstream:
             upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
-            await router.acompletion(
-                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
-            )
+            await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
             sent: Final = upstream.calls.last.request.headers["Authorization"]
     finally:
         router.discard()
@@ -7489,7 +7477,9 @@ async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_config
         with respx.mock(assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_BEDROCK_REPLY)
             await router.acompletion(
-                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+                model="claude",
+                messages=_PING,
+                aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com",
             )
             sent: Final = tuple(
                 (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
@@ -7698,7 +7688,9 @@ async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials
         (
             lambda reference: LiteLLM_Params(
                 **litellm.Router(
-                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                    model_list=[
+                        {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}
+                    ]
                 ).get_model_list(model_name="openai/*")[0]["litellm_params"]
             ),
             lambda reference: "Bearer listing-token",
@@ -8247,6 +8239,49 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
     assert exc_info.value.model == MODEL
 
 
+_ALLOWED_TOOLS_CHAT_LAYOUT: Final = {
+    "type": "allowed_tools",
+    "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+}
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("mode", ["auto", "required"])
+def test_validate_tool_choice_allowed_tools_chat_layout_passes_through(mode):
+    """OpenAI's chat allowed_tools restriction is forwarded as the caller sent it, not rejected as an unknown dict."""
+    tool_choice = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
+        },
+    }
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+        {"type": "allowed_tools"},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+        {"type": "allowed_tools", "allowed_tools": {"tools": [{"type": "function", "function": {"name": "a"}}]}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": "get_time"}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice):
+    """The flat Responses layout, a missing or empty tool list, or a mode OpenAI does not define is a 400 that shows
+    the chat layout, since OpenAI's chat endpoint rejects each of those too."""
+    with pytest.raises(litellm.BadRequestError, match="allowed_tools") as exc_info:
+        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+    assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
@@ -8670,7 +8705,9 @@ def test_basic_trimming_no_max_tokens_specified():
     trimmed_messages = trim_messages(messages, model="gpt-4")
     print("trimmed messages for gpt-4")
     print(trimmed_messages)
-    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"]["max_input_tokens"]
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost["gpt-4"][
+        "max_input_tokens"
+    ]
 
 
 def test_multiple_messages_trimming():

@@ -67,8 +67,12 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
-from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.exceptions import BadRequestError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS,
+    is_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
@@ -5751,6 +5755,18 @@ def completion(
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
+
+        if is_allowed_tools_tool_choice(tool_choice) and custom_llm_provider not in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
+            raise BadRequestError(
+                message=(
+                    "tool_choice type 'allowed_tools' is only supported for "
+                    f"{', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, got custom_llm_provider={custom_llm_provider}. "
+                    "drop_params does not drop it, since that would let the model call tools the request excluded. "
+                    "Send only the allowed tools in `tools` with tool_choice='auto' or 'required' instead."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
         if provider_specific_header is not None:
             headers.update(
