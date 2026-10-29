@@ -122,12 +122,12 @@ async def test_cooldown_skips_only_the_failed_duplicate_model_deployment() -> No
 
 
 @pytest.mark.parametrize(
-    "router_kwargs",
-    [{"fallbacks": [{"primary": "backup"}]}, {"default_fallbacks": "backup"}],
-    ids=["string_fallback_target", "string_default_fallbacks"],
+    "fallbacks",
+    [[{"primary": "backup"}], [{"*": "backup"}]],
+    ids=["string_fallback_target", "string_catch_all_target"],
 )
 @pytest.mark.asyncio
-async def test_string_valued_fallbacks_still_cool_down_the_failing_primary(router_kwargs: dict[str, object]) -> None:
+async def test_string_valued_fallbacks_still_cool_down_the_failing_primary(fallbacks: list[dict[str, object]]) -> None:
     with wire_server(_peer) as wire:
         router: Final = Router(
             model_list=[
@@ -136,8 +136,8 @@ async def test_string_valued_fallbacks_still_cool_down_the_failing_primary(route
             ],
             allowed_fails=0,
             num_retries=0,
-            **router_kwargs,
         )
+        router.fallbacks = fallbacks
         with pytest.raises(litellm.AuthenticationError):
             await router.acompletion(
                 model="primary",

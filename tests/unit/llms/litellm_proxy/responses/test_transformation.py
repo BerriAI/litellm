@@ -7,6 +7,7 @@ import respx
 
 import litellm
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 from tests.unit.proxy.conftest import httpx_transport
@@ -73,3 +74,23 @@ def test_get_complete_url_requires_api_base(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.delenv("LITELLM_PROXY_API_BASE", raising=False)
     with pytest.raises(ValueError, match="api_base not set"):
         LiteLLMProxyResponsesAPIConfig().get_complete_url(api_base=None, litellm_params={})
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_compact_request_forwards_metadata_and_user_to_the_downstream_proxy(drop_params: bool) -> None:
+    url, data = LiteLLMProxyResponsesAPIConfig().transform_compact_response_api_request(
+        model="gpt-5.5",
+        input="hi",
+        response_api_optional_request_params={"metadata": {"ticket": "qa-1"}, "user": "end-user-1", "temperature": 0.2},
+        api_base="https://my-proxy.example.com/responses",
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert url == "https://my-proxy.example.com/responses/compact"
+    assert {key: data[key] for key in data if key != "input"} == {
+        "model": "gpt-5.5",
+        "metadata": {"ticket": "qa-1"},
+        "user": "end-user-1",
+        "temperature": 0.2,
+    }
