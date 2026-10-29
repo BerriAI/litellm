@@ -3,18 +3,15 @@ completion_start_time on the first chunk so downstream TTFT consumers
 (Prometheus, OTEL, SpendLogs completionStartTime) do not fall back to
 completion_start_time = end_time."""
 
-import asyncio
+import asyncio, importlib
 import functools
 import gc
-import importlib
 import json
 import threading
 import weakref
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from datetime import datetime
-from types import SimpleNamespace
-from typing import Final
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -25,10 +22,8 @@ from pydantic_core import PydanticSerializationError
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.responses import streaming_iterator as streaming_module
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -43,12 +38,15 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
+from contextlib import suppress
+from litellm.responses import streaming_iterator as streaming_module
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from types import SimpleNamespace
 
 
 def _sse_event(payload: dict) -> bytes:
-    return f"data: {json.dumps(payload)}\n\n".encode()
+    return f"data: {json.dumps(payload)}\n\n".encode("utf-8")
 
 
 def _mock_config() -> Mock:
@@ -82,7 +80,7 @@ def _make_iterator(
     *,
     sse_events: list[bytes],
     logging_obj: LiteLLMLoggingObj,
-    trailing_error: Exception | None = None,
+    trailing_error: Optional[Exception] = None,
     config: Mock | None = None,
     request_data: dict | None = None,
 ) -> ResponsesAPIStreamingIterator:
@@ -111,7 +109,7 @@ def _make_sync_iterator(
     *,
     sse_events: list[bytes],
     logging_obj: LiteLLMLoggingObj,
-    trailing_error: Exception | None = None,
+    trailing_error: Optional[Exception] = None,
 ) -> SyncResponsesAPIStreamingIterator:
     def iter_bytes():
         for evt in sse_events:
@@ -493,6 +491,7 @@ class _LoopRecordingLogger(CustomLogger):
         self.hook_loop = asyncio.get_running_loop()
         await asyncio.sleep(0.05)
         self.hook_finished = True
+        return None
 
 
 class _SyncOnlyRecordingLogger(CustomLogger):
@@ -841,6 +840,40 @@ def _responses_api_response_with_usage() -> ResponsesAPIResponse:
     )
 
 
+def test_stamp_responses_usage_cost_stamps_computed_cost():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "openai"}
+    logging_obj.response_cost_calculator.return_value = 0.000704
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
+    priced = logging_obj.response_cost_calculator.call_args.kwargs["result"]
+    assert priced.usage.prompt_tokens == response.usage.input_tokens, (
+        "priced in the chat usage shape the spend row uses"
+    )
+
+
+def test_stamp_responses_usage_cost_bills_the_spend_row_price_over_the_provider_reported_cost():
+    from litellm.litellm_core_utils.core_helpers import response_cost_in_hidden_params
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    setattr(response.usage, "cost", 0.5)
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "openai"}
+    logging_obj.response_cost_calculator.return_value = 0.00032
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.00032), "the client sees what the row bills"
+    priced = logging_obj.response_cost_calculator.call_args.kwargs["result"]
+    assert response_cost_in_hidden_params(priced) == pytest.approx(0.5), "the reported cost reaches the calculator"
+
+
 def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
     return ResponsesAPIResponse.model_construct(
         id="resp_lit7391",
@@ -854,8 +887,8 @@ def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
     )
 
 
-def test_normalize_responses_usage_types_a_dict_usage_and_keeps_the_provider_cost():
-    from litellm.responses.streaming_iterator import normalize_responses_usage
+def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 
     response = _unvalidated_response_with_dict_usage(
         {
@@ -866,50 +899,43 @@ def test_normalize_responses_usage_types_a_dict_usage_and_keeps_the_provider_cos
             "cost": {"currency": "USD", "input_cost": 0, "output_cost": 3e-05, "total_cost": 3e-05},
         }
     )
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "openai"}
+    logging_obj.response_cost_calculator.return_value = 3e-05
 
-    normalize_responses_usage(response, None)
+    stamp_responses_usage_cost(response, logging_obj)
 
     assert isinstance(response.usage, ResponseAPIUsage)
     assert response.usage.cost == pytest.approx(3e-05)
     assert response.usage.output_tokens_details.reasoning_tokens == 117
 
 
-def test_normalize_responses_usage_never_writes_a_cost_the_provider_did_not_report():
-    from litellm.responses.streaming_iterator import normalize_responses_usage
+def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "openai"}
+    logging_obj.response_cost_calculator.return_value = 0.000704
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert isinstance(response.usage, ResponseAPIUsage)
+    assert response.usage.cost == pytest.approx(0.000704)
+    logging_obj.response_cost_calculator.assert_called_once()
+
+
+def test_stamp_responses_usage_cost_survives_calculator_failure():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 
     response = _responses_api_response_with_usage()
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "openai"}
+    logging_obj.response_cost_calculator.side_effect = RuntimeError("cost map unavailable")
 
-    normalize_responses_usage(response, None)
+    stamp_responses_usage_cost(response, logging_obj)
 
     assert getattr(response.usage, "cost", None) is None
-
-
-def test_normalize_responses_usage_stamps_the_logging_objects_bill_as_hidden_response_cost():
-    from litellm.responses.streaming_iterator import normalize_responses_usage
-
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    response: Final = _responses_api_response_with_usage()
-    logging_obj: Final = Logging(
-        model="mantle-claude",
-        messages=[{"role": "user", "content": "q"}],
-        stream=True,
-        call_type="aresponses",
-        start_time=None,
-        litellm_call_id="call",
-        function_id="fn",
-    )
-    logging_obj.update_environment_variables(
-        litellm_params={"custom_llm_provider": "openai", "input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6},
-        optional_params={},
-    )
-    logging_obj.custom_cost_per_token = {"input_cost_per_token": 2e-6, "output_cost_per_token": 6e-6}
-
-    normalize_responses_usage(response, logging_obj)
-
-    hidden: Final = get_hidden_params(response)
-    assert hidden is not None and hidden["response_cost"] == pytest.approx(20 * 2e-6 + 60 * 6e-6)
-    assert getattr(response.usage, "cost", None) is None, "the client field is written at the proxy egress, not here"
 
 
 def _capture_dispatch(logged: list):
@@ -929,7 +955,7 @@ def _capture_dispatch(logged: list):
     return _dispatch
 
 
-def _headers_config(*, transform_hidden_params: Mapping[str, object] | None = None) -> Mock:
+def _headers_config(*, transform_hidden_params: Optional[dict] = None) -> Mock:
     """Config whose completed event carries a real ResponsesAPIResponse, so the logging copy
     performs a genuine model_dump/model_validate round trip."""
     mock_config = Mock(spec=BaseResponsesAPIConfig)
@@ -1194,9 +1220,7 @@ async def test_completed_event_survives_a_failing_usage_estimate():
     falls back to usage None."""
     malformed_input: Final = [{"type": "message", "role": "user", "content": 42}]
     with pytest.raises(ValueError, match="Invalid content type"):
-        _estimate_usage_from_text(
-            "gpt-4o-mini", malformed_input, {"input": malformed_input}, "hello world"
-        )
+        _estimate_usage_from_text("gpt-4o-mini", malformed_input, {"input": malformed_input}, "hello world")
 
     response = _responses_api_response_without_usage()
     iterator = _make_iterator(
@@ -1246,10 +1270,10 @@ async def test_completed_event_without_usage_counts_tool_input_deltas(tool_delta
 
 
 @pytest.mark.asyncio
-async def test_completed_event_with_a_dict_response_is_typed():
+async def test_completed_event_with_a_dict_response_is_typed_and_billed():
     """transform_streaming_response can model_construct a terminal event whose
     response stays a plain dict; the iterator must type it so the estimated
-    usage reaches logging and the proxy egress as a model."""
+    usage reaches the cost stamping path."""
     dict_response: Final = {
         "id": "resp_dict",
         "model": "gpt-4o-mini",
@@ -1291,7 +1315,15 @@ async def test_completed_event_with_a_dict_response_is_typed():
     assert usage is not None
     assert usage.input_tokens > 0
     assert usage.output_tokens > 0
-    assert getattr(usage, "cost", None) is None, "the bill goes on at the proxy egress, never on the event logging prices"
+    assert usage.cost == pytest.approx(0.000704)
+    priced: Final = [
+        call.kwargs["result"]
+        for call in logging_obj.response_cost_calculator.call_args_list
+        if isinstance(call.kwargs.get("result"), ResponsesAPIResponse)
+    ]
+    assert [(r.id, r.usage.prompt_tokens) for r in priced] == [(completed_response.id, usage.input_tokens)], (
+        "priced once, in the chat usage shape the spend row uses"
+    )
 
 
 def test_billed_terminal_response_keeps_a_response_that_already_has_usage():
@@ -1716,7 +1748,7 @@ def test_process_chunk_wraps_encrypted_content_with_model_id():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-def test_process_chunk_completed_response_updates_id_and_leaves_usage_cost_alone(monkeypatch: pytest.MonkeyPatch):
+def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch):
     original_include_cost = litellm.include_cost_in_streaming_usage
     litellm.include_cost_in_streaming_usage = True
     openai_types = streaming_module._get_openai_response_types()
@@ -1765,7 +1797,7 @@ def test_process_chunk_completed_response_updates_id_and_leaves_usage_cost_alone
     assert iterator.completed_response is event
     assert event.response.id != "resp_live"
     assert event.response.id.startswith("resp_")
-    assert event.response.usage.cost is None, "the bill goes on at the proxy egress, never on the event logging prices"
+    assert event.response.usage.cost == 1.23
     completion_handler.assert_called_once()
 
 

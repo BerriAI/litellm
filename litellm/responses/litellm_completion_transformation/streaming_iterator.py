@@ -25,7 +25,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, normalize_responses_usage
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, stamp_responses_usage_cost
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
@@ -1481,7 +1481,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             )
         )
-        normalize_responses_usage(partial, self.litellm_logging_obj)
+        stamp_responses_usage_cost(partial, self.litellm_logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _emit_terminal_response_event(

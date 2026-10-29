@@ -6060,31 +6060,3 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
-
-
-def test_the_inner_responses_bill_rides_the_chat_usage_cost_of_the_terminal_chunk() -> None:
-    from litellm.completion_extras.litellm_responses_transformation.transformation import (
-        OpenAiResponsesToChatCompletionStreamIterator,
-    )
-    from litellm.litellm_core_utils.hidden_params import get_hidden_params
-    from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
-
-    inner = ResponsesAPIResponse(
-        id="resp_bridge",
-        created_at=1,
-        status="completed",
-        model="gpt-5.5-pro",
-        object="response",
-        output=[],
-        usage=ResponseAPIUsage(input_tokens=1840, output_tokens=412, total_tokens=2252),
-    )
-    hidden = get_hidden_params(inner)
-    assert hidden is not None
-    hidden["response_cost"] = 0.07704
-    event = ResponseCompletedEvent(type="response.completed", response=inner)
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter(()), sync_stream=True)
-
-    chunk = iterator._handle_string_chunk(event)  # pyright: ignore[reportPrivateUsage]  # the seam the inner event enters through
-
-    assert chunk.usage is not None and chunk.usage.cost == 0.07704, "the spend row's number reaches the chat client"
-    assert chunk.usage.prompt_tokens == 1840 and chunk.usage.completion_tokens == 412

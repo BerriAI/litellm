@@ -45,7 +45,6 @@ from litellm.litellm_core_utils.core_helpers import (
     set_response_cost_in_hidden_params,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import (
     is_background_response,
     requests_background,
@@ -600,7 +599,7 @@ class BaseResponsesAPIStreamingIterator:
                         else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
                     )
                     self.completed_response = _terminal_chunk
-                    normalize_responses_usage(_billed_response, self.logging_obj)
+                    stamp_responses_usage_cost(_billed_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -1128,7 +1127,7 @@ class BaseResponsesAPIStreamingIterator:
                 "output": _partial_output_items(self._generated_content),
             }
         )
-        normalize_responses_usage(partial, self.logging_obj)
+        stamp_responses_usage_cost(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _billed_without_disconnect(self) -> bool:
@@ -1827,11 +1826,12 @@ def _estimate_usage_safely(
         return None
 
 
-def normalize_responses_usage(response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None) -> None:
-    """A terminal response built off an untyped dict carries its usage as a dict, logging and the proxy read a model.
-    The bill the logging object prices for it rides its hidden ``response_cost``, so the proxy shows the same number.
-    It is priced on a copy shaped the way the success handler shapes the spend row's result, the reported
-    ``usage.cost`` in the response-cost header and the usage in chat shape, so both read the same number."""
+def stamp_responses_usage_cost(
+    response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
+) -> None:
+    """The terminal response's ``usage.cost`` is the bill litellm writes to the spend row. It is priced on a copy
+    shaped the way the success handler shapes the spend row's result (the reported ``usage.cost`` in the
+    response-cost header, the usage in chat shape), so the client and the row read the same number."""
     if response_obj is None:
         return
     usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
@@ -1840,19 +1840,21 @@ def normalize_responses_usage(response_obj: ResponsesAPIResponse | None, logging
     response_obj.usage = usage_obj  # rebind-ok: the typed usage has to ride on the response the client receives
     if logging_obj is None:
         return
-    priced: Final = response_obj.model_copy()
+    priced: Final = response_obj.model_copy(
+        update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)}
+    )
     priced.hidden_params = {}
     set_response_cost_in_hidden_params(
         priced, provider_reported_usage_cost(usage_obj, logging_obj.model_call_details.get("custom_llm_provider"))
     )
-    setattr(priced, "usage", ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj))
     try:
         bill: Final = logging_obj.response_cost_calculator(result=priced)
     except Exception:  # noqa: BLE001  # a pricing failure leaves the client usage as the upstream sent it
         return
-    hidden: Final = get_hidden_params(response_obj)
-    if hidden is not None and isinstance(bill, (int, float)) and not isinstance(bill, bool):
-        hidden["response_cost"] = float(bill)
+    if isinstance(bill, bool) or not isinstance(bill, (int, float)):
+        return
+    if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
+        setattr(usage_obj, "cost", float(bill))
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -1886,7 +1888,7 @@ def build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = get_openai_response_types()
-    normalize_responses_usage(transformed, logging_obj)
+    stamp_responses_usage_cost(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),

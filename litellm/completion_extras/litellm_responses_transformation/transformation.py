@@ -1882,22 +1882,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return status_mapping.get(status, "stop")
 
 
-def _event_dict_with_inner_bill(
-    event: BaseModel,
-) -> dict[str, object]:  # mutable-ok: chunk_parser takes the plain dict model_dump returns
-    """``event.model_dump()``, with ``response.usage.cost`` set to the inner Responses call's bill (its hidden
-    ``response_cost``) when the upstream left ``cost`` unset. Any other event is dumped as is."""
-    response: Final = getattr(event, "response", None)
-    usage: Final = getattr(response, "usage", None)
-    bill: Final = (get_hidden_params(response) or {}).get("response_cost")
-    if not isinstance(response, BaseModel) or not isinstance(usage, BaseModel):
-        return event.model_dump()
-    if getattr(usage, "cost", None) is not None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
-        return event.model_dump()
-    billed_usage: Final = usage.model_copy(update={"cost": float(bill)})
-    return event.model_copy(update={"response": response.model_copy(update={"usage": billed_usage})}).model_dump()
-
-
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(
         self,
@@ -1919,7 +1903,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from pydantic import BaseModel
 
         if isinstance(str_line, BaseModel):
-            return self.chunk_parser(_event_dict_with_inner_bill(str_line))
+            return self.chunk_parser(str_line.model_dump())
 
         if not str_line or str_line.startswith("event:"):
             # ignore.
