@@ -1,10 +1,11 @@
 import json
 import re
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from functools import partial
-from itertools import accumulate, chain, groupby
+from functools import partial, reduce
+from itertools import accumulate, chain, groupby, islice
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -26,6 +27,11 @@ _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
 _SOURCED_BLOCK_TYPES: Final = frozenset({"image", "document"})
 _TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document"})
 _WORD_OR_CHARACTER: Final = re.compile(r"\w+|\W")
+_WORD: Final = re.compile(r"\w+")
+_MAX_ALIGNED_CELLS: Final = 4096
+_COMPARED_WORDS: Final = 256
+_MAX_DIFFED_TOKENS: Final = 8000
+_ANCHOR_SCORE: Final = 3.0
 
 
 _JSON_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
@@ -352,12 +358,61 @@ def _kind_indexes(units: tuple[_Unit, ...], start: int, stop: int, kind: str) ->
     return (index for index in range(start, stop) if _unit_kind(units[index]) == kind)
 
 
+@dataclass(frozen=True, slots=True)
+class _Alignment:
+    score: float
+    pairs: tuple[tuple[int, int], ...]
+
+
+_UNALIGNED: Final = _Alignment(0.0, ())
+
+
+def _unit_words(unit: _Unit) -> frozenset[str]:
+    if _unit_kind(unit) != "text":
+        return frozenset()
+    return frozenset(match.group() for match in islice(_WORD.finditer(unit.key[1]), _COMPARED_WORDS))
+
+
+def _pair_score(unit: _Unit, words: frozenset[str], partner: _Unit, partner_words: frozenset[str]) -> float | None:
+    if unit.key == partner.key:
+        return _ANCHOR_SCORE
+    if _unit_kind(unit) != _unit_kind(partner):
+        return None
+    return 1.0 + len(words & partner_words) / max(len(words), len(partner_words), 1)
+
+
+def _best_alignment(
+    up: _Alignment, left: _Alignment, diagonal: _Alignment, score: float | None, pair: tuple[int, int]
+) -> _Alignment:
+    kept: Final = up if up.score >= left.score else left
+    if score is None or diagonal.score + score <= kept.score:
+        return kept
+    return _Alignment(diagonal.score + score, (*diagonal.pairs, pair))
+
+
+def _best_pairs(units: tuple[_Unit, ...], rewritten_units: tuple[_Unit, ...]) -> tuple[tuple[int, int], ...]:
+    words: Final = tuple(map(_unit_words, units))
+    rewritten_words: Final = tuple(map(_unit_words, rewritten_units))
+
+    def row(previous: tuple[_Alignment, ...], index: int) -> tuple[_Alignment, ...]:
+        def cell(left: _Alignment, column: int) -> _Alignment:
+            score: Final = _pair_score(units[index], words[index], rewritten_units[column], rewritten_words[column])
+            return _best_alignment(previous[column + 1], left, previous[column], score, (index, column))
+
+        return tuple(accumulate(range(len(rewritten_units)), cell, initial=previous[0]))
+
+    first_row: Final = tuple(_UNALIGNED for _ in range(len(rewritten_units) + 1))
+    return reduce(row, range(len(units)), first_row)[-1].pairs
+
+
 def _opcode_pairs(
     original: tuple[_Unit, ...], rewritten: tuple[_Unit, ...], opcode: _Opcode
 ) -> tuple[tuple[int, int], ...]:
     match opcode:
         case ("equal", i1, i2, j1, j2):
             return tuple(zip(range(i1, i2), range(j1, j2)))
+        case ("replace", i1, i2, j1, j2) if (i2 - i1) * (j2 - j1) <= _MAX_ALIGNED_CELLS:
+            return tuple((i1 + i, j1 + j) for i, j in _best_pairs(original[i1:i2], rewritten[j1:j2]))
         case ("replace", i1, i2, j1, j2):
             kinds: Final = frozenset(map(_unit_kind, original[i1:i2]))
             return tuple(
@@ -370,31 +425,43 @@ def _opcode_pairs(
             return ()
 
 
+def _unit_pairs(units: tuple[_Unit, ...], rewritten_units: tuple[_Unit, ...]) -> tuple[tuple[int, int], ...]:
+    if len(units) * len(rewritten_units) <= _MAX_ALIGNED_CELLS:
+        return _best_pairs(units, rewritten_units)
+    opcodes: Final = SequenceMatcher(
+        None, tuple(unit.key for unit in units), tuple(unit.key for unit in rewritten_units), autojunk=False
+    ).get_opcodes()
+    return tuple(chain.from_iterable(_opcode_pairs(units, rewritten_units, opcode) for opcode in opcodes))
+
+
 def _insertion_anchor(index: int, originals_by_rewritten: Mapping[int, int], end: int) -> int:
     later: Final = sorted(rewritten for rewritten in originals_by_rewritten if rewritten > index)
     return originals_by_rewritten[later[0]] if later else end
 
 
 def _common_prefix_length(left: str, right: str) -> int:
-    return next(
-        (index for index, (left_char, right_char) in enumerate(zip(left, right)) if left_char != right_char),
-        min(len(left), len(right)),
-    )
+    return bisect_left(range(min(len(left), len(right))), True, key=lambda size: left[: size + 1] != right[: size + 1])
 
 
-def _offset_in_region(offset: int, original: str, rewritten: str) -> int:
-    prefix: Final = _common_prefix_length(original, rewritten)
-    suffix: Final = min(
-        _common_prefix_length(original[::-1], rewritten[::-1]), len(original) - prefix, len(rewritten) - prefix
-    )
-    if offset <= prefix:
-        return offset
-    if offset >= len(original) - suffix:
-        return len(rewritten) - len(original) + offset
-    return len(rewritten) - suffix
+def _common_edges(left: str, right: str) -> tuple[int, int]:
+    prefix: Final = _common_prefix_length(left, right)
+    suffix: Final = min(_common_prefix_length(left[::-1], right[::-1]), len(left) - prefix, len(right) - prefix)
+    return prefix, suffix
 
 
-_Span: TypeAlias = tuple[int, int, int, int]
+@dataclass(frozen=True, slots=True)
+class _Span:
+    start: int
+    end: int
+    rewritten_start: int
+    rewritten_end: int
+    prefix: int
+    suffix: int
+
+
+def _span(original: str, rewritten: str, start: int, end: int, rewritten_start: int, rewritten_end: int) -> _Span:
+    prefix, suffix = _common_edges(original[start:end], rewritten[rewritten_start:rewritten_end])
+    return _Span(start, end, rewritten_start, rewritten_end, prefix, suffix)
 
 
 def _token_offsets(text: str) -> tuple[tuple[str, ...], tuple[int, ...]]:
@@ -402,23 +469,47 @@ def _token_offsets(text: str) -> tuple[tuple[str, ...], tuple[int, ...]]:
     return tokens, (0, *accumulate(map(len, tokens)))
 
 
+def _changed_spans(
+    original: str, rewritten: str, prefix: int, original_end: int, rewritten_end: int
+) -> Iterator[_Span]:
+    original_tokens, original_offsets = _token_offsets(original[prefix:original_end])
+    rewritten_tokens, rewritten_offsets = _token_offsets(rewritten[prefix:rewritten_end])
+    if len(original_tokens) + len(rewritten_tokens) > _MAX_DIFFED_TOKENS:
+        return iter((_span(original, rewritten, prefix, original_end, prefix, rewritten_end),))
+    return (
+        _span(
+            original,
+            rewritten,
+            prefix + original_offsets[i1],
+            prefix + original_offsets[i2],
+            prefix + rewritten_offsets[j1],
+            prefix + rewritten_offsets[j2],
+        )
+        for _, i1, i2, j1, j2 in SequenceMatcher(None, original_tokens, rewritten_tokens).get_opcodes()
+    )
+
+
 def _diff_spans(original: str, rewritten: str) -> tuple[_Span, ...]:
-    original_tokens, original_offsets = _token_offsets(original)
-    rewritten_tokens, rewritten_offsets = _token_offsets(rewritten)
-    opcodes: Final = SequenceMatcher(None, original_tokens, rewritten_tokens).get_opcodes()
-    return tuple(
-        (original_offsets[i1], original_offsets[i2], rewritten_offsets[j1], rewritten_offsets[j2])
-        for _, i1, i2, j1, j2 in opcodes
+    original_text: Final = original.rstrip()
+    rewritten_text: Final = rewritten.rstrip()
+    prefix, suffix = _common_edges(original_text, rewritten_text)
+    original_end: Final = len(original_text) - suffix
+    rewritten_end: Final = len(rewritten_text) - suffix
+    return (
+        _Span(0, prefix, 0, prefix, prefix, 0),
+        *_changed_spans(original, rewritten, prefix, original_end, rewritten_end),
+        _Span(original_end, len(original_text), rewritten_end, len(rewritten_text), suffix, 0),
+        _span(original, rewritten, len(original_text), len(original), len(rewritten_text), len(rewritten)),
     )
 
 
-def _mapped_offset(offset: int, spans: tuple[_Span, ...], original: str, rewritten: str) -> int:
-    return next(
-        rewritten_start
-        + _offset_in_region(offset - start, original[start:end], rewritten[rewritten_start:rewritten_end])
-        for start, end, rewritten_start, rewritten_end in spans
-        if start <= offset <= end
-    )
+def _mapped_offset(offset: int, spans: tuple[_Span, ...], ends: tuple[int, ...]) -> int:
+    span: Final = spans[bisect_left(ends, offset)]
+    if offset - span.start <= span.prefix:
+        return span.rewritten_start + offset - span.start
+    if span.end - offset <= span.suffix:
+        return span.rewritten_end - (span.end - offset)
+    return span.rewritten_end - span.suffix
 
 
 def _split_text(texts: tuple[str, ...], rewritten: str) -> tuple[str, ...]:
@@ -426,8 +517,9 @@ def _split_text(texts: tuple[str, ...], rewritten: str) -> tuple[str, ...]:
     if joined == rewritten:
         return texts
     spans: Final = _diff_spans(joined, rewritten)
+    span_ends: Final = tuple(span.end for span in spans)
     boundaries: Final = accumulate(map(len, texts[:-1]))
-    ends: Final = (*(_mapped_offset(end, spans, joined, rewritten) for end in boundaries), len(rewritten))
+    ends: Final = (*(_mapped_offset(boundary, spans, span_ends) for boundary in boundaries), len(rewritten))
     return tuple(rewritten[start:end] for start, end in zip((0, *ends[:-1]), ends))
 
 
@@ -454,12 +546,7 @@ def _unit_emissions(
 def _aligned_contents(original: _Contents, rewritten: _Contents, role: str, carried: _Carried) -> _Contents:
     units: Final = _units(original, role, carried)
     rewritten_units: Final = _units(rewritten, role, _always_carried)
-    opcodes: Final = SequenceMatcher(
-        None, tuple(unit.key for unit in units), tuple(unit.key for unit in rewritten_units), autojunk=False
-    ).get_opcodes()
-    partners: Final = MappingProxyType(
-        dict(chain.from_iterable(_opcode_pairs(units, rewritten_units, opcode) for opcode in opcodes))
-    )
+    partners: Final = MappingProxyType(dict(_unit_pairs(units, rewritten_units)))
     originals_by_rewritten: Final = MappingProxyType({rewritten: original for original, rewritten in partners.items()})
     insertions: Final = tuple(
         (_insertion_anchor(index, originals_by_rewritten, len(units)), index)

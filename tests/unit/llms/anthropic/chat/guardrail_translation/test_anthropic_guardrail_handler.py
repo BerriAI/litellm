@@ -2888,6 +2888,30 @@ def _with_user_notice(message: dict) -> dict:
     return {**message, "content": [_text("Notice: reviewed."), *content]}
 
 
+def _masked(message: dict) -> dict:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {
+        **message,
+        "content": [
+            {**part, "text": part["text"].replace("bob@example.com", "<EMAIL>")} if "text" in part else part
+            for part in content
+        ],
+    }
+
+
+def _cached(text: str) -> dict[str, object]:
+    return {**_text(text), "cache_control": {"type": "ephemeral"}}
+
+
+def _paragraphs(count: int, emailed: Callable[[int], bool]) -> list[dict[str, object]]:
+    return [
+        _text(f" Paragraph {index} cites {'bob@example.com' if emailed(index) else 'the forecast'} once.")
+        for index in range(count)
+    ]
+
+
 class TestStructuredWriteBackKeepsTheClientsBlocks:
     """A rewrite sends every block the guardrail never saw, or saw only in a lossy form, as the client sent it."""
 
@@ -3095,6 +3119,107 @@ class TestStructuredWriteBackKeepsTheClientsBlocks:
         )
 
         assert data["messages"] == [{"role": "user", "content": [_text("Notice: reviewed."), cached, _PDF_DOCUMENT]}]
+
+    @pytest.mark.parametrize(
+        ("content", "rewrite", "expected_content"),
+        [
+            (
+                [_text("A bob@example.com"), _text("B DROP ME"), _TEXT_DOCUMENT, _cached("C bob@example.com more")],
+                lambda message: _without_dropped_parts(_masked(message)),
+                [_text("A <EMAIL>"), _TEXT_DOCUMENT, _cached("C <EMAIL> more")],
+            ),
+            (
+                [_cached("hi bob@example.com"), _text("hi <EMAIL>")],
+                _masked,
+                [_cached("hi <EMAIL>"), _text("hi <EMAIL>")],
+            ),
+            (
+                [_cached("Email bob@example.com"), _text("Second")],
+                lambda message: _with_user_notice(_masked(message)),
+                [_text("Notice: reviewed."), _cached("Email <EMAIL>"), _text("Second")],
+            ),
+        ],
+        ids=["dropped-and-masked-texts", "masked-into-its-neighbors-text", "notice-beside-a-masked-text"],
+    )
+    async def test_an_edited_text_keeps_its_cache_breakpoint_when_texts_are_added_or_dropped_beside_it(
+        self,
+        content: list[dict[str, object]],
+        rewrite: Callable[[dict], dict],
+        expected_content: list[dict[str, object]],
+    ) -> None:
+        data = {"model": "claude-fable-5", "messages": [{"role": "user", "content": content}]}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredRewritingGuardrail(rewrite)
+        )
+
+        assert data["messages"] == [{"role": "user", "content": expected_content}]
+
+    @pytest.mark.parametrize(
+        ("emailed", "dropped"),
+        [(lambda index: index == 7, ()), (lambda index: True, ()), (lambda index: index == 7, (100,))],
+        ids=["one-masked-text", "every-text-masked", "masked-and-dropped-texts"],
+    )
+    async def test_a_long_rewritten_turn_keeps_its_document_and_cache_breakpoint_in_place(
+        self, emailed: Callable[[int], bool], dropped: tuple[int, ...]
+    ) -> None:
+        paragraphs = [
+            _text("DROP ME") if index in dropped else paragraph
+            for index, paragraph in enumerate(_paragraphs(160, emailed))
+        ]
+        content = [
+            *paragraphs[:79],
+            {**paragraphs[79], "cache_control": {"type": "ephemeral"}},
+            _TEXT_DOCUMENT,
+            *paragraphs[80:],
+        ]
+        data = {"model": "claude-fable-5", "messages": [{"role": "user", "content": content}]}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data,
+            guardrail_to_apply=MockStructuredRewritingGuardrail(lambda message: _without_dropped_parts(_masked(message))),
+        )
+
+        masked = json.loads(json.dumps(content).replace("bob@example.com", "<EMAIL>"))
+        assert data["messages"] == [{"role": "user", "content": [block for block in masked if block != _text("DROP ME")]}]
+
+    @pytest.mark.timeout(10)
+    async def test_a_long_masked_answer_is_split_back_into_every_paragraph_quickly(self) -> None:
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [_text("Summarize the forecasts.")]},
+                {"role": "assistant", "content": _paragraphs(4000, lambda index: index == 2000)},
+                {"role": "user", "content": [_text("Thanks")]},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"][1]["content"] == json.loads(
+            json.dumps(_paragraphs(4000, lambda index: index == 2000)).replace("bob@example.com", "<EMAIL>")
+        )
+
+    @pytest.mark.timeout(10)
+    async def test_a_long_answer_masked_everywhere_keeps_all_of_its_text(self) -> None:
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [_text("Summarize the forecasts.")]},
+                {"role": "assistant", "content": _paragraphs(4000, lambda index: True)},
+                {"role": "user", "content": [_text("Thanks")]},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert "".join(part["text"] for part in data["messages"][1]["content"]) == "".join(
+            part["text"].replace("bob@example.com", "<EMAIL>") for part in _paragraphs(4000, lambda index: True)
+        )
 
     async def test_an_untouched_cited_answer_keeps_its_thinking_texts_and_citations(self) -> None:
         answer = [
