@@ -18,6 +18,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     delta_event,
     duration_usage,
     json_object,
+    normalize_transcript_word,
     parse_transcription_session_update,
     speech_event,
     transcription_session,
@@ -165,10 +166,6 @@ def session_created_event(config: ChirpSessionConfig, session_id: str) -> OpenAI
     return transcription_session_created_event(config.openai_session(session_id))
 
 
-def _normalize_word(word: str) -> str:
-    return "".join(char for char in word if char.isalnum()).casefold()
-
-
 def new_words(previous: str, current: str) -> str:
     previous_words: Final = previous.split()
     current_words: Final = current.split()
@@ -176,7 +173,7 @@ def new_words(previous: str, current: str) -> str:
         (
             index
             for index, (old, new) in enumerate(zip(previous_words, current_words, strict=False))
-            if _normalize_word(old) != _normalize_word(new)
+            if normalize_transcript_word(old) != normalize_transcript_word(new)
         ),
         min(len(previous_words), len(current_words)),
     )
