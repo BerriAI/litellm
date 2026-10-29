@@ -1,10 +1,13 @@
 import importlib.abc
+import importlib.machinery
 import importlib.util
 import logging
 import sys
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from types import ModuleType
+from typing import Final
 
 import pytest
 
@@ -15,33 +18,46 @@ from litellm.proxy.mcp_server.guardrail_translation.handler import (
 )
 from litellm.types.utils import CallTypes
 
-OPENAI_CHAT_TRANSLATION_MODULE = "litellm.llms.openai.chat.guardrail_translation"
-MCP_TRANSLATION_MODULE = "litellm.proxy.mcp_server.guardrail_translation"
+OPENAI_CHAT_TRANSLATION_MODULE: Final = "litellm.llms.openai.chat.guardrail_translation"
+MCP_TRANSLATION_MODULE: Final = "litellm.proxy.mcp_server.guardrail_translation"
+RETRY_SECONDS: Final = llms_package.GUARDRAIL_TRANSLATION_RETRY_SECONDS
+
+
+def at(seconds: float) -> Callable[[], float]:
+    return lambda: seconds
 
 
 class RaisingLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def __init__(self, module_path: str, error: BaseException) -> None:
         self.module_path = module_path
         self.error = error
+        self.attempts = 0
 
-    def find_spec(self, fullname: str, path=None, target=None):
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
         if fullname != self.module_path:
             return None
         return importlib.util.spec_from_loader(fullname, self)
 
-    def create_module(self, spec) -> ModuleType | None:
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType | None:
         return None
 
     def exec_module(self, module: ModuleType) -> None:
+        self.attempts += 1
         raise self.error
 
 
 @contextmanager
-def raising_on_import(module_path: str, error: BaseException) -> Iterator[None]:
+def raising_on_import(module_path: str, error: BaseException) -> Iterator[RaisingLoader]:
+    loader: Final = RaisingLoader(module_path, error)
     with pytest.MonkeyPatch.context() as mp:
         mp.delitem(sys.modules, module_path, raising=False)
-        mp.setattr(sys, "meta_path", [RaisingLoader(module_path, error), *sys.meta_path])
-        yield
+        mp.setattr(sys, "meta_path", [loader, *sys.meta_path])
+        yield loader
 
 
 @contextmanager
@@ -59,17 +75,18 @@ def capturing(caplog: pytest.LogCaptureFixture, level: int) -> Iterator[None]:
         yield
 
 
+def errors_in(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR)
+
+
 @pytest.fixture(autouse=True)
-def reset_guardrail_translation_discovery():
-    saved = llms_package.guardrail_translation_discovery
-    llms_package.guardrail_translation_discovery = None
-    yield
-    llms_package.guardrail_translation_discovery = saved
+def reset_guardrail_translation_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(llms_package, "guardrail_translation_discovery", None)
 
 
-def test_discovery_reports_the_handler_package_it_could_not_import():
+def test_discovery_reports_the_handler_package_it_could_not_import() -> None:
     with unimportable(OPENAI_CHAT_TRANSLATION_MODULE):
-        discovery = llms_package.discover_guardrail_translations()
+        discovery: Final = llms_package.discover_guardrail_translations()
 
     assert tuple(discovery.unavailable) == (OPENAI_CHAT_TRANSLATION_MODULE,)
     assert "None in sys.modules" in discovery.unavailable[OPENAI_CHAT_TRANSLATION_MODULE]
@@ -78,128 +95,148 @@ def test_discovery_reports_the_handler_package_it_could_not_import():
     assert CallTypes.aembedding in discovery.mappings
 
 
-def test_complete_discovery_reports_nothing_unavailable():
-    discovery = llms_package.discover_guardrail_translations()
+def test_complete_discovery_reports_nothing_unavailable() -> None:
+    discovery: Final = llms_package.discover_guardrail_translations()
 
     assert not discovery.unavailable
     assert CallTypes.acompletion in discovery.mappings
 
 
-def test_the_next_lookup_retries_a_package_that_failed_to_import():
+def test_a_lookup_after_the_retry_interval_retries_a_package_that_failed_to_import() -> None:
     with unimportable(OPENAI_CHAT_TRANSLATION_MODULE):
-        partial = llms_package.load_guardrail_translation_mappings()
+        partial: Final = llms_package.load_guardrail_translation_mappings(now=at(0.0))
 
     assert CallTypes.acompletion not in partial
     assert CallTypes.aembedding in partial
 
-    recovered = llms_package.load_guardrail_translation_mappings()
+    recovered: Final = llms_package.load_guardrail_translation_mappings(now=at(RETRY_SECONDS))
 
     assert CallTypes.acompletion in recovered
     assert CallTypes.completion in recovered
     assert CallTypes.aembedding in recovered
-    assert not llms_package.guardrail_translation_discovery.unavailable
 
 
-def test_a_complete_discovery_is_not_scanned_again():
-    healthy = llms_package.load_guardrail_translation_mappings()
+def test_a_package_that_fails_to_import_is_retried_at_most_once_per_interval() -> None:
+    with raising_on_import(OPENAI_CHAT_TRANSLATION_MODULE, ImportError("simulated broken install")) as loader:
+        for seconds in (0.0, RETRY_SECONDS / 2, RETRY_SECONDS * 0.99):
+            assert CallTypes.acompletion not in llms_package.load_guardrail_translation_mappings(now=at(seconds))
+        assert loader.attempts == 1
+
+        llms_package.load_guardrail_translation_mappings(now=at(RETRY_SECONDS))
+        assert loader.attempts == 2
+
+        llms_package.load_guardrail_translation_mappings(now=at(RETRY_SECONDS * 1.5))
+        assert loader.attempts == 2
+
+        llms_package.load_guardrail_translation_mappings(now=at(RETRY_SECONDS * 2))
+        assert loader.attempts == 3
+
+
+def test_a_complete_discovery_is_not_scanned_again() -> None:
+    healthy: Final = llms_package.load_guardrail_translation_mappings(now=at(0.0))
 
     assert CallTypes.acompletion in healthy
 
     with unimportable(OPENAI_CHAT_TRANSLATION_MODULE):
-        after_the_package_breaks = llms_package.load_guardrail_translation_mappings()
+        after_the_package_breaks: Final = llms_package.load_guardrail_translation_mappings(
+            now=at(RETRY_SECONDS * 10)
+        )
 
     assert CallTypes.acompletion in after_the_package_breaks
-    assert not llms_package.guardrail_translation_discovery.unavailable
 
 
-def test_a_package_that_keeps_failing_is_reported_once_and_its_recovery_announced(caplog):
+def test_a_package_that_keeps_failing_is_reported_once_and_its_recovery_announced(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     with capturing(caplog, logging.INFO), unimportable(OPENAI_CHAT_TRANSLATION_MODULE):
-        for _ in range(3):
-            llms_package.load_guardrail_translation_mappings()
+        for attempt in range(3):
+            llms_package.load_guardrail_translation_mappings(now=at(attempt * RETRY_SECONDS))
 
-    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
-    assert len(errors) == 1, [record.getMessage() for record in errors]
-    assert OPENAI_CHAT_TRANSLATION_MODULE in errors[0].getMessage()
-    assert "None in sys.modules" in errors[0].getMessage()
+    errors: Final = errors_in(caplog)
+    assert len(errors) == 1, errors
+    assert OPENAI_CHAT_TRANSLATION_MODULE in errors[0]
+    assert "None in sys.modules" in errors[0]
 
     caplog.clear()
     with capturing(caplog, logging.INFO):
-        llms_package.load_guardrail_translation_mappings()
-        llms_package.load_guardrail_translation_mappings()
+        llms_package.load_guardrail_translation_mappings(now=at(3 * RETRY_SECONDS))
+        llms_package.load_guardrail_translation_mappings(now=at(4 * RETRY_SECONDS))
 
-    recoveries = [record for record in caplog.records if "available again" in record.getMessage()]
+    recoveries: Final = [record for record in caplog.records if "available again" in record.getMessage()]
     assert len(recoveries) == 1
     assert OPENAI_CHAT_TRANSLATION_MODULE in recoveries[0].getMessage()
     assert recoveries[0].levelno >= logging.WARNING
-    assert not [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert not errors_in(caplog)
 
 
-def test_lookup_recovers_after_a_failed_discovery():
+def test_lookup_recovers_after_a_failed_discovery() -> None:
     with unimportable(OPENAI_CHAT_TRANSLATION_MODULE):
         with pytest.raises(ValueError, match="acompletion"):
             llms_package.get_guardrail_translation_mapping(CallTypes.acompletion)
 
+    llms_package.load_guardrail_translation_mappings(now=at(time.monotonic() + RETRY_SECONDS))
+
     assert llms_package.get_guardrail_translation_mapping(CallTypes.acompletion) is not None
 
 
-def test_an_mcp_package_that_fails_to_import_is_reported_and_retried():
-    with raising_on_import(MCP_TRANSLATION_MODULE, AttributeError("module 'mcp.types' has no attribute 'ToolCall'")):
-        partial = llms_package.load_guardrail_translation_mappings()
+def test_an_mcp_package_that_fails_to_import_is_reported_and_retried(caplog: pytest.LogCaptureFixture) -> None:
+    broken: Final = AttributeError("module 'mcp.types' has no attribute 'ToolCall'")
+
+    with capturing(caplog, logging.DEBUG), raising_on_import(MCP_TRANSLATION_MODULE, broken):
+        partial: Final = llms_package.load_guardrail_translation_mappings(now=at(0.0))
 
     assert CallTypes.call_mcp_tool not in partial
     assert CallTypes.acompletion in partial
-    assert tuple(llms_package.guardrail_translation_discovery.unavailable) == (MCP_TRANSLATION_MODULE,)
-    assert "AttributeError" in llms_package.guardrail_translation_discovery.unavailable[MCP_TRANSLATION_MODULE]
+    errors: Final = errors_in(caplog)
+    assert len(errors) == 1, errors
+    assert MCP_TRANSLATION_MODULE in errors[0]
+    assert "AttributeError" in errors[0]
 
-    recovered = llms_package.load_guardrail_translation_mappings()
+    recovered: Final = llms_package.load_guardrail_translation_mappings(now=at(RETRY_SECONDS))
 
     assert CallTypes.call_mcp_tool in recovered
     assert CallTypes.acompletion in recovered
-    assert not llms_package.guardrail_translation_discovery.unavailable
 
 
-def test_an_install_without_the_mcp_server_is_discovered_once_and_quietly(caplog):
-    absent = ModuleNotFoundError("No module named 'mcp'", name="mcp")
+def test_an_install_without_the_mcp_server_is_discovered_once_and_quietly(caplog: pytest.LogCaptureFixture) -> None:
+    absent: Final = ModuleNotFoundError("No module named 'mcp'", name="mcp")
 
     with capturing(caplog, logging.DEBUG), unimportable("mcp"), raising_on_import(MCP_TRANSLATION_MODULE, absent):
-        first = llms_package.load_guardrail_translation_mappings()
-        second = llms_package.load_guardrail_translation_mappings()
+        first: Final = llms_package.load_guardrail_translation_mappings(now=at(0.0))
+        much_later: Final = llms_package.load_guardrail_translation_mappings(now=at(RETRY_SECONDS * 10))
 
-    assert first is second
+    assert first is much_later
     assert CallTypes.call_mcp_tool not in first
     assert CallTypes.acompletion in first
-    assert not llms_package.guardrail_translation_discovery.unavailable
     assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
 
-def test_a_broken_mcp_dependency_is_reported_and_retried(caplog):
-    broken = ModuleNotFoundError("No module named 'mcp.types'", name="mcp.types")
+def test_a_broken_mcp_dependency_is_reported_and_retried(caplog: pytest.LogCaptureFixture) -> None:
+    broken: Final = ModuleNotFoundError("No module named 'mcp.types'", name="mcp.types")
 
     with capturing(caplog, logging.DEBUG), raising_on_import(MCP_TRANSLATION_MODULE, broken):
-        partial = llms_package.load_guardrail_translation_mappings()
+        partial: Final = llms_package.load_guardrail_translation_mappings(now=at(0.0))
 
     assert CallTypes.call_mcp_tool not in partial
     assert CallTypes.acompletion in partial
-    assert tuple(llms_package.guardrail_translation_discovery.unavailable) == (MCP_TRANSLATION_MODULE,)
-    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
-    assert len(errors) == 1, [record.getMessage() for record in caplog.records]
-    assert "mcp.types" in errors[0].getMessage()
+    errors: Final = errors_in(caplog)
+    assert len(errors) == 1, errors
+    assert "mcp.types" in errors[0]
 
-    recovered = llms_package.load_guardrail_translation_mappings()
+    recovered: Final = llms_package.load_guardrail_translation_mappings(now=at(RETRY_SECONDS))
 
     assert CallTypes.call_mcp_tool in recovered
-    assert not llms_package.guardrail_translation_discovery.unavailable
 
 
 class _StandInMCPHandler:
     pass
 
 
-def test_the_mcp_package_wins_a_handler_collision_with_a_bundled_package(monkeypatch):
-    colliding = ModuleType("litellm.llms.colliding_stub.guardrail_translation")
+def test_the_mcp_package_wins_a_handler_collision_with_a_bundled_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    colliding: Final = ModuleType("litellm.llms.colliding_stub.guardrail_translation")
     colliding.guardrail_translation_mappings = {CallTypes.call_mcp_tool: _StandInMCPHandler}
     monkeypatch.setitem(sys.modules, colliding.__name__, colliding)
 
-    discovery = llms_package._discover((colliding.__name__, MCP_TRANSLATION_MODULE), already_found={})
+    discovery: Final = llms_package._discover((colliding.__name__, MCP_TRANSLATION_MODULE), already_found={})
 
     assert discovery.mappings[CallTypes.call_mcp_tool] is MCPGuardrailTranslationHandler

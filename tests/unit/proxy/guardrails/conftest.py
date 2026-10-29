@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+
 import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
@@ -6,7 +8,7 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
 
 
 @pytest.fixture(autouse=True)
-def _forget_unscanned_warnings():
+def _forget_unscanned_warnings() -> Iterator[None]:
     unified_module._warn_left_unscanned_once.cache_clear()
     yield
     unified_module._warn_left_unscanned_once.cache_clear()

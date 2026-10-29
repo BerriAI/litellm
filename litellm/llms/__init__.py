@@ -1,7 +1,8 @@
 import importlib
 import importlib.util
 import os
-from collections.abc import Iterable, Iterator, Mapping
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
@@ -98,6 +99,7 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
 _GUARDRAIL_TRANSLATION_PACKAGE: Final = "guardrail_translation"
 _MCP_GUARDRAIL_TRANSLATION_MODULE: Final = "litellm.proxy.mcp_server.guardrail_translation"
 _NO_MAPPINGS: Final[Mapping[CallTypes, type["BaseTranslation"]]] = MappingProxyType({})
+GUARDRAIL_TRANSLATION_RETRY_SECONDS: Final = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,8 +193,9 @@ def _announce_discovery(previous: GuardrailTranslationDiscovery | None, current:
     if previous is None:
         verbose_logger.error(
             "Could not import guardrail translation handlers from %s; guardrails cannot run for their call types "
-            "until the import succeeds, which every lookup retries. %s",
+            "until the import succeeds, which is retried at most once every %s seconds. %s",
             ", ".join(current.unavailable),
+            GUARDRAIL_TRANSLATION_RETRY_SECONDS,
             "; ".join(f"{module_path}: {reason}" for module_path, reason in current.unavailable.items()),
         )
         return
@@ -204,21 +207,35 @@ def _announce_discovery(previous: GuardrailTranslationDiscovery | None, current:
     verbose_logger.warning("Guardrail translation handlers from %s are available again.", ", ".join(recovered))
 
 
-guardrail_translation_discovery: GuardrailTranslationDiscovery | None = None
+@dataclass(frozen=True, slots=True)
+class CachedGuardrailTranslationDiscovery:
+    discovery: GuardrailTranslationDiscovery
+    retry_at: float
 
 
-def load_guardrail_translation_mappings() -> Mapping[CallTypes, type["BaseTranslation"]]:
+guardrail_translation_discovery: CachedGuardrailTranslationDiscovery | None = None  # rebind-ok: per-worker cache
+
+
+def load_guardrail_translation_mappings(
+    now: Callable[[], float] = time.monotonic,
+) -> Mapping[CallTypes, type["BaseTranslation"]]:
     global guardrail_translation_discovery
     cached: Final = guardrail_translation_discovery
-    if cached is not None and not cached.unavailable:
-        return cached.mappings
+    if cached is not None and not cached.discovery.unavailable:
+        return cached.discovery.mappings
+    checked_at: Final = now()
+    if cached is not None and checked_at < cached.retry_at:
+        return cached.discovery.mappings
     discovery: Final = (
         discover_guardrail_translations()
         if cached is None
-        else _discover(cached.unavailable, already_found=cached.mappings)
+        else _discover(cached.discovery.unavailable, already_found=cached.discovery.mappings)
     )
-    _announce_discovery(previous=cached, current=discovery)
-    guardrail_translation_discovery = discovery
+    _announce_discovery(previous=cached.discovery if cached is not None else None, current=discovery)
+    refreshed: Final = CachedGuardrailTranslationDiscovery(
+        discovery=discovery, retry_at=checked_at + GUARDRAIL_TRANSLATION_RETRY_SECONDS
+    )
+    guardrail_translation_discovery = refreshed  # rebind-ok: per-worker cache, replaced whole
     return discovery.mappings
 
 
