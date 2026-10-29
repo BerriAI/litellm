@@ -20,7 +20,6 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response, Timeout
-from openai.types.batch_usage import BatchUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -200,6 +199,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    batch_chat_usage,
 )
 from litellm.types.videos.main import VideoObject
 from litellm.utils import get_base_model_from_metadata, print_verbose
@@ -7253,15 +7253,6 @@ def _served_from_cache_at_no_charge(result: object) -> bool:
     return served_from_cache(result) and hidden_params is not None and hidden_params.get("response_cost") == 0
 
 
-_PROVIDER_ONLY_BATCH_USAGE_FIELDS: Final = frozenset(BatchUsage.model_fields) - frozenset(Usage.model_fields)
-
-
-def _batch_chat_usage(response: object) -> Usage | None:
-    if not isinstance(response, LiteLLMBatch) or response.usage is None:
-        return None
-    return Usage.model_validate(response.usage.model_dump(exclude=set(_PROVIDER_ONLY_BATCH_USAGE_FIELDS)))
-
-
 def _extract_response_obj_and_hidden_params(
     init_response_obj: object,
     original_exception: Exception | None,
@@ -7400,7 +7391,7 @@ def get_standard_logging_object_payload(
         raw_usage_dict: Final = StandardLoggingPayloadSetup.get_usage_as_dict(
             response_obj=None if is_unbilled_non_inference_call(call_type, metadata, response_obj) else response_obj,
             combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object"))
-            or _batch_chat_usage(init_response_obj),
+            or (batch_chat_usage(init_response_obj) if isinstance(init_response_obj, LiteLLMBatch) else None),
         )
         usage_dict: Final = (
             {**raw_usage_dict, "output_image_count": len(init_response_obj.data)}

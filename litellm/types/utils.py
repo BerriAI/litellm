@@ -4937,6 +4937,15 @@ class LiteLLMBatch(Batch):
             return self.dict()
 
 
+_PROVIDER_ONLY_BATCH_USAGE_FIELDS: Final = frozenset(BatchUsage.model_fields) - frozenset(Usage.model_fields)
+
+
+def batch_chat_usage(batch: LiteLLMBatch) -> Usage | None:
+    if batch.usage is None:
+        return None
+    return Usage.model_validate(batch.usage.model_dump(exclude=set(_PROVIDER_ONLY_BATCH_USAGE_FIELDS)))
+
+
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     # Events are already well-formed provider dicts. Validating them against the
     # OpenAIRealtimeEvents union makes Pydantic try every member per event, which
