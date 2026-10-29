@@ -9,6 +9,8 @@ from typing_extensions import TypedDict
 from litellm._internal_context import internal_sub_call
 
 if TYPE_CHECKING:
+    import httpx
+
     from litellm import LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
@@ -87,6 +89,8 @@ class SpeechToCompletionBridgeHandler:
         headers: dict,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
+        api_base: str | None,
+        timeout: "float | httpx.Timeout | None",
     ) -> "HttpxBinaryResponseContent":
         received_args: Final = locals()
         from litellm import completion
@@ -106,7 +110,7 @@ class SpeechToCompletionBridgeHandler:
             model=model,
             input=input,
             optional_params=optional_params,
-            litellm_params=litellm_params,
+            litellm_params={**litellm_params, "api_base": api_base, "timeout": timeout},
             headers=headers,
             litellm_logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,

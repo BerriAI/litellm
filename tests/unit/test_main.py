@@ -5454,6 +5454,67 @@ def test_speech_mistral_routes_to_configured_api_base(respx_mock: respx.MockRout
     assert response.content == audio_bytes
 
 
+GEMINI_TTS_MODEL: Final = "gemini-3.8-flash-tts"
+GEMINI_GATEWAY_BASE: Final = "https://gemini.gateway.internal/v1beta"
+GEMINI_DEFAULT_GENERATE_CONTENT_URL: Final = (
+    rf"https://generativelanguage\.googleapis\.com/[^/]+/models/{GEMINI_TTS_MODEL}:generateContent"
+)
+
+
+@pytest.mark.parametrize("endpoint_param", ["api_base", "base_url"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_speech_gemini_tts_routes_to_configured_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, endpoint_param: str, sync_mode: bool
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    gateway_route: Final = respx_mock.post(f"{GEMINI_GATEWAY_BASE}/models/{GEMINI_TTS_MODEL}:generateContent").mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+    speech_kwargs: Final = {
+        "model": f"gemini/{GEMINI_TTS_MODEL}",
+        "input": "hello from litellm",
+        "voice": "Kore",
+        "api_key": "fake-gemini-key",
+        endpoint_param: GEMINI_GATEWAY_BASE,
+    }
+
+    response: Final = litellm.speech(**speech_kwargs) if sync_mode else await litellm.aspeech(**speech_kwargs)
+
+    assert gateway_route.call_count == 1
+    assert gateway_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
+    assert b"pcm-audio-bytes" in response.content
+
+
+def test_speech_gemini_tts_applies_the_caller_timeout(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    litellm.speech(
+        model=f"gemini/{GEMINI_TTS_MODEL}", input="hello", voice="Kore", api_key="fake-gemini-key", timeout=7.5
+    )
+
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(7.5).as_dict()
+
+
+def test_speech_gemini_tts_without_a_timeout_waits_as_long_as_the_same_chat_completion(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    litellm.speech(model=f"gemini/{GEMINI_TTS_MODEL}", input="hello", voice="Kore", api_key="fake-gemini-key")
+    litellm.completion(
+        model=f"gemini/{GEMINI_TTS_MODEL}",
+        messages=[{"role": "user", "content": "hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore", "format": "pcm16"},
+        api_key="fake-gemini-key",
+    )
+
+    speech_call, chat_call = route.calls
+    assert speech_call.request.extensions["timeout"] == chat_call.request.extensions["timeout"]
+
+
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"
 
 

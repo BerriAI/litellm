@@ -1702,6 +1702,30 @@ async def test_aspeech_vertex_ai_gemini_tts_formats_the_bridge_serves_stay_on_ge
     assert _PCM_AUDIO in response.content
 
 
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "vertex_ai_beta"))
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_routes_to_configured_api_base(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, custom_llm_provider: str
+) -> None:
+    gateway_route: Final = respx_mock.post(
+        "https://vertex.gateway.internal/v1/projects/test-project/locations/global"
+        "/publishers/google/models/gemini-3.8-flash-tts:generateContent"
+    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+
+    response: Final = await litellm.aspeech(
+        model=f"{custom_llm_provider}/gemini-3.8-flash-tts",
+        input="Say hello",
+        voice="Kore",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+        api_base="https://vertex.gateway.internal",
+    )
+
+    assert gateway_route.call_count == 1
+    assert gateway_route.calls.last.request.headers["authorization"] == "Bearer minted-google-token"
+    assert _PCM_AUDIO in response.content
+
+
 @pytest.mark.asyncio
 async def test_aspeech_vertex_ai_gemini_tts_mp3_reaches_cloud_tts_for_any_gemini_tts_model(
     respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
