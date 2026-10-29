@@ -2684,14 +2684,14 @@ _HuggingFaceTokenizerKey: TypeAlias = tuple[HuggingFaceTokenizerKind, Decision]
 _HuggingFaceTokenizerLoadOutcome: TypeAlias = _HuggingFaceTokenizerLoaded | _HuggingFaceTokenizerLoadFailure
 
 
-def _start_in_daemon_thread(work: Callable[[], None]) -> None:
-    threading.Thread(target=work, name="litellm-huggingface-tokenizer-retry", daemon=True).start()
+def _start_in_thread_joined_at_exit(work: Callable[[], None]) -> None:
+    threading.Thread(target=work, name="litellm-huggingface-tokenizer-retry", daemon=False).start()
 
 
 @dataclass(slots=True)
 class _HuggingFaceTokenizerLoadOutcomes:
     clock: Callable[[], float] = time.monotonic
-    start_retry: Callable[[Callable[[], None]], None] = _start_in_daemon_thread
+    start_retry: Callable[[Callable[[], None]], None] = _start_in_thread_joined_at_exit
     pid: Callable[[], int] = os.getpid
     lock: threading.Lock = field(default_factory=threading.Lock)
     by_tokenizer: Mapping[_HuggingFaceTokenizerKey, _HuggingFaceTokenizerLoadOutcome] = field(

@@ -2611,6 +2611,27 @@ tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
 print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
 """
 
+HUB_RETRY_DURING_EXIT_SCRIPT: Final = HUB_SETUP_SCRIPT + """
+import threading
+import time
+from litellm.utils import _HuggingFaceTokenizerLoadOutcomes, _return_huggingface_tokenizer
+retry_reached_hub = threading.Event()
+def answer_once_the_process_is_exiting(request):
+    retry_reached_hub.set()
+    while threading.main_thread().is_alive():
+        time.sleep(0.01)
+    time.sleep(0.5)
+    return handle(request)
+now = [0.0]
+outcomes = _HuggingFaceTokenizerLoadOutcomes(clock=lambda: now[0])
+model = "meta-llama/llama-3-70b-instruct"
+_return_huggingface_tokenizer(model, outcomes)
+huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(answer_once_the_process_is_exiting)))
+now[0] = 3600.0
+_return_huggingface_tokenizer(model, outcomes)
+print(json.dumps({"retry_reached_hub": retry_reached_hub.wait(timeout=60)}))
+"""
+
 
 def _word_level_tokenizer_json(
     pre_tokenizer: pre_tokenizers.PreTokenizer, vocab: Mapping[str, int] | None = None
@@ -2671,6 +2692,10 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
+
+
+def test_process_exits_cleanly_while_a_background_tokenizer_retry_is_downloading(tmp_path: Path) -> None:
+    assert _run_in_memory_hub(HUB_RETRY_DURING_EXIT_SCRIPT, {}, "", tmp_path) == {"retry_reached_hub": True}
 
 
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
