@@ -39,6 +39,13 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ImageObject, ImageResponse
 
+from ..common_utils import (
+    DASHSCOPE_CHAT_COMPATIBLE_PATH,
+    DASHSCOPE_IMAGE_PATH,
+    is_dashscope_native_endpoint_url,
+    resolve_dashscope_endpoints,
+)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -52,8 +59,6 @@ _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=Config
 _DECODED_JSON: Final = TypeAdapter(object)
 
 DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-
-CHAT_COMPATIBLE_MODE_PATH: Final = "/compatible-mode/v1"
 
 # Maps OpenAI size strings (WxH) to DashScope size strings (W*H)
 OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
@@ -102,8 +107,14 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
             raise ValueError("DASHSCOPE_API_KEY is not set")
         return resolved_api_key
 
-    def _resolve_image_api_base(self, image_api_base: str | None) -> str:
-        return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+    def _image_api_base_env(self) -> str | None:
+        return get_secret_str("DASHSCOPE_API_BASE_IMAGE")
+
+    def _default_image_api_base(self) -> str:
+        return DEFAULT_API_BASE
+
+    def _configured_chat_api_base(self) -> str | None:
+        return get_secret_str("DASHSCOPE_API_BASE")
 
     def get_complete_url(
         self,
@@ -114,10 +125,18 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        image_api_base: Final = (
-            api_base if api_base and not api_base.rstrip("/").endswith(CHAT_COMPATIBLE_MODE_PATH) else None
-        )
-        return self._resolve_image_api_base(image_api_base)
+        image_env_api_base: Final = self._image_api_base_env()
+        configured_api_base: Final = api_base or self._configured_chat_api_base()
+        if not configured_api_base or configured_api_base.rstrip("/").endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
+            return image_env_api_base or self._default_image_api_base()
+        if is_dashscope_native_endpoint_url(configured_api_base):
+            return configured_api_base
+        endpoints: Final = resolve_dashscope_endpoints(configured_api_base)
+        if endpoints is None:
+            return configured_api_base
+        if not api_base and image_env_api_base:
+            return image_env_api_base
+        return f"{endpoints.origin}{DASHSCOPE_IMAGE_PATH}"
 
     def validate_environment(
         self,
