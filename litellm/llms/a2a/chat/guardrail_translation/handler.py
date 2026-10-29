@@ -14,7 +14,7 @@ import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -337,7 +337,7 @@ class A2AGuardrailHandler(BaseTranslation):
             elif isinstance(item, str):
                 try:
                     obj = _JSON_OBJECT.validate_python(json.loads(item.strip()))
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError, ValidationError):
                     continue
             else:
                 continue
