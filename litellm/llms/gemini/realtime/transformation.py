@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -125,7 +126,7 @@ def _is_undocumented_live_voice(voice: object) -> bool:
     return (
         isinstance(voice, str)
         and voice.lower() not in OPENAI_STOCK_REALTIME_VOICES
-        and voice.lower() not in GEMINI_LIVE_DOCUMENTED_VOICES
+        and OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice).lower() not in GEMINI_LIVE_DOCUMENTED_VOICES
     )
 
 

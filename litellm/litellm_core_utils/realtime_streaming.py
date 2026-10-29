@@ -1568,7 +1568,11 @@ class RealTimeStreaming:
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
-        return close.code != 1000 and not self._backend_sent_frames
+        return (
+            close.code != 1000
+            and not self._backend_sent_frames
+            and not self._holds_session_updates_until_first_content()
+        )
 
     async def _log_session_end(self, transport_refusal: Exception | None) -> None:
         provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()

@@ -18,6 +18,7 @@ import websockets.exceptions  # registers websockets.exceptions on the websocket
 
 import litellm
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
 # ---------------------------------------------------------------------------
@@ -699,3 +700,20 @@ def test_vertex_drops_an_undocumented_voice_with_drop_params():
         json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
     )
     assert "speechConfig" not in json.loads(messages[0])["setup"].get("generationConfig", {})
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("voice", ["fable", "onyx"])
+def test_vertex_sends_the_documented_voice_an_openai_tts_voice_maps_to(voice, drop_params):
+    cfg: Final = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1", drop_params=drop_params
+    )
+    session_update: Final = {"type": "session.update", "session": {"voice": voice}}
+
+    assert cfg.setup_session_update_rejection("gemini-live-2.5-flash", session_update["session"], setup_sent=False) is None
+    messages: Final = cfg.transform_realtime_request(
+        json.dumps(session_update), "gemini-live-2.5-flash", session_configuration_request=None
+    )
+    assert json.loads(messages[0])["setup"]["generationConfig"]["speechConfig"] == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES[voice]}}
+    }

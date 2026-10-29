@@ -4174,6 +4174,24 @@ async def test_upstream_refusal_after_a_synthetic_session_created_still_logs_a_f
     assert session.logging.logged_sessions == ()
 
 
+class _LazySetupRealtimeConfig(_PassthroughRealtimeConfig):
+    def builds_setup_from_session_update(self) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_upstream_outage_before_a_held_setup_was_sent_logs_the_session_not_a_refusal():
+    upstream_close: Final = ConnectionClosed(Close(1011, "upstream outage"), None)
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(), _backend_ws_closing_with(upstream_close), _LazySetupRealtimeConfig()
+    )
+
+    await session.run()
+
+    assert session.logging.logged_failures == ()
+    assert len(session.logging.logged_sessions) == 1
+
+
 @pytest.mark.asyncio
 async def test_upstream_close_after_relayed_events_still_logs_the_session_as_success():
     client_ws: Final = _client_ws_that_never_sends()
