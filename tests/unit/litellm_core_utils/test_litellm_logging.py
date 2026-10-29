@@ -8392,6 +8392,18 @@ class _BlockingNameMaskingGuardrail(_NameMaskingGuardrail):
         return self._mask(kwargs), result
 
 
+class _HangingSyncMaskingGuardrail(_NameMaskingGuardrail):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release: Final = threading.Event()
+
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        _ = self.release.wait(timeout=30)
+        return self._mask(kwargs), result
+
+
 class _FailureLogRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -8491,15 +8503,15 @@ async def test_failure_log_keeps_the_prompt_when_no_logging_only_guardrail_masks
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", ["completion", "acompletion"])
-async def test_failure_is_still_logged_when_the_masking_guardrail_raises(
+async def test_failure_is_logged_redacted_when_the_masking_guardrail_raises(
     monkeypatch: pytest.MonkeyPatch, call: Literal["completion", "acompletion"]
 ) -> None:
     recorder, sync_logged = _register_failure_logging(monkeypatch, _RaisingMaskingGuardrail())
 
     await _fail_chat_call(call, copy.deepcopy(_RAW_LOG))
 
-    assert len(recorder.logged) == 1
-    assert len(sync_logged) == 1
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+    assert sync_logged == [_REDACTED_LOG]
 
 
 @pytest.mark.asyncio
@@ -8507,7 +8519,7 @@ async def test_failure_log_still_goes_out_masked_when_the_caller_is_cancelled_mi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     guardrail: Final = _BlockingNameMaskingGuardrail()
-    _, sync_logged = _register_failure_logging(monkeypatch, guardrail)
+    recorder, sync_logged = _register_failure_logging(monkeypatch, guardrail)
     call: Final = asyncio.create_task(
         litellm.acompletion(model="gpt-4o-mini", messages=copy.deepcopy(_RAW_LOG), mock_response=_bad_key_error())
     )
@@ -8517,9 +8529,26 @@ async def test_failure_log_still_goes_out_masked_when_the_caller_is_cancelled_mi
     with pytest.raises(asyncio.CancelledError):
         await call
     guardrail.release.set()
-    await asyncio.wait_for(_until(lambda: bool(sync_logged)), timeout=10)
+    await asyncio.wait_for(_until(lambda: bool(sync_logged) and bool(recorder.logged)), timeout=10)
 
     assert sync_logged == [_MASKED_LOG]
+    assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_log_is_redacted_when_the_mask_outlasts_its_time_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _HangingSyncMaskingGuardrail()
+    recorder, sync_logged = _register_failure_logging(monkeypatch, guardrail)
+
+    try:
+        await asyncio.wait_for(_fail_chat_call("completion", copy.deepcopy(_RAW_LOG)), timeout=10)
+    finally:
+        guardrail.release.set()
+
+    assert sync_logged == [_REDACTED_LOG]
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
 
 
 @pytest.mark.asyncio

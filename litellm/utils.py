@@ -2432,7 +2432,12 @@ def client(original_function):
                 run_failure_handler: Final = functools.partial(
                     logging_obj.failure_handler, e, traceback_exception, start_time, end_time, for_async_request=True
                 )
-                await logging_obj.async_mask_failure_log_request(on_cancelled=run_failure_handler)
+                await logging_obj.async_mask_failure_log_request(
+                    on_cancelled=run_failure_handler,
+                    on_cancelled_async=functools.partial(
+                        logging_obj.async_failure_handler, e, traceback_exception, start_time, end_time
+                    ),
+                )
                 run_failure_handler()  # DO NOT MAKE THREADED - router retry fallback relies on this!
                 try:
                     await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)

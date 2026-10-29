@@ -2,6 +2,7 @@
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 import asyncio
+import concurrent.futures
 import copy
 import datetime
 import functools
@@ -569,7 +570,16 @@ def _resolve_mantle_region_for_cost(
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _REDACTED_RESULT: Final = TypeAdapter(object)
-_ORPHANED_FAILURE_LOG_MASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: keeps orphaned masks alive
+_ORPHANED_FAILURE_LOG_TASKS: Final[set["asyncio.Future[None]"]] = set()  # mutable-ok: keeps orphaned tasks alive
+
+
+def _failure_log_hook_kwargs(details: Mapping[str, Any]) -> dict[str, object]:  # mutable-ok: hooks mask in place
+    return {**details, "messages": copy.deepcopy(details.get("messages"))}
+
+
+def _keep_alive_until_done(task: "asyncio.Future[None]") -> None:
+    _ORPHANED_FAILURE_LOG_TASKS.add(task)
+    task.add_done_callback(_ORPHANED_FAILURE_LOG_TASKS.discard)
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -4188,9 +4198,6 @@ class Logging(LiteLLMLoggingBaseClass):
             if isinstance(callback, CustomGuardrail) and callback.masks_logged_request
         )
 
-    def _failure_log_hook_kwargs(self) -> dict[str, object]:  # mutable-ok: logging hooks mask a plain dict in place
-        return {**self.model_call_details, "messages": copy.deepcopy(self.model_call_details.get("messages"))}
-
     @property
     def messages_sent_to_model(self) -> object:
         return self._unmasked_messages if self._failure_log_masked else self.model_call_details.get("messages")
@@ -4214,21 +4221,25 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _report_failure_log_mask_error(self, guardrail: CustomGuardrail) -> None:
         verbose_logger.error(
-            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred masking the failure log with %s %s",
+            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred masking the failure log with %s, so its request "
+            "is redacted %s",
             guardrail.guardrail_name,
             traceback.format_exc(),
         )
         self._handle_callback_failure(callback=guardrail)
 
+    def _redact_failure_log_request_after_timeout(self) -> None:
+        verbose_logger.error(
+            "LiteLLM.LoggingError: [Non-Blocking] Masking the failure log took over %ss, so its request is redacted",
+            FAILURE_LOG_MASK_TIMEOUT_SECONDS,
+        )
+        self._redact_failure_log_request()
+
     async def _mask_failure_log_request_with(self, maskers: tuple[CustomGuardrail, ...]) -> None:
         try:
             await asyncio.wait_for(self._run_failure_log_maskers(maskers), timeout=FAILURE_LOG_MASK_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
-            verbose_logger.error(
-                "LiteLLM.LoggingError: [Non-Blocking] Masking the failure log took over %ss, so its request is redacted",
-                FAILURE_LOG_MASK_TIMEOUT_SECONDS,
-            )
-            self._redact_failure_log_request()
+            self._redact_failure_log_request_after_timeout()
 
     async def _run_failure_log_maskers(self, maskers: tuple[CustomGuardrail, ...]) -> None:
         for guardrail in maskers:
@@ -4236,12 +4247,20 @@ class Logging(LiteLLMLoggingBaseClass):
                 if not _runs_on_logging_only(guardrail, self.model_call_details):
                     continue
                 self.model_call_details, _ = await guardrail.async_logging_hook(
-                    kwargs=self._failure_log_hook_kwargs(), result=None, call_type=self._logging_hook_call_type
+                    kwargs=_failure_log_hook_kwargs(self.model_call_details),
+                    result=None,
+                    call_type=self._logging_hook_call_type,
                 )
-            except Exception:  # noqa: BLE001  # a failing mask must not stop failure logging
+            except Exception:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
                 self._report_failure_log_mask_error(guardrail)
+                self._redact_failure_log_request()
+                return
 
-    async def async_mask_failure_log_request(self, on_cancelled: Callable[[], None] | None = None) -> None:
+    async def async_mask_failure_log_request(
+        self,
+        on_cancelled: Callable[[], None] | None = None,
+        on_cancelled_async: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         if not self._claim_failure_log_mask():
             return
         maskers: Final = self._failure_log_maskers()
@@ -4251,24 +4270,45 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             await asyncio.shield(mask)
         except asyncio.CancelledError:
-            _ORPHANED_FAILURE_LOG_MASKS.add(mask)
-            mask.add_done_callback(_ORPHANED_FAILURE_LOG_MASKS.discard)
+            _keep_alive_until_done(mask)
             if on_cancelled is not None:
                 mask.add_done_callback(lambda _: on_cancelled())
+            if on_cancelled_async is not None:
+                mask.add_done_callback(lambda _: _keep_alive_until_done(asyncio.ensure_future(on_cancelled_async())))
             raise
 
     def mask_failure_log_request(self) -> None:
         if is_event_loop_running() or not self._claim_failure_log_mask():
             return
-        for guardrail in self._failure_log_maskers():
-            try:
-                if not _runs_on_logging_only(guardrail, self.model_call_details):
-                    continue
-                self.model_call_details, _ = guardrail.logging_hook(
-                    kwargs=self._failure_log_hook_kwargs(), result=None, call_type=self._logging_hook_call_type
-                )
-            except Exception:  # noqa: BLE001  # a failing mask must not stop failure logging
-                self._report_failure_log_mask_error(guardrail)
+        maskers: Final = self._failure_log_maskers()
+        if not maskers:
+            return
+        masking: Final = executor.submit(
+            functools.reduce, self._sync_failure_log_mask_step, maskers, self.model_call_details
+        )
+        try:
+            masked: Final = masking.result(timeout=FAILURE_LOG_MASK_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError:
+            self._redact_failure_log_request_after_timeout()
+            return
+        if masked is None:
+            self._redact_failure_log_request()
+            return
+        self.model_call_details = dict(masked)
+
+    def _sync_failure_log_mask_step(
+        self, details: Mapping[str, Any] | None, guardrail: CustomGuardrail
+    ) -> Mapping[str, Any] | None:
+        if details is None or not _runs_on_logging_only(guardrail, details):
+            return details
+        try:
+            hooked: Final = guardrail.logging_hook(
+                kwargs=_failure_log_hook_kwargs(details), result=None, call_type=self._logging_hook_call_type
+            )
+        except Exception:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
+            self._report_failure_log_mask_error(guardrail)
+            return None
+        return hooked[0]
 
     def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
         if start_time is None:

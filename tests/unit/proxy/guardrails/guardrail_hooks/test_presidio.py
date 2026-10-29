@@ -4897,11 +4897,17 @@ def _card_and_email_spans(text: str) -> tuple[PresidioAnalyzeResponseItem, ...]:
     )
 
 
+_PENDING_PRESIDIO_REPLIES: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: keeps pending replies alive
+
+
 class _InMemoryPresidioTransport(asyncio.Transport):
-    def __init__(self, protocol: ResponseHandler, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+    def __init__(
+        self, protocol: ResponseHandler, analyzed: asyncio.Queue[PresidioAnalyzeRequest], replies_wait_for: int
+    ) -> None:
         super().__init__()
         self._protocol: Final = protocol
         self._analyzed: Final = analyzed
+        self._replies_wait_for: Final = replies_wait_for
         self._received = b""
         self._closing = False
 
@@ -4921,7 +4927,12 @@ class _InMemoryPresidioTransport(asyncio.Transport):
             + f"Content-Length: {len(reply)}\r\n\r\n".encode()
             + reply
         )
-        asyncio.get_running_loop().call_soon(self._protocol.data_received, response)
+        _PENDING_PRESIDIO_REPLIES.add(asyncio.get_running_loop().create_task(self._reply_once_analyzed(response)))
+
+    async def _reply_once_analyzed(self, response: bytes) -> None:
+        while self._analyzed.qsize() < self._replies_wait_for:
+            await asyncio.sleep(0.01)
+        self._protocol.data_received(response)
 
     def _reply(self, path: str, body: bytes) -> tuple[PresidioAnalyzeResponseItem, ...] | _PresidioAnonymizeReply:
         if path == "/analyze":
@@ -4962,15 +4973,16 @@ class _InMemoryPresidioTransport(asyncio.Transport):
 
 
 class _InMemoryPresidioConnector(aiohttp.BaseConnector):
-    def __init__(self, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+    def __init__(self, analyzed: asyncio.Queue[PresidioAnalyzeRequest], replies_wait_for: int) -> None:
         super().__init__()
         self._analyzed: Final = analyzed
+        self._replies_wait_for: Final = replies_wait_for
 
     async def _create_connection(  # pyright: ignore[reportImplicitOverride]  # aiohttp's connector extension point
         self, req: aiohttp.ClientRequest, traces: Sequence[object], timeout: aiohttp.ClientTimeout
     ) -> ResponseHandler:
         protocol: Final = ResponseHandler(asyncio.get_running_loop())
-        protocol.connection_made(_InMemoryPresidioTransport(protocol, self._analyzed))
+        protocol.connection_made(_InMemoryPresidioTransport(protocol, self._analyzed, self._replies_wait_for))
         return protocol
 
 
@@ -4979,15 +4991,35 @@ def _drain(analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> tuple[PresidioAna
 
 
 def _guardrail_with_in_memory_presidio(
-    analyzed: asyncio.Queue[PresidioAnalyzeRequest],
+    analyzed: asyncio.Queue[PresidioAnalyzeRequest], replies_wait_for: int = 0
 ) -> OPTIONAL_PresidioPIIMasking:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(
         pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
         presidio_analyzer_api_base="http://presidio-analyzer.test/",
         presidio_anonymizer_api_base="http://presidio-anonymizer.test/",
     )
-    guardrail._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed))
+    guardrail._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed, replies_wait_for))
     return guardrail
+
+
+@pytest.mark.asyncio
+async def test_presidio_scans_every_message_of_a_request_at_once() -> None:
+    texts: Final = (f"My email is {_EMAIL}", f"Write to {_EMAIL} today")
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, replies_wait_for=len(texts))
+    try:
+        _ = await asyncio.wait_for(
+            guardrail.async_logging_hook(
+                kwargs={"messages": [{"role": "user", "content": text} for text in texts]},
+                result=None,
+                call_type="acompletion",
+            ),
+            timeout=5,
+        )
+    finally:
+        await guardrail._close_http_session()
+
+    assert sorted(request.get("text") or "" for request in _drain(analyzed)) == sorted(texts)
 
 
 @pytest.mark.asyncio
