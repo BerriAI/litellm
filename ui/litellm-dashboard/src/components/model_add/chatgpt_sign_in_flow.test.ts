@@ -58,8 +58,8 @@ describe("signInFlowReducer", () => {
     expect(pending).toEqual({ ...awaiting, pollCount: 1 });
   });
 
-  it("connects with the account id from the poll", () => {
-    expect(connected()).toEqual({ kind: "connected", attempt: 0, accountId: "acct-1" });
+  it("connects once the poll says connected", () => {
+    expect(connected()).toEqual({ kind: "connected", attempt: 0 });
   });
 
   it("expires locally once the code lifetime has passed", () => {

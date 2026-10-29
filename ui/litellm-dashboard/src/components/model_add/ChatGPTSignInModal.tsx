@@ -104,8 +104,6 @@ export default function ChatGPTSignInModal({ credentialName, request, onClose, o
           </div>
         )}
 
-        {state.kind === "connected" && <p className="text-sm">Signed in with ChatGPT.</p>}
-
         {state.kind === "failed" && (
           <p role="alert" className="text-sm text-destructive">
             {signInFailureMessage(state)}
@@ -118,7 +116,7 @@ export default function ChatGPTSignInModal({ credentialName, request, onClose, o
               Start again
             </Button>
           )}
-          <Button onClick={onClose}>{state.kind === "connected" ? "Done" : "Close"}</Button>
+          <Button onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

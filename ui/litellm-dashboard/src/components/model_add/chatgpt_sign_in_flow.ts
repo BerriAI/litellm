@@ -29,7 +29,7 @@ export type SignInFlowState =
       readonly intervalSeconds: number;
       readonly flowHandle: string;
     }
-  | { readonly kind: "connected"; readonly attempt: number; readonly accountId: string | null }
+  | { readonly kind: "connected"; readonly attempt: number }
   | {
       readonly kind: "failed";
       readonly attempt: number;
@@ -117,7 +117,7 @@ const afterPoll = (
     case "pending":
       return { ...state, pollCount: state.pollCount + 1 };
     case "connected":
-      return { kind: "connected", attempt: state.attempt, accountId: response.account_id };
+      return { kind: "connected", attempt: state.attempt };
   }
 };
 
