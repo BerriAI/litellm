@@ -285,6 +285,7 @@ from litellm.router_utils.embedding_batch_size_check import (
 from litellm.router_utils.endpoint_eligibility import (
     eligible_deployments,
     endpoint_selection,
+    warn_on_unenforced_endpoint_flag,
 )
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -10625,6 +10626,7 @@ class Router:
             declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
             warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)
+            warn_on_unenforced_endpoint_flag(model_name=_model_name, model_info=_model_info)
             deployment = without_model_capability_flags(
                 Deployment(
                     **deployment_info,
@@ -11428,6 +11430,9 @@ class Router:
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
         warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
+        warn_on_unenforced_endpoint_flag(
+            model_name=deployment.model_name, model_info=deployment.model_info.model_dump()
+        )
         served: Final = with_admin_api_key_secret_reference(without_model_capability_flags(deployment))
 
         # add to model list

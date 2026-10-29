@@ -31366,3 +31366,26 @@ def test_router_keeps_supported_fallback_shapes(
     router: Final = Router(model_list=list(_FALLBACK_VALIDATION_MODEL_LIST), **router_kwargs)
 
     assert router.fallbacks == expected_fallbacks
+
+
+def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "embed-from-config",
+                    "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "sk-fake"},
+                    "model_info": {"enforce_supported_endpoints": True},
+                }
+            ]
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="embed-from-api",
+                litellm_params=LiteLLM_Params(model="openai/text-embedding-3-small", api_key="sk-fake"),
+                model_info=ModelInfo(enforce_supported_endpoints=True, supported_endpoints=["/v1/embeddings", 7]),
+            )
+        )
+
+    assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
+    assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text

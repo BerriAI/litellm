@@ -4,8 +4,9 @@ from contextvars import ContextVar
 from types import MappingProxyType
 from typing import Final, TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
 
+from litellm._logging import verbose_router_logger
 from litellm.exceptions import EndpointNotSupportedByModelError
 
 CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
@@ -31,12 +32,14 @@ CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
 
 
 def _endpoint_path(endpoint: str) -> str:
-    rooted: Final = "/" + endpoint.strip().lstrip("/")
-    return rooted.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
+    rooted: Final = "/" + endpoint.strip().strip("/").casefold()
+    path: Final = rooted.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
+    return "/" + path.rsplit(":", 1)[-1] if ":" in path else path
 
 
 CHAT_ENDPOINTS: Final = frozenset(_endpoint_path(endpoint) for endpoint in CHAT_ENDPOINT_BY_CALL.values())
 _Deployment: Final = TypeVar("_Deployment", bound=Mapping[str, object])
+_ENFORCE_FLAG: Final = TypeAdapter(bool | None)
 _REQUEST_SELECTION: Final[ContextVar[tuple[str | None, str | None]]] = ContextVar(
     "router_request_endpoint", default=(None, None)
 )
@@ -65,14 +68,34 @@ def endpoint_selection(call_type: object, module: object = None, model: object =
         _REQUEST_SELECTION.reset(token)
 
 
-def non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[str] | None:
+def _enforced_endpoints(model_info: object) -> tuple[str, ...] | None:
     try:
-        declaration: Final = _EndpointDeclaration.model_validate(deployment.get("model_info"))
+        declaration: Final = _EndpointDeclaration.model_validate(model_info)
     except ValidationError:
         return None
-    if not declaration.enforce_supported_endpoints or declaration.supported_endpoints is None:
+    return declaration.supported_endpoints if declaration.enforce_supported_endpoints else None
+
+
+def warn_on_unenforced_endpoint_flag(model_name: str, model_info: Mapping[str, object]) -> str | None:
+    try:
+        flagged: Final = _ENFORCE_FLAG.validate_python(model_info.get("enforce_supported_endpoints"))
+    except ValidationError:
         return None
-    endpoints: Final = frozenset(declaration.supported_endpoints)
+    if not flagged or _enforced_endpoints(model_info) is not None:
+        return None
+    warning: Final = (
+        f"Deployment '{model_name}' sets enforce_supported_endpoints without a supported_endpoints list of "
+        'strings, so litellm enforces nothing for it. Set supported_endpoints, e.g. ["/v1/embeddings"].'
+    )
+    verbose_router_logger.warning(warning)
+    return warning
+
+
+def non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[str] | None:
+    declared: Final = _enforced_endpoints(deployment.get("model_info"))
+    if declared is None:
+        return None
+    endpoints: Final = frozenset(declared)
     normalized: Final = frozenset(_endpoint_path(endpoint) for endpoint in endpoints)
     return endpoints if normalized.isdisjoint(CHAT_ENDPOINTS) else None
 

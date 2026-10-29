@@ -5,7 +5,11 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.exceptions import EndpointNotSupportedByModelError
-from litellm.router_utils.endpoint_eligibility import eligible_deployments, endpoint_selection
+from litellm.router_utils.endpoint_eligibility import (
+    eligible_deployments,
+    endpoint_selection,
+    warn_on_unenforced_endpoint_flag,
+)
 
 _DEPLOYMENT: Final = TypeAdapter(list[dict[str, object]])
 
@@ -96,6 +100,9 @@ def test_nested_non_chat_calls_do_not_inherit_the_outer_chat_restriction() -> No
         "chat/completions",
         "v1/responses",
         " /v1/chat/completions ",
+        "/v1/chat/completions/",
+        "/V1/Chat/Completions",
+        "/v1beta/models/gemini-3-flash:generateContent",
     ],
 )
 def test_chat_endpoint_declarations_keep_their_meaning_across_prefixes(endpoint: str) -> None:
@@ -103,3 +110,30 @@ def test_chat_endpoint_declarations_keep_their_meaning_across_prefixes(endpoint:
     with endpoint_selection("acompletion"):
         result: Final = eligible_deployments("shared", (deployment,))
     assert result == (deployment,)
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {"enforce_supported_endpoints": True},
+        {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings", None]},
+        {"enforce_supported_endpoints": "true", "supported_endpoints": 7},
+    ],
+)
+def test_a_flag_without_a_usable_endpoint_list_is_reported(info: Mapping[str, object]) -> None:
+    warning: Final = warn_on_unenforced_endpoint_flag("embed-only", info)
+    assert warning is not None
+    assert "'embed-only'" in warning
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+        {"enforce_supported_endpoints": True, "supported_endpoints": "/v1/embeddings"},
+        {"enforce_supported_endpoints": False},
+        {"supported_endpoints": ["/v1/embeddings", None]},
+    ],
+)
+def test_an_enforceable_or_unflagged_deployment_is_not_reported(info: Mapping[str, object]) -> None:
+    assert warn_on_unenforced_endpoint_flag("embed-only", info) is None
