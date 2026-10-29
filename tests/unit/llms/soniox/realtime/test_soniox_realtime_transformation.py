@@ -364,25 +364,18 @@ def _refusal_after(processed_ms: int, error_code: int = 401) -> SonioxRealtimeCo
     return config
 
 
-def test_an_error_before_any_audio_is_processed_is_a_refused_session_that_bills_nothing():
-    config = _refusal_after(processed_ms=0)
+@pytest.mark.parametrize("error_code", [400, 401, 402, 403, 408, 429, 500, 503])
+def test_an_error_before_any_audio_is_processed_is_a_refused_session_that_bills_nothing(error_code: int):
+    config = _refusal_after(processed_ms=0, error_code=error_code)
 
     refusal = config.session_refusal()
     assert isinstance(refusal, SonioxException)
-    assert refusal.status_code == 401
+    assert refusal.status_code == error_code
     assert config.unbilled_usage_on_session_close(MODEL) is None
 
 
 def test_an_error_after_audio_was_processed_keeps_the_session_a_billed_success():
     config = _refusal_after(processed_ms=1500)
-
-    assert config.session_refusal() is None
-    assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 3.0}
-
-
-@pytest.mark.parametrize("error_code", [408, 500, 503])
-def test_a_stream_failure_before_any_audio_is_processed_still_bills_the_open_stream(error_code: int):
-    config = _refusal_after(processed_ms=0, error_code=error_code)
 
     assert config.session_refusal() is None
     assert config.unbilled_usage_on_session_close(MODEL) == {"type": "duration", "seconds": 3.0}

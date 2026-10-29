@@ -61,7 +61,6 @@ _CLIENT_CONTROL_FRAMES: Final = MappingProxyType(
 SESSION_STARTED_FRAME: Final = '{"type":"litellm.soniox.session_started"}'
 _ENDPOINT_TOKEN: Final = "<end>"
 _FINALIZED_TOKEN: Final = "<fin>"
-_REFUSED_STREAM_CODES: Final = frozenset({400, 401, 402, 403, 429})
 
 
 class SonioxProtocolError(RealtimeTranscriptionProtocolError):
@@ -282,7 +281,7 @@ class SonioxEventTransformer:
         return duration_usage(unbilled_ms / 1000)
 
     def _report(self, error: SonioxException) -> OpenAIRealtimeErrorEvent:
-        if self._processed_ms == 0 and error.status_code in _REFUSED_STREAM_CODES:
+        if self._processed_ms == 0:
             self._refusal = error
         return error_event(error.message)
 
