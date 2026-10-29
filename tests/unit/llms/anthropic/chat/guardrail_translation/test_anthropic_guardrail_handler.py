@@ -6,6 +6,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
+from collections.abc import Callable
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -2510,7 +2511,7 @@ class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
 class MockToolResultRedactingGuardrail(CustomGuardrail):
     """Replace every tool result the guardrail sees with one redaction notice."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(guardrail_name="tool-result-redacting-test")
 
     async def apply_guardrail(
@@ -2826,6 +2827,65 @@ _PDF_DOCUMENT: Final = {
     "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
     "title": "Invoice",
 }
+_WEB_SEARCH: Final = (
+    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "weather"}},
+    {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01",
+        "content": [
+            {
+                "type": "web_search_result",
+                "url": "https://example.com/forecast",
+                "title": "Forecast",
+                "encrypted_content": "EqgfCioIARgBIiQ3",
+            }
+        ],
+    },
+)
+_CITATION: Final = {
+    "type": "web_search_result_location",
+    "url": "https://example.com/forecast",
+    "title": "Forecast",
+    "encrypted_index": "Eo8BCioIAhgBIiQ3",
+    "cited_text": "sunny all week",
+}
+
+
+def _text(text: str) -> dict[str, object]:
+    return {"type": "text", "text": text}
+
+
+class MockStructuredRewritingGuardrail(CustomGuardrail):
+    """Rewrite each structured message the guardrail sees with one function."""
+
+    def __init__(self, rewrite: Callable[[dict], dict]) -> None:
+        super().__init__(guardrail_name="structured-rewriting-test")
+        self.rewrite = rewrite
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        rewritten = inputs.copy()
+        rewritten["structured_messages"] = [self.rewrite(message) for message in inputs.get("structured_messages") or []]
+        return rewritten
+
+
+def _without_dropped_parts(message: dict) -> dict:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {**message, "content": [part for part in content if "DROP ME" not in str(part.get("text"))]}
+
+
+def _with_user_notice(message: dict) -> dict:
+    content = message.get("content")
+    if message.get("role") != "user" or not isinstance(content, list):
+        return message
+    return {**message, "content": [_text("Notice: reviewed."), *content]}
 
 
 class TestStructuredWriteBackKeepsTheClientsBlocks:
@@ -2836,7 +2896,7 @@ class TestStructuredWriteBackKeepsTheClientsBlocks:
         [_PDF_DOCUMENT, _URL_DOCUMENT, _TEXT_DOCUMENT, _SEARCH_RESULT],
         ids=["base64-pdf-document", "url-document", "text-document", "search-result"],
     )
-    async def test_a_masked_user_turn_keeps_its_other_blocks_in_place(self, block):
+    async def test_a_masked_user_turn_keeps_its_other_blocks_in_place(self, block: dict[str, object]) -> None:
         data = {
             "model": "claude-fable-5",
             "messages": [
@@ -2941,8 +3001,11 @@ class TestStructuredWriteBackKeepsTheClientsBlocks:
         ids=["added-text-ends-the-turn", "emptied-message-is-dropped", "changed-turns-move-no-block"],
     )
     async def test_a_rewrite_fills_the_client_turns_only_while_the_turns_line_up(
-        self, messages, replacement_messages, expected_messages
-    ):
+        self,
+        messages: list[dict[str, object]],
+        replacement_messages: list[dict[str, object]],
+        expected_messages: list[dict[str, object]],
+    ) -> None:
         data = {"model": "claude-fable-5", "messages": messages}
 
         await AnthropicMessagesHandler().process_input_messages(
@@ -2950,6 +3013,144 @@ class TestStructuredWriteBackKeepsTheClientsBlocks:
         )
 
         assert data["messages"] == expected_messages
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [
+                {"role": "user", "content": [_TEXT_DOCUMENT]},
+                {"role": "assistant", "content": [_text("Got it.")]},
+                {"role": "user", "content": [_text("Email: bob@example.com")]},
+            ],
+            [
+                {"role": "user", "content": [_text("Email: bob@example.com")]},
+                {"role": "assistant", "content": [_text("Ok.")]},
+                {"role": "user", "content": [_SEARCH_RESULT]},
+                {"role": "assistant", "content": [_text("Read it.")]},
+                {"role": "user", "content": [_text("Thanks")]},
+            ],
+            [
+                {"role": "user", "content": [_text("Email: bob@example.com")]},
+                {"role": "assistant", "content": [_text("Ok.")]},
+                {"role": "user", "content": [_TEXT_DOCUMENT]},
+            ],
+            [
+                {"role": "user", "content": [_text("Email: bob@example.com")]},
+                {"role": "assistant", "content": list(_WEB_SEARCH)},
+                {"role": "user", "content": [_text("Thanks")]},
+            ],
+        ],
+        ids=[
+            "document-only-first-turn",
+            "search-result-only-middle-turn",
+            "document-only-last-turn",
+            "web-search-only-reply",
+        ],
+    )
+    async def test_a_turn_with_no_block_the_guardrail_sees_keeps_its_place(
+        self, messages: list[dict[str, object]]
+    ) -> None:
+        data = {"model": "claude-fable-5", "messages": json.loads(json.dumps(messages))}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"] == json.loads(json.dumps(messages).replace("bob@example.com", "<EMAIL>"))
+
+    async def test_a_dropped_text_leaves_the_pdf_beside_it_a_document(self) -> None:
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [_text("DROP ME: intro"), _PDF_DOCUMENT, _text("Summarize it.")]}
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredRewritingGuardrail(_without_dropped_parts)
+        )
+
+        assert data["messages"] == [{"role": "user", "content": [_PDF_DOCUMENT, _text("Summarize it.")]}]
+
+    async def test_a_dropped_text_inside_a_tool_result_leaves_the_pdf_a_document(self) -> None:
+        data = {
+            "model": "claude-fable-5",
+            "messages": TestStructuredWriteBackKeepsToolResults._claude_code_tool_search_turns(
+                [_text("DROP ME: header"), _PDF_DOCUMENT, _text("footer")]
+            ),
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredRewritingGuardrail(_without_dropped_parts)
+        )
+
+        assert data["messages"][2]["content"][0]["content"] == [_PDF_DOCUMENT, _text("footer")]
+
+    async def test_an_added_notice_leaves_the_cache_breakpoint_on_the_clients_text(self) -> None:
+        cached = {**_text("Summarize the report."), "cache_control": {"type": "ephemeral"}}
+        data = {"model": "claude-fable-5", "messages": [{"role": "user", "content": [cached, _PDF_DOCUMENT]}]}
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredRewritingGuardrail(_with_user_notice)
+        )
+
+        assert data["messages"] == [{"role": "user", "content": [_text("Notice: reviewed."), cached, _PDF_DOCUMENT]}]
+
+    async def test_an_untouched_cited_answer_keeps_its_thinking_texts_and_citations(self) -> None:
+        answer = [
+            _text("I will search the forecast."),
+            *_WEB_SEARCH,
+            {"type": "thinking", "thinking": "The forecast answers it.", "signature": "c2lnbmF0dXJl"},
+            _text("Paris is "),
+            {**_text("sunny all week"), "citations": [_CITATION]},
+            _text(" according to the forecast."),
+        ]
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [_text("What is the weather? I am bob@example.com")]},
+                {"role": "assistant", "content": answer},
+                {"role": "user", "content": [_text("Thanks")]},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"] == [
+            {"role": "user", "content": [_text("What is the weather? I am <EMAIL>")]},
+            {"role": "assistant", "content": answer},
+            {"role": "user", "content": [_text("Thanks")]},
+        ]
+
+    async def test_a_masked_cited_answer_keeps_each_text_with_its_citations(self) -> None:
+        cited = {**_text("sunny all week"), "citations": [_CITATION]}
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": [_text("What is the weather?")]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        *_WEB_SEARCH,
+                        _text("Tell bob@example.com it is "),
+                        cited,
+                        _text(", and copy bob@example.com."),
+                    ],
+                },
+                {"role": "user", "content": [_text("Thanks")]},
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert data["messages"][1] == {
+            "role": "assistant",
+            "content": [*_WEB_SEARCH, _text("Tell <EMAIL> it is "), cited, _text(", and copy <EMAIL>.")],
+        }
 
 
 class NamelessComputerToolGuardrail(CustomGuardrail):

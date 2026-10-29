@@ -1,7 +1,10 @@
 import json
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from difflib import SequenceMatcher
 from functools import partial
-from itertools import chain, groupby, islice
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -22,6 +25,7 @@ _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
 )
 _SOURCED_BLOCK_TYPES: Final = frozenset({"image", "document"})
 _TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document"})
+_WORD_OR_CHARACTER: Final = re.compile(r"\w+|\W")
 
 
 _JSON_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
@@ -263,23 +267,231 @@ def _carried_tool_result_part(scan_part: _ScanPart, part: object) -> bool:
     return scan_part(_scannable_part(part)) is not None
 
 
-def _merged_part(original: object, rewritten: Iterator[object], carried: _Carried) -> tuple[object, ...]:
-    if not carried(original):
-        return (original,)
-    return tuple(_rewritten_part(original, part) for part in islice(rewritten, 1))
+_UnitKey: TypeAlias = tuple[str, str]
+_Position: TypeAlias = tuple[int, int]
+_Contents: TypeAlias = tuple[tuple[object, ...], ...]
+_Opcode: TypeAlias = tuple[str, int, int, int, int]
 
 
-def _merged_parts(originals: Iterable[object], rewritten: Iterator[object], carried: _Carried) -> tuple[object, ...]:
-    return tuple(chain.from_iterable(_merged_part(part, rewritten, carried) for part in originals))
+@dataclass(frozen=True, slots=True)
+class _Unit:
+    key: _UnitKey
+    positions: tuple[_Position, ...]
+    blocks: tuple[object, ...]
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+
+
+def _unit_key(block: object) -> _UnitKey:
+    match as_str_mapping(block):
+        case {"type": "text"}:
+            return ("text", tool_result_text_part(_scannable_part(block)) or "")
+        case {"type": "image" | "document", "source": source}:
+            return ("source", _canonical_json(source))
+        case {"type": "tool_use", "id": str(tool_use_id)}:
+            return ("tool_use", sanitize_anthropic_tool_use_id(tool_use_id))
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)}:
+            return ("tool_result", sanitize_anthropic_tool_use_id(tool_use_id))
+        case {"type": str(block_type)}:
+            return (block_type, _canonical_json(block))
+        case _:
+            return ("", _canonical_json(block))
+
+
+def _unit_kind(unit: _Unit) -> str:
+    return unit.key[0]
+
+
+def _unit_order(role: str, unit: _Unit) -> tuple[int, _Position]:
+    match (role, _unit_kind(unit)):
+        case ("assistant", "thinking" | "redacted_thinking") | ("user", "tool_result"):
+            return (0, unit.positions[0])
+        case ("assistant", "tool_use"):
+            return (2, unit.positions[0])
+        case _:
+            return (1, unit.positions[0])
+
+
+_Entry: TypeAlias = tuple[_Position, object, _UnitKey]
+
+
+def _text_group(texts: tuple[_Entry, ...]) -> _Unit:
+    return _Unit(
+        ("text", "".join(key[1] for _, _, key in texts)),
+        tuple(position for position, _, _ in texts),
+        tuple(block for _, block, _ in texts),
+    )
+
+
+def _message_units(index: int, blocks: tuple[object, ...], role: str, carried: _Carried) -> tuple[_Unit, ...]:
+    entries: Final = tuple(
+        ((index, position), block, _unit_key(block)) for position, block in enumerate(blocks) if carried(block)
+    )
+    groups_texts: Final = role == "assistant"
+    singles: Final = tuple(
+        _Unit(key, (position,), (block,)) for position, block, key in entries if not (groups_texts and key[0] == "text")
+    )
+    texts: Final = tuple(entry for entry in entries if groups_texts and entry[2][0] == "text")
+    grouped: Final = (_text_group(texts),) if texts else ()
+    return tuple(sorted((*singles, *grouped), key=partial(_unit_order, role)))
+
+
+def _units(contents: _Contents, role: str, carried: _Carried) -> tuple[_Unit, ...]:
+    return tuple(
+        chain.from_iterable(_message_units(index, blocks, role, carried) for index, blocks in enumerate(contents))
+    )
+
+
+def _always_carried(block: object) -> bool:
+    return True
+
+
+def _kind_indexes(units: tuple[_Unit, ...], start: int, stop: int, kind: str) -> Iterator[int]:
+    return (index for index in range(start, stop) if _unit_kind(units[index]) == kind)
+
+
+def _opcode_pairs(
+    original: tuple[_Unit, ...], rewritten: tuple[_Unit, ...], opcode: _Opcode
+) -> tuple[tuple[int, int], ...]:
+    match opcode:
+        case ("equal", i1, i2, j1, j2):
+            return tuple(zip(range(i1, i2), range(j1, j2)))
+        case ("replace", i1, i2, j1, j2):
+            kinds: Final = frozenset(map(_unit_kind, original[i1:i2]))
+            return tuple(
+                chain.from_iterable(
+                    zip(_kind_indexes(original, i1, i2, kind), _kind_indexes(rewritten, j1, j2, kind))
+                    for kind in sorted(kinds)
+                )
+            )
+        case _:
+            return ()
+
+
+def _insertion_anchor(index: int, originals_by_rewritten: Mapping[int, int], end: int) -> int:
+    later: Final = sorted(rewritten for rewritten in originals_by_rewritten if rewritten > index)
+    return originals_by_rewritten[later[0]] if later else end
+
+
+def _common_prefix_length(left: str, right: str) -> int:
+    return next(
+        (index for index, (left_char, right_char) in enumerate(zip(left, right)) if left_char != right_char),
+        min(len(left), len(right)),
+    )
+
+
+def _offset_in_region(offset: int, original: str, rewritten: str) -> int:
+    prefix: Final = _common_prefix_length(original, rewritten)
+    suffix: Final = min(
+        _common_prefix_length(original[::-1], rewritten[::-1]), len(original) - prefix, len(rewritten) - prefix
+    )
+    if offset <= prefix:
+        return offset
+    if offset >= len(original) - suffix:
+        return len(rewritten) - len(original) + offset
+    return len(rewritten) - suffix
+
+
+_Span: TypeAlias = tuple[int, int, int, int]
+
+
+def _token_offsets(text: str) -> tuple[tuple[str, ...], tuple[int, ...]]:
+    tokens: Final = tuple(_WORD_OR_CHARACTER.findall(text))
+    return tokens, (0, *accumulate(map(len, tokens)))
+
+
+def _diff_spans(original: str, rewritten: str) -> tuple[_Span, ...]:
+    original_tokens, original_offsets = _token_offsets(original)
+    rewritten_tokens, rewritten_offsets = _token_offsets(rewritten)
+    opcodes: Final = SequenceMatcher(None, original_tokens, rewritten_tokens).get_opcodes()
+    return tuple(
+        (original_offsets[i1], original_offsets[i2], rewritten_offsets[j1], rewritten_offsets[j2])
+        for _, i1, i2, j1, j2 in opcodes
+    )
+
+
+def _mapped_offset(offset: int, spans: tuple[_Span, ...], original: str, rewritten: str) -> int:
+    return next(
+        rewritten_start
+        + _offset_in_region(offset - start, original[start:end], rewritten[rewritten_start:rewritten_end])
+        for start, end, rewritten_start, rewritten_end in spans
+        if start <= offset <= end
+    )
+
+
+def _split_text(texts: tuple[str, ...], rewritten: str) -> tuple[str, ...]:
+    joined: Final = "".join(texts)
+    if joined == rewritten:
+        return texts
+    spans: Final = _diff_spans(joined, rewritten)
+    boundaries: Final = accumulate(map(len, texts[:-1]))
+    ends: Final = (*(_mapped_offset(end, spans, joined, rewritten) for end in boundaries), len(rewritten))
+    return tuple(rewritten[start:end] for start, end in zip((0, *ends[:-1]), ends))
+
+
+def _split_text_part(block: object, text: str) -> tuple[object, ...]:
+    return (_rewritten_part(block, {"type": "text", "text": text}),) if text else ()
+
+
+def _paired_blocks(unit: _Unit, partner: _Unit | None) -> _Contents:
+    if partner is None:
+        return tuple(() for _ in unit.blocks)
+    if len(unit.blocks) == len(partner.blocks):
+        return tuple((_rewritten_part(block, rewritten),) for block, rewritten in zip(unit.blocks, partner.blocks))
+    texts: Final = _split_text(tuple(_unit_key(block)[1] for block in unit.blocks), partner.key[1])
+    return tuple(map(_split_text_part, unit.blocks, texts))
+
+
+def _unit_emissions(
+    unit: _Unit, partner: _Unit | None, inserted: tuple[object, ...]
+) -> Iterator[tuple[_Position, tuple[object, ...]]]:
+    outputs: Final = _paired_blocks(unit, partner)
+    return zip(unit.positions, ((*inserted, *outputs[0]), *outputs[1:]))
+
+
+def _aligned_contents(original: _Contents, rewritten: _Contents, role: str, carried: _Carried) -> _Contents:
+    units: Final = _units(original, role, carried)
+    rewritten_units: Final = _units(rewritten, role, _always_carried)
+    opcodes: Final = SequenceMatcher(
+        None, tuple(unit.key for unit in units), tuple(unit.key for unit in rewritten_units), autojunk=False
+    ).get_opcodes()
+    partners: Final = MappingProxyType(
+        dict(chain.from_iterable(_opcode_pairs(units, rewritten_units, opcode) for opcode in opcodes))
+    )
+    originals_by_rewritten: Final = MappingProxyType({rewritten: original for original, rewritten in partners.items()})
+    insertions: Final = tuple(
+        (_insertion_anchor(index, originals_by_rewritten, len(units)), index)
+        for index in range(len(rewritten_units))
+        if index not in originals_by_rewritten
+    )
+
+    def inserted_at(anchor: int) -> tuple[object, ...]:
+        return tuple(chain.from_iterable(rewritten_units[index].blocks for at, index in insertions if at == anchor))
+
+    emissions: Final = MappingProxyType(
+        dict(
+            chain.from_iterable(
+                _unit_emissions(
+                    unit, rewritten_units[partners[index]] if index in partners else None, inserted_at(index)
+                )
+                for index, unit in enumerate(units)
+            )
+        )
+    )
+    contents: Final = tuple(
+        tuple(chain.from_iterable(emissions.get((index, position), (block,)) for position, block in enumerate(blocks)))
+        for index, blocks in enumerate(original)
+    )
+    return (*contents[:-1], (*contents[-1], *inserted_at(len(units))))
 
 
 def _merged_content(original: object, rewritten: object, carried: _Carried) -> object:
-    original_parts: Final = _list_items(original)
+    original_blocks: Final = _list_items(original)
     if not isinstance(original, list):
         return rewritten
-    remaining: Final = iter(_content_blocks(rewritten))
-    merged: Final = _merged_parts(original_parts, remaining, carried)
-    return [*merged, *remaining]
+    return list(_aligned_contents((original_blocks,), (_content_blocks(rewritten),), "user", carried)[0])
 
 
 def _restored_tool_result(
@@ -345,6 +557,16 @@ _Turn: TypeAlias = tuple[Mapping[str, object], ...]
 _Run: TypeAlias = tuple[str | None, tuple[object, ...]]
 
 
+@dataclass(frozen=True, slots=True)
+class _ClientMessage:
+    message: Mapping[str, object]
+    scanned_role: str | None
+    turn_role: str | None
+
+
+_Segment: TypeAlias = tuple[str | None, tuple[_ClientMessage, ...]]
+
+
 def _turn_role(message: object) -> str | None:
     match as_str_mapping(message):
         case {"role": str(role)} if role in _CONVERTIBLE_BLOCK_TYPES:
@@ -375,36 +597,80 @@ def _carried_turn_block(role: str, scan_part: _ScanPart, block: object) -> bool:
             return True
 
 
-def _turn_blocks(turn: _Turn) -> Iterator[object]:
-    return chain.from_iterable(_content_blocks(message.get("content")) for message in turn)
+def _scanned_role(message: Mapping[str, object], scan_part: _ScanPart) -> str | None:
+    role: Final = _turn_role(message)
+    content: Final = message.get("content")
+    blocks: Final = _list_items(content)
+    if role is None or not isinstance(content, list):
+        return role
+    carried: Final = partial(_carried_turn_block, role, scan_part)
+    return role if any(map(carried, blocks)) else None
 
 
-def _merged_turn(original: _Turn, rewritten: _Turn, carried: _Carried) -> _Turn:
-    remaining: Final = iter(tuple(_turn_blocks(rewritten)))
-    contents: Final = tuple(
-        _merged_parts(_content_blocks(message.get("content")), remaining, carried) for message in original
+def _later_turn_role(later: str | None, scanned_role: str | None) -> str | None:
+    return scanned_role or later
+
+
+def _client_messages(original: object, scan_part: _ScanPart) -> tuple[_ClientMessage, ...]:
+    messages: Final = tuple(message for message in _turn(_list_items(original)) if _turn_role(message) is not None)
+    scanned_roles: Final = tuple(_scanned_role(message, scan_part) for message in messages)
+    upcoming_roles: Final = tuple(accumulate(reversed(scanned_roles), _later_turn_role))
+    return tuple(map(_ClientMessage, messages, scanned_roles, reversed(upcoming_roles)))
+
+
+def _client_turn_role(client_message: _ClientMessage) -> str | None:
+    return client_message.turn_role
+
+
+def _segments(client_messages: Iterable[_ClientMessage]) -> tuple[_Segment, ...]:
+    return tuple((role, tuple(group)) for role, group in groupby(client_messages, key=_client_turn_role))
+
+
+def _segment_messages(segment: _Segment) -> _Turn:
+    return tuple(client_message.message for client_message in segment[1])
+
+
+def _restored_message(client_message: _ClientMessage, merged: Iterator[tuple[object, ...]]) -> tuple[object, ...]:
+    if client_message.scanned_role is None:
+        return (client_message.message,)
+    content: Final = next(merged)
+    return ({**client_message.message, "content": list(content)},) if content else ()
+
+
+def _message_contents(messages: Iterable[Mapping[str, object]]) -> _Contents:
+    return tuple(_content_blocks(message.get("content")) for message in messages)
+
+
+def _restored_segment(
+    client_messages: tuple[_ClientMessage, ...], role: str, rewritten: _Turn, scan_part: _ScanPart
+) -> tuple[object, ...]:
+    scanned: Final = tuple(message.message for message in client_messages if message.scanned_role is not None)
+    contents: Final = _aligned_contents(
+        _message_contents(scanned), _message_contents(rewritten), role, partial(_carried_turn_block, role, scan_part)
     )
-    completed: Final = (*contents[:-1], (*contents[-1], *remaining))
-    return tuple(
-        {**message, "content": list(content)} for message, content in zip(original, completed, strict=True) if content
-    )
+    merged: Final = iter(contents)
+    return tuple(chain.from_iterable(_restored_message(message, merged) for message in client_messages))
 
 
-def _restored_run(run: _Run, original_turns: Iterator[_Turn], scan_part: _ScanPart) -> tuple[object, ...]:
+def _restored_run(run: _Run, segments: Iterator[_Segment], scan_part: _ScanPart) -> tuple[object, ...]:
     match run:
         case (str(role), messages):
-            return _merged_turn(next(original_turns), _turn(messages), partial(_carried_turn_block, role, scan_part))
+            return _restored_segment(next(segments)[1], role, _turn(messages), scan_part)
         case (_, messages):
             return messages
 
 
 def _restored_turns(rewritten: Sequence[object], original: object, scan_part: _ScanPart) -> Sequence[object]:
+    segments: Final = _segments(_client_messages(original, scan_part))
+    segment_roles: Final = tuple(role for role, _ in segments if role is not None)
+    if segments and not segment_roles:
+        return list(_segment_messages(segments[0]))
     rewritten_runs: Final = _runs(rewritten)
-    original_runs: Final = _runs(_list_items(original))
-    if _turn_roles(rewritten_runs) != _turn_roles(original_runs):
+    if _turn_roles(rewritten_runs) != segment_roles:
         return rewritten
-    original_turns: Final = iter(tuple(_turn(messages) for role, messages in original_runs if role is not None))
-    return list(chain.from_iterable(_restored_run(run, original_turns, scan_part) for run in rewritten_runs))
+    remaining: Final = iter(segments)
+    restored: Final = tuple(chain.from_iterable(_restored_run(run, remaining, scan_part) for run in rewritten_runs))
+    return [*restored, *chain.from_iterable(map(_segment_messages, remaining))]
 
 
 def restore_client_blocks(rewritten: Sequence[object], original: object, scan_part: _ScanPart) -> Sequence[object]:

@@ -259,3 +259,56 @@ def test_a_part_the_guardrail_adds_follows_the_parts_it_was_shown() -> None:
     assert restored == _tool_result_turn(
         [{"type": "text", "text": "masked"}, _SEARCH_RESULT, {"type": "text", "text": "note"}]
     )
+
+
+def test_a_conversation_the_guardrail_never_saw_comes_back_as_the_client_sent_it() -> None:
+    original: Final[list[object]] = [{"role": "user", "content": [_SEARCH_RESULT]}]
+    placeholder: Final = [{"role": "user", "content": [{"type": "text", "text": "Please continue."}]}]
+
+    restored: Final = restore_client_blocks(placeholder, original, LiteLLMAnthropicMessagesAdapter().tool_result_part)
+
+    assert restored == original
+
+
+def _cited_answer(texts: tuple[str, ...]) -> list[object]:
+    return [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text, "citations": [index]} for index, text in enumerate(texts) if text],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("texts", "rewritten_text", "restored_texts"),
+    (
+        (("Mail bob@example.com", "It is sunny."), "Mail <EMAIL>It is sunny.", ("Mail <EMAIL>", "It is sunny.")),
+        (("Mail bob@exam", "ple.com today"), "Mail <EMAIL> today", ("Mail <EMAIL>", " today")),
+        (
+            ("a bob@example.com b", " mid ", "c bob@example.com d"),
+            "a <EMAIL> b mid c <EMAIL> d",
+            ("a <EMAIL> b", " mid ", "c <EMAIL> d"),
+        ),
+        (("Keep this.", " Drop that."), "Keep this.", ("Keep this.", "")),
+        (("Call user", "1234 now"), "Call user<ID> now", ("Call user", "<ID> now")),
+        (("Mail bob@exam", "ple.comIt is sunny."), "Mail <EMAIL>It is sunny.", ("Mail <EMAIL>", "It is sunny.")),
+    ),
+    ids=[
+        "change-ends-at-a-block-edge",
+        "change-spans-a-block-edge",
+        "changes-in-two-blocks",
+        "block-text-removed",
+        "change-starts-at-a-block-edge",
+        "change-spans-a-block-edge-inside-a-word",
+    ],
+)
+def test_a_rewritten_answer_is_split_back_across_the_text_blocks_it_was_joined_from(
+    texts: tuple[str, ...], rewritten_text: str, restored_texts: tuple[str, ...]
+) -> None:
+    rewritten: Final = [{"role": "assistant", "content": [{"type": "text", "text": rewritten_text}]}]
+
+    restored: Final = restore_client_blocks(
+        rewritten, _cited_answer(texts), LiteLLMAnthropicMessagesAdapter().tool_result_part
+    )
+
+    assert restored == _cited_answer(restored_texts)
