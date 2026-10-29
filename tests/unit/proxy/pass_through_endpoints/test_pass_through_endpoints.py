@@ -8527,6 +8527,9 @@ _VERTEX_SEARCH_TARGET = (
 _RELAYED_GEMINI_COUNT_TOKENS_TARGET = "http://127.0.0.1:30732/v1beta/models/gemini-3.8-flash:countTokens"
 _TRANSLATE_TARGET = "https://translate.googleapis.com/v3/projects/p/locations/global:translateText"
 _NON_GOOGLE_VERTEX_SHAPED_TARGET = "https://llm.example.com/v1/projects/a/locations/b/models/my-model:predict"
+_VERTEX_LIVE_TARGET: Final = (
+    "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+)
 _VEO_OPERATION_SUFFIX = "/models/veo-3.0-generate-001/operations/op-8f2c1"
 _RELAYED_VERTEX_COUNT_TOKENS_TARGET = (
     "http://127.0.0.1:30732/v1/projects/p/locations/us-east5/publishers/google/models/gemini-3.8-flash:countTokens"
@@ -8557,6 +8560,7 @@ async def _run_passthrough_failure(
     upstream: httpx.Response | Exception,
     stream: bool = False,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    dispatched_endpoint: Callable[..., object] | None = None,
 ) -> dict:
     recorder = _FailureHookRecorder()
     with (
@@ -8578,7 +8582,12 @@ async def _run_passthrough_failure(
         mock_request.method = "POST"
         proxy_url = httpx.URL(target.replace("https://", "http://test-proxy.com/"))
         mock_request.url = proxy_url
-        mock_request.scope = {"type": "http", "method": "POST", "path": proxy_url.path}
+        mock_request.scope = {
+            "type": "http",
+            "method": "POST",
+            "path": proxy_url.path,
+            **({"endpoint": dispatched_endpoint} if dispatched_endpoint is not None else {}),
+        }
         mock_request.body = AsyncMock(return_value=b'{"contents": "not a list"}')
         mock_request.headers = Headers({"content-type": "application/json"})
         mock_request.query_params = QueryParams({})
@@ -8657,6 +8666,16 @@ async def test_passthrough_upstream_error_to_a_host_outside_gemini_and_vertex_ge
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target", [_GEMINI_FLASH_TARGET, _VERTEX_FLASH_TARGET])
+async def test_passthrough_upstream_error_on_a_user_defined_route_to_google_gets_no_url_attribution(target: str):
+    failure = await _run_passthrough_failure(
+        target, None, _upstream_400(target), dispatched_endpoint=_marked_pass_through_endpoint()
+    )
+    assert failure["request_data"]["model"] == ""
+    assert failure["request_data"].get("custom_llm_provider") is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "target, custom_llm_provider, expected_provider",
     [
@@ -8723,18 +8742,15 @@ def _websocket_connect_failure(kind: str) -> Exception:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_kind", ["rejected_handshake", "unreachable_host"])
 @pytest.mark.parametrize(
-    "target, expected_provider",
+    "target, builtin_provider_route, expected_provider",
     [
-        (
-            "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService"
-            "/BidiGenerateContent",
-            "vertex_ai",
-        ),
-        ("wss://api.openai.com/v1/realtime?model=gpt-realtime", None),
+        (_VERTEX_LIVE_TARGET, True, "vertex_ai"),
+        (_VERTEX_LIVE_TARGET, False, None),
+        ("wss://api.openai.com/v1/realtime?model=gpt-realtime", True, None),
     ],
 )
 async def test_websocket_passthrough_connect_failure_logs_the_provider_of_the_upstream_url(
-    failure_kind: str, target: str, expected_provider: str | None
+    failure_kind: str, target: str, builtin_provider_route: bool, expected_provider: str | None
 ):
     recorder = _FailureHookRecorder()
     with (
@@ -8755,6 +8771,7 @@ async def test_websocket_passthrough_connect_failure_logs_the_provider_of_the_up
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
             endpoint="/vertex_ai/live",
             accept_websocket=False,
+            builtin_provider_route=builtin_provider_route,
         )
     assert len(recorder.failures) == 1
     assert recorder.failures[0]["request_data"].get("custom_llm_provider") == expected_provider
@@ -8787,10 +8804,19 @@ async def test_websocket_passthrough_connect_failure_logs_the_provider_of_the_up
         ({}, _VERTEX_CLAUDE_RAW_PREDICT_TARGET, None, "vertex_ai/claude-opus-5", "vertex_ai"),
         (
             {},
-            _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"),
+            _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict?alt=sse"),
             None,
             "claude-opus-5",
             "vertex_ai",
+        ),
+        ({}, "https://generativelanguage.googleapis.com/v1beta/models?pageToken=/models/x", "gemini", "", "gemini"),
+        (
+            {"contents": []},
+            "https://evilaiplatform.googleapis.com/v1/projects/p/locations/l"
+            "/publishers/google/models/gemini-3.8-flash:generateContent",
+            None,
+            "",
+            None,
         ),
         ({}, _VERTEX_SEARCH_TARGET, None, "vertex_ai/search_api", "vertex_ai"),
         ({}, f"{_VERTEX_FLASH_TARGET}?tag=rawPredict", None, "gemini-3.8-flash", "vertex_ai"),
@@ -8884,6 +8910,7 @@ def test_build_passthrough_failure_request_payload_model_and_provider_precedence
         logging_obj=None,
         custom_llm_provider=custom_llm_provider,
         url=httpx.URL(url) if url else None,
+        builtin_provider_route=True,
     )
     assert request_payload["model"] == expected_model
     assert request_payload.get("custom_llm_provider") == expected_provider
@@ -8897,11 +8924,12 @@ def test_build_passthrough_failure_request_payload_model_and_provider_precedence
         (_VERTEX_FLASH_TARGET.replace(":generateContent", ":predict"), "gemini-3.8-flash"),
         (_VERTEX_FLASH_TARGET.replace(":generateContent", ":embedContent"), "gemini-3.8-flash"),
         (_VERTEX_CLAUDE_RAW_PREDICT_TARGET, "vertex_ai/claude-opus-5"),
-        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"), "claude-opus-5"),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict"), "vertex_ai/claude-opus-5"),
         (
             _VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":streamRawPredict?alt=sse"),
             "claude-opus-5",
         ),
+        (_VERTEX_CLAUDE_RAW_PREDICT_TARGET.replace(":rawPredict", ":rawPredict?alt=sse"), "claude-opus-5"),
         (f"{_VERTEX_FLASH_TARGET}?tag=rawPredict", "gemini-3.8-flash"),
         (_VERTEX_SEARCH_TARGET, "vertex_ai/search_api"),
         ("https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/batchPredictionJobs", None),

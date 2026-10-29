@@ -4017,6 +4017,7 @@ async def vertex_ai_live_websocket_passthrough(
         forward_headers=False,
         endpoint="/vertex_ai/live",
         accept_websocket=False,
+        builtin_provider_route=True,
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,

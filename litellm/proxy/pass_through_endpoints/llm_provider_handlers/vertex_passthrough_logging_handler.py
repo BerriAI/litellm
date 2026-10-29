@@ -3,7 +3,7 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -55,6 +55,12 @@ GOOGLE_AI_HOST_SUFFIXES: Final = (
     "discoveryengine.googleapis.com",
 )
 _VERTEX_MULTI_REGION_HOST: Final = re.compile(r"aiplatform\.[a-z0-9-]+\.rep\.googleapis\.com")
+
+
+def _is_host_or_subdomain(hostname: str, suffix: str) -> bool:
+    return hostname == suffix or hostname.endswith((f".{suffix}", f"-{suffix}"))
+
+
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
 
@@ -696,11 +702,12 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def model_from_url_route(url_route: str) -> str | None:
-        path: Final = urlparse(url_route).path
-        model: Final = get_vertex_model_id_from_url(path)
+        parsed_url: Final = urlparse(url_route)
+        model: Final = get_vertex_model_id_from_url(parsed_url.path)
         if model is None:
-            return "vertex_ai/search_api" if ":search" in path else None
-        if path.endswith(":rawPredict"):
+            return "vertex_ai/search_api" if ":search" in parsed_url.path else None
+        streamed: Final = "sse" in parse_qs(parsed_url.query).get("alt", ())
+        if parsed_url.path.endswith((":rawPredict", ":streamRawPredict")) and not streamed:
             return f"vertex_ai/{model}"
         return model
 
@@ -751,7 +758,8 @@ class VertexPassthroughLoggingHandler:
     def is_google_ai_url(url: str) -> bool:
         hostname: Final = urlparse(url).hostname
         return hostname is not None and (
-            hostname.endswith(GOOGLE_AI_HOST_SUFFIXES) or _VERTEX_MULTI_REGION_HOST.fullmatch(hostname) is not None
+            any(_is_host_or_subdomain(hostname, suffix) for suffix in GOOGLE_AI_HOST_SUFFIXES)
+            or _VERTEX_MULTI_REGION_HOST.fullmatch(hostname) is not None
         )
 
     @staticmethod

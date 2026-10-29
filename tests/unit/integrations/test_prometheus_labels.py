@@ -271,9 +271,9 @@ def test_extract_api_provider_reads_the_request_declared_provider_only_on_pass_t
 
 @pytest.mark.parametrize(
     "declared_provider",
-    ["client-supplied-value", "", {"nested": "object"}, 42],
+    ["azure", "bedrock", "openrouter", "client-supplied-value", "", {"nested": "object"}, 42],
 )
-def test_extract_api_provider_ignores_pass_through_declared_values_outside_the_known_provider_set(
+def test_extract_api_provider_ignores_pass_through_declared_values_outside_gemini_and_vertex(
     declared_provider: object,
 ):
     from litellm.integrations.prometheus import PrometheusLogger
@@ -283,20 +283,6 @@ def test_extract_api_provider_ignores_pass_through_declared_values_outside_the_k
 
     assert extract({"model": "gpt-4o-mini", **declared}) == "openai"
     assert extract({"model": "no-such-model", **declared}) is None
-
-
-def test_extract_api_provider_keeps_registered_custom_providers_declared_on_pass_through(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    import litellm
-    from litellm.integrations.prometheus import PrometheusLogger
-
-    extract = PrometheusLogger._extract_api_provider_from_request_data
-    request_data = {"call_type": _PASS_THROUGH_CALL_TYPE, "custom_llm_provider": "my-custom-llm"}
-    assert extract(request_data) is None
-
-    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "my-custom-llm"])
-    assert extract(request_data) == "my-custom-llm"
 
 
 def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors():
@@ -912,11 +898,15 @@ async def test_failure_hook_prefers_request_data_provider_over_exception_provide
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "call_type, expected_requested_model",
-    [(_PASS_THROUGH_CALL_TYPE, "gcp/google/gemini-2.5-flash"), ("acompletion", "other")],
+    "call_type, custom_llm_provider, expected_requested_model",
+    [
+        (_PASS_THROUGH_CALL_TYPE, "vertex_ai", "gcp/google/gemini-2.5-flash"),
+        ("acompletion", "vertex_ai", "other"),
+        (_PASS_THROUGH_CALL_TYPE, "bedrock", "other"),
+    ],
 )
 async def test_failure_hook_labels_a_pass_through_failure_with_the_router_model_the_client_requested(
-    call_type: str, expected_requested_model: str
+    call_type: str, custom_llm_provider: str, expected_requested_model: str
 ):
     from unittest.mock import patch
 
@@ -942,7 +932,7 @@ async def test_failure_hook_labels_a_pass_through_failure_with_the_router_model_
                 request_data={
                     "model": "gemini-2.5-flash",
                     "call_type": call_type,
-                    "custom_llm_provider": "vertex_ai",
+                    "custom_llm_provider": custom_llm_provider,
                     "metadata": {},
                     "litellm_params": {"metadata": {"model_group": "gcp/google/gemini-2.5-flash"}},
                 },
