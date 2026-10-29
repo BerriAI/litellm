@@ -351,6 +351,8 @@ export interface CredentialItem {
     custom_llm_provider?: string;
     description?: string;
     required?: boolean;
+    chatgpt_owner_team_id?: string;
+    chatgpt_owner_key_hash?: string;
   };
 }
 
@@ -2730,6 +2732,48 @@ export const userConnectionPollCall = (
 
 export const userConnectionDeleteCall = (accessToken: string, credentialName: string): Promise<void> =>
   apiClient.delete<void>(userConnectionPath(credentialName), { accessToken });
+
+export interface ChatGPTLoginStartRequest {
+  ownerTeamId: string | null;
+  ownerKeyHash: string | null;
+  displayName: string | null;
+}
+
+export interface ChatGPTLoginStartResponse {
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  flow_handle: string;
+}
+
+export interface ChatGPTLoginPollResponse {
+  status: "pending" | "connected";
+  account_id: string | null;
+}
+
+const chatGPTLoginPath = (credentialName: string): string =>
+  `/credentials/${encodeURIComponent(credentialName)}/chatgpt_login`;
+
+export const chatGPTLoginStartCall = (
+  accessToken: string,
+  credentialName: string,
+  { ownerTeamId, ownerKeyHash, displayName }: ChatGPTLoginStartRequest,
+): Promise<ChatGPTLoginStartResponse> =>
+  apiClient.post<ChatGPTLoginStartResponse>(`${chatGPTLoginPath(credentialName)}/start`, {
+    accessToken,
+    body: { owner_team_id: ownerTeamId, owner_key_hash: ownerKeyHash, display_name: displayName },
+  });
+
+export const chatGPTLoginPollCall = (
+  accessToken: string,
+  credentialName: string,
+  flowHandle: string,
+): Promise<ChatGPTLoginPollResponse> =>
+  apiClient.post<ChatGPTLoginPollResponse>(`${chatGPTLoginPath(credentialName)}/poll`, {
+    accessToken,
+    body: { flow_handle: flowHandle },
+  });
 
 export const credentialUpdateCall = async (
   accessToken: string,

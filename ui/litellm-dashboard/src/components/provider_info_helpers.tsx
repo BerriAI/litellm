@@ -440,6 +440,15 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.XINFERENCE]: xinferenceLogo.src,
 };
 
+export const providerEnumKeyOf = (providerValue: string): string | undefined => {
+  const lowered = providerValue.toLowerCase();
+  const enumKeys = Object.keys(provider_map);
+  return Object.hasOwn(provider_map, providerValue)
+    ? providerValue
+    : enumKeys.find((key) => provider_map[key].toLowerCase() === lowered) ??
+        enumKeys.find((key) => key.toLowerCase() === lowered);
+};
+
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
   if (!providerValue) {
     return { logo: "", displayName: "-" };
@@ -452,12 +461,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
     return { logo, displayName };
   }
 
-  // Resolve by the litellm provider slug (e.g. "bedrock_mantle"); fall back to
-  // the enum key (e.g. "BedrockMantle") for callers like the Add Model dropdown
-  // that pass the key instead of the slug.
-  const enumKey =
-    Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === providerValue.toLowerCase()) ??
-    Object.keys(provider_map).find((key) => key.toLowerCase() === providerValue.toLowerCase());
+  const enumKey = providerEnumKeyOf(providerValue);
 
   if (!enumKey) {
     return { logo: "", displayName: providerValue };

@@ -145,6 +145,11 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toContain("openai_small");
     });
 
+    it("should resolve an exact enum key to its own provider even when it lowercases to another provider's slug", () => {
+      expect(getProviderLogoAndName("SageMaker").displayName).toBe(Providers.SageMaker);
+      expect(getProviderLogoAndName("sagemaker").displayName).toBe(Providers.SAGEMAKER_LEGACY);
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);

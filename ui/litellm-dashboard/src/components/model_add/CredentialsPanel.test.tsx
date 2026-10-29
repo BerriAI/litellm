@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,10 +37,12 @@ vi.mock("./CredentialModal", () => ({
     mode,
     open,
     onSubmit,
+    onSignedIn,
   }: {
     mode: "add" | "edit";
     open: boolean;
     onSubmit: (submission: CredentialSubmission, valuesToDelete?: readonly string[]) => void;
+    onSignedIn?: () => void;
   }) {
     if (!open) {
       return null;
@@ -79,6 +81,9 @@ vi.mock("./CredentialModal", () => ({
           }
         >
           switch {mode} to federation
+        </button>
+        <button data-testid={`credential-modal-${mode}-chatgpt-signed-in`} onClick={() => onSignedIn?.()}>
+          finish {mode} ChatGPT sign-in
         </button>
       </>
     );
@@ -260,6 +265,57 @@ describe("CredentialsPanel", () => {
     });
     const [, , plainPayload] = vi.mocked(credentialUpdateCall).mock.calls[1];
     expect(plainPayload).not.toHaveProperty("credential_values_to_delete");
+  });
+
+  it.each(["add", "edit"] as const)(
+    "closes the %s modal and refetches the list after a ChatGPT sign-in",
+    async (mode) => {
+      const user = userEvent.setup();
+      const refetch = vi.fn();
+      mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+      mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch });
+
+      renderPanel();
+
+      if (mode === "add") {
+        await user.click(screen.getByRole("button", { name: /add credential/i }));
+      } else {
+        await user.click(screen.getByTestId("credential-actions-openai-key"));
+        await user.click(await screen.findByTestId("credential-action-edit"));
+      }
+      await user.click(screen.getByTestId(`credential-modal-${mode}-chatgpt-signed-in`));
+
+      expect(refetch).toHaveBeenCalledTimes(1);
+      expect(toast.success).toHaveBeenCalledWith("Signed in with ChatGPT");
+      expect(screen.queryByTestId(`credential-modal-${mode}-submit`)).not.toBeInTheDocument();
+    },
+  );
+
+  it("names a stored chatgpt credential's provider as ChatGPT Subscription in the delete confirmation", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({
+      data: {
+        credentials: [
+          {
+            credential_name: "team-chatgpt",
+            credential_values: {},
+            credential_info: { custom_llm_provider: "chatgpt", chatgpt_owner_team_id: "team-1" },
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: vi.fn(),
+    });
+
+    renderPanel();
+
+    await user.click(screen.getByTestId("credential-actions-team-chatgpt"));
+    await user.click(await screen.findByTestId("credential-action-delete"));
+
+    const confirmation = await screen.findByRole("dialog");
+    expect(within(confirmation).getByText("ChatGPT Subscription")).toBeInTheDocument();
+    expect(within(confirmation).queryByText("chatgpt")).not.toBeInTheDocument();
   });
 
   describe("Admin Viewer write-action gating", () => {

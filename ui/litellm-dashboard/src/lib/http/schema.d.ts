@@ -3864,6 +3864,46 @@ export interface paths {
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
     };
+    "/credentials/{credential_name}/chatgpt_login/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Poll Chatgpt Login
+         * @description Poll a ChatGPT sign-in once and save the login on the credential when it completes. Proxy admin only.
+         */
+        post: operations["poll_chatgpt_login_credentials__credential_name__chatgpt_login_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/{credential_name}/chatgpt_login/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Chatgpt Login
+         * @description Start a ChatGPT device-code sign-in whose login only the given team or virtual key can use. Proxy admin only.
+         */
+        post: operations["start_chatgpt_login_credentials__credential_name__chatgpt_login_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/{credential_name}/jwks": {
         parameters: {
             query?: never;
@@ -29134,6 +29174,27 @@ export interface components {
             detail?: string;
             /** Url */
             url: string;
+        };
+        /** ChatGPTLoginPollResponse */
+        ChatGPTLoginPollResponse: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Interval */
+            interval?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "connected";
+        };
+        /** ChatGPTLoginStartRequest */
+        ChatGPTLoginStartRequest: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Owner Key Hash */
+            owner_key_hash?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
         };
         /** ChoiceAnswer */
         ChoiceAnswer: {
@@ -57107,6 +57168,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_chatgpt_login_credentials__credential_name__chatgpt_login_poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserConnectionPollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatGPTLoginPollResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_chatgpt_login_credentials__credential_name__chatgpt_login_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTLoginStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserConnectionStartResponse"];
                 };
             };
             /** @description Validation Error */

@@ -16,7 +16,7 @@ import {
   type MountedFormValues,
 } from "../common_components/MountedFormField";
 import { CredentialItem } from "../networking";
-import { Providers } from "../provider_info_helpers";
+import { getProviderLogoAndName, providerEnumKeyOf, Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import {
   displayNameChange,
@@ -42,6 +42,15 @@ import {
   type AuthMethod,
 } from "./credential_federation";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import ChatGPTOwnerFields from "./ChatGPTOwnerFields";
+import ChatGPTSignInModal from "./ChatGPTSignInModal";
+import {
+  chatGPTSignInFrom,
+  credentialSubmitLabel,
+  storedChatGPTOwner,
+  type ChatGPTOwnerKind,
+  type ChatGPTSignIn,
+} from "./chatgpt_sign_in_flow";
 
 const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([providerEnum, providerDisplayName]) => ({
   label: providerDisplayName,
@@ -58,10 +67,14 @@ const authMethodItems: { value: AuthMethod; label: string }[] = [
   { value: "federation", label: "Workload identity federation" },
 ];
 
+const isChatGPTSubscription = (provider: string | null): boolean =>
+  provider !== null && getProviderLogoAndName(provider).displayName === Providers.CHATGPT;
+
 interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
   onSubmit: (submission: CredentialSubmission, valuesToDelete: readonly string[]) => void;
+  onSignedIn?: () => void;
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
   initialProvider?: string | null;
@@ -77,6 +90,7 @@ export default function CredentialModal({
   open,
   onCancel,
   onSubmit,
+  onSignedIn,
   mode,
   existingCredential = null,
   initialProvider = null,
@@ -100,6 +114,10 @@ export default function CredentialModal({
   );
   const [identitySource, setIdentitySource] = useState<IdentitySourceId>(storedIdentitySource);
   const selection = selectionFor(federatedProviderOf(selectedProvider), authMethod, identitySource);
+  const storedOwner = storedChatGPTOwner(existingCredential);
+  const [chatGPTOwnerKind, setChatGPTOwnerKind] = useState<ChatGPTOwnerKind>(storedOwner.kind);
+  const [chatGPTSignIn, setChatGPTSignIn] = useState<ChatGPTSignIn | null>(null);
+  const signsInWithChatGPT = isChatGPTSubscription(selectedProvider);
 
   const initialValues = initialFormValues(existingCredential, initialProvider);
 
@@ -154,6 +172,19 @@ export default function CredentialModal({
     onSubmit({ ...meta, credential_values: patch.credential_values }, valuesToDelete);
   };
 
+  const startChatGPTSignIn = async () => {
+    const isValid = await form.trigger(registry.mountedNames() as string[]);
+    if (!isValid) {
+      return;
+    }
+    setChatGPTSignIn(chatGPTSignInFrom(chatGPTOwnerKind, projectMountedValues(registry, form.getValues)));
+  };
+
+  const finishChatGPTSignIn = () => {
+    setChatGPTSignIn(null);
+    onSignedIn?.();
+  };
+
   const closeAndReset = () => {
     onCancel();
     form.reset();
@@ -170,7 +201,7 @@ export default function CredentialModal({
             <form
               onSubmit={(event) => {
                 event.preventDefault();
-                void handleSubmit();
+                void (signsInWithChatGPT ? startChatGPTSignIn() : handleSubmit());
               }}
             >
               <MountedFormField
@@ -216,7 +247,7 @@ export default function CredentialModal({
                     inputId={control.id}
                     placeholder="Select a provider"
                     options={providerOptions}
-                    value={typeof control.value === "string" ? control.value : null}
+                    value={typeof control.value === "string" ? providerEnumKeyOf(control.value) ?? control.value : null}
                     disabled={providerLocked}
                     onValueChange={(value) => {
                       control.onChange(value);
@@ -253,12 +284,21 @@ export default function CredentialModal({
                 </div>
               )}
 
-              <ProviderSpecificFields
-                selectedProvider={selectedProvider}
-                hiddenFieldKeys={selection.authMethod === "federation" ? API_KEY_FIELDS : NO_HIDDEN_FIELDS}
-                initialAuthTypeId={initialAuthTypeId}
-                fieldValidators={providerFieldValidators(selection)}
-              />
+              {signsInWithChatGPT ? (
+                <ChatGPTOwnerFields
+                  ownerKind={chatGPTOwnerKind}
+                  onOwnerKindChange={setChatGPTOwnerKind}
+                  storedOwnerTeamId={storedOwner.teamId}
+                  storedOwnerKeyHash={storedOwner.keyHash}
+                />
+              ) : (
+                <ProviderSpecificFields
+                  selectedProvider={selectedProvider}
+                  hiddenFieldKeys={selection.authMethod === "federation" ? API_KEY_FIELDS : NO_HIDDEN_FIELDS}
+                  initialAuthTypeId={initialAuthTypeId}
+                  fieldValidators={providerFieldValidators(selection)}
+                />
+              )}
 
               {selection.authMethod === "federation" && (
                 <FederationFields
@@ -281,12 +321,20 @@ export default function CredentialModal({
                   <Button variant="outline" className="mr-2.5" onClick={closeAndReset}>
                     Cancel
                   </Button>
-                  <Button type="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
+                  <Button type="submit">{credentialSubmitLabel(signsInWithChatGPT, mode)}</Button>
                 </div>
               </div>
             </form>
           </MountedFormProvider>
         </FormProvider>
+        {chatGPTSignIn && (
+          <ChatGPTSignInModal
+            credentialName={chatGPTSignIn.credentialName}
+            request={chatGPTSignIn.request}
+            onClose={() => setChatGPTSignIn(null)}
+            onConnected={finishChatGPTSignIn}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
