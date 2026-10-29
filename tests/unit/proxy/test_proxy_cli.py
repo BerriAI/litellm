@@ -2657,6 +2657,51 @@ class TestRunServerDbSetup:
             assert "prisma CLI" not in out
             assert "Setup complete" in out
 
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes", return_value=True)
+    def test_a_pgbouncer_that_cannot_start_stops_the_cli_with_an_uncolored_error_off_a_terminal(
+        self,
+        mock_build_indexes,
+        mock_setup_database,
+        mock_atexit_register,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=ProxyConfig,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("DATABASE_URL", "DIRECT_URL", "LITELLM_PGBOUNCER_", "DISABLE_SCHEMA_UPDATE"))
+        }
+        pgbouncer_env: Final = {
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
+            "LITELLM_PGBOUNCER_ENABLED": "true",
+            "LITELLM_PGBOUNCER_BINARY": str(tmp_path / "missing-pgbouncer"),
+        }
+
+        with (
+            patch.dict(os.environ, {**clean_env, **pgbouncer_env}, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        error: Final = capsys.readouterr().err
+        assert exit_info.value.code == 1
+        assert "LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer could not start" in error
+        assert "\x1b[" not in error
+
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
