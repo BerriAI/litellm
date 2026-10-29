@@ -126,6 +126,11 @@ _CONTENTS: Final = {"contents": [_TURN]}
         ({"systemInstruction": {"parts": {"text": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": {"text": None, "inlineData": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": {"text": None, "thought": False}}}, _NO_SYSTEM_PARTS),
+        ({"systemInstruction": {"parts": {"text": None, "videoMetadata": {"fps": 1}}}}, _NO_SYSTEM_PARTS),
+        (
+            {"systemInstruction": {"parts": {"text": None, "mediaResolution": {"level": "MEDIA_RESOLUTION_LOW"}}}},
+            _NO_SYSTEM_PARTS,
+        ),
         ({"systemInstruction": {"parts": [{"thoughtSignature": "c2ln"}, {"text": "Follow these rules"}]}}, _SYSTEM),
         ({"systemInstruction": {"parts": [{}]}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
@@ -170,12 +175,28 @@ def test_google_count_tokens_rejects_a_scalar_where_google_expects_an_object_or_
         _google_count_tokens_request("counted", {"contents": [_TURN], **malformed})
 
 
+_NON_TEXT_PART_DATA: Final[tuple[tuple[str, JsonValue], ...]] = (
+    ("inlineData", {"mimeType": "image/png", "data": "aGVsbG8="}),
+    ("inline_data", {"mime_type": "image/png", "data": "aGVsbG8="}),
+    ("fileData", {"fileUri": "gs://bucket/rules.pdf"}),
+    ("file_data", {"file_uri": "gs://bucket/rules.pdf"}),
+    ("functionCall", {"name": "lookup", "args": {}}),
+    ("function_call", {"name": "lookup", "args": {}}),
+    ("functionResponse", {"name": "lookup", "response": {}}),
+    ("function_response", {"name": "lookup", "response": {}}),
+    ("executableCode", {"language": "PYTHON", "code": "print(1)"}),
+    ("executable_code", {"language": "PYTHON", "code": "print(1)"}),
+    ("codeExecutionResult", {"outcome": "OUTCOME_OK", "output": "1"}),
+    ("code_execution_result", {"outcome": "OUTCOME_OK", "output": "1"}),
+)
+
+
 @pytest.mark.parametrize(
     "parts",
     (
-        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
+        *({field: data} for field, data in _NON_TEXT_PART_DATA),
+        *({"text": None, field: data} for field, data in _NON_TEXT_PART_DATA),
         [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}],
-        {"text": None, "inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
         [{"text": "Follow these rules"}, {"text": None, "fileData": {"fileUri": "gs://bucket/rules.pdf"}}],
     ),
 )

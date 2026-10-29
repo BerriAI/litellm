@@ -55,11 +55,18 @@ def _write_part_text(part: object, text: str) -> None:
     setattr(part, "text", text)  # noqa: B010  # SDK parts are typed as object here; direct assignment cannot type-check
 
 
+def _content_parts(parts: object) -> Sequence[object]:
+    match parts:
+        case dict():
+            return (parts,)
+        case list() | tuple():
+            return parts
+        case _:
+            return ()
+
+
 def _content_text_parts(content: object) -> tuple[object, ...]:
-    parts: Final = _field(content, "parts")
-    if not isinstance(parts, (list, tuple)):
-        return ()
-    return tuple(part for part in parts if _part_text(part) is not None)
+    return tuple(part for part in _content_parts(_field(content, "parts")) if _part_text(part) is not None)
 
 
 def _system_instruction(data: Mapping[str, object]) -> object | None:

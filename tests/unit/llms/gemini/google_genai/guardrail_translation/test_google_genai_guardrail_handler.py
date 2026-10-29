@@ -64,6 +64,26 @@ async def test_input_system_instruction_text_is_scanned_and_written_back():
 
 
 @pytest.mark.asyncio
+async def test_input_parts_sent_as_one_object_are_scanned_and_written_back():
+    handler = GoogleGenAIGenerateContentHandler()
+    guardrail = _mock_guardrail(["masked instruction", "masked question"])
+    data = {
+        "model": "gemini-2.5-flash",
+        "systemInstruction": {"parts": {"text": "prohibited instruction"}},
+        "contents": [{"role": "user", "parts": {"text": "prohibited question"}}],
+    }
+
+    result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == [
+        "prohibited instruction",
+        "prohibited question",
+    ]
+    assert result["systemInstruction"]["parts"] == {"text": "masked instruction"}
+    assert result["contents"][0]["parts"] == {"text": "masked question"}
+
+
+@pytest.mark.asyncio
 async def test_input_config_nested_snake_case_system_instruction_is_scanned():
     handler = GoogleGenAIGenerateContentHandler()
     guardrail = _mock_guardrail(["clean"])
