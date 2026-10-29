@@ -4921,6 +4921,7 @@ class Router:
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
         ):
             kwargs.pop(key, None)
+        kwargs.pop("daily_reset_time", None)  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped dict
         defaults: Final = _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params)
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=defaults)
 

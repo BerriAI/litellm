@@ -156,6 +156,7 @@ OPTION_NAMES: Final = (
     "tpm",
     "rpd",
     "tpd",
+    "daily_reset_time",
     "itpm",
     "otpm",
     "default_api_key_rpm_limit",

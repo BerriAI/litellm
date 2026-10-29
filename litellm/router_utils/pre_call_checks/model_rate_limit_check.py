@@ -12,7 +12,7 @@ is logged the first time such a deployment is seen.
 """
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -38,7 +38,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.router import RouterErrors
+from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
@@ -58,42 +58,49 @@ class RoutingArgs:
 DAY_FORMAT: Final = "%Y-%m-%d"
 
 
-def seconds_until_utc_midnight(now: datetime) -> int:
-    next_midnight: Final = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return max(1, int((next_midnight - now).total_seconds()))
+def daily_window_day(now: datetime, reset_offset: timedelta) -> str:
+    return (now - reset_offset).strftime(DAY_FORMAT)
 
 
-def _first_set(*values: int | None) -> int | None:
-    return next((value for value in values if value is not None), None)
+def seconds_until_daily_reset(now: datetime, reset_offset: timedelta = timedelta(0)) -> int:
+    window_start: Final = (now - reset_offset).replace(hour=0, minute=0, second=0, microsecond=0)
+    next_reset: Final = window_start + timedelta(days=1) + reset_offset
+    return max(1, int((next_reset - now).total_seconds()))
 
 
-class _DailyLimitFields(BaseModel):
+class _DailyLimitParams(BaseModel):
+    """rpd, tpd and daily_reset_time live in litellm_params only."""
+
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+    model: str | None = None
     tpd: int | None = None
     rpd: int | None = None
+    daily_reset_time: str | None = None
+
+    def reset_offset(self) -> timedelta:
+        return parse_daily_reset_time(self.daily_reset_time)
 
 
-class _DailyLimitParams(_DailyLimitFields):
-    model: str | None = None
-
-
-class _DailyLimitModelInfo(_DailyLimitFields):
+class _DailyLimitModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
     id: str | None = None
 
 
-class _DailyLimitDeployment(_DailyLimitFields):
+class _DailyLimitDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
     model_name: str = ""
     litellm_params: _DailyLimitParams = _DailyLimitParams()
     model_info: _DailyLimitModelInfo = _DailyLimitModelInfo()
 
     def limits(self) -> tuple[int | None, int | None]:
-        return (
-            _first_set(self.tpd, self.litellm_params.tpd, self.model_info.tpd),
-            _first_set(self.rpd, self.litellm_params.rpd, self.model_info.rpd),
-        )
+        return self.litellm_params.tpd, self.litellm_params.rpd
 
-    def cache_keys(self, current_day: str) -> tuple[str, str]:
+    def reset_offset(self) -> timedelta:
+        return self.litellm_params.reset_offset()
+
+    def cache_keys(self, now: datetime) -> tuple[str, str]:
         prefix: Final = f"{self.model_info.id}:{self.litellm_params.model}"
+        current_day: Final = daily_window_day(now, self.reset_offset())
         return f"{prefix}:tpd:{current_day}", f"{prefix}:rpd:{current_day}"
 
     def limit_error(self, kind: Literal["tpd", "rpd"], limit: int, usage: int, now: datetime) -> litellm.RateLimitError:
@@ -104,10 +111,17 @@ class _DailyLimitDeployment(_DailyLimitFields):
             response=httpx.Response(
                 status_code=429,
                 content=f"{RouterErrors.user_defined_ratelimit_error.value} {kind} limit={limit}. current usage={usage}. id={self.model_info.id}, model_group={self.model_name}",
-                headers={"retry-after": str(seconds_until_utc_midnight(now))},
+                headers={"retry-after": str(seconds_until_daily_reset(now, self.reset_offset()))},
                 request=httpx.Request(method="model_rate_limit_check", url="https://github.com/BerriAI/litellm"),
             ),
         )
+
+
+def _reset_offset_from_kwargs(kwargs: Mapping[str, object]) -> timedelta:
+    litellm_params: Final = kwargs.get("litellm_params")
+    if litellm_params is None:
+        return timedelta(0)
+    return _DailyLimitParams.model_validate(litellm_params).reset_offset()
 
 
 class ModelRateLimitingCheck(CustomLogger):
@@ -242,7 +256,7 @@ class ModelRateLimitingCheck(CustomLogger):
         tpd_limit, rpd_limit = deployment.limits()
         if tpd_limit is None and rpd_limit is None:
             return
-        tpd_key, rpd_key = deployment.cache_keys(now.strftime(DAY_FORMAT))
+        tpd_key, rpd_key = deployment.cache_keys(now)
         if tpd_limit is not None:
             current_tpd: Final = self._get_current_tpm(tpd_key, tpd_limit)
             if current_tpd is not None and current_tpd >= tpd_limit:
@@ -394,7 +408,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
-            tpd_key, rpd_key = daily.cache_keys(dt.strftime(DAY_FORMAT))
+            tpd_key, rpd_key = daily.cache_keys(dt)
 
             model_id: Final = deployment.get("model_info", {}).get("id")
             model_name: Final = deployment.get("litellm_params", {}).get("model")
@@ -510,7 +524,8 @@ class ModelRateLimitingCheck(CustomLogger):
             dt: Final = self.clock()
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
-            tpd_key: Final = f"{model_id}:{model}:tpd:{dt.strftime(DAY_FORMAT)}"
+            reset_offset: Final = _reset_offset_from_kwargs(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            tpd_key: Final = f"{model_id}:{model}:tpd:{daily_window_day(dt, reset_offset)}"
 
             verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
 
@@ -570,7 +585,8 @@ class ModelRateLimitingCheck(CustomLogger):
             dt: Final = self.clock()
             current_minute: Final = dt.strftime("%H-%M")
             tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
-            tpd_key: Final = f"{model_id}:{model}:tpd:{dt.strftime(DAY_FORMAT)}"
+            reset_offset: Final = _reset_offset_from_kwargs(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            tpd_key: Final = f"{model_id}:{model}:tpd:{daily_window_day(dt, reset_offset)}"
 
             tokens: Final = int(total_tokens)
             self._increment(tpm_key, tokens, RoutingArgs.ttl)

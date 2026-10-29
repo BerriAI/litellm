@@ -35397,6 +35397,8 @@ export interface components {
             cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
+            /** Daily Reset Time */
+            daily_reset_time?: string | null;
             /** Default Api Key Rpm Limit */
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
@@ -50793,6 +50795,8 @@ export interface components {
             cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
+            /** Daily Reset Time */
+            daily_reset_time?: string | null;
             /** Default Api Key Rpm Limit */
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
