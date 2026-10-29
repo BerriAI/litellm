@@ -1,8 +1,8 @@
 import asyncio
 import contextvars
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Coroutine
 from functools import partial
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,7 +31,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 async def arerank(
     model: str,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: (
         Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
     ) = None,
@@ -76,7 +76,7 @@ async def arerank(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        if asyncio.iscoroutine(init_response):
+        if isinstance(init_response, Coroutine):
             response = await init_response
         else:
             response = init_response
@@ -93,7 +93,7 @@ async def arerank(
 def rerank(
     model: str,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: (
         Literal[
             "cohere",

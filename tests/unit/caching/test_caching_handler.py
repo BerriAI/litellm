@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import asyncio
 import hashlib
+import threading
 import random
 
 import pytest
@@ -14,6 +15,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.caching.caching import Cache
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
@@ -40,6 +42,7 @@ from litellm.types.utils import (
     Embedding,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta, datetime
 from typing import Final, cast
@@ -52,7 +55,8 @@ import json
 import httpx
 import respx
 from fastapi.testclient import TestClient
-from litellm._internal_context import current_service_target, in_post_response_phase
+from contextlib import nullcontext
+from litellm._internal_context import current_service_target, in_post_response_phase, internal_sub_call
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -62,6 +66,46 @@ def setup_cache():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     litellm.cache = cache
     return cache
+
+
+@pytest.mark.parametrize(
+    ("call", "request_kwargs"),
+    [
+        (
+            completion,
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "mock_response": "x"},
+        ),
+        (embedding, {"model": "text-embedding-3-small", "input": ["hi"], "mock_response": [0.1, 0.2]}),
+        (litellm.text_completion, {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "mock_response": "x"}),
+    ],
+)
+def test_sync_cache_hits_reach_sync_custom_logger(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[..., object], request_kwargs: dict[str, object]
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged_cache_hits: Final[list[object]] = []
+    all_logged: Final = threading.Event()
+
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged_cache_hits.append(kwargs.get("cache_hit"))
+            if len(logged_cache_hits) == 3:
+                all_logged.set()
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [SyncRecorder()])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    for _ in range(3):
+        call(**request_kwargs)
+
+    assert all_logged.wait(timeout=10)
+    assert Counter(logged_cache_hits) == Counter({None: 1, True: 2}), logged_cache_hits
 
 
 @pytest.fixture
@@ -173,6 +217,50 @@ async def test_async_copilot_requests_bypass_response_cache(copilot_response_cac
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_databricks_agent_replies_are_never_served_from_the_response_cache(
+    copilot_response_cache: Cache, stream: bool
+) -> None:
+    workspace: Final = "https://adb-cache.azuredatabricks.net"
+    replies: Final = iter(("first agent answer", "second agent answer"))
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        text: Final = next(replies)
+        if json.loads(request.content).get("stream"):
+            frame: Final = {"type": "response.output_text.delta", "item_id": "m", "delta": text}
+            return httpx.Response(200, content=f"data: {json.dumps(frame)}\n\n".encode(), request=request)
+        message: Final = {"type": "message", "id": "m", "content": [{"type": "output_text", "text": text}]}
+        return httpx.Response(200, json={"output": [message]}, request=request)
+
+    async def answer() -> str:
+        response: Final = await litellm.acompletion(
+            model="databricks_agent/support-agent",
+            messages=[{"role": "user", "content": "same question"}],
+            api_base=workspace,
+            api_key="dbx-pat",
+            client=client,
+            stream=stream,
+            caching=True,
+        )
+        if isinstance(response, CustomStreamWrapper):
+            return "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+        return cast(str, response.choices[0].message.content)  # cast-ok: a ModelResponse's message content
+
+    client: Final = AsyncHTTPHandler(transport=_CopilotCacheAsyncTransport(respond))
+    async with client.client:
+        first: Final = await answer()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        second: Final = await answer()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert (first, second) == ("first agent answer", "second agent answer")
+    assert len(requests) == 2
+    _assert_copilot_cache_empty(copilot_response_cache)
+
+
+@pytest.mark.asyncio
 async def test_existing_provider_response_cache_still_hits(copilot_response_cache: Cache) -> None:
     messages: Final = [{"role": "user", "content": "cached provider control"}]
     first: Final = await litellm.acompletion(
@@ -215,6 +303,93 @@ async def test_cache_hit_reports_zero_response_cost(copilot_response_cache: Cach
     assert first._hidden_params["response_cost"] > 0
     assert second._hidden_params["cache_hit"] is True
     assert second._hidden_params["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_async_cache_hits_never_use_up_a_deployment_tpm_limit(copilot_response_cache: Cache) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tpm-limited",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "mock_response": "cached answer",
+                    "tpm": 100,
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+    messages: Final = [{"role": "user", "content": "tpm limit and cache hits"}]
+
+    async def call_and_settle() -> litellm.ModelResponse:
+        response: Final = await router.acompletion(model="tpm-limited", messages=messages, caching=True)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return response
+
+    first: Final = await call_and_settle()
+    hits: Final = [await call_and_settle() for _ in range(8)]
+
+    assert first.usage.total_tokens * len(hits) > 100
+    assert all(hit._hidden_params["cache_hit"] is True for hit in hits)
+
+
+def _logging_obj_left_with_a_cache_hit(messages: list[dict[str, str]]) -> LiteLLMLogging:
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.acompletion.value,
+        model="gpt-4o-mini",
+        messages=messages,
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+    logging_obj.caching_details = {"cache_hit": True, "cache_duration_ms": 1.0}
+    return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_cache_miss_clears_the_hit_an_earlier_lookup_left_on_the_call(
+    copilot_response_cache: Cache,
+) -> None:
+    messages: Final = [{"role": "user", "content": f"never cached {uuid.uuid4()}"}]
+    logging_obj: Final = _logging_obj_left_with_a_cache_hit(messages)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.acompletion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    response: Final = await handler.async_get_cache(
+        model="gpt-4o-mini",
+        original_function=litellm.acompletion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs={"model": "gpt-4o-mini", "messages": messages, "caching": True},
+    )
+
+    assert response is not None and response.cached_result is None
+    assert logging_obj.caching_details is None
+
+
+def test_sync_cache_miss_clears_the_hit_an_earlier_lookup_left_on_the_call(copilot_response_cache: Cache) -> None:
+    messages: Final = [{"role": "user", "content": f"never cached {uuid.uuid4()}"}]
+    logging_obj: Final = _logging_obj_left_with_a_cache_hit(messages)
+    handler: Final = LLMCachingHandler(original_function=completion, request_kwargs={}, start_time=datetime.now())
+
+    response: Final = handler.sync_get_cache(
+        model="gpt-4o-mini",
+        original_function=completion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.completion.value,
+        kwargs={"model": "gpt-4o-mini", "messages": messages, "caching": True},
+    )
+
+    assert response.cached_result is None
+    assert logging_obj.caching_details is None
 
 
 chat_completion_response = litellm.ModelResponse(
@@ -1027,7 +1202,7 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
         stream=True,
         start_time=datetime.now(),
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    logging_obj.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     kwargs = {
         "model": original_model,
@@ -1051,7 +1226,7 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
     assert isinstance(
         cached_response.cached_result, CachedResponsesAPIStreamingIterator
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+    logging_obj.handle_sync_cache_hit_success_callbacks.assert_not_called()
 
 
 def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
@@ -1071,7 +1246,7 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
         stream=True,
         start_time=datetime.now(),
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    logging_obj.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     kwargs = {
         "model": original_model,
@@ -1092,7 +1267,7 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
     )
 
     assert cached_response.cached_result is not None
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+    logging_obj.handle_sync_cache_hit_success_callbacks.assert_not_called()
 
 
 def test_should_defer_streaming_cache_hit_callbacks_for_any_streaming_request():
@@ -3002,3 +3177,57 @@ async def test_async_get_cache_answers_400_for_a_single_object_embedding_input()
             call_type=CallTypes.aembedding.value,
             kwargs={"model": model, "custom_llm_provider": "gemini", "input": clip_block, "caching": True},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("internal", [False, True])
+async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_callbacks_of_its_own(
+    monkeypatch: pytest.MonkeyPatch, internal: bool
+):
+    cache: Final = Cache(type="local")
+    monkeypatch.setattr(litellm, "cache", cache)
+    kwargs: Final = {"model": "gpt-5.4", "messages": [{"role": "user", "content": "hello"}], "caching": True}
+    cache.add_cache(
+        result=litellm.ModelResponse(
+            model="gpt-5.4",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+        **kwargs,
+    )
+    async_logging: Final = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    async_logging.async_success_handler = AsyncMock()
+    async_logging.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    sync_logging: Final = _build_logging_obj(CallTypes.completion.value, stream=False)
+    sync_logging.handle_sync_cache_hit_success_callbacks = MagicMock()
+
+    with internal_sub_call() if internal else nullcontext():
+        async_hit: Final = await LLMCachingHandler(
+            original_function=litellm.acompletion, request_kwargs=kwargs, start_time=_FIXED_START
+        ).async_get_cache(
+            model="gpt-5.4",
+            original_function=litellm.acompletion,
+            logging_obj=async_logging,
+            start_time=_FIXED_START,
+            call_type=CallTypes.acompletion.value,
+            kwargs=kwargs,
+            args=(),
+        )
+        sync_hit: Final = LLMCachingHandler(
+            original_function=completion, request_kwargs=kwargs, start_time=_FIXED_START
+        ).sync_get_cache(
+            model="gpt-5.4",
+            original_function=completion,
+            logging_obj=sync_logging,
+            start_time=_FIXED_START,
+            call_type=CallTypes.completion.value,
+            kwargs=kwargs,
+        )
+
+    assert async_hit is not None and async_hit.cached_result is not None
+    assert sync_hit.cached_result is not None
+    assert async_hit.cached_result._hidden_params.get("response_cost") == 0.0
+    assert sync_hit.cached_result._hidden_params.get("response_cost") == 0.0
+    assert async_logging.async_success_handler.called is not internal
+    assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
+    assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal

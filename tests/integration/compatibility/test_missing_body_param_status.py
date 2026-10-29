@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import socket
 import subprocess
 import sys
 import uuid
@@ -24,6 +23,7 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process, paused, stop_child
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, BadRequestError, OpenAI
 from openai.types import Video
 from openai.types.eval_create_response import EvalCreateResponse as _Eval
@@ -42,6 +42,8 @@ from tests.integration.cost_calculation.cost_tracking_case import (
     RoutedResponse,
     SseResponse,
 )
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _Route = tuple[str, str, tuple[str, ...], dict[str, JsonValue], str]
 _EVAL_DATA_SOURCE_CONFIG: Final[dict[str, JsonValue]] = {
@@ -252,8 +254,13 @@ _ROUTES: Final[dict[str, _Route]] = {
     "acreate_agent": (
         "/v1beta/agents",
         "/v1beta/agents",
-        ("name",),
-        {"name": "agent", "base_agent": "waverunner", "instructions": "You are a helpful assistant."},
+        ("id",),
+        {
+            "id": "agent",
+            "base_agent": "antigravity-preview-09-2026",
+            "system_instruction": "You are a helpful assistant.",
+            "agent_config": {"type": "antigravity", "model": "gemini-3.8-flash"},
+        },
         "gemini/gemini-2.5-flash",
     ),
     "acreate_interaction": (
@@ -639,7 +646,7 @@ class _Observations:
             )
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
+        self.items = tuple(object_value(item) for item in requests if isinstance(item, dict))
         return self.items
 
     def for_scenario(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
@@ -1248,11 +1255,7 @@ def test_valid_agent_creation_reaches_upstream(gateway: Gateway) -> None:
         _assert_scripted_response("acreate_agent", caller)
         matches: Final = _observed(_Observations(gateway.upstream_url), identity)
         outbound: Final = object_value(matches[0]["body"])
-        assert outbound == {
-            "name": "agent",
-            "base_agent": "waverunner",
-            "instructions": "You are a helpful assistant.",
-        }, matches
+        assert outbound == body, matches
 
 
 def test_valid_speech_returns_binary_audio_and_reaches_upstream(gateway: Gateway) -> None:
@@ -1504,9 +1507,7 @@ def _healthy(url: str) -> int:
 
 @contextmanager
 def _upstream(directory: Path) -> Iterator[tuple[subprocess.Popen[bytes], str]]:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = int(reserve.getsockname()[1])
+    port: Final = allocate_port()
     root: Final = Path(__file__).resolve().parents[2]
     url: Final = f"http://127.0.0.1:{port}"
     with (directory / "upstream.log").open("w") as log:
@@ -1697,15 +1698,19 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             record_property("chaos_spend_row_counts", str(tuple(len(rows) for rows in spend_rows)))
             with owned.replacing_worker(min(workers)) as kill:
                 kill()
-                post_kill: Final = tuple(
-                    _post(candidate, path, body) for path, body, _expected, _identity in missing_calls[:5]
-                )
-                assert all(
-                    response.status_code == 400 and response.json() == expected
-                    for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
-                ), [response.text for response in post_kill]
-                recovered: Final = _post(candidate, "/v1/chat/completions", _chat_body(chat_model, "recovered", True))
-                assert recovered.status_code == 200, recovered.text
+                with httpx.Client(base_url=candidate.client.base_url, timeout=15, trust_env=False) as fresh:
+                    survivor: Final = Gateway(fresh, candidate.key, candidate.upstream_url)
+                    post_kill: Final = tuple(
+                        _post(survivor, path, body) for path, body, _expected, _identity in missing_calls[:5]
+                    )
+                    assert all(
+                        response.status_code == 400 and response.json() == expected
+                        for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
+                    ), [response.text for response in post_kill]
+                    recovered: Final = _post(
+                        survivor, "/v1/chat/completions", _chat_body(chat_model, "recovered", True)
+                    )
+                    assert recovered.status_code == 200, recovered.text
 
 
 def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
@@ -2074,8 +2079,8 @@ def test_documented_json_video_edit_routes_and_decodes_the_reference(gateway: Ga
 
 def test_multipart_bracketed_video_reference_reaches_upstream_as_a_decoded_id(gateway: Gateway) -> None:
     pytest.skip(
-        "BUG: multipart video[id]=<encoded id> to /v1/videos/edits and /v1/videos/extensions returns 404 and "
-        "never reaches the provider because the handler only reads a top-level video field"
+        "BUG: multipart video[id]=<encoded id> to /v1/videos/edits and /v1/videos/extensions is never decoded, "
+        "so the request skips the encoded deployment and goes to the default OpenAI api_base"
     )
     seen: Final[list[Request]] = []
     with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:

@@ -5,17 +5,21 @@ use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
-use litellm_llms::base_llm::ocr::error::Error;
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use litellm_llms::base_llm::ocr::{error::Error, transformation::DROP_PARAMS_PARAM};
+use pyo3::{prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
 use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
 use crate::{
     coercion::FieldSpec,
     credentials::{self, CallerTokenProvider},
-    marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
+    marshal::{
+        ArgumentError, project_optional_fields, python_timeout_seconds, request_input_sources,
+    },
     python_settings::{PythonSettings, Snapshot},
 };
+
+pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.ocr";
 
 /// What the host keeps after projection: the caller's token callable that answers the
 /// token operation, and the provider name the failure mapping reports.
@@ -30,9 +34,9 @@ struct OcrArguments<'a, 'py> {
 }
 
 impl<'py> OcrArguments<'_, 'py> {
-    fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        litellm_host_python::lookup(self.kwargs, self.bound, name)?
-            .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
+    fn lookup(&self, name: &'static str) -> PyResult<Bound<'py, PyAny>> {
+        Ok(litellm_host_python::lookup(self.kwargs, self.bound, name)?
+            .ok_or(ArgumentError::Required(name))?)
     }
 
     fn model(&self) -> PyResult<String> {
@@ -92,6 +96,7 @@ impl ProjectedDocument {
                 {
                     ocr_error_to_pyerr(Error::RequestField {
                         path: "document.type".into(),
+                        cause: None,
                     })
                 } else {
                     error
@@ -135,6 +140,15 @@ pub(super) fn project_request(
     let optional_params = match defaults {
         Some(defaults) => fold_module_globals(bound.py(), optional_params, &globals, &defaults)?,
         None => optional_params,
+    };
+    let optional_params = if names.contains(&DROP_PARAMS_PARAM) {
+        fold_drop_params(
+            bound.py(),
+            optional_params,
+            present(kwargs, bound, DROP_PARAMS_PARAM)?,
+        )?
+    } else {
+        optional_params
     };
     let input_sources = request_input_sources(
         kwargs,
@@ -213,13 +227,32 @@ fn fold_module_globals(
         .collect())
 }
 
+fn fold_drop_params(
+    py: Python<'_>,
+    optional_params: Map<String, Value>,
+    requested: Option<Bound<'_, PyAny>>,
+) -> PyResult<Map<String, Value>> {
+    let drops: bool = py
+        .import(ROUTE_HOST_MODULE)?
+        .getattr("drops_unsupported_params")?
+        .call1((requested,))?
+        .extract()?;
+    Ok(optional_params
+        .into_iter()
+        .filter(|(name, _)| name != DROP_PARAMS_PARAM)
+        .chain(drops.then(|| (DROP_PARAMS_PARAM.to_string(), Value::Bool(true))))
+        .collect())
+}
+
 /// A misconfigured litellm setting is the operator's error, not the request's or the
 /// provider's, so the host raises it as is instead of mapping it onto a provider failure.
 pub(super) const SETTINGS_ERROR_MARKER: &str = "native_settings_error";
 
 fn settings_error(py: Python<'_>, error: PyErr) -> PyErr {
-    error.value(py).setattr(SETTINGS_ERROR_MARKER, true).ok();
-    error
+    match error.value(py).setattr(SETTINGS_ERROR_MARKER, true) {
+        Ok(()) => error,
+        Err(failure) => failure,
+    }
 }
 
 #[cfg(test)]

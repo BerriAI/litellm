@@ -8,7 +8,7 @@ import os
 import copy
 import uuid
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 
 from unittest.mock import AsyncMock, patch, Mock, MagicMock
 
@@ -595,6 +595,26 @@ class TestSnowflakeCortexClaudeFixes:
         assert blocks[0] == {"type": "thinking", "thinking": "391", "signature": "Eto"}
         assert [b["type"] for b in blocks] == ["thinking", "tool_use"]
 
+    def test_signed_thinking_blocks_replay_without_their_stream_index(self):
+        body: Final = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "391",
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "391", "signature": "Eto", "index": 0},
+                        {"type": "redacted_thinking", "data": "opaque", "index": 1},
+                    ],
+                },
+            ]
+        )
+        blocks: Final = body["messages"][1]["content"]
+        assert blocks[:2] == [
+            {"type": "thinking", "thinking": "391", "signature": "Eto"},
+            {"type": "redacted_thinking", "data": "opaque"},
+        ]
+
     def test_signed_thinking_blocks_lead_a_plain_text_assistant_turn(self):
         """A thinking response without a tool call must also round-trip on the next request."""
         body = self._transform(
@@ -882,20 +902,14 @@ class TestSnowflakeChatCompletion:
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     def test_chat_completion_snowflake_stream(self, sync_mode):
-        raw_chunks = _streaming_chunks()
+        sse_body = "".join(f"data: {chunk}\n\n" for chunk in _streaming_chunks()) + "data: [DONE]\n\n"
+        mock_resp = httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=httpx.ByteStream(sse_body.encode()),
+        )
 
         if sync_mode:
-
-            def _iter_lines():
-                for chunk in raw_chunks:
-                    yield f"data: {chunk}"
-                yield "data: [DONE]"
-
-            mock_resp = MagicMock()
-            mock_resp.iter_lines.return_value = _iter_lines()
-            mock_resp.status_code = 200
-            mock_resp.headers = {"content-type": "text/event-stream"}
-
             with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
                 response = completion(
                     model="snowflake/mistral-7b",
@@ -909,16 +923,6 @@ class TestSnowflakeChatCompletion:
                 chunks_received = list(response)
                 mock_post.assert_called_once()
         else:
-
-            async def _aiter_lines():
-                for chunk in raw_chunks:
-                    yield f"data: {chunk}"
-                yield "data: [DONE]"
-
-            mock_resp = MagicMock()
-            mock_resp.aiter_lines.return_value = _aiter_lines()
-            mock_resp.status_code = 200
-            mock_resp.headers = {"content-type": "text/event-stream"}
 
             async def _run():
                 with patch.object(
@@ -944,8 +948,8 @@ class TestSnowflakeChatCompletion:
 
             chunks_received = asyncio.run(_run())
 
-        assert len(chunks_received) > 0
         content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)
+        assert content == "The sky is blue"
 
 
 async def test_snowflake_claude_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):

@@ -22,8 +22,11 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 MANAGED_PREFIX: Final = "litellm_proxy:"
 CARRIED_PROVIDER_FILE_ID: Final = re.compile(r"(?:^|;)llm_output_file_id,([^;]+)")
@@ -1202,7 +1205,8 @@ def test_provider_outage_mid_burst_fails_loudly_and_mapping_resumes_after_recove
     provider_a: Final = _provider_file_id(bearer, "a.txt")
     respond: Final = _provider(store, _constant_listing(store, provider_a))
     with gateway.scenario() as scenario:
-        with wire_server(respond) as wire:
+        port: Final = allocate_port()
+        with wire_server(respond, port=port) as wire:
             model: Final = scenario.model(api_base=wire.url + "/v1", api_key=bearer)
             _wait_until_every_worker_serves(gateway, model)
             wire.drain()
@@ -1212,8 +1216,6 @@ def test_provider_outage_mid_burst_fails_loudly_and_mapping_resumes_after_recove
             served: Final = _burst(gateway, store, member.key, model, 40)
             assert [_ids(_listed(response)) for response in served] == [(managed_a,)] * 40
             assert sum(1 for request in wire.drain() if request.method == "GET") == 40
-            port: Final = urlsplit(wire.url).port
-        assert port is not None
         failed: Final = _burst(gateway, store, member.key, model, 20)
         assert [response.status_code for response in failed] == [500] * 20, [r.text for r in failed[:3]]
         for response in failed:

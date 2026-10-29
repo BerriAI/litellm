@@ -338,9 +338,9 @@ def test_an_id_without_a_served_group_still_polls_its_own_deployment(rig: _Rig) 
     video_id: Final = created_id(create(rig.gateway, {"model": rig.member_a, "seconds": "5", "size": "1280x720"}))
     assert decoded(video_id).get("served_model") is None
     legacy: Final = forged_id("dashscope", rig.member_a, task_of(video_id), None)
-    assert legacy == video_id
+    assert {**decoded(legacy), "deployment_id": decoded(video_id).get("deployment_id")} == decoded(video_id)
     rig.drain()
-    _assert_served(_poll(rig, legacy), legacy)
+    _assert_served(_poll(rig, legacy), video_id)
     download: Final = _download(rig, legacy)
     assert download.status_code == 200 and download.content == MP4, download.text
     received: Final = rig.a.drain()

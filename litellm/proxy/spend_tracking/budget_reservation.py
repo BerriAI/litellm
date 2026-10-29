@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
@@ -39,7 +40,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model, tokenizer_models
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -228,29 +229,6 @@ def _raise_counter_budget_exceeded(
     )
 
 
-_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
-    {
-        "/models",
-        "/v1/models",
-        "/utils/token_counter",
-        "/responses/input_tokens",
-        "/v1/responses/input_tokens",
-        "/openai/v1/responses/input_tokens",
-    }
-)
-_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
-_TOKEN_COUNTING_ACTION: Final = "countTokens"
-
-
-def _is_token_counting_route(route: str) -> bool:
-    resource, _, action = route.rsplit("/", 1)[-1].partition(":")
-    return resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
-
-
-def _is_unbilled_route(route: str) -> bool:
-    return route in _UNBILLED_ROUTES or _is_token_counting_route(route)
-
-
 async def reserve_budget_for_request(
     request_body: dict,
     route: str,
@@ -269,7 +247,7 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if _is_unbilled_route(route):
+    if RouteChecks.is_unbilled_route(route):
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
@@ -751,7 +729,9 @@ async def _get_team_member_budget_counter(
     membership_cache_key: Final = team_membership_reservation_cache_key(
         user_id=valid_token.user_id, team_id=team_object.team_id
     )
-    cached_team_membership: Final = await user_api_key_cache.async_get_cache(key=membership_cache_key)
+    cached_team_membership: Final = _CACHED_VALUE.validate_python(
+        await user_api_key_cache.async_get_cache(key=membership_cache_key)
+    )
     team_membership: LiteLLM_TeamMembership | None = None
     if isinstance(cached_team_membership, LiteLLM_TeamMembership):
         team_membership = cached_team_membership
@@ -1620,7 +1600,19 @@ async def count_request_input_tokens(
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    return await count_input_tokens(request_body=request_body, raw_body=raw_body, models=models)
+    counted_as: Final = MappingProxyType({model: tokenizer_models(model, llm_router) for model in models})
+    counts: Final = await count_input_tokens(
+        request_body=request_body,
+        raw_body=raw_body,
+        models=tuple(dict.fromkeys(chain.from_iterable(counted_as.values()))),
+    )
+    return MappingProxyType(
+        {
+            model: count
+            for model, names in counted_as.items()
+            if (count := max((counts[name] for name in names if name in counts), default=None)) is not None
+        }
+    )
 
 
 def _estimate_input_tokens(

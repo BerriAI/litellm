@@ -28,6 +28,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _MODEL_ID: Final = "global.moonshotai.kimi-k3"
 _CONVERSE_MODEL: Final = f"bedrock/converse/{_MODEL_ID}"
 _STREAM_TARGET: Final = f"/model/{_MODEL_ID}/converse-stream"

@@ -1,9 +1,11 @@
 import json
-from collections.abc import Callable
+import types
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -36,6 +38,7 @@ from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
 sagemaker_config: Final = SagemakerConfig()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _InvokeEndpointArgs(TypedDict):
@@ -152,7 +155,7 @@ class SagemakerLLM(BaseAWSLLM):
         model_id: Final = optional_params.get("model_id", None)
 
         ## Load Config
-        config: Final = litellm.SagemakerConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.SagemakerConfig.get_config())
         for k, v in config.items():
             if (
                 k not in inference_params
@@ -573,7 +576,7 @@ class SagemakerLLM(BaseAWSLLM):
         inference_params.pop("stream", None)
 
         ## Load Config
-        config: Final = litellm.SagemakerConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.SagemakerConfig.get_config())
         for k, v in config.items():
             if (
                 k not in inference_params
@@ -623,7 +626,7 @@ class SagemakerLLM(BaseAWSLLM):
             status_code, error_message = client_error_details(e)
             raise SagemakerError(status_code=status_code, message=with_inference_component_hint(error_message))
 
-        response = json.loads(response["Body"].read().decode("utf8"))
+        response = _DECODED_JSON.validate_python(json.loads(response["Body"].read().decode("utf8")))
         ## LOGGING
         logging_obj.post_call(
             input=input,

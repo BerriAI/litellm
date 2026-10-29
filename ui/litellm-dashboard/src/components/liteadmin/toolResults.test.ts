@@ -143,6 +143,209 @@ describe("model result privacy", () => {
     });
   });
 
+  it.each(["team", "tag"])(
+    "should aggregate all token counts across dates and %s usage without exposing private fields",
+    (entity) => {
+      const days = [
+        {
+          date: "2031-05-01",
+          spend: 10,
+          api_requests: 3,
+          total_tokens: 50,
+          prompt_tokens: 40,
+          completion_tokens: 10,
+          cache_read_input_tokens: 15,
+          cache_creation_input_tokens: 5,
+        },
+        {
+          date: "2031-05-02",
+          spend: 20,
+          api_requests: 4,
+          total_tokens: 75,
+          prompt_tokens: 60,
+          completion_tokens: 15,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 10,
+        },
+      ];
+      const totals = {
+        total_spend: 30,
+        total_api_requests: 7,
+        total_tokens: 125,
+        total_prompt_tokens: 100,
+        total_completion_tokens: 25,
+        total_cache_read_input_tokens: 35,
+        total_cache_creation_input_tokens: 15,
+      };
+      const raw = {
+        metadata: { ...totals, secret: "private" },
+        results: days.map(({ date, ...metrics }) => ({
+          date,
+          metrics,
+          breakdown: {
+            models: { "model captured-token": { metrics, messages: ["private prompt"] } },
+            providers: { "provider captured-token": { metrics, messages: ["private prompt"] } },
+            entities: {
+              [`${entity} sk-secret`]: {
+                metrics,
+                metadata: { team_alias: "Team captured-token", secret: "private" },
+              },
+            },
+            api_keys: { "sk-private-key": { metrics, metadata: { key_alias: "worker", raw_key: "private" } } },
+          },
+        })),
+      };
+      const combined = {
+        spend: 30,
+        api_requests: 7,
+        total_tokens: 125,
+        prompt_tokens: 100,
+        completion_tokens: 25,
+        cache_read_input_tokens: 35,
+        cache_creation_input_tokens: 15,
+      };
+      const expected = {
+        totals,
+        daily: days,
+        breakdown_limit: 20,
+        top_models: [{ name: "model [redacted]", ...combined }],
+        top_providers: [{ name: "provider [redacted]", ...combined }],
+        top_entities: [{ name: `${entity} [redacted]`, alias: "Team [redacted]", ...combined }],
+        top_api_keys: [{ name: "[redacted]", alias: "worker", ...combined }],
+      };
+      expect(projectToolResult("usage", raw, ["captured-token"])).toEqual(expected);
+    },
+  );
+
+  it.each([undefined, null, 0])("should preserve zero or unavailable token counts reported as %s", (count) => {
+    const tokens = {
+      prompt_tokens: count,
+      completion_tokens: count,
+      cache_read_input_tokens: count,
+      cache_creation_input_tokens: count,
+    };
+    const metrics = { spend: 0, api_requests: 0, total_tokens: 0, ...tokens };
+    const metadata = {
+      total_prompt_tokens: count,
+      total_completion_tokens: count,
+      total_cache_read_input_tokens: count,
+      total_cache_creation_input_tokens: count,
+    };
+    const daily = ["2031-05-01", "2031-05-02"].map((date) => ({ date, ...metrics }));
+    const raw = {
+      metadata,
+      results: daily.map(({ date }) => ({ date, metrics, breakdown: { models: { model: { metrics } } } })),
+    };
+    const expected = {
+      totals: metadata,
+      daily,
+      breakdown_limit: 20,
+      top_models: [
+        {
+          name: "model",
+          ...metrics,
+          prompt_tokens: count ?? undefined,
+          completion_tokens: count ?? undefined,
+          cache_read_input_tokens: count ?? undefined,
+          cache_creation_input_tokens: count ?? undefined,
+        },
+      ],
+      top_providers: [],
+      top_entities: [],
+      top_api_keys: [],
+    };
+    expect(projectToolResult("usage", raw, [])).toEqual(expected);
+  });
+
+  it.each([0, 1, 2])(
+    "should leave partially reported token counts unavailable when day %s omits them",
+    (missingDay) => {
+      const metrics = { spend: 1, api_requests: 1, total_tokens: 20 };
+      const tokens = {
+        prompt_tokens: 15,
+        completion_tokens: 5,
+        cache_read_input_tokens: 6,
+        cache_creation_input_tokens: 2,
+      };
+      const raw = {
+        results: Array.from({ length: 3 }, (_, index) => {
+          const dayMetrics = index === missingDay ? metrics : { ...metrics, ...tokens };
+          return {
+            date: `2031-05-0${index + 1}`,
+            metrics: dayMetrics,
+            breakdown: { models: { model: { metrics: dayMetrics } }, entities: { entity: { metrics: dayMetrics } } },
+          };
+        }),
+      };
+      const result = projectToolResult("usage", raw, []);
+      expect(result).toHaveProperty("top_models", [{ name: "model", spend: 3, api_requests: 3, total_tokens: 60 }]);
+      expect(result).toHaveProperty("top_entities", [{ name: "entity", spend: 3, api_requests: 3, total_tokens: 60 }]);
+      expect(result).toHaveProperty("totals", undefined);
+    },
+  );
+
+  it("should bound usage breakdowns after ranking while keeping complete totals", () => {
+    const metrics = {
+      spend: 300,
+      api_requests: 30,
+      total_tokens: 900,
+      prompt_tokens: 700,
+      completion_tokens: 200,
+      cache_read_input_tokens: 250,
+      cache_creation_input_tokens: 100,
+    };
+    const result = projectToolResult(
+      "usage",
+      {
+        metadata: { total_spend: metrics.spend },
+        results: [
+          {
+            date: "2031-05-01",
+            metrics,
+            breakdown: {
+              providers: Object.fromEntries(
+                Array.from({ length: 30 }, (_, index) => [
+                  `provider-${index}`,
+                  { metrics: { ...metrics, spend: index } },
+                ]),
+              ),
+            },
+          },
+        ],
+      },
+      [],
+    );
+    expect(result).toMatchObject({ totals: { total_spend: 300 }, daily: [{ ...metrics }], breakdown_limit: 20 });
+    expect(result).toHaveProperty(
+      "top_providers",
+      Array.from({ length: 20 }, (_, index) => ({
+        name: `provider-${29 - index}`,
+        ...metrics,
+        spend: 29 - index,
+      })),
+    );
+  });
+
+  it("should keep the usage output size limit when token breakdowns enlarge the response", () => {
+    const raw = {
+      results: Array.from({ length: 200 }, () => ({
+        date: "2031-05-01",
+        metrics: {
+          spend: 1,
+          api_requests: 1,
+          total_tokens: 20,
+          prompt_tokens: 15,
+          completion_tokens: 5,
+          cache_read_input_tokens: 6,
+          cache_creation_input_tokens: 2,
+        },
+      })),
+    };
+    expect(projectToolResult("usage", raw, [])).toEqual({
+      notice: "The result is too large to summarize safely. Use a smaller page or narrower filters.",
+    });
+  });
+
   it("bounds list and string sizes and rejects results that exceed the overall output budget", () => {
     const raw = {
       users: Array.from({ length: 80 }, (_, index) => ({ user_id: String(index), user_alias: "x".repeat(800) })),

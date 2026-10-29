@@ -73,6 +73,27 @@ def test_transform_to_invoke_model_format_base64_encodes_body():
     assert body["max_tokens"] == DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
 
 
+def test_transform_to_invoke_model_format_counts_tools_the_way_bedrock_messages_sends_them():
+    schema = {"type": "object", "properties": {}}
+
+    result = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(
+        {
+            "model": "anthropic.claude-haiku-5-5",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            "tools": [
+                {"name": "read", "input_schema": schema, "custom": {"defer_loading": True}},
+                {"name": "write", "input_schema": schema, "custom": {"eager_input_streaming": True}},
+            ],
+        }
+    )
+
+    body = json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
+    assert body["tools"] == [
+        {"name": "read", "input_schema": schema, "defer_loading": True},
+        {"name": "write", "input_schema": schema},
+    ]
+
+
 def test_transform_to_invoke_model_format_raw_body_unchanged():
     """Non-messages bodies (e.g. Titan inputText) must not get Anthropic fields."""
     config = BedrockCountTokensConfig()
@@ -167,6 +188,25 @@ def test_transform_includes_tools():
     assert tools[0]["toolSpec"]["description"] == "Read a file"
     assert tools[0]["toolSpec"]["inputSchema"]["json"]["type"] == "object"
 
+
+def test_transform_maps_chat_function_tools():
+    parameters = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    request = {
+        "model": "amazon.nova-pro-v1:0",
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "description": "Look up the weather", "parameters": parameters},
+            }
+        ],
+    }
+
+    result = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(request)
+
+    assert result["input"]["converse"]["toolConfig"]["tools"] == [
+        {"toolSpec": {"name": "get_weather", "description": "Look up the weather", "inputSchema": {"json": parameters}}}
+    ]
 
 def test_transform_includes_system_and_tools_together():
     """Test that both system and tools are included together."""

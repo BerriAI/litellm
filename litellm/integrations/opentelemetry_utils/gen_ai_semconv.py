@@ -35,11 +35,13 @@ from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.integrations.otel.mappers.utils import drop_none
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
     from opentelemetry._logs import SeverityNumber as _SeverityNumber
     from opentelemetry.trace import Span as _Span
+    from opentelemetry.trace import SpanContext
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
@@ -147,8 +149,11 @@ class OTELGenAISemconvMixin:
         """Map a LiteLLM ``call_type`` to spec ``gen_ai.operation.name``.
 
         Substring match (e.g. ``aembedding`` -> ``embeddings``); defaults to
-        ``chat``.
+        ``chat``. A pass-through call's operation, stored under ``PASSTHROUGH_OPERATION_KEY``, wins.
         """
+        passthrough_operation: Final = kwargs.get(PASSTHROUGH_OPERATION_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # kwargs is an untyped dict
+        if isinstance(passthrough_operation, GenAIOperation):
+            return passthrough_operation.value
         call_type: Final = kwargs.get("call_type", "") or ""
         match call_type:
             case s if "embedding" in s:
@@ -231,7 +236,7 @@ class OTELGenAISemconvMixin:
         response_obj: dict,
         provider: str | None,
         otel_logger,
-        parent_ctx,
+        parent_ctx: "SpanContext",
     ) -> None:
         """Emit the consolidated ``gen_ai.client.inference.operation.details``
         log event, correlated to the request span via ``parent_ctx``.

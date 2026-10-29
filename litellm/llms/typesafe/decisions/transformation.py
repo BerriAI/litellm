@@ -94,8 +94,12 @@ class TypeSafeDecisionsConfig(BaseDecisionsConfig):
             name.lower() == _IMAGES_HEADER and value.strip().lower() == "true" for name, value in headers.items()
         )
 
-    def supports_box_questions(self, model: str, custom_llm_provider: str, headers: Mapping[str, str]) -> bool:
-        return self.supports_assets(headers) and super().supports_box_questions(model, custom_llm_provider, headers)
+    def supports_box_questions(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str], deployment_flag: bool | None
+    ) -> bool:
+        return self.supports_assets(headers) and super().supports_box_questions(
+            model, custom_llm_provider, headers, deployment_flag
+        )
 
     def transform_decisions_request(
         self,
