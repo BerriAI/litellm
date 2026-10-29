@@ -75,7 +75,7 @@ class RedisPipelineSetOperation(TypedDict):
     """
 
     key: str
-    value: Any
+    value: object
     ttl: int | None
 
 
@@ -133,12 +133,14 @@ class HealthCheckCacheParams(LiteLLMBaseModel):
 
     host: str | None = None
     port: str | int | None = None
-    redis_kwargs: dict[str, Any] | None = None
+    redis_kwargs: dict[str, object] | None = None
     namespace: str | None = None
     redis_version: str | int | float | None = None
 
 
 EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
+
+CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
 
 class CachedEmbedding(TypedDict):

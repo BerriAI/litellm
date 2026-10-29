@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Literal
 
 
 class CustomDB:
@@ -14,12 +14,12 @@ class CustomDB:
         Check if key valid
         """
 
-    def insert_data(self, value: Any, table_name: Literal["user", "key", "config"]):
+    def insert_data(self, value: object, table_name: Literal["user", "key", "config"]):
         """
         For new key / user logic
         """
 
-    def update_data(self, key: str, value: Any, table_name: Literal["user", "key", "config"]):
+    def update_data(self, key: str, value: object, table_name: Literal["user", "key", "config"]):
         """
         For cost tracking logic
         """

@@ -2,6 +2,7 @@
 # This file contains the LiteralAILogger class which is used to log steps to the LiteralAI observability platform.
 import asyncio
 import os
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -181,7 +182,8 @@ class LiteralAILogger(CustomBatchLogger):
 
         if messages and isinstance(messages, list) and isinstance(messages[0], dict):
             for message in messages:
-                if literal_prompt := getattr(message, "__literal_prompt__", None):
+                literal_prompt: Mapping[str, object] | None = getattr(message, "__literal_prompt__", None)
+                if literal_prompt:
                     prompt_id = literal_prompt.get("prompt_id")
                     variables = literal_prompt.get("variables")
                     message["uuid"] = literal_prompt.get("uuid")

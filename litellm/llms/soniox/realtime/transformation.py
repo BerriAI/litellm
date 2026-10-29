@@ -1,9 +1,10 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from itertools import chain
 from types import MappingProxyType, TracebackType
 from typing import Final
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from typing_extensions import Self
@@ -25,6 +26,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     speech_event,
     transcription_session,
     transcription_session_created_event,
+    uses_server_vad,
 )
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.llms.soniox.common_utils import get_soniox_api_key
@@ -36,6 +38,7 @@ from litellm.types.realtime import (
 )
 
 DEFAULT_SONIOX_REALTIME_URL: Final = "wss://stt-rt.soniox.com/transcribe-websocket"
+WEBSOCKET_SCHEMES: Final = MappingProxyType({"wss": "wss", "ws": "ws", "https": "wss", "http": "ws"})
 DEFAULT_SAMPLE_RATE: Final = 24_000
 KEEPALIVE_INTERVAL_SECONDS: Final = 5.0
 _MAX_PENDING_FRAMES: Final = 64
@@ -79,12 +82,16 @@ class SonioxStartRequest(SonioxRealtimeOptions):
 
 
 class _SonioxToken(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     text: str
     is_final: bool = False
     translation_status: str | None = None
 
 
 class _SonioxResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     tokens: tuple[_SonioxToken, ...] = ()
     total_audio_proc_ms: int | None = None
     error_code: int | None = None
@@ -112,8 +119,12 @@ def _language_hints(language: str | None, configured: tuple[str, ...] | None) ->
     return (language, *(hint for hint in configured or () if hint != language))
 
 
+def _uses_endpoint_detection(update: TranscriptionSessionUpdate, drop_params: bool) -> bool:
+    return uses_server_vad(update, "Soniox realtime", drop_params, SonioxProtocolError)
+
+
 def build_start_request(
-    model: str, update: TranscriptionSessionUpdate | None, options: SonioxRealtimeOptions
+    model: str, update: TranscriptionSessionUpdate | None, options: SonioxRealtimeOptions, drop_params: bool = False
 ) -> SonioxStartRequest:
     return SonioxStartRequest(
         **options.model_dump(exclude={"language_hints"}),
@@ -122,7 +133,7 @@ def build_start_request(
         audio_format="pcm_s16le",
         sample_rate=_sample_rate(update),
         num_channels=1,
-        enable_endpoint_detection=update is None or not update.turn_detection_disabled,
+        enable_endpoint_detection=update is None or _uses_endpoint_detection(update, drop_params),
     )
 
 
@@ -145,7 +156,7 @@ def _changes_started_rate(update: TranscriptionSessionUpdate, started: SonioxSta
     return audio_format.rate is not None and requested_rate != started.sample_rate
 
 
-def _changes_started_stream(update: TranscriptionSessionUpdate, started: SonioxStartRequest) -> bool:
+def _changes_started_stream(update: TranscriptionSessionUpdate, started: SonioxStartRequest, drop_params: bool) -> bool:
     turn_detection_set: Final = update.turn_detection is not None or update.turn_detection_disabled
     return (
         _changes_started_rate(update, started)
@@ -153,16 +164,18 @@ def _changes_started_stream(update: TranscriptionSessionUpdate, started: SonioxS
             update.language is not None
             and _language_hints(update.language, started.language_hints) != started.language_hints
         )
-        or (turn_detection_set and update.turn_detection_disabled == started.enable_endpoint_detection)
+        or (turn_detection_set and _uses_endpoint_detection(update, drop_params) != started.enable_endpoint_detection)
     )
 
 
 def build_soniox_realtime_url(api_base: str | None) -> str:
     if api_base is None:
         return DEFAULT_SONIOX_REALTIME_URL
-    if urlparse(api_base).scheme not in ("ws", "wss"):
-        raise ValueError("Soniox realtime api_base must be a ws:// or wss:// URL")
-    return api_base
+    parsed: Final = urlparse(api_base)
+    scheme: Final = WEBSOCKET_SCHEMES.get(parsed.scheme)
+    if scheme is None:
+        raise ValueError("Soniox realtime api_base must be a wss://, ws://, https://, or http:// URL")
+    return urlunparse(parsed._replace(scheme=scheme))
 
 
 class SonioxEventTransformer:
@@ -181,7 +194,7 @@ class SonioxEventTransformer:
         if response.error_code is not None or response.error_message is not None:
             return (error_event(f"Soniox realtime error {response.error_code}: {response.error_message}"),)
         self._bill(response.total_audio_proc_ms)
-        return tuple(event for token in response.tokens for event in self._token_events(token))
+        return tuple(chain.from_iterable(self._token_events(token) for token in response.tokens))
 
     def take_unbilled_usage(self, stream_ms: int = 0) -> RealtimeInputAudioTranscriptionUsage | None:
         billable_ms: Final = max(self._processed_ms, stream_ms)
@@ -289,7 +302,7 @@ class SonioxRealtimeBackend:
         while True:
             try:
                 frame = await self._inner.recv()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001  # recv() re-raises it, so an upstream failure never hangs the reader
                 await self._frames.put(e)
                 return
             await self._frames.put(frame)
@@ -301,7 +314,7 @@ class SonioxRealtimeBackend:
                 continue
             try:
                 await self.send(_KEEPALIVE)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001  # stops only keepalives; the pump reports the broken socket
                 verbose_logger.debug("Soniox realtime: stopping keepalive after send failed: %s", e)
                 return
 
@@ -313,8 +326,10 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         options: SonioxRealtimeOptions | None = None,
         wrap: Callable[[RealtimeBackend], RealtimeBackend] = SonioxRealtimeBackend,
         clock: Callable[[], float] = time.monotonic,
+        drop_params: bool = False,
     ) -> None:
         self._options: Final = options or SonioxRealtimeOptions()
+        self._drop_params: Final = drop_params
         self._wrap: Final = wrap
         self._clock: Final = clock
         self._transformer: Final = SonioxEventTransformer(translated_only=self._options.translation is not None)
@@ -323,8 +338,8 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
         self._opened_at: float | None = None
 
     @classmethod
-    def from_litellm_params(cls, litellm_params: Mapping[str, object]) -> Self:
-        return cls(options=SonioxRealtimeOptions.model_validate(dict(litellm_params)))
+    def from_litellm_params(cls, litellm_params: Mapping[str, object], *, drop_params: bool = False) -> Self:
+        return cls(options=SonioxRealtimeOptions.model_validate(dict(litellm_params)), drop_params=drop_params)
 
     def requires_session_configuration(self) -> bool:
         return True
@@ -410,9 +425,9 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
     def _start(self, model: str, update: TranscriptionSessionUpdate | None) -> tuple[str, ...]:
         started: Final = self._start_request
         if started is not None:
-            if update is not None and _changes_started_stream(update, started):
+            if update is not None and _changes_started_stream(update, started, self._drop_params):
                 raise SonioxProtocolError("Soniox realtime can't change the session once the stream has started")
             return ()
-        start_request: Final = build_start_request(model, update, self._options)
+        start_request: Final = build_start_request(model, update, self._options, self._drop_params)
         self._start_request = start_request
         return (start_request.model_dump_json(exclude_none=True),)

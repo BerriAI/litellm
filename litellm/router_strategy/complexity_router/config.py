@@ -7,12 +7,12 @@ All values are configurable via proxy config.yaml.
 
 import math
 import re
-import warnings
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
     ConfigDict,
@@ -27,8 +27,13 @@ from pydantic import (
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
+if TYPE_CHECKING:
+    import sre_constants
+    import sre_parse
+elif sys.version_info >= (3, 11):
+    from re import _constants as sre_constants
+    from re import _parser as sre_parse
+else:
     import sre_constants
     import sre_parse
 
@@ -72,6 +77,15 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 # "is the classifier model a real dependency of this router" resolves it here, including the ones
 # that only hold the raw config mapping and cannot reach ComplexityRouterConfig.uses_llm_classifier.
 LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "capability", "llm_v2", "heuristic_first", "hybrid"})
+
+
+def configured_local_heuristic(config: Mapping[str, object]) -> Literal["heuristic", "heuristic_v2"] | None:
+    classifier_type: Final = config.get("classifier_type", "heuristic")
+    if classifier_type == "heuristic" or classifier_type == "heuristic_v2":
+        return classifier_type
+    if classifier_type in ("heuristic_first", "hybrid"):
+        return "heuristic_v2" if config.get("local_heuristic") == "heuristic_v2" else "heuristic"
+    return None
 
 
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
@@ -696,10 +710,19 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
     return normalized
 
 
+_ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
+    {
+        "jev": "TYPESAFE_API_KEY is only sent to TYPESAFE_API_BASE or https://api.typesafe.ai",
+        "databricks": "DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE",
+    }
+)
+
+
 class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    deployment_name: str | None = Field(default=None, min_length=1)
+    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
@@ -737,6 +760,12 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
+        if self.deployment_name is not None:
+            if not self.deployment_name.strip():
+                raise ValueError("deployment_name must name a configured decision model")
+            if self.api_key is not None or self.api_base is not None:
+                raise ValueError("deployment_name uses the deployment connection; omit api_key and api_base")
+            return self
         if self.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
@@ -744,10 +773,22 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
             if self.api_base is not None:
                 _ = validate_oss_api_base(self.provider, self.api_base)
             return self
+        if self.provider == "databricks":
+            from litellm.llms.databricks.decisions.transformation import (
+                DATABRICKS_AI_DECIDE_MODEL,
+                validate_databricks_decisions_model,
+            )
+
+            if "model" not in self.model_fields_set:
+                raise ValueError(
+                    "opensource_classifier_config.model is required for provider 'databricks': "
+                    f"{DATABRICKS_AI_DECIDE_MODEL!r} or a serving endpoint name, e.g. databricks-openjev-qwen35-4b"
+                )
+            _ = validate_databricks_decisions_model(self.model)
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
-                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
-                "to TYPESAFE_API_BASE or https://api.typesafe.ai"
+                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
+                f"{_ENVIRONMENT_KEY_SCOPE[self.provider]}"
             )
         return self
 
@@ -807,7 +848,10 @@ def _resolve_normalized_complexity_router_config_write(
         {
             key: value
             for key, value in existing.items()
-            if same_provider and key in ("api_key", "api_base") and (key != "api_key" or same_base)
+            if same_provider
+            and not classifier.get("deployment_name")
+            and key in ("api_key", "api_base")
+            and (key != "api_key" or same_base)
         }
     )
     return ComplexityRouterConfigWrite(
@@ -1160,10 +1204,17 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         default=None,
         description="Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2.",
     )
+    local_heuristic: Literal["heuristic", "heuristic_v2"] | None = Field(
+        default=None,
+        description=(
+            "Local scorer for heuristic_first or hybrid. Omitted or null keeps heuristic v1; "
+            "heuristic_v2 uses the trained success predictor. Rejected for other classifier types."
+        ),
+    )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
         default="ultrafeedback",
         description=(
-            "Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled "
+            "Success-probability artifact used by standalone or chained heuristic_v2. The bundled "
             "UltraFeedback artifact is selected by default; an inline trained artifact may replace it"
         ),
     )
@@ -1173,10 +1224,11 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. "
-            "The first tier meeting this threshold is selected, or REASONING if none meets it. "
+            "Minimum predicted success probability for standalone or chained heuristic_v2 to select a tier. "
+            "The first tier meeting this threshold is selected. When none meets it, standalone heuristic_v2 "
+            "selects REASONING and chained heuristic_v2 defers to the LLM judge. "
             "When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). "
-            "Other classifier types ignore this setting"
+            "Ignored when heuristic_v2 is not selected"
         ),
     )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
@@ -1203,8 +1255,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "one skips the LLM classifier and routes straight to that heuristic tier, so the classifier "
             "call is only paid for on traffic the scorer could not place cheaply. The scorer must also "
             "have produced at least one signal: a prompt where no dimension fired scores 0.0 and would "
-            "otherwise land SIMPLE by default rather than by evidence, which is how a chained router "
-            "would silently send unclassified traffic to the cheapest model. Names a built-in tier, and "
+            "otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', "
+            "the predicted tier must meet its success threshold. Names a built-in tier, and "
             "may not name the highest one, since that would make the LLM classifier unreachable."
         ),
     )
@@ -1218,7 +1270,9 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "this from every active boundary routes on the scorer's own tier with no classifier call, at any "
             "tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A "
             "prompt where no dimension fired still goes to the classifier, since the scorer has no opinion "
-            "to be near a boundary with. 0 escalates only scores sitting exactly on a boundary."
+            "to be near a boundary with. With local_heuristic 'heuristic_v2', a tier must meet its success "
+            "threshold and its probability and all lower-tier probabilities must be further than this margin "
+            "from that threshold. 0 escalates only scores or probabilities exactly on a boundary."
         ),
     )
     classifier_plugin: ClassifierPlugin | None = Field(
@@ -1408,7 +1462,7 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
-    max_tokens_from_tier_model: bool = Field(
+    max_tokens_from_tier_model: bool | Literal["clamp"] = Field(
         default=True,
         description=(
             "Set max_tokens on every routed request to the output ceiling of the tier model it "
@@ -1419,7 +1473,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "from each deployment's model_info and then the model cost map; a tier model with a "
             "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
             "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
-            "wins. Set false to forward the caller's value unchanged."
+            'wins. Set "clamp" to keep a smaller positive caller value and cap a larger one at '
+            "the ceiling. Set false to forward the caller's value unchanged."
         ),
     )
     route_housekeeping_to_cheapest_tier: bool = Field(
@@ -1856,11 +1911,24 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_local_heuristic(self) -> "ComplexityRouterConfig":
+        if self.local_heuristic is not None and self.classifier_type not in ("heuristic_first", "hybrid"):
+            raise ValueError("local_heuristic requires classifier_type heuristic_first or hybrid")
+        return self
+
+    @model_validator(mode="after")
     def _validate_custom_dimensions(self) -> "ComplexityRouterConfig":
         if not self.custom_dimensions:
             return self
-        if self.classifier_type not in ("heuristic", "heuristic_first", "hybrid"):
-            raise ValueError("custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid")
+        if (
+            configured_local_heuristic(
+                {"classifier_type": self.classifier_type, "local_heuristic": self.local_heuristic}
+            )
+            != "heuristic"
+        ):
+            raise ValueError(
+                "custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid using heuristic v1"
+            )
         names: Final = tuple(dimension.name.casefold() for dimension in self.custom_dimensions)
         reserved: Final = frozenset(name.casefold() for name in DEFAULT_DIMENSION_WEIGHTS)
         weighted: Final = frozenset(name.casefold() for name in self.dimension_weights)

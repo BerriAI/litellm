@@ -22,6 +22,9 @@ class _ConfigRow(Protocol):
     @property
     def param_value(self) -> object: ...
 
+    @property
+    def reload_revision(self) -> int | None: ...
+
 
 class _ConfigTable(Protocol):
     async def find_unique(self, *, where: Mapping[str, str]) -> _ConfigRow | None: ...

@@ -1,9 +1,11 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Coroutine
+from collections.abc import Collection, Coroutine, Mapping
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
+
+from pydantic import TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
@@ -17,6 +19,9 @@ from litellm import client
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    invalid_provider_routing_hints_message,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
@@ -34,6 +39,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 # BFL handlers
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
+from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -52,27 +58,73 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
     LlmProviders,
+    ProviderRoutingHints,
 )
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ImageResponse,
     ProviderConfigManager,
     get_llm_provider,
     get_optional_params_image_gen,
 )
 
+_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
-_ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+_ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
 
 
-def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
+def _get_ImageEditRequestUtils() -> type["ImageEditRequestUtils"]:
     """Get ImageEditRequestUtils, loading it lazily if needed."""
     global _ImageEditRequestUtils_cache
     if _ImageEditRequestUtils_cache is None:
         # Access via module to trigger __getattr__ if not cached
-        module: Final = importlib.import_module(__name__)
-        _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
+        from litellm.images import main as images_main
+
+        _ImageEditRequestUtils_cache = images_main.ImageEditRequestUtils
     assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
     return _ImageEditRequestUtils_cache
+
+
+def _chatgpt_image_params(kwargs: Mapping[str, object]) -> GenericLiteLLMParams:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    headers: Final = ResponsesAPIRequestUtils.merge_client_forwarded_headers(
+        TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(kwargs.get("extra_headers")),
+        TypeAdapter[dict[str, str] | None](dict[str, str] | None).validate_python(kwargs.get("headers")),
+    )
+    return GenericLiteLLMParams.model_validate({**kwargs, "extra_headers": headers})
+
+
+def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: Mapping[str, str]) -> Mapping[str, str]:
+    from litellm.llms.chatgpt.common_utils import get_chatgpt_request_credential
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+
+    credential: Final = get_chatgpt_request_credential(params)
+    credential_headers: Final = (
+        {
+            "Authorization": f"Bearer {credential.access_token}",
+            **({"ChatGPT-Account-Id": credential.account_id} if credential.account_id else {}),
+        }
+        if credential is not None
+        else {}
+    )
+    explicit_account_id: Final = next(
+        (value for name, value in headers.items() if name.lower() == "chatgpt-account-id"), None
+    )
+    auth_headers: Final = ChatGPTResponsesAPIConfig().validate_environment(
+        headers=credential_headers, model=model, litellm_params=params
+    )
+    return {
+        **{k: v for k, v in auth_headers.items() if k.lower() not in ("content-type", "accept")},
+        **{
+            k: v
+            for k, v in headers.items()
+            if k.lower() not in ("authorization", "chatgpt-account-id", "cookie", "x-litellm-api-key")
+        },
+        **({"ChatGPT-Account-Id": explicit_account_id} if credential is None and explicit_account_id else {}),
+        "Accept": "application/json",
+    }
 
 
 ##### Image Generation #######################
@@ -92,6 +144,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
     model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aimg_generation"] = True
+    try:
+        provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
+        ) from error
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
@@ -101,7 +159,17 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=provider_hints.get("api_base"),
+            litellm_params=(
+                _chatgpt_image_params(TypeAdapter(dict[str, object]).validate_python(kwargs))
+                if provider_hints.get("custom_llm_provider") == "chatgpt"
+                or (isinstance(model, str) and model.startswith("chatgpt/"))
+                else None
+            ),
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -217,20 +285,32 @@ def image_generation(
         extra_headers: Final = kwargs.get("extra_headers", None)
         headers: Final[dict] = kwargs.get("headers", None) or {}
         base_model: Final = kwargs.get("base_model", None)
+        call_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: image_generation's **kwargs is untyped
+        max_retries: Final = call_kwargs.get("max_retries")
+        is_router_call: Final = any(
+            isinstance(call_metadata := call_kwargs.get(k), Mapping) and "model_group" in call_metadata
+            for k in ("metadata", "litellm_metadata")
+        )
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
+        chatgpt_params: Final = (
+            _chatgpt_image_params(TypeAdapter(dict[str, object]).validate_python({**kwargs, "api_key": api_key}))
+            if custom_llm_provider == "chatgpt" or (model is not None and model.startswith("chatgpt/"))
+            else None
+        )
         dynamic_api_key: str | None = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
+                litellm_params=chatgpt_params,
             )
         else:
             model = "dall-e-2"
             custom_llm_provider = "openai"  # default to dall-e-2 on openai
-        model_response._hidden_params["model"] = model
+        model_response.hidden_params["model"] = model
         openai_params: Final = [
             "user",
             "request_timeout",
@@ -248,7 +328,10 @@ def image_generation(
             "size",
             "style",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = filter_out_litellm_params(
+            kwargs,
+            excluding=[*openai_params, "extra_headers", "headers"] if chatgpt_params is not None else openai_params,
+        )
 
         image_generation_config: BaseImageGenerationConfig | None = None
         if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
@@ -384,7 +467,7 @@ def image_generation(
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,
-        ):
+        ) or (custom_llm_provider == litellm.LlmProviders.TENCENT and image_generation_config is not None):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
@@ -470,10 +553,11 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
-            if extra_headers is not None:
+            if extra_headers is not None and chatgpt_params is None:
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
+            sdk_max_retries: Final = 0 if is_router_call else max_retries
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -481,12 +565,25 @@ def image_generation(
                 api_key=api_key or dynamic_api_key,
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
-                optional_params=optional_params,
+                optional_params=(
+                    optional_params if sdk_max_retries is None else {**optional_params, "max_retries": sdk_max_retries}
+                ),
                 model_response=model_response,
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=(
+                    dict(
+                        _chatgpt_image_headers(
+                            model,
+                            chatgpt_params.model_copy(update={"api_key": dynamic_api_key or api_key}),
+                            TypeAdapter(dict[str, str]).validate_python(headers),
+                        )
+                    )
+                    if chatgpt_params is not None
+                    else headers
+                ),
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
             if model is None:
@@ -663,10 +760,13 @@ def image_variation(
     api_base = provider_config.get_api_base(litellm_params.get("api_base", None))
 
     if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
-        if api_key is None:
-            raise ValueError("API key is required for OpenAI image variations")
         if api_base is None:
             raise ValueError("API base is required for OpenAI image variations")
+        if api_key is None and (
+            resolve_openai_workload_identity_config(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
+            is None
+        ):
+            raise ValueError("API key is required for OpenAI image variations")
 
         response = openai_image_variations.image_variations(
             model_response=model_response,
@@ -706,6 +806,32 @@ def image_variation(
             f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
         )
     return response
+
+
+_IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
+_DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+
+
+def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
+    try:
+        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+    except ValidationError:
+        return ()
+
+
+def _tokenhub_passthrough_edit_params(
+    non_default_params: Mapping[str, object],
+    extra_body: Mapping[str, object] | None,
+    mapped_params: Collection[str],
+    additional_drop_params: Collection[str] | None,
+) -> Mapping[str, object]:
+    dropped: Final = frozenset(additional_drop_params or ())
+    unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    return {
+        **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
+        **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
+    }
 
 
 @client
@@ -836,22 +962,24 @@ def image_edit(
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
+        provider_supported_params: Final[frozenset[str]] = frozenset(
+            image_edit_provider_config.get_supported_openai_params(model)
+        )
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
                 local_vars,
-                provider_supported_params=frozenset(
-                    image_edit_provider_config.get_supported_openai_params(model)
-                ).intersection(non_default_params),
+                provider_supported_params=provider_supported_params.intersection(non_default_params),
             )
         )
         # Get optional parameters for the responses API
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
         image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
             model=model,
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_params=image_edit_optional_params,
             drop_params=kwargs.get("drop_params"),
-            additional_drop_params=kwargs.get("additional_drop_params"),
+            additional_drop_params=additional_drop_params,
         )
 
         if image_edit_provider_config.use_multipart_form_data() and (
@@ -940,7 +1068,19 @@ def image_edit(
             image=images,
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_request_params=image_edit_request_params,
+            image_edit_optional_request_params={
+                **image_edit_request_params,
+                **(
+                    _tokenhub_passthrough_edit_params(
+                        non_default_params,
+                        extra_body if isinstance(extra_body, dict) else None,
+                        provider_supported_params,
+                        additional_drop_params,
+                    )
+                    if custom_llm_provider == litellm.LlmProviders.TENCENT.value
+                    else {}
+                ),
+            },
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
@@ -963,7 +1103,7 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes],
+    image: FileTypes | list[FileTypes] | None,
     model: str,
     prompt: str,
     mask: str | None = None,
@@ -1003,7 +1143,7 @@ async def aimage_edit(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
-        images: Final = image if isinstance(image, list) else [image]
+        images: Final = image if isinstance(image, list) else ([image] if image is not None else [])
 
         func: Final = partial(
             image_edit,

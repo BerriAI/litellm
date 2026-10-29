@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, PrivateAttr, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictInt, field_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
@@ -343,6 +343,18 @@ class ListAgentsResponse(LiteLLMBaseModel):
     agents: list[AgentResponse]
 
 
+class AgentCreateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    base_agent: str | None = None
+    agent_config: Mapping[str, object] | None = None
+    system_instruction: str | None = None
+    base_environment: str | Mapping[str, object] | None = None
+    description: str | None = None
+    tools: Sequence[Mapping[str, object]] | None = None
+
+
 class AgentCreateResponse(LiteLLMPydanticObjectBase):
     """
     Response from a provider-side agent creation or get call (e.g. Gemini v1beta/agents).
@@ -360,6 +372,14 @@ class AgentCreateResponse(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class AgentDeleteResult(LiteLLMPydanticObjectBase):
     """Result of a provider-side agent deletion (e.g. Gemini DELETE /v1beta/agents/{name}).
@@ -373,6 +393,14 @@ class AgentDeleteResult(LiteLLMPydanticObjectBase):
     model_config = {"extra": "allow"}
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class AgentListResponse(LiteLLMPydanticObjectBase):
@@ -388,6 +416,14 @@ class AgentListResponse(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class AgentVersionsResponse(LiteLLMPydanticObjectBase):
     """Response from listing versions of an agent (e.g. Gemini GET /v1beta/agents/{name}/versions).
@@ -402,6 +438,14 @@ class AgentVersionsResponse(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class AgentMakePublicResponse(LiteLLMBaseModel):
     message: str
@@ -413,7 +457,7 @@ class MakeAgentsPublicRequest(LiteLLMBaseModel):
     agent_ids: list[str]
 
 
-def _normalize_a2a_jsonrpc_response(
+def normalize_a2a_jsonrpc_response(
     response_dict: Mapping[str, object],
     request_id: object | None = None,
 ) -> dict[str, object]:
@@ -443,6 +487,9 @@ def _normalize_a2a_jsonrpc_response(
     return normalized
 
 
+_normalize_a2a_jsonrpc_response = normalize_a2a_jsonrpc_response
+
+
 class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     """
     LiteLLM wrapper for A2A SendMessageResponse.
@@ -465,6 +512,14 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     # LiteLLM private attributes for logging/cost tracking
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     @classmethod
     def from_a2a_response(
         cls,
@@ -481,7 +536,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        response_dict: Final = _normalize_a2a_jsonrpc_response(
+        response_dict: Final = normalize_a2a_jsonrpc_response(
             response.model_dump(mode="json", exclude_none=True), request_id=request_id
         )
         return cls.model_validate(response_dict)
@@ -502,4 +557,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls.model_validate(_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))
+        return cls.model_validate(normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

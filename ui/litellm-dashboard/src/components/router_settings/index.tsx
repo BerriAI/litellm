@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "./RouterSettingsForm";
+import { RouterSettingsSource, SOURCE_UNKNOWN_HINT, isOwnedByConfig } from "./ConfigOwned";
 
 interface RouterSettingsProps {
   accessToken: string | null;
@@ -24,6 +25,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
+  const [routerSettingsSource, setRouterSettingsSource] = useState<RouterSettingsSource | null>(null);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -42,45 +44,54 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         selectedStrategy: initialStrategy,
       }));
     });
-    getRouterSettingsCall(accessToken).then((data) => {
-      if (data.fields) {
-        // Build metadata map for easy lookup
-        const fieldsMap: { [key: string]: any } = {};
-        data.fields.forEach((field: any) => {
-          fieldsMap[field.field_name] = {
-            ui_field_name: field.ui_field_name,
-            field_description: field.field_description,
-            options: field.options,
-            link: field.link,
-          };
-        });
-        setRouterFieldsMetadata(fieldsMap);
-
-        // Extract routing strategies from the routing_strategy field's options
-        const routingStrategyField = data.fields.find((field: any) => field.field_name === "routing_strategy");
-        if (routingStrategyField?.options) {
-          setAvailableRoutingStrategies(routingStrategyField.options);
+    getRouterSettingsCall(accessToken)
+      .catch(() => {
+        setRouterSettingsSource(null);
+        return null;
+      })
+      .then((data) => {
+        if (!data) {
+          return;
         }
+        setRouterSettingsSource(data.source ?? {});
+        if (data.fields) {
+          // Build metadata map for easy lookup
+          const fieldsMap: { [key: string]: any } = {};
+          data.fields.forEach((field: any) => {
+            fieldsMap[field.field_name] = {
+              ui_field_name: field.ui_field_name,
+              field_description: field.field_description,
+              options: field.options,
+              link: field.link,
+            };
+          });
+          setRouterFieldsMetadata(fieldsMap);
 
-        // Store routing strategy descriptions
-        if (data.routing_strategy_descriptions) {
-          setRoutingStrategyDescriptions(data.routing_strategy_descriptions);
-        }
+          // Extract routing strategies from the routing_strategy field's options
+          const routingStrategyField = data.fields.find((field: any) => field.field_name === "routing_strategy");
+          if (routingStrategyField?.options) {
+            setAvailableRoutingStrategies(routingStrategyField.options);
+          }
 
-        // Set enable_tag_filtering value
-        const tagFilteringField = data.fields.find((field: any) => field.field_name === "enable_tag_filtering");
-        if (tagFilteringField?.field_value !== null && tagFilteringField?.field_value !== undefined) {
-          setFormValue((prev) => ({
-            ...prev,
-            enableTagFiltering: tagFilteringField.field_value,
-          }));
+          // Store routing strategy descriptions
+          if (data.routing_strategy_descriptions) {
+            setRoutingStrategyDescriptions(data.routing_strategy_descriptions);
+          }
+
+          // Set enable_tag_filtering value
+          const tagFilteringField = data.fields.find((field: any) => field.field_name === "enable_tag_filtering");
+          if (tagFilteringField?.field_value !== null && tagFilteringField?.field_value !== undefined) {
+            setFormValue((prev) => ({
+              ...prev,
+              enableTagFiltering: tagFilteringField.field_value,
+            }));
+          }
         }
-      }
-    });
+      });
   }, [accessToken, userRole, userID]);
 
   const handleSaveChanges = async () => {
-    if (!accessToken) {
+    if (!accessToken || routerSettingsSource === null) {
       return;
     }
 
@@ -128,7 +139,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     const updatedVariables = Object.fromEntries(
       Object.entries(settingsToUpdate)
         .map(([key, value]) => {
-          if (tabOwnedKeys.has(key)) {
+          if (tabOwnedKeys.has(key) || isOwnedByConfig(routerSettingsSource, key)) {
             return null;
           }
           if (key !== "routing_strategy_args" && key !== "routing_strategy" && key !== "enable_tag_filtering") {
@@ -186,6 +197,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         routerFieldsMetadata={routerFieldsMetadata}
         availableRoutingStrategies={availableRoutingStrategies}
         routingStrategyDescriptions={routingStrategyDescriptions}
+        routerSettingsSource={routerSettingsSource ?? {}}
       />
 
       {/* Actions - Sticky at bottom */}
@@ -193,7 +205,13 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         <Button variant="outline" onClick={() => window.location.reload()}>
           Reset
         </Button>
-        <Button onClick={handleSaveChanges}>Save Changes</Button>
+        <Button
+          onClick={handleSaveChanges}
+          disabled={routerSettingsSource === null}
+          title={routerSettingsSource === null ? SOURCE_UNKNOWN_HINT : undefined}
+        >
+          Save Changes
+        </Button>
       </div>
     </div>
   );

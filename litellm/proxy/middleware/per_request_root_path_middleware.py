@@ -104,7 +104,7 @@ class PerRequestRootPathMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
-            path: Final = scope.get("path", "")
+            path: Final[str] = scope.get("path", "")
             for prefix in self.root_paths:
                 if path == prefix or path.startswith(prefix + "/"):
                     scope["root_path"] = prefix  # rebind-ok: ASGI middleware contract; Router and base_url read it

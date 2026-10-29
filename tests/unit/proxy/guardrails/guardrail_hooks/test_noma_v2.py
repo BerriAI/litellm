@@ -1,3 +1,4 @@
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -533,6 +534,33 @@ class TestNomaV2ActionBehavior:
             )
 
         assert result == inputs
+
+    @pytest.mark.asyncio
+    async def test_a_scan_cancelled_before_noma_answers_is_recorded_as_not_run(self, noma_v2_guardrail):
+        scan_sent = asyncio.Event()
+
+        async def noma_never_answers(payload):
+            scan_sent.set()
+            await asyncio.Event().wait()
+
+        request_data = {"metadata": {}}
+        with patch.object(noma_v2_guardrail, "_call_noma_scan", noma_never_answers):
+            scan = asyncio.ensure_future(
+                noma_v2_guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data=request_data,
+                    input_type="response",
+                )
+            )
+            await scan_sent.wait()
+            scan.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await scan
+
+        assert [
+            record["guardrail_status"]
+            for record in request_data["metadata"]["standard_logging_guardrail_information"]
+        ] == ["not_run"]
 
     @pytest.mark.asyncio
     async def test_fail_closed_on_technical_scan_failure_when_block_failures_true(self):

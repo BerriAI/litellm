@@ -73,6 +73,7 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
         patch.object(ps, "user_api_key_cache", fresh_user_cache),
         patch.object(ps, "spend_counter_cache", fresh_spend_cache),
         patch.object(ps, "cli_sso_session_cache", fresh_cli_sso_cache),
+        patch.object(ps, "saml_sso_cache", DualCache()),
         patch.object(ps, "litellm_config_cache", fresh_config_cache),
         patch.object(ps, "llm_router", None),
         # Cache is locally imported inside _init_cache: patch it at source.
@@ -182,6 +183,7 @@ class TestRedisAuthCacheFlag:
             limiter_cache,
             ps.spend_counter_cache,
             ps.cli_sso_session_cache,
+            ps.saml_sso_cache,
             ps.user_api_key_cache,
             ps.litellm_config_cache,
         )
@@ -191,3 +193,16 @@ class TestRedisAuthCacheFlag:
             ps._attach_redis_usage_cache(fake_redis, enable_redis_auth_cache=False)
             assert limiter_cache.redis_cache is fake_redis
             assert ps.user_api_key_cache.redis_cache is None
+
+
+@pytest.mark.parametrize(
+    "litellm_settings",
+    [{"enable_redis_auth_cache": True}, {"enable_redis_auth_cache": False}, {}],
+    ids=["flag-true", "flag-false", "flag-absent"],
+)
+def test_saml_sso_cache_always_gets_redis_regardless_of_flag(litellm_settings: dict[str, bool]) -> None:
+    with _patched_init_cache(
+        litellm_settings=litellm_settings,
+        cache_params={"type": "redis", "host": "localhost", "port": 6379},
+    ):
+        assert ps.saml_sso_cache.redis_cache is not None

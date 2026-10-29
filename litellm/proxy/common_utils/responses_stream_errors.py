@@ -30,7 +30,7 @@ class _StreamEvent(LiteLLMBaseModel):
 
 
 class _FailureDetails(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True, from_attributes=True)
+    model_config = ConfigDict(frozen=True)
 
     message: str | None = None
     code: str | int | None = None
@@ -52,6 +52,10 @@ class _FailureDetails(LiteLLMBaseModel):
     def normalize_type(cls, value: object) -> str | None:
         return value if isinstance(value, str) else None
 
+    @classmethod
+    def of_exception(cls, exception: Exception) -> "_FailureDetails":
+        return cls.model_validate({field: getattr(exception, field, None) for field in cls.model_fields})
+
 
 def _original_failure(exception: Exception) -> Exception:
     current = exception  # rebind-ok: the recursion gate requires iterative wrapper traversal
@@ -61,7 +65,7 @@ def _original_failure(exception: Exception) -> Exception:
 
 
 def _failure_details(original: Exception) -> _FailureDetails:
-    mapped: Final = _FailureDetails.model_validate(original)
+    mapped: Final = _FailureDetails.of_exception(original)
     body: Final = getattr(original, "body", None)
     if not isinstance(body, Mapping):
         return mapped

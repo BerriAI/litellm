@@ -19,8 +19,9 @@ from litellm._logging import verbose_logger
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.tracing.types import SpendLogRecord
+from litellm.tracing.types import SpendLogPayload, SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
 
 # litellm_logging.py rewrites cache-hit ids as f"{id}_cache_hit{time.time()}"
@@ -79,7 +80,7 @@ def _json(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
-def _json_mapping(value: Mapping[str, Any]) -> str:
+def _json_mapping(value: Mapping[str, object]) -> str:
     return _json(dict(value))
 
 
@@ -114,7 +115,7 @@ def _request_tags(value: object) -> list[str]:
     return [str(tag) for tag in value]
 
 
-def _session_id(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> str:
+def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]) -> str:
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
     request_metadata = (kwargs.get("litellm_params") or MappingProxyType({})).get("metadata") or MappingProxyType({})
     return str(payload.get("session_id") or request_metadata.get("session_id") or payload.get("trace_id") or "")
@@ -125,7 +126,9 @@ def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
     return str(payload.get("call_type") or "").startswith(TRACE_INGEST_ROUTE)
 
 
-def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
+def spend_log_row_from_payload(
+    payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]
+) -> SpendLogRecord:
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
     hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
     usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})
@@ -133,6 +136,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     trace_id, span_id = _find_traceparent(metadata, kwargs)
     request_id = str(payload.get("id") or "")
     redact = litellm.turn_off_message_logging is True
+    track_end_user: Final = not litellm.disable_end_user_cost_tracking
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
     response_cost: Final = payload.get("response_cost")
     unknown_success_cost: Final[bool] = payload.get("status") == "success" and kwargs.get("response_cost") is None
@@ -155,6 +159,11 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     return SpendLogRecord(
         request_id=request_id,
         response_id=strip_cache_hit_suffix(request_id),
+        provider_request_id=(
+            get_provider_request_id(kwargs.get("response_headers"))
+            or get_provider_request_id(hidden_params.get("additional_headers"))
+            or ""
+        ),
         litellm_call_id=payload.get("litellm_call_id") or "",
         call_type=payload.get("call_type") or "",
         api_key=metadata.get("user_api_key_hash") or "",
@@ -163,7 +172,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         team_alias=metadata.get("user_api_key_team_alias") or metadata.get("team_alias") or "",
         organization_id=metadata.get("user_api_key_org_id") or "",
         user=metadata.get("user_api_key_user_id") or "",
-        end_user=payload.get("end_user") or metadata.get("user_api_key_end_user_id") or "",
+        end_user=(payload.get("end_user") or metadata.get("user_api_key_end_user_id") or "") if track_end_user else "",
         model=payload.get("model") or "",
         model_group=payload.get("model_group") or "",
         model_id=payload.get("model_id") or "",
@@ -186,7 +195,14 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         span_id=span_id,
         request_tags=_request_tags(payload.get("request_tags")),
         metadata=_json_mapping(
-            MappingProxyType({**request_metadata, **metadata, "litellm_lens_internal": is_lens_analysis()})
+            MappingProxyType(
+                {
+                    **request_metadata,
+                    **metadata,
+                    "litellm_lens_internal": is_lens_analysis(),
+                    **({} if track_end_user else {"user_api_key_end_user_id": None}),
+                }
+            )
         ),
         messages="" if redact else _json(payload.get("messages")),
         response="" if redact else _json(payload.get("response")),

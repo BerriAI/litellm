@@ -3,18 +3,21 @@ Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completi
 """
 
 from collections.abc import Coroutine, Mapping, Sequence
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning, supports_vision
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
@@ -32,7 +35,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to DeepSeek params.
 
@@ -58,6 +61,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
         elif reasoning_effort is not None:
             optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+
+        if (
+            isinstance(reasoning_effort, str)
+            and reasoning_effort in SUPPORTED_REASONING_EFFORTS
+            and optional_params["thinking"] == {"type": "enabled"}
+        ):
+            return {**optional_params, "reasoning_effort": reasoning_effort}
 
         return optional_params
 
@@ -104,7 +114,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -116,7 +126,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         DeepSeek vision models accept image_url content blocks in user
         messages (https://api-docs.deepseek.com/guides/vision), so those
@@ -363,10 +373,4 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
         """
-        if not api_base:
-            api_base = "https://api.deepseek.com/beta"
-
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
-
-        return api_base
+        return ensure_api_route(api_base or "https://api.deepseek.com/beta", "chat/completions")

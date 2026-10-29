@@ -172,13 +172,15 @@ def test_validate_environment_rejects_a_missing_key(monkeypatch):
         SonioxRealtimeConfig().validate_environment({}, MODEL)
 
 
-def test_get_complete_url_defaults_to_soniox_and_only_accepts_websocket_bases():
+def test_get_complete_url_defaults_to_soniox_and_opens_a_websocket_for_http_bases():
     config = SonioxRealtimeConfig()
 
     assert config.get_complete_url(None, MODEL) == DEFAULT_SONIOX_REALTIME_URL
     assert config.get_complete_url("wss://proxy.example/ws", MODEL) == "wss://proxy.example/ws"
-    with pytest.raises(ValueError, match="ws://"):
-        config.get_complete_url("https://api.soniox.com", MODEL)
+    assert config.get_complete_url("https://proxy.example/ws?region=eu", MODEL) == "wss://proxy.example/ws?region=eu"
+    assert config.get_complete_url("http://localhost:8080/ws", MODEL) == "ws://localhost:8080/ws"
+    with pytest.raises(ValueError, match="wss://"):
+        config.get_complete_url("ftp://proxy.example/ws", MODEL)
 
 
 def test_endpoint_detection_emits_one_openai_turn_billed_by_processed_audio():
@@ -409,7 +411,7 @@ def test_provider_config_manager_passes_only_soniox_options_from_deployment_para
     config = ProviderConfigManager.get_provider_realtime_config(
         MODEL,
         LlmProviders.SONIOX,
-        {
+        litellm_params={
             "api_key": "secret",
             "model": "soniox/stt-rt-v5",
             "audio_format": "mulaw",
@@ -430,6 +432,40 @@ def test_provider_config_manager_passes_only_soniox_options_from_deployment_para
         "context": {"terms": ["LiteLLM"]},
         "max_endpoint_delay_ms": 800,
     }
+
+
+
+SEMANTIC_VAD: Final = {"turn_detection": {"type": "semantic_vad", "eagerness": "high"}}
+
+
+def _soniox_config(drop_params: bool) -> SonioxRealtimeConfig:
+    config = ProviderConfigManager.get_provider_realtime_config(MODEL, LlmProviders.SONIOX, drop_params=drop_params)
+    assert isinstance(config, SonioxRealtimeConfig)
+    return config
+
+
+def test_unsupported_turn_detection_is_rejected_without_drop_params():
+    config = _soniox_config(drop_params=False)
+
+    with pytest.raises(SonioxProtocolError, match="Set drop_params to use server_vad instead"):
+        config.transform_realtime_request(_session_update(SEMANTIC_VAD), MODEL)
+
+
+def test_unsupported_turn_detection_falls_back_to_endpoint_detection_with_drop_params():
+    config = _soniox_config(drop_params=True)
+
+    frames = config.transform_realtime_request(_session_update(SEMANTIC_VAD), MODEL)
+
+    assert _start_request(frames)["enable_endpoint_detection"] is True
+    assert config.transform_realtime_request(_session_update(SEMANTIC_VAD), MODEL) == ()
+
+
+def test_a_follow_up_with_unsupported_turn_detection_is_rejected_without_drop_params():
+    config = _soniox_config(drop_params=False)
+    config.transform_realtime_request(_append(), MODEL)
+
+    with pytest.raises(SonioxProtocolError, match="Set drop_params to use server_vad instead"):
+        config.transform_realtime_request(_session_update(SEMANTIC_VAD), MODEL)
 
 
 class _RecordingBackend:

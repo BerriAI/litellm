@@ -41,7 +41,7 @@ module "litellm" {
   ui_password        = var.ui_password
 
   image_registry = var.image_registry
-  image_tag      = var.image_tag
+  image_tag      = var.image_tag != "" ? var.image_tag : null
 
   lb_domains                   = var.lb_domains
   allow_plaintext_lb           = var.allow_plaintext_lb

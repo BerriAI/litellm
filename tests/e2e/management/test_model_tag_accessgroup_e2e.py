@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, LiteLLMParamsBody, ModelInfoBody, ModelNewBody
@@ -216,6 +217,12 @@ def _model_blocked_flag(client: ManagementClient, model_id: str) -> bool | None:
 
 class TestModelRoutes:
     @pytest.mark.covers("mgmt.model.add.admin_only")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_non_admin_key_cannot_add_global_model(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -248,6 +255,12 @@ class TestModelRoutes:
         )
 
     @pytest.mark.covers("mgmt.model.block.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_block_then_unblock_persists_to_model_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -281,6 +294,12 @@ class TestModelRoutes:
 
 class TestTagRoutes:
     @pytest.mark.covers("mgmt.tag.list.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TAG_MANAGEMENT,
+        )
+    )
     def test_tag_list_reports_created_tag(self, client: ManagementClient, resources: ResourceManager) -> None:
         name = f"e2e-mgmt-tag-{unique_marker()}"
         description = "coverage: tag inventory"
@@ -301,6 +320,12 @@ class TestTagRoutes:
         )
 
     @pytest.mark.covers("mgmt.tag.delete.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.TAG_MANAGEMENT,
+        )
+    )
     def test_tag_delete_removes_from_list(self, client: ManagementClient, resources: ResourceManager) -> None:
         """The teardown's deferred delete fires again on the already-deleted tag by
         design: it is the safety net if this test fails before the in-body delete,
@@ -326,6 +351,12 @@ class TestTagRoutes:
 
 class TestModelAccessGroupRoutes:
     @pytest.mark.covers("mgmt.access_group.new.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_new_access_group_tags_the_deployment(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -356,6 +387,12 @@ class TestModelAccessGroupRoutes:
         )
 
     @pytest.mark.covers("mgmt.access_group.info.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_access_group_info_reports_membership(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

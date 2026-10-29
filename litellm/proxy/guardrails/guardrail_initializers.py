@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -18,7 +18,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         guardrailIdentifier=litellm_params.guardrailIdentifier,
         guardrailVersion=litellm_params.guardrailVersion,
-        checks=litellm_params.checks,
+        checks=litellm_params.checks if isinstance(litellm_params.checks, BedrockChecksConfigModel) else None,
         content_filter_threshold=litellm_params.content_filter_threshold,
         prompt_attack_threshold=litellm_params.prompt_attack_threshold,
         pii_confidence_threshold=litellm_params.pii_confidence_threshold,
@@ -41,6 +41,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         aws_bedrock_runtime_endpoint=litellm_params.aws_bedrock_runtime_endpoint,
         experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
         only_scan_new_messages=litellm_params.only_scan_new_messages or False,
+        skip_unscannable_attachments=litellm_params.skip_unscannable_attachments,
         streaming_buffer_until_moderated=streaming_params.streaming_buffer_until_moderated,
         streaming_sampling_rate=streaming_params.streaming_sampling_rate,
         streaming_end_of_stream_only=streaming_params.streaming_end_of_stream_only,
@@ -100,7 +101,7 @@ _MCP_EVENT_HOOKS: Final = frozenset(
 )
 
 
-def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
+def configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
     if isinstance(mode, str):
         return (mode,)
     if isinstance(mode, list):
@@ -114,7 +115,7 @@ def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
 
 
 def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
-    hooks: Final = _configured_event_hooks(mode)
+    hooks: Final = configured_event_hooks(mode)
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
@@ -134,7 +135,7 @@ def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) ->
 
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     explicit_filter_scope: Final = litellm_params.presidio_filter_scope
@@ -163,7 +164,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         params.update(overrides)
         # Passed outside the heterogeneous params dict so the argument keeps
         # its precise int | None type.
-        callback: Final = _OPTIONAL_PresidioPIIMasking(
+        callback: Final = OPTIONAL_PresidioPIIMasking(
             presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
             **params,
         )
@@ -218,7 +219,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
-    rules: list[dict[str, Any]] | None = None
+    rules: list[dict[str, object]] | None = None
     if litellm_params.rules:
         rules = []
         for rule in litellm_params.rules:

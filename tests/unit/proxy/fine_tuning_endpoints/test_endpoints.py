@@ -37,9 +37,9 @@ RAW_FILE_ID = "file-victim-abc123"
 RAW_JOB_ID = "ftjob-victim-abc123"
 
 
-def _unified_file_id() -> str:
+def _unified_file_id(unified_id: str = "victim-unified-id", provider_file_id: str = RAW_FILE_ID) -> str:
     unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-        "application/json", "victim-unified-id", "gpt-4o-mini", RAW_FILE_ID, "gpt-4o-mini-id"
+        "application/json", unified_id, "gpt-4o-mini", provider_file_id, "gpt-4o-mini-id"
     )
     return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
 
@@ -49,7 +49,12 @@ def _unified_job_id() -> str:
     return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
 
 
-def _job() -> LiteLLMFineTuningJob:
+def _decode_unified_id(encoded_id: str) -> str:
+    padding: Final = "=" * (-len(encoded_id) % 4)
+    return base64.urlsafe_b64decode(f"{encoded_id}{padding}").decode()
+
+
+def _job(validation_file: str | None = None) -> LiteLLMFineTuningJob:
     job = LiteLLMFineTuningJob(
         id=RAW_JOB_ID,
         created_at=1234567890,
@@ -64,7 +69,7 @@ def _job() -> LiteLLMFineTuningJob:
         status="running",
         trained_tokens=None,
         training_file=RAW_FILE_ID,
-        validation_file=None,
+        validation_file=validation_file,
     )
     job._hidden_params = {}
     return job
@@ -211,11 +216,38 @@ async def test_create__raw_validation_file_rejected_when_managed_files_required(
 @pytest.mark.asyncio
 async def test_create__unified_training_file_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_file_id: Final = _unified_file_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _create(_unified_file_id())
+        response: Final = await _create(unified_file_id)
 
     assert seams.router.acreate_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_file_id"] == _decode_unified_id(unified_file_id)
+
+
+MANAGED_VALIDATION_FILE_ID: Final = _unified_file_id("validation-unified-id", "file-provider-validation")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("validation_file", "provider_validation_file", "expected_validation_file"),
+    [
+        (None, None, None),
+        (RAW_FILE_ID, RAW_FILE_ID, RAW_FILE_ID),
+        (MANAGED_VALIDATION_FILE_ID, "file-provider-validation", MANAGED_VALIDATION_FILE_ID),
+    ],
+    ids=["no-validation-file", "raw-validation-file", "managed-validation-file"],
+)
+async def test_create__managed_job_returns_the_callers_file_ids(
+    seams, validation_file: str | None, provider_validation_file: str | None, expected_validation_file: str | None
+):
+    seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    seams.router.acreate_fine_tuning_job.return_value = _job(validation_file=provider_validation_file)
+    training_file: Final = _unified_file_id()
+
+    response: Final = await _create(training_file, validation_file=validation_file)
+
+    assert (response.training_file, response.validation_file) == (training_file, expected_validation_file)
 
 
 @pytest.mark.asyncio
@@ -251,11 +283,13 @@ async def test_retrieve__raw_job_id_rejected_when_managed_files_required(seams):
 @pytest.mark.asyncio
 async def test_retrieve__unified_job_id_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_job_id: Final = _unified_job_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _retrieve(_unified_job_id())
+        response: Final = await _retrieve(unified_job_id)
 
     assert seams.router.aretrieve_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_finetuning_job_id"] == _decode_unified_id(unified_job_id)
 
 
 @pytest.mark.asyncio
@@ -271,11 +305,13 @@ async def test_cancel__raw_job_id_rejected_when_managed_files_required(seams):
 @pytest.mark.asyncio
 async def test_cancel__unified_job_id_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_job_id: Final = _unified_job_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _cancel(_unified_job_id())
+        response: Final = await _cancel(unified_job_id)
 
     assert seams.router.acancel_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_finetuning_job_id"] == _decode_unified_id(unified_job_id)
 
 
 FINE_TUNING_API_BASE: Final = "https://fine-tuning.test/v1"

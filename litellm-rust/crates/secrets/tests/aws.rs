@@ -53,7 +53,7 @@ async fn read_results_follow_the_selected_failure_policy(
             },
         )),
         Arc::new(move |_: &str| environment.map(str::to_owned)),
-        OidcResolver::new(litellm_http::Client::plain_for_test()),
+        OidcResolver::new(litellm_http::Client::for_test()),
     )
     .with_failure_policy(policy);
     let result = resolver
@@ -97,7 +97,7 @@ async fn primary_secret_values_other_than_strings_resolve_to_none(
     let resolver = SecretResolver::new_python_compatible(
         Arc::new(state(&server, settings)),
         Arc::new(|_: &str| Some("fallback".into())),
-        OidcResolver::new(litellm_http::Client::plain_for_test()),
+        OidcResolver::new(litellm_http::Client::for_test()),
     );
     let text = value.as_str();
     assert_eq!(
@@ -157,7 +157,7 @@ async fn gating_prediction_matches_actual_lookup(
     let resolver = SecretResolver::new_python_compatible(
         Arc::new(state),
         Arc::new(|_: &str| Some("environment".into())),
-        OidcResolver::new(litellm_http::Client::plain_for_test()),
+        OidcResolver::new(litellm_http::Client::for_test()),
     );
     assert_eq!(
         resolver
@@ -218,6 +218,6 @@ async fn aws_handler_reads_ciphertext_decodes_trims_and_redacts() {
     ));
     assert!(matches!(
         get_secret_from_manager(&manager, "KEY", &settings, &|_: &str| Some("abc".into())).await,
-        Err(Error::InvalidCiphertext)
+        Err(Error::InvalidCiphertext(_))
     ));
 }

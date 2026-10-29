@@ -4,7 +4,6 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
-from typing_extensions import Self
 
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
@@ -24,7 +23,7 @@ else:
 
 
 class RealtimeBackend(Protocol):
-    async def __aenter__(self) -> Self: ...
+    async def __aenter__(self) -> object: ...
 
     async def __aexit__(
         self,

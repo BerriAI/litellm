@@ -248,21 +248,27 @@ export const getReferencedModelsError = (
     tiers: ComplexityRouterConfigPayload["tiers"];
     classifierType: ClassifierType;
     classifierLlmConfig: ClassifierLLMConfig | undefined;
+    decisionDeploymentName?: string;
     semanticMatchingEnabled: boolean;
     embeddingModel: string | undefined;
     defaultModel?: string;
   },
   availability: ModelAvailability,
 ): string | null => {
-  const missing = getMissingModels(
-    {
-      tiers: params.tiers,
-      default_model: params.defaultModel,
-      classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
-      embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
-    },
-    availability,
-  );
+  if (
+    params.classifierType === "jev" &&
+    params.decisionDeploymentName &&
+    !resolveAvailableModel(params.decisionDeploymentName, availability)
+  ) {
+    return `Model(s) no longer available: ${params.decisionDeploymentName}`;
+  }
+  const references = {
+    tiers: params.tiers,
+    default_model: params.defaultModel,
+    classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
+    embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
+  };
+  const missing = getMissingModels(references, availability);
   return missing.length > 0 ? `Model(s) no longer available: ${missing.join(", ")}` : null;
 };
 
@@ -358,6 +364,7 @@ export const buildPresetPrefill = (
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      max_tokens_from_tier_model: config.max_tokens_from_tier_model,
       dimension_weights: hydrateDimensionWeights(config.dimension_weights),
       custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
       tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),
