@@ -7,14 +7,14 @@ from typing import Final
 from pydantic import Json, TypeAdapter, ValidationError
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     capability_limit_violation,
     classify_strategy_router_model,
     count_capability_routers,
     gated_capabilities_of,
 )
-from litellm.router_utils.auto_router_tuning_baseline import (
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     is_mutable_tuned_candidate,
     mutable_tuned_identities,
     tuning_quota_violation,

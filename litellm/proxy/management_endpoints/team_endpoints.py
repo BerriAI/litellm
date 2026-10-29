@@ -11,6 +11,7 @@ All /team management endpoints
 
 import asyncio
 import copy
+import itertools
 import json
 import math
 import traceback
@@ -131,6 +132,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
@@ -139,7 +141,12 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
+    RoutedModels,
     build_model_max_budget_usage,
+    entries_outranked_by,
+    entry_names_model,
+    is_enforced_budget_entry,
+    proxy_routed_models,
     resolve_model_budget,
 )
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
@@ -1467,8 +1474,10 @@ def _check_team_model_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_model_max_budget: Mapping[str, object] | None,
+    routed_models_source: Callable[[str | None], RoutedModels] = proxy_routed_models,
 ) -> None:
-    """Like `_check_team_budget_update_authority`: only a proxy admin may raise, re-window or drop a per-model cap."""
+    """Like `_check_team_budget_update_authority`: only a proxy admin may raise, re-window or drop a per-model cap, or
+    add an entry that takes precedence over one."""
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
     if "model_max_budget" not in data.model_fields_set or not existing_model_max_budget:
@@ -1487,29 +1496,97 @@ def _check_team_model_budget_update_authority(
                 )
             },
         )
-    for model_name, proposed in requested.items():
-        governing = resolve_model_budget(model=model_name, model_max_budget=existing_model_max_budget)
-        if governing is None:
-            continue
-        cap = governing.budget_config
-        if cap.max_budget is None:
-            continue
-        if (
-            proposed.max_budget is None
-            or proposed.max_budget > cap.max_budget
-            or proposed.budget_duration != cap.budget_duration
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": (
-                        f"Only a proxy admin can raise a team's model_max_budget for {model_name!r} or change its "
-                        f"budget_duration. Current max_budget={cap.max_budget} per {cap.budget_duration} "
-                        f"(entry {governing.budget_model!r}), requested={proposed.max_budget} per "
-                        f"{proposed.budget_duration}."
-                    )
-                },
+    routed_models: Final = routed_models_source(data.team_id)
+    for entry, proposed in requested.items():
+        existing = _existing_model_cap(existing_model_max_budget.get(entry))
+        if existing is not None:
+            _check_existing_model_cap_kept(entry=entry, cap_entry=entry, proposed=proposed, existing=existing)
+            if is_enforced_budget_entry(existing) or not is_enforced_budget_entry(proposed):
+                continue
+        governing = resolve_model_budget(model=entry, model_max_budget=existing_model_max_budget, team_id=data.team_id)
+        if governing is not None and entry_names_model(entry=governing.budget_model, model=entry):
+            _check_existing_model_cap_kept(
+                entry=entry, cap_entry=governing.budget_model, proposed=proposed, existing=governing.budget_config
             )
+        _check_new_entry_outranks_no_cap(
+            entry=entry,
+            existing_model_max_budget=existing_model_max_budget,
+            routed_models=routed_models,
+            team_id=data.team_id,
+        )
+
+
+def _check_existing_model_cap_kept(entry: str, cap_entry: str, proposed: BudgetConfig, existing: BudgetConfig) -> None:
+    if existing.max_budget is None or not _looser_model_cap(proposed=proposed, cap=existing):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                f"Only a proxy admin can raise a team's model_max_budget for {entry!r} or change its "
+                f"budget_duration. Current max_budget={existing.max_budget} per {existing.budget_duration} "
+                f"(entry {cap_entry!r}), requested={proposed.max_budget} per {proposed.budget_duration}."
+            )
+        },
+    )
+
+
+def _check_new_entry_outranks_no_cap(
+    entry: str,
+    existing_model_max_budget: Mapping[str, object],
+    routed_models: RoutedModels,
+    team_id: str | None,
+) -> None:
+    """A new entry gets its own counter, so the models it takes from a capped entry stop drawing from that cap."""
+    outranked: Final = next(
+        _capped_entries_outranked_by(
+            entry=entry,
+            existing_model_max_budget=existing_model_max_budget,
+            routed_models=routed_models,
+            team_id=team_id,
+        ),
+        None,
+    )
+    if outranked is None:
+        return
+    outranked_name, cap = outranked
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                f"Only a proxy admin can add a team model_max_budget entry {entry!r} that takes precedence over "
+                f"{outranked_name!r}, since the models they share would stop drawing from its max_budget="
+                f"{cap.max_budget} per {cap.budget_duration}."
+            )
+        },
+    )
+
+
+def _capped_entries_outranked_by(
+    entry: str,
+    existing_model_max_budget: Mapping[str, object],
+    routed_models: RoutedModels,
+    team_id: str | None,
+) -> Iterator[tuple[str, BudgetConfig]]:
+    governing: Final = resolve_model_budget(model=entry, model_max_budget=existing_model_max_budget, team_id=team_id)
+    outranked_names: Final = itertools.chain(
+        ()
+        if governing is None or entry_names_model(entry=governing.budget_model, model=entry)
+        else (governing.budget_model,),
+        entries_outranked_by(entry=entry, model_max_budget=existing_model_max_budget, routed_models=routed_models),
+    )
+    outranked_caps: Final = ((name, _existing_model_cap(existing_model_max_budget[name])) for name in outranked_names)
+    yield from (
+        (name, cap) for name, cap in outranked_caps if name != entry and cap is not None and cap.max_budget is not None
+    )
+
+
+def _looser_model_cap(proposed: BudgetConfig, cap: BudgetConfig) -> bool:
+    return (
+        proposed.max_budget is None
+        or (cap.max_budget is not None and proposed.max_budget > cap.max_budget)
+        or (is_enforced_budget_entry(cap) and proposed.budget_duration != cap.budget_duration)
+    )
 
 
 def _should_auto_add_team_creator(
@@ -1572,7 +1649,7 @@ async def new_team(
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
+    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model, keyed by model name, `*` pattern, or model access group. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
@@ -2350,7 +2427,7 @@ async def update_team(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
+    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model, keyed by model name, `*` pattern, or model access group. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
@@ -5450,21 +5527,9 @@ async def team_info(
             e,
             traceback.format_exc(),
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @router.get(
