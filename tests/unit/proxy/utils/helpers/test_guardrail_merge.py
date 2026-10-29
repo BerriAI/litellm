@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 import pytest
 
 from litellm.proxy.utils import (
@@ -19,7 +21,7 @@ def _router_with_deployment(guardrails, *, by_alias: bool = False):
     `get_model_list(model_name=...)` to return one matching deployment so the
     pre_call alias fallback (#29652) resolves."""
     deployment = SimpleNamespace(litellm_params={"guardrails": guardrails})
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
     router.get_model_list.return_value = [{"litellm_params": {"guardrails": guardrails}}] if by_alias else []
     return router
@@ -31,7 +33,7 @@ def _router_with_deployments(group_guardrails):
     one deployment in the group (use None for a deployment with no guardrails).
     Used to pin the UNION-across-deployments fallback (veria-ai Medium on
     #29654)."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
         {"litellm_params": {"guardrails": g} if g is not None else {}} for g in group_guardrails
@@ -40,7 +42,7 @@ def _router_with_deployments(group_guardrails):
 
 
 def _router_without_deployment():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = []
     return router
@@ -152,7 +154,7 @@ def test_check_and_merge_model_level_guardrails_ignores_client_model_info_id_whe
     On the pre_call path (trust_client_model_info=False), the helper must
     ignore the spoofed id and fall back to the alias-union path.
     """
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     # Spoofed id resolves to an unguarded deployment.
     spoofed_deployment = SimpleNamespace(litellm_params={"guardrails": []})
     router.get_deployment.return_value = spoofed_deployment
@@ -190,7 +192,7 @@ def test_check_and_merge_model_level_guardrails_post_call_accepts_bare_string_gu
     before. Wrap a scalar into a one-element list so post_call merge keeps
     working with single-guardrail configs."""
     deployment = SimpleNamespace(litellm_params={"guardrails": "scalar-guardrail"})
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = deployment
     data = {"model": "any", "metadata": {"model_info": {"id": "deployment-x"}}}
     result = check_and_merge_model_level_guardrails(data, router)
@@ -199,7 +201,7 @@ def test_check_and_merge_model_level_guardrails_post_call_accepts_bare_string_gu
 
 def test_check_and_merge_model_level_guardrails_alias_union_accepts_bare_string_guardrail():
     """Same scalar-string contract on the pre_call alias-union path."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [{"litellm_params": {"guardrails": "scalar-alias-guardrail"}}]
     data = {"model": "alias-m", "metadata": {"model_info": {}}}
@@ -212,7 +214,7 @@ def test_check_and_merge_model_level_guardrails_alias_fallback_passes_team_id():
     model names with metadata.user_api_key_team_id. The pre_call alias
     lookup must pass that team_id to get_model_list, or team-scoped
     deployments are invisible and their guardrails are silently dropped."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [{"litellm_params": {"guardrails": ["team-guardrail"]}}]
     data = {
@@ -230,7 +232,7 @@ def test_check_and_merge_model_level_guardrails_alias_fallback_passes_team_id():
 def test_check_and_merge_model_level_guardrails_alias_fallback_reads_team_id_from_litellm_metadata():
     """Backstop: some call sites stash the team id on litellm_metadata
     instead of metadata. The alias fallback should accept either."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment.return_value = None
     router.get_model_list.return_value = []
     data = {
