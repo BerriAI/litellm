@@ -232,5 +232,61 @@ def test_cohere_embed_passthrough_is_costed_from_billed_units(
     assert logged["kwargs"]["response_cost"] == pytest.approx(expected_cost)
 
 
+
+def _normalize_cohere_embed(url_route: str, body: Mapping[str, object], model: str) -> Mapping[str, object]:
+    return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+        httpx_response=httpx.Response(200, json=body, request=httpx.Request("POST", url_route)),
+        response_body=dict(body),
+        request_body={"model": model, "texts": ["hello world"], "input_type": "search_document"},
+        logging_obj=_passthrough_logging_obj(),
+        url_route=url_route,
+        result="",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+    )
+
+
+def test_cohere_v3_image_embed_passthrough_is_costed_per_billed_image() -> None:
+    body: Final = {
+        "id": "8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        "embeddings": {"float": [[0.125, -0.375]]},
+        "texts": [],
+        "images": [{"width": 64, "height": 64, "format": "image/png", "bit_depth": 8}],
+        "meta": {"api_version": {"version": "2"}, "billed_units": {"images": 1}},
+        "response_type": "embeddings_by_type",
+    }
+    per_image: Final = litellm.get_model_info("embed-english-v3.0", custom_llm_provider="cohere")["input_cost_per_image"]
+
+    logged: Final = _normalize_cohere_embed("https://api.cohere.com/v2/embed", body, "embed-english-v3.0")
+
+    assert per_image is not None and per_image > 0
+    assert logged["kwargs"]["response_cost"] == pytest.approx(per_image)
+
+
+def test_cohere_embed_passthrough_rows_keep_their_embedding_type() -> None:
+    body: Final = {
+        **COHERE_EMBED_V2_TEXT_BODY,
+        "embeddings": {"float": [[0.1, 0.2], [0.3, 0.4]], "int8": [[1, 2], [3, 4]]},
+    }
+
+    logged: Final = _normalize_cohere_embed("https://api.cohere.com/v2/embed", body, "embed-v4.0")
+
+    assert [(row["type"], row["index"], row["embedding"]) for row in logged["standard_logging_response_object"].data] == [
+        ("float", 0, [0.1, 0.2]),
+        ("float", 1, [0.3, 0.4]),
+        ("int8", 0, [1, 2]),
+        ("int8", 1, [3, 4]),
+    ]
+
+
+def test_unpriceable_cohere_embed_passthrough_falls_back_to_the_plain_passthrough_row() -> None:
+    logged: Final = _normalize_cohere_embed(
+        "https://api.cohere.com/v2/embed", COHERE_EMBED_V2_TEXT_BODY, "embed-model-missing-from-the-cost-map"
+    )
+
+    assert logged["standard_logging_response_object"] is None
+    assert "response_cost" not in logged["kwargs"]
+
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -12,11 +12,11 @@ Docs - https://docs.cohere.com/v2/reference/embed
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
 from enum import Enum
-from itertools import chain
+from itertools import chain, starmap
 from typing import Final, Protocol, TypeAlias, cast
 
 import httpx
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
@@ -48,11 +48,17 @@ class CohereImageTokenBilling(Enum):
     FOLDED_INTO_INPUT_TOKENS = "folded_into_input_tokens"
 
 
+class CohereEmbeddingRowShape(Enum):
+    OPENAI = "openai"
+    TYPED = "typed"
+
+
 class _CohereBilledUnits(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     input_tokens: int | None = None
-    image_tokens: int | None = Field(default=None, validation_alias=AliasChoices("image_tokens", "images"))
+    image_tokens: int | None = None
+    images: int | None = None
 
 
 class _CohereEmbedMeta(BaseModel):
@@ -75,8 +81,18 @@ def _embedding_rows(vectors: Sequence[object]) -> Iterator[Mapping[str, object]]
     return ({"object": "embedding", "index": index, "embedding": vector} for index, vector in enumerate(vectors))
 
 
-def _vector_lists(embeddings: _CohereEmbeddings) -> Iterable[Sequence[object]]:
-    return embeddings.values() if isinstance(embeddings, Mapping) else (embeddings,)
+def _typed_embedding_rows(embedding_type: str, vectors: Sequence[object]) -> Iterator[Mapping[str, object]]:
+    return ({**row, "type": embedding_type} for row in _embedding_rows(vectors))
+
+
+def _response_rows(embeddings: _CohereEmbeddings, row_shape: CohereEmbeddingRowShape) -> Iterable[Mapping[str, object]]:
+    if not isinstance(embeddings, Mapping):
+        return _embedding_rows(embeddings)
+    match row_shape:
+        case CohereEmbeddingRowShape.OPENAI:
+            return chain.from_iterable(map(_embedding_rows, embeddings.values()))
+        case CohereEmbeddingRowShape.TYPED:
+            return chain.from_iterable(starmap(_typed_embedding_rows, embeddings.items()))
 
 
 def _prompt_usage(prompt_tokens: int, prompt_tokens_details: PromptTokensDetailsWrapper | None) -> Usage:
@@ -91,10 +107,13 @@ def _prompt_usage(prompt_tokens: int, prompt_tokens_details: PromptTokensDetails
 def _billed_usage(billed_units: _CohereBilledUnits, image_billing: CohereImageTokenBilling) -> Usage:
     match image_billing:
         case CohereImageTokenBilling.SEPARATE_FROM_INPUT_TOKENS:
+            image_units: Final = (billed_units.image_tokens or 0) + (billed_units.images or 0)
             return _prompt_usage(
-                (billed_units.input_tokens or 0) + (billed_units.image_tokens or 0),
+                (billed_units.input_tokens or 0) + image_units,
                 PromptTokensDetailsWrapper(
-                    text_tokens=billed_units.input_tokens, image_tokens=billed_units.image_tokens
+                    text_tokens=billed_units.input_tokens,
+                    image_tokens=image_units or None,
+                    image_count=billed_units.images,
                 ),
             )
         case CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS:
@@ -107,7 +126,7 @@ def _cohere_embed_usage(
     encoding: _SupportsEncode,
     image_billing: CohereImageTokenBilling,
 ) -> Usage:
-    if billed_units.input_tokens is None and billed_units.image_tokens is None:
+    if billed_units.input_tokens is None and billed_units.image_tokens is None and billed_units.images is None:
         return _prompt_usage(sum(len(encoding.encode_ordinary(text)) for text in input_texts), None)
     return _billed_usage(billed_units, image_billing)
 
@@ -118,11 +137,12 @@ def cohere_embedding_response(
     encoding: _SupportsEncode,
     input_texts: Iterable[str],
     image_billing: CohereImageTokenBilling,
+    row_shape: CohereEmbeddingRowShape,
 ) -> EmbeddingResponse:
     cohere_body: Final = _CohereEmbedBody.model_validate(body)
     return EmbeddingResponse(
         model=model,
-        data=list(chain.from_iterable(map(_embedding_rows, _vector_lists(cohere_body.embeddings)))),
+        data=list(_response_rows(cohere_body.embeddings, row_shape)),
         usage=_cohere_embed_usage(cohere_body.meta.billed_units, input_texts, encoding, image_billing),
     )
 
@@ -239,6 +259,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         encoding: _SupportsEncode,
         input: Sequence[str],
+        row_shape: CohereEmbeddingRowShape,
     ) -> EmbeddingResponse:
         response_json: Final = _DECODED_JSON.validate_python(response.json())
         ## LOGGING
@@ -254,6 +275,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             encoding,
             input,
             CohereImageTokenBilling.SEPARATE_FROM_INPUT_TOKENS,
+            row_shape,
         )
 
     def transform_embedding_response(
@@ -275,6 +297,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             model=model,
             encoding=litellm.encoding,
             input=logging_obj.model_call_details["input"],
+            row_shape=CohereEmbeddingRowShape.OPENAI,
         )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

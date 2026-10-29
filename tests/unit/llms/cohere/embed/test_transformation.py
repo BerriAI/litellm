@@ -70,6 +70,7 @@ def test_cohere_embedding_response_lists_every_embedding_type_in_provider_order(
     ("meta", "expected_counts", "expected_details"),
     [
         ({"billed_units": {"input_tokens": 5}}, (5, 0, 5), (5, None)),
+        ({"billed_units": {"input_tokens": 5, "image_tokens": 0}}, (5, 0, 5), (5, None)),
         ({"billed_units": {"images": 3}}, (3, 0, 3), (None, 3)),
         ({"billed_units": {"input_tokens": 5, "images": 3}}, (8, 0, 8), (5, 3)),
         ({"billed_units": {"input_tokens": 0, "image_tokens": 6}}, (6, 0, 6), (0, 6)),

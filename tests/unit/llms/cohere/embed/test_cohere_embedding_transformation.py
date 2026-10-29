@@ -9,6 +9,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.cohere.embed.transformation import (
     CohereEmbeddingConfig,
+    CohereEmbeddingRowShape,
     CohereImageTokenBilling,
     cohere_embedding_response,
 )
@@ -136,6 +137,7 @@ def test_cohere_embedding_usage_includes_text_and_image_token_details(image_key:
         litellm.encoding,
         ["hello"],
         CohereImageTokenBilling.SEPARATE_FROM_INPUT_TOKENS,
+        CohereEmbeddingRowShape.OPENAI,
     ).usage
 
     assert usage.prompt_tokens == 7
@@ -149,6 +151,7 @@ def test_cohere_embedding_usage_folded_image_tokens_count_input_tokens_only() ->
         litellm.encoding,
         [],
         CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS,
+        CohereEmbeddingRowShape.OPENAI,
     ).usage
 
     assert (usage.prompt_tokens, usage.total_tokens, usage.prompt_tokens_details) == (24, 24, None)

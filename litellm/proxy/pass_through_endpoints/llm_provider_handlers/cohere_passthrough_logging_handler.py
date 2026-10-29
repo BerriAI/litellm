@@ -17,7 +17,7 @@ from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from litellm.llms.cohere.common_utils import (
     ModelResponseIterator as CohereModelResponseIterator,
 )
-from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
+from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig, CohereEmbeddingRowShape
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
@@ -106,6 +106,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                     encoding=litellm.encoding,
                     input=input_texts,
+                    row_shape=CohereEmbeddingRowShape.TYPED,
                 )
 
                 # Calculate cost using LiteLLM's cost calculator
@@ -156,19 +157,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     "kwargs": kwargs,
                 }
             except Exception:
-                # For other routes (e.g., /v2/chat), fall back to chat handler
-                return super().passthrough_chat_handler(
-                    httpx_response=httpx_response,
-                    response_body=response_body,
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    request_body=request_body,
-                    **kwargs,
-                )
+                return {"result": None, "kwargs": kwargs}
 
         # For non-embed routes (e.g., /v2/chat), fall back to chat handler
         return super().passthrough_chat_handler(

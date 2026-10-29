@@ -23,7 +23,11 @@ from litellm.llms.base_llm.passthrough.transformation import (
     relayed_body,
     strip_leading_model_segment,
 )
-from litellm.llms.cohere.embed.transformation import CohereImageTokenBilling, cohere_embedding_response
+from litellm.llms.cohere.embed.transformation import (
+    CohereEmbeddingRowShape,
+    CohereImageTokenBilling,
+    cohere_embedding_response,
+)
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_PASSTHROUGH_RESPONSE, NativeOcrPassthroughResponse
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.rerank import RerankResponse
@@ -97,7 +101,12 @@ def echoed_texts(body: Mapping[str, object]) -> tuple[str, ...]:
 
 def cohere_embed_relay_response(body: Mapping[str, object]) -> EmbeddingResponse:
     return cohere_embedding_response(
-        body, None, get_default_encoding(), echoed_texts(body), CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS
+        body,
+        None,
+        get_default_encoding(),
+        echoed_texts(body),
+        CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS,
+        CohereEmbeddingRowShape.TYPED,
     )
 
 
