@@ -744,11 +744,12 @@ def _steps_that_ran(result: PipelineExecutionResult) -> frozenset[str]:
 def _whole_response_log_waits_for_its_pipelines(data: Mapping[str, object], call_type: str) -> bool:
     """
     The success log is parked until the response hooks finish, and the headers are built
-    after them, except on the LLM pass-through route.
+    after them. The LLM pass-through route builds its headers first, and the generateContent
+    adapter logs its nested completion before the response hooks run.
     """
     logging_obj: Final = data.get("litellm_logging_obj")
     return (
-        call_type != CallTypes.allm_passthrough_route.value
+        call_type not in (CallTypes.allm_passthrough_route.value, CallTypes.agenerate_content.value)
         and isinstance(logging_obj, Logging)
         and logging_obj.enqueue_deferred_logging is not None
     )

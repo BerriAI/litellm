@@ -90,7 +90,6 @@ _FINE_TUNING_JOB: Final[dict[str, JsonValue]] = {
     "validation_file": None,
 }
 _VIDEO: Final = {
-    "id": "video_pipeline",
     "object": "video",
     "model": "sora-2",
     "status": "queued",
@@ -240,7 +239,7 @@ def _completion(request: Request) -> Reply:
     if request.target in ("/v1/images/generations", "/v1/images/edits"):
         return Reply(body=json.dumps({"created": 1, "data": [{"b64_json": "aW1n", "revised_prompt": None}]}).encode())
     if request.target == "/v1/videos":
-        return Reply(body=json.dumps(_VIDEO).encode())
+        return Reply(body=json.dumps({**_VIDEO, "id": f"video_{uuid.uuid4().hex}"}).encode())
     if request.target == "/v1/fine_tuning/jobs":
         return Reply(body=json.dumps(_FINE_TUNING_JOB).encode())
     if request.target.split("?", 1)[0].endswith(":generateContent"):
@@ -823,7 +822,7 @@ def test_a_cache_hit_names_every_response_step_that_ran_in_the_spend_log_and_the
     expected: Final = [_RESPONSE_FIRST, _RESPONSE_SECOND]
     assert [first.status_code, cached.status_code] == [200, 200], (first.text, cached.text)
     assert _steps_that_ran(rig) == (_RESPONSE_FIRST, _RESPONSE_SECOND) * 2
-    assert [row["cache_hit"] for row in rows] == ["False", "True"], rows
+    assert [row["cache_hit"] == "True" for row in rows] == [False, True], rows
     assert [sorted(response.headers.get(_HEADER, "").split(",")) for response in (first, cached)] == [expected] * 2
     assert [sorted(object_value(row["metadata"]).get("applied_guardrails") or []) for row in rows] == [expected] * 2
     assert [sorted(ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"]))) for span in spans] == [

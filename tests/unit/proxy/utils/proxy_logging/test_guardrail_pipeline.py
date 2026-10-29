@@ -1366,6 +1366,9 @@ async def test_pre_call_hook_names_a_step_that_ran_in_the_litellm_metadata_a_lat
         pytest.param(
             True, "allm_passthrough_route", "metadata", ["first", "second"], id="pass-through-headers-already-out"
         ),
+        pytest.param(
+            True, "agenerate_content", "metadata", ["first", "second"], id="generate-content-adapter-logged-its-call"
+        ),
     ],
 )
 async def test_post_call_pipeline_drops_the_steps_that_did_not_run_only_while_nothing_has_read_them(
