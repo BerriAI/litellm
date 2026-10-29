@@ -1857,7 +1857,7 @@ class TestWebSocketTurnAdmission:
 
 
     @pytest.mark.asyncio
-    async def test_native_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(self):
+    async def test_native_relay_bills_a_refused_turn_and_returns_it_as_the_close_time_failure(self):
         from unittest.mock import AsyncMock
 
         from litellm.exceptions import RateLimitError
@@ -1916,7 +1916,7 @@ class TestWebSocketTurnAdmission:
         bill_refusal.assert_called_once_with(refusal)
 
     @pytest.mark.asyncio
-    async def test_managed_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(
+    async def test_managed_relay_bills_a_refused_turn_and_returns_it_as_the_close_time_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         from unittest.mock import AsyncMock

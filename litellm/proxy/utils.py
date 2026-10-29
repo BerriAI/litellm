@@ -1490,6 +1490,12 @@ object, meaning the request died (auth, body parsing, model resolution) before t
 object rather than ``True`` because ``request_data`` is the client body: JSON cannot forge this identity, so a
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
+FAILURE_ROW_ALREADY_WRITTEN_KEY: Final = "litellm_failure_row_already_written"
+FAILURE_ROW_ALREADY_WRITTEN: Final = object()
+"""Stored under ``FAILURE_ROW_ALREADY_WRITTEN_KEY`` on ``request_data`` when the failure being handled already
+wrote its own spend row, so the failure hooks still run (budget reservation release, alerting) but the spend logger
+writes no second row. A sentinel object for the same reason as ``REJECTED_BEFORE_REQUEST_SETUP``."""
+
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}

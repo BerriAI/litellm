@@ -4,6 +4,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
@@ -83,7 +84,12 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
+from litellm.proxy.utils import (
+    FAILURE_ROW_ALREADY_WRITTEN,
+    FAILURE_ROW_ALREADY_WRITTEN_KEY,
+    count_request_input_tokens,
+    handle_exception_on_proxy,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
@@ -96,7 +102,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.token_count import TokenCountSourceFields
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, TokenCountResponse
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypes, TokenCountResponse
 from litellm.utils import get_base_model_from_metadata
 
 if TYPE_CHECKING:
@@ -2074,7 +2080,7 @@ def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: _PreCallGuardrailWalk,
-    record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
+    record_refused_turn: Callable[[Exception], None],
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -2089,10 +2095,21 @@ def _responses_ws_frame_guard(
     }
     model: Final = admitted.get("model")
 
-    # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
+    # a blocked or refused turn is billed as its own failed request; the socket settles the admission reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
 
+    failure_row: Final = partial(_turn_failure_row, metadata_key, admitted_bucket)
+
+    def bill_refusal(turn: Mapping[str, object], started_at: datetime, refusal: Exception) -> None:
+        record_refused_turn(refusal)
+        _ = spawn_logging_task(
+            asyncio.get_running_loop(),
+            _bill_rejected_frame(rejected_frame_auth, refusal, failure_row(turn, started_at)),
+            task_name="Responses WebSocket refused turn row",
+        )
+
     async def guard(frame: str) -> GuardedResponsesWsFrame:
+        started_at: Final = datetime.now()  # noqa: DTZ005  # the request pipeline logs naive local start times
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         nested: Final = frame_obj.get("response")
         if isinstance(nested, dict) and any(key in frame_obj for key in _GUARDED_FRAME_FIELDS):
@@ -2116,14 +2133,14 @@ def _responses_ws_frame_guard(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
             )
         except Exception as e:
-            await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
+            await _bill_rejected_frame(rejected_frame_auth, e, failure_row(frame_data, started_at))
             raise
         if guarded_data.get("model") != model:
             rerouted: Final = ValueError(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
                 f" is bound to {model!r}, send this turn over HTTP /v1/responses"
             )
-            await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
+            await _bill_rejected_frame(rejected_frame_auth, rerouted, failure_row(frame_data, started_at))
             raise rerouted
         # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
@@ -2138,10 +2155,37 @@ def _responses_ws_frame_guard(
             frame=json.dumps(rewritten),
             guardrail_information=guardrail_information,
             pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
-            bill_refusal=partial(record_refused_turn, guardrail_information),
+            bill_refusal=partial(bill_refusal, guarded_data, started_at),
         )
 
     return guard
+
+
+def _turn_failure_row(
+    metadata_key: str, socket_bucket: object, turn: Mapping[str, object], started_at: datetime
+) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
+    """A turn bills like an HTTP ``/v1/responses`` request: its own call id, start time, guardrail records and stored
+    request, under the socket's call type and the model group the router resolved for the socket."""
+    turn_bucket: Final = turn.get(metadata_key)
+    model_group: Final = (
+        _WS_FRAME.validate_python(socket_bucket).get("model_group") if isinstance(socket_bucket, dict) else None
+    )
+    return {
+        **turn,
+        metadata_key: {
+            **(_WS_FRAME.validate_python(turn_bucket) if isinstance(turn_bucket, dict) else {}),
+            **({"model_group": model_group} if isinstance(model_group, str) else {}),
+        },
+        "call_type": CallTypes.aresponses_websocket.value,
+        "start_time": started_at,
+        "proxy_server_request": {
+            "body": {
+                key: _without_untrusted_metadata(key, value)
+                for key, value in turn.items()
+                if key not in (metadata_key, "litellm_call_id")
+            }
+        },
+    }
 
 
 def _without_untrusted_metadata(key: str, value: object) -> object:
@@ -2186,29 +2230,15 @@ _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
 
 @dataclass(slots=True)
 class _RefusedTurns:
-    """Turns the deployment refused after their guardrails passed. The socket's close-time failure row bills their
-    guardrail records, so its failure hooks, model group and call type cover those turns too, and the first refusal
-    is that row's exception when the session limit cancels the relay before it returns one."""
+    """Each turn the deployment refused wrote its own failure row when refused. The first refusal is still the
+    socket's close-time failure, so its failure hooks run once, even when the session limit cancels the relay before
+    it returns one, but they write no second row for it."""
 
     first: Exception | None = None
-    records: tuple[Mapping[str, object], ...] = ()
 
-    def add(self, records: tuple[Mapping[str, object], ...], refusal: Exception) -> None:
-        self.records = (*self.records, *records)
+    def add(self, refusal: Exception) -> None:
         if self.first is None:
             self.first = refusal
-
-    def billed_on(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
-        if not self.records:
-            return request_data
-        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
-        bucket: Final = request_data.get(metadata_key)
-        fields: Final = _WS_FRAME.validate_python(bucket) if isinstance(bucket, dict) else {}
-        recorded: Final = (*_recorded_guardrail_information(fields), *self.records)
-        return {
-            **request_data,
-            metadata_key: {**fields, _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in recorded]},
-        }
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
@@ -2324,16 +2354,23 @@ async def _responses_websocket_session(
         **_routing_hints_from_first_ws_frame(first_message),
     )
 
-    async def write_failure_row(exception: Exception) -> None:
+    async def run_failure_hooks(exception: Exception) -> None:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=exception,
-            request_data=dict(refused_turns.billed_on(routed_data)),
+            request_data={
+                **routed_data,
+                **(
+                    {FAILURE_ROW_ALREADY_WRITTEN_KEY: FAILURE_ROW_ALREADY_WRITTEN}
+                    if exception is refused_turns.first
+                    else {}
+                ),
+            },
         )
 
     def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
         return spawn_logging_task(
-            asyncio.get_running_loop(), write_failure_row(exception), task_name="Responses WebSocket failure row"
+            asyncio.get_running_loop(), run_failure_hooks(exception), task_name="Responses WebSocket failure row"
         )
 
     async def relay_and_bill_failure() -> asyncio.Task[object] | None:

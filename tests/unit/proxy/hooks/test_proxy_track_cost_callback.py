@@ -34,6 +34,8 @@ from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, buil
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import (
+    FAILURE_ROW_ALREADY_WRITTEN,
+    FAILURE_ROW_ALREADY_WRITTEN_KEY,
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     ProxyUpdateSpend,
@@ -3666,4 +3668,36 @@ async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
             original_exception=exception,
             user_api_key_dict=user_api_key_dict,
         )
+    assert len(writer.rows) == rows_written
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_data", "rows_written"),
+    [
+        ({**_ROUTED_REQUEST, FAILURE_ROW_ALREADY_WRITTEN_KEY: FAILURE_ROW_ALREADY_WRITTEN}, 0),
+        ({**_ROUTED_REQUEST, FAILURE_ROW_ALREADY_WRITTEN_KEY: True}, 1),
+        (_ROUTED_REQUEST, 1),
+    ],
+    ids=["already-written", "client-spoofed-marker", "unmarked"],
+)
+async def test_async_post_call_failure_hook_settles_the_reservation_but_writes_no_second_row_for_a_billed_failure(
+    request_data: Mapping[str, object], rows_written: int
+) -> None:
+    writer: Final = _RecordingSpendWriter()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route="/v1/responses",
+        budget_reservation={"reserved_cost": 0.5, "entries": []},
+    )
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation", new_callable=AsyncMock
+    ) as release:
+        await ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer)).async_post_call_failure_hook(
+            request_data={**request_data, "metadata": dict[str, object]()},
+            original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="gpt-4o-mini"),
+            user_api_key_dict=user_api_key_dict,
+        )
+    assert release.await_count == 1
+    assert release.await_args.kwargs["budget_reservation"] is user_api_key_dict.budget_reservation
     assert len(writer.rows) == rows_written

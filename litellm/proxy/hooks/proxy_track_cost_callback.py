@@ -62,6 +62,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import (
+    FAILURE_ROW_ALREADY_WRITTEN,
+    FAILURE_ROW_ALREADY_WRITTEN_KEY,
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     BilledFailedAttempt,
@@ -400,8 +402,10 @@ class _ProxyDBLogger(CustomLogger):
                 )
 
         request_route: Final = user_api_key_dict.request_route
+        request_fields: Final = _str_keyed_fields(request_data)
         if (
-            ProxyDBLogger._should_track_errors_in_db() is False
+            request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN
+            or ProxyDBLogger._should_track_errors_in_db() is False
             or ProxyDBLogger._skips_pre_routing_rejections()
             and is_pre_routing_rejection(original_exception, _REQUEST_DATA.validate_python(request_data))
             or request_route is not None
@@ -442,7 +446,6 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata, original_exception=original_exception
         )
 
-        request_fields: Final = _str_keyed_fields(request_data)
         _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
