@@ -9,9 +9,11 @@ replay yields multiple word-shaped chunks instead of a single one-shot
 content frame, restoring per-token cadence on cache hits.
 """
 
-from typing import Final
+from datetime import datetime
+from typing import Final, Literal
 
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -19,6 +21,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_streaming_response,
     convert_to_streaming_response_async,
 )
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponseStream
 
 
@@ -267,16 +270,16 @@ async def test_async_usage_attached_to_last_chunk_only():
 
 
 @pytest.mark.asyncio
-async def test_async_empty_content_yields_single_finish_frame():
-    # tool-calls-only-style response: short-circuit to the single-yield path.
+async def test_async_empty_content_yields_the_role_then_a_separate_finish_frame():
     payload = _async_payload(content=None)
     payload["usage"] = None
     chunks = await _collect_async(payload)
-    assert len(chunks) == 1
-    assert chunks[0].choices[0].delta.content is None
-    assert chunks[0].choices[0].finish_reason == "stop"
-    assert chunks[0].choices[0].delta.role == "assistant"
-    assert getattr(chunks[0], "usage", None) is None
+    assert [(c.choices[0].delta.role, c.choices[0].finish_reason) for c in chunks] == [
+        ("assistant", None),
+        (None, "stop"),
+    ]
+    assert all(c.choices[0].delta.content is None for c in chunks)
+    assert all(getattr(c, "usage", None) is None for c in chunks)
 
 
 @pytest.mark.asyncio
@@ -422,11 +425,7 @@ def test_sync_delta_and_choice_metadata_only_on_first_chunk():
         assert getattr(choice, "enhancements", None) is None
 
 
-def test_sync_non_enumerated_delta_fields_only_on_first_chunk():
-    # annotations (and any other Delta field beyond the role/tool_call/reasoning
-    # set) must also stay on the first slice. Rebuilding later slices as a bare
-    # content delta drops the whole class, so this holds without enumerating
-    # every field by hand.
+def test_sync_annotations_arrive_once_with_the_last_content_slice():
     annotations = [
         {
             "type": "url_citation",
@@ -456,7 +455,85 @@ def test_sync_non_enumerated_delta_fields_only_on_first_chunk():
         ],
     }
     chunks = list(convert_to_streaming_response(payload))
-    assert len(chunks) > 1
-    assert getattr(chunks[0].choices[0].delta, "annotations", None) == annotations
-    for c in chunks[1:]:
-        assert getattr(c.choices[0].delta, "annotations", None) is None
+    annotated: Final = [i for i, c in enumerate(chunks) if getattr(c.choices[0].delta, "annotations", None)]
+    last_content: Final = max(i for i, c in enumerate(chunks) if c.choices[0].delta.content)
+    assert annotated == [last_content] and last_content > 0
+    assert chunks[last_content].choices[0].delta.annotations == annotations
+
+
+async def _client_stream(
+    message: dict[str, JsonValue], replay: Literal["async", "sync"]
+) -> list[dict[str, JsonValue]]:
+    payload: Final = {
+        **_async_payload(),
+        "choices": [{"index": 0, "message": {"role": "assistant", **message}, "finish_reason": "stop"}],
+    }
+    logging_obj: Final = litellm.Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="cached-replay",
+        function_id="cached-replay",
+    )
+    source: Final = (
+        convert_to_streaming_response_async(response_object=payload)
+        if replay == "async"
+        else convert_to_streaming_response(response_object=payload)
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=source, model="gpt-4o-mini", custom_llm_provider="cached_response", logging_obj=logging_obj
+    )
+    chunks: Final = [chunk async for chunk in wrapper] if replay == "async" else list(wrapper)
+    return [
+        {**chunk.choices[0].delta.model_dump(exclude_none=True), "finish": chunk.choices[0].finish_reason}
+        for chunk in chunks
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("audio", {"id": "audio_1", "data": "UklGRg==", "expires_at": 1700000600, "transcript": "Hello"}),
+        ("images", [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}, "index": 0}]),
+    ],
+)
+async def test_a_cached_answer_without_text_streams_its_role_and_payload_to_the_client(
+    replay: Literal["async", "sync"], field: str, value: JsonValue
+) -> None:
+    deltas: Final = await _client_stream({"content": None, field: value}, replay)
+    assert deltas[0]["role"] == "assistant"
+    assert [delta[field] for delta in deltas if field in delta] == [value]
+    assert deltas[-1]["finish"] == "stop"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", ["async", "sync"])
+async def test_a_cached_answer_streams_reasoning_before_the_text_and_citations_after_it(
+    replay: Literal["async", "sync"],
+) -> None:
+    annotations: Final[JsonValue] = [
+        {
+            "type": "url_citation",
+            "url_citation": {"url": "https://example.com", "title": "Example", "start_index": 0, "end_index": 23},
+        }
+    ]
+    deltas: Final = await _client_stream(
+        {
+            "content": "The answer is 14 apples",
+            "reasoning_content": "Count the apples in each basket",
+            "annotations": annotations,
+        },
+        replay,
+    )
+    reasoning: Final = [i for i, delta in enumerate(deltas) if "reasoning_content" in delta]
+    text: Final = [i for i, delta in enumerate(deltas) if delta.get("content")]
+    cited: Final = [i for i, delta in enumerate(deltas) if "annotations" in delta]
+    assert "".join(str(deltas[i]["reasoning_content"]) for i in reasoning) == "Count the apples in each basket"
+    assert "".join(str(deltas[i]["content"]) for i in text) == "The answer is 14 apples"
+    assert max(reasoning) < min(text)
+    assert cited == [max(text)] and deltas[max(text)]["annotations"] == annotations
+    assert deltas[-1]["finish"] == "stop"

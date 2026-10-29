@@ -2287,17 +2287,19 @@ class TestConvertToStreamingResponse:
         }
 
         chunks = list(convert_to_streaming_response(response_object=response_object))
-        assert len(chunks) == 1
-        chunk = chunks[0]
-        assert chunk.id == "chatcmpl-123"
-        assert chunk.model == "gpt-4"
-        assert chunk.created == 1700000000
-        assert chunk.system_fingerprint == "fp_abc"
-        assert chunk.choices[0].delta.content == "Hello!"
-        assert chunk.choices[0].delta.role == "assistant"
-        assert chunk.choices[0].finish_reason == "stop"
-        assert chunk.usage.prompt_tokens == 5
-        assert chunk.usage.completion_tokens == 2
+        assert len(chunks) == 2
+        assert all(chunk.id == "chatcmpl-123" for chunk in chunks)
+        assert all(chunk.model == "gpt-4" for chunk in chunks)
+        assert all(chunk.created == 1700000000 for chunk in chunks)
+        assert all(chunk.system_fingerprint == "fp_abc" for chunk in chunks)
+        content, finish = chunks
+        assert content.choices[0].delta.content == "Hello!"
+        assert content.choices[0].delta.role == "assistant"
+        assert content.choices[0].finish_reason is None
+        assert finish.choices[0].delta.content is None
+        assert finish.choices[0].finish_reason == "stop"
+        assert finish.usage.prompt_tokens == 5
+        assert finish.usage.completion_tokens == 2
 
     def test_finish_details_fallback(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2315,7 +2317,7 @@ class TestConvertToStreamingResponse:
         }
 
         chunks = list(convert_to_streaming_response(response_object=response_object))
-        assert chunks[0].choices[0].finish_reason == "length"
+        assert chunks[-1].choices[0].finish_reason == "length"
 
     def test_tool_calls_in_streaming(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2347,17 +2349,20 @@ class TestConvertToStreamingResponse:
         }
 
         async def run():
-            chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
-                chunks.append(chunk)
-            return chunks
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
 
         chunks = asyncio.run(run())
-        assert len(chunks) == 1
+        assert len(chunks) == 2
         assert chunks[0].choices[0].delta.tool_calls[0].id == "call_1"
         assert chunks[0].choices[0].delta.tool_calls[0].function.name == "get_weather"
+        assert chunks[0].choices[0].finish_reason is None
+        assert chunks[1].choices[0].delta.tool_calls is None
+        assert chunks[1].choices[0].finish_reason == "tool_calls"
 
 class TestConvertToStreamingResponseAsync:
     def test_none_raises(self):
@@ -2395,17 +2400,17 @@ class TestConvertToStreamingResponseAsync:
         }
 
         async def run():
-            chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
-                chunks.append(chunk)
-            return chunks
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
 
         chunks = asyncio.run(run())
         # Cached replay is sliced into word-shaped chunks to preserve
         # streaming cadence; joining the slices reconstructs the content.
-        assert len(chunks) == 2
+        assert len(chunks) == 3
         assert all(c.id == "msg_async_1" for c in chunks)
         assert all(c.model == "claude-3" for c in chunks)
         assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Hi there"
@@ -2470,10 +2475,16 @@ class TestConvertToStreamingResponseAsync:
         assert (
             "".join(c.choices[0].delta.content or "" for c in chunks) == "Final answer"
         )
+        assert chunks[0].choices[0].delta.content is None
         assert chunks[0].choices[0].delta.reasoning_content == "cached reasoning"
         assert chunks[0].choices[0].delta.thinking_blocks == thinking_blocks
-        assert chunks[0].choices[0].delta.annotations == annotations
-        assert not any(c.choices[0].delta.get("annotations") for c in chunks[1:])
+        last_content = max(
+            i for i, c in enumerate(chunks) if c.choices[0].delta.content
+        )
+        assert chunks[last_content].choices[0].delta.annotations == annotations
+        assert [
+            i for i, c in enumerate(chunks) if c.choices[0].delta.get("annotations")
+        ] == [last_content]
         assert not any(
             hasattr(c.choices[0].delta, "reasoning_content") for c in chunks[1:]
         )
