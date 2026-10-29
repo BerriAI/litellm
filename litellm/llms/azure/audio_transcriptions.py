@@ -64,7 +64,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             model=model,
             _is_async=False,
             client=client,
-            litellm_params=litellm_params,
+            litellm_params={**(litellm_params or {}), "timeout": timeout, "max_retries": max_retries},
         )
         if not isinstance(azure_client, AzureOpenAI):
             raise AzureOpenAIError(
@@ -135,7 +135,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 model=model,
                 _is_async=True,
                 client=client,
-                litellm_params=litellm_params,
+                litellm_params={**(litellm_params or {}), "timeout": timeout, "max_retries": max_retries},
             )
             if not isinstance(async_azure_client, AsyncAzureOpenAI):
                 raise AzureOpenAIError(

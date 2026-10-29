@@ -2635,3 +2635,51 @@ async def test_azure_client_cache_keeps_each_timeout_on_its_own_client(
     finally:
         sync_http.close()
         await async_http.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("endpoint", ["transcription", "speech"])
+async def test_azure_audio_clients_honor_the_requested_retry_limit_and_timeout(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, endpoint: str
+) -> None:
+    from openai import RateLimitError
+
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    sent_read_timeouts: list[float | None] = []
+
+    def rate_limited(request: httpx.Request) -> httpx.Response:
+        sent_read_timeouts.append(request.extensions["timeout"]["read"])
+        return httpx.Response(429, json={"error": {"message": "rate limited"}}, headers={"retry-after-ms": "1"})
+
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(rate_limited))
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(rate_limited))
+    monkeypatch.setattr(litellm, "client_session", sync_http)
+    monkeypatch.setattr(litellm, "aclient_session", async_http)
+    shared: Final = dict(
+        api_key="test-key",
+        api_base="https://audio-retry-cache-test.openai.azure.com",
+        api_version="2024-02-01",
+        max_retries=0,
+        timeout=7.0,
+    )
+
+    async def call() -> object:
+        if endpoint == "transcription":
+            audio = ("hello.wav", b"RIFF0000WAVEfmt ", "audio/wav")
+            if is_async:
+                return await litellm.atranscription(model="azure/whisper", file=audio, **shared)
+            return litellm.transcription(model="azure/whisper", file=audio, **shared)
+        if is_async:
+            return await litellm.aspeech(model="azure/tts", input="hi", voice="alloy", **shared)
+        return litellm.speech(model="azure/tts", input="hi", voice="alloy", **shared)
+
+    try:
+        with pytest.raises(RateLimitError):
+            await call()
+        assert sent_read_timeouts == [7.0]
+    finally:
+        sync_http.close()
+        await async_http.aclose()

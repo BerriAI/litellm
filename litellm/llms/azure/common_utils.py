@@ -573,31 +573,30 @@ class BaseAzureLLM(BaseOpenAILLM):
         model: str | None = None,
     ) -> AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None:
         openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None
-        client_initialization_params: Final[dict] = locals()
-        client_initialization_params["is_async"] = _is_async
+        call_args: Final = dict(locals())
         _lp: Final = litellm_params or {}
         client_limits: Final = _AZURE_CLIENT_LIMITS_ADAPTER.validate_python(_lp)
         configured_max_retries: Final = client_limits.get("max_retries")
-        client_initialization_params["max_retries"] = (
-            DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries
-        )
-        client_initialization_params["timeout"] = client_limits.get("timeout")
         _ad_provider: Final = _lp.get("azure_ad_token_provider")
         _ad_token: Final = _lp.get("azure_ad_token")
         _client_secret: Final = _lp.get("client_secret")
         _azure_password: Final = _lp.get("azure_password")
-        client_initialization_params["azure_ad_token"] = (
-            hashlib.sha256(_ad_token.encode()).hexdigest() if isinstance(_ad_token, str) else None
-        )
-        client_initialization_params["azure_ad_token_provider"] = (
-            f"provider_id={id(_ad_provider) if callable(_ad_provider) else None}"
-            f"|tenant_id={_lp.get('tenant_id')}"
-            f"|client_id={_lp.get('client_id')}"
-            f"|client_secret={hashlib.sha256(_client_secret.encode()).hexdigest() if isinstance(_client_secret, str) else None}"
-            f"|azure_username={_lp.get('azure_username')}"
-            f"|azure_password={hashlib.sha256(_azure_password.encode()).hexdigest() if isinstance(_azure_password, str) else None}"
-            f"|azure_scope={_lp.get('azure_scope')}"
-        )
+        client_initialization_params: Final = {
+            **call_args,
+            "is_async": _is_async,
+            "max_retries": DEFAULT_MAX_RETRIES if configured_max_retries is None else configured_max_retries,
+            "timeout": client_limits.get("timeout"),
+            "azure_ad_token": (hashlib.sha256(_ad_token.encode()).hexdigest() if isinstance(_ad_token, str) else None),
+            "azure_ad_token_provider": (
+                f"provider_id={id(_ad_provider) if callable(_ad_provider) else None}"
+                f"|tenant_id={_lp.get('tenant_id')}"
+                f"|client_id={_lp.get('client_id')}"
+                f"|client_secret={hashlib.sha256(_client_secret.encode()).hexdigest() if isinstance(_client_secret, str) else None}"
+                f"|azure_username={_lp.get('azure_username')}"
+                f"|azure_password={hashlib.sha256(_azure_password.encode()).hexdigest() if isinstance(_azure_password, str) else None}"
+                f"|azure_scope={_lp.get('azure_scope')}"
+            ),
+        }
         if client is not None:
             if (
                 api_version is not None
