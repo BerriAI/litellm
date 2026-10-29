@@ -25,6 +25,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.anthropic.common_utils import is_claude_tool_target
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -4294,7 +4295,14 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "model", "requested_thinking", "rejected_keys", "expected_thinking"),
+    (
+        "custom_llm_provider",
+        "model",
+        "requested_thinking",
+        "rejected_keys",
+        "expected_thinking",
+        "provider_rejects_block_binding",
+    ),
     (
         (
             "anthropic",
@@ -4302,6 +4310,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4309,6 +4318,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4316,6 +4326,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4323,6 +4334,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "adaptive", "display": "updates"},
             {"not_a_thinking_key": True, "budget_tokens": 2048},
             {"type": "adaptive", "display": "updates"},
+            False,
         ),
         (
             "vertex_ai",
@@ -4330,6 +4342,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "databricks",
@@ -4337,6 +4350,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            True,
         ),
     ),
     ids=(
@@ -4355,6 +4369,7 @@ def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     requested_thinking: dict[str, object],
     rejected_keys: dict[str, object],
     expected_thinking: dict[str, object],
+    provider_rejects_block_binding: bool,
     drop_params_source: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4369,7 +4384,10 @@ def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     )
 
     kept_rejected_keys: Final = {} if drop_params_source else rejected_keys
-    assert optional_params["thinking"] == {**expected_thinking, "block_binding": block_binding, **kept_rejected_keys}
+    kept_block_binding: Final = (
+        {} if drop_params_source and provider_rejects_block_binding else {"block_binding": block_binding}
+    )
+    assert optional_params["thinking"] == {**expected_thinking, **kept_block_binding, **kept_rejected_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
@@ -4522,3 +4540,22 @@ def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_dro
     )
 
     assert optional_params == {"thinking": {"type": "adaptive"}}
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected"),
+    [
+        ("anthropic", "claude-sonnet-5", True),
+        ("bedrock", "us.anthropic.claude-sonnet-5-20260501-v1:0", True),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", True),
+        ("bedrock", "us.amazon.nova-2-lite-v1:0", False),
+        ("vertex_ai", "claude-sonnet-5", True),
+        ("vertex_ai", "gemini-3.8-flash", False),
+        ("azure_ai", "claude-sonnet-4-6", True),
+        ("azure_ai", "gpt-5.6", False),
+        ("openai", "gpt-5.6", False),
+        ("gemini", "gemini-3.8-flash", False),
+    ],
+)
+def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
+    assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected

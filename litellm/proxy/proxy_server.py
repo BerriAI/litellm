@@ -79,6 +79,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
     INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
@@ -98,9 +99,14 @@ from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, offload_token_count
+from litellm.litellm_core_utils.token_counter import (
+    UnsupportedContentTypeError,
+    deployment_openai_model,
+    offload_token_count,
+)
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
     KimiK3Encodings,
@@ -203,7 +209,7 @@ from litellm.types.utils import (
     is_server_derived_pricing_key,
     pricing_override_fields,
 )
-from litellm.utils import cost_map_omits_token_price, load_credentials_from_list, with_named_credential
+from litellm.utils import acredential_updates, cost_map_omits_token_price, with_named_credential
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -306,6 +312,7 @@ import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
+    STARTUP_OUTPUT_SETTINGS,
     print_startup_message,
     redact_string,
     verbose_proxy_logger,
@@ -1269,15 +1276,44 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 
 
 async def _flush_spend_on_shutdown() -> None:
+    from litellm.proxy.utils import update_daily_tag_spend
+
     await flush_spend_counters_on_shutdown()
+    if prisma_client is not None:
+        await update_daily_tag_spend(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
     await _flush_spend_logs_queue_on_shutdown()
 
 
 async def _flush_spend_around_logging_drain_on_shutdown(
     flush_spend: Callable[[], Awaitable[None]] = _flush_spend_on_shutdown,
+    *,
+    worker: LoggingWorker = GLOBAL_LOGGING_WORKER,
+    clock: Callable[[], float] = time.monotonic,
+    drain_tasks: Callable[[float], Awaitable[None]] = drain_logging_tasks,
 ) -> None:
     await flush_spend()
-    await drain_logging_tasks()
+    remaining: Final = GracefulShutdownManager.remaining(clock=clock)
+    callback_timeout: Final = max(0.0, remaining - GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS)
+    verbose_proxy_logger.info(
+        "Draining success callbacks before the final spend flush remaining_s=%.3f callback_timeout_s=%.3f",
+        remaining,
+        callback_timeout,
+    )
+
+    async def drain_callbacks() -> None:
+        await drain_tasks(callback_timeout)
+        await worker.flush()
+
+    try:
+        await asyncio.wait_for(drain_callbacks(), timeout=callback_timeout)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "Success callback shutdown budget exhausted with %d unfinished callbacks; accounting may be incomplete",
+            worker.pending_count,
+        )
+    finally:
+        await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
+    await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
     await flush_spend()
 
 
@@ -1440,6 +1476,13 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+    with GracefulShutdownManager.capture_sigterm():
+        async with _proxy_startup_event(app) as state:
+            yield state
+
+
+@asynccontextmanager
+async def _proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
         prisma_client, \
         master_key, \
@@ -5801,6 +5844,12 @@ class ProxyConfig:
         # verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
         return config
 
+    async def read_config_file(self, config_file_path: str) -> Mapping[str, object]:
+        """The config file with its includes merged, without the bucket, database and secret steps of get_config."""
+        return await self._process_includes(
+            config=self._load_yaml_file(config_file_path), config_file_path=os.path.abspath(config_file_path)
+        )
+
     async def _process_includes(self, config: dict, config_file_path: str) -> dict:
         """
         Process includes by appending their contents to the main config
@@ -6425,13 +6474,8 @@ class ProxyConfig:
 
         search_tools_parsed: Final[list[SearchToolTypedDict]] = []
 
-        print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m")
-
         for search_tool in search_tools_raw:
-            # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
-            search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
-            print_startup_message(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
@@ -6601,13 +6645,15 @@ class ProxyConfig:
             from litellm.types.integrations.prometheus import validate_caller_identity_settings
 
             validate_caller_identity_settings(litellm_settings)
+            if STARTUP_OUTPUT_SETTINGS.validate_python(litellm_settings).get("suppress_startup_output") is True:
+                litellm.suppress_startup_output = True
 
             # ANSI escape code for blue text
             blue_color_code: Final = "\033[94m"
             reset_color_code: Final = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print_startup_message(f"{blue_color_code}\nSetting Cache on Proxy{reset_color_code}")
+                    print_startup_message(f"\n{blue_color_code}Setting Cache on Proxy{reset_color_code}")
                     from litellm.caching.caching import Cache
 
                     cache_params = {}
@@ -6922,6 +6968,8 @@ class ProxyConfig:
                     setattr(litellm, key, value)
                 elif key == "drop_params":
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
+                elif key == "suppress_startup_output":
+                    continue
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",
@@ -6968,6 +7016,7 @@ class ProxyConfig:
                     for name in (
                         "vector_store_deny_by_default",
                         "search_tool_deny_by_default",
+                        "claude_code_marketplace_auth_required",
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                     )
@@ -7277,6 +7326,13 @@ class ProxyConfig:
 
         ## SEARCH TOOLS SETTINGS
         search_tools: Final[list[SearchToolTypedDict] | None] = self.parse_search_tools(config)
+        if search_tools:
+            print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m")
+            for tool in search_tools:
+                print_startup_message(
+                    f"\033[32m    {tool.get('search_tool_name', '')} "
+                    f"({tool.get('litellm_params', {}).get('search_provider', '')})\033[0m"
+                )
 
         ## SANDBOX TOOLS SETTINGS
         from litellm.sandbox.sandbox_tools import register_sandbox_tools
@@ -9679,12 +9735,9 @@ async def initialize(
         master_key, \
         user_custom_auth, \
         prisma_client
-    from litellm.proxy.common_utils.banner import LITELLM_BANNER, show_banner
+    from litellm.proxy.common_utils.banner import LITELLM_BANNER
 
-    if litellm.json_logs:
-        print_startup_message(LITELLM_BANNER)
-    else:
-        show_banner()
+    print_startup_message(f"\n{LITELLM_BANNER}\n")
     if os.getenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "").lower() != "true":
         generate_feedback_box()
     user_model = model
@@ -14749,10 +14802,10 @@ def _provider_count_outcome(
     return result
 
 
-def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
+async def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
     call_params: Final = _LITELLM_PARAMS_COPY.validate_python(litellm_params)
     try:
-        load_credentials_from_list(call_params)
+        return {**call_params, **(await acredential_updates(call_params))}
     except litellm.AuthenticationError as e:
         raise ProxyException(
             message=e.message,
@@ -14760,13 +14813,19 @@ def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
             param="model",
             code=401,
         ) from e
-    return call_params
+    except litellm.ServiceUnavailableError as e:
+        raise ProxyException(
+            message=e.message,
+            type="service_unavailable",
+            param="model",
+            code=503,
+        ) from e
 
 
-def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
+async def _with_resolved_credentials(deployment: Mapping[str, object] | None) -> dict[str, object] | None:
     if deployment is None:
         return None
-    return {**deployment, "litellm_params": _with_resolved_api_key(deployment.get("litellm_params", {}))}
+    return {**deployment, "litellm_params": await _with_resolved_api_key(deployment.get("litellm_params", {}))}
 
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
@@ -14829,7 +14888,7 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=_with_resolved_credentials(deployment_in_region),
+            deployment=await _with_resolved_credentials(deployment_in_region),
             request_model=request_model,
             tools=tools,
             system=system,
@@ -14863,7 +14922,7 @@ async def _try_native_responses_count(
             model_to_use=model_to_use,
             request=responses_request,
             policy=policy,
-            deployment=_with_resolved_credentials(deployment),
+            deployment=await _with_resolved_credentials(deployment),
             request_model=request_model,
         )
     )
@@ -15542,7 +15601,7 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=model_to_use,
+        model=deployment_openai_model(deployment_view) or model_to_use,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
