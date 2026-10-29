@@ -127,6 +127,8 @@ def _served_provider_for_model(model: str) -> str | None:
 def _declared_provider(model: str) -> str | None:
     import litellm
 
+    if litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default():
+        return None
     prefix, separator, _ = model.partition("/")
     return prefix if separator and prefix in litellm.provider_list else None
 
@@ -517,14 +519,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> bool:
         if model is None:
             return False
+        declared_provider: Final = custom_llm_provider or _declared_provider(model)
         hosted_flag: Final = _hosted_openai_dialect_flag(
-            model, custom_llm_provider or _declared_provider(model), AnthropicCacheControlHook._resolve_provider
+            model, declared_provider, AnthropicCacheControlHook._resolve_provider
         )
         if hosted_flag is not None:
             return hosted_flag
         if not supports_openai_prompt_cache_breakpoint(model):
             return False
-        if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
+        if (declared_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
             return False
         return prompt_cache_options is not None or targets_openai_api(api_base)
 

@@ -4001,6 +4001,7 @@ class TestChatPathProviderStamp:
 class TestChatPathResolvesTheDeploymentProvider:
     MODEL = "azure_ai/gpt-6-astra"
     AMBIENT_API_BASE = "https://other-deployment.openai.azure.com"
+    UPSTREAM_PROXY_API_BASE = "https://upstream-proxy.example.com"
     POINTS = [{"location": "message", "role": "system"}]
     MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
 
@@ -4010,17 +4011,19 @@ class TestChatPathResolvesTheDeploymentProvider:
         else:
             monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
 
-    def _chat(self, custom_llm_provider: str | None, api_base: str) -> tuple[list[AllMessageValues], dict[str, object]]:
+    def _chat(
+        self, custom_llm_provider: str | None, api_base: str, model: str = MODEL
+    ) -> tuple[list[AllMessageValues], dict[str, object]]:
         seeded: Final[dict[str, object]] = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
         AnthropicCacheControlHook.maybe_seed_default_injection_points(
             non_default_params=seeded,
             messages=copy.deepcopy(self.MESSAGES),
-            model=self.MODEL,
+            model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
         )
         _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
-            model=self.MODEL,
+            model=model,
             messages=copy.deepcopy(self.MESSAGES),
             non_default_params=seeded,
             prompt_id=None,
@@ -4042,6 +4045,19 @@ class TestChatPathResolvesTheDeploymentProvider:
         unset_resolved, unset_told = self._chat(None, api_base), self._chat("azure_ai", api_base)
         assert pinned_resolved == pinned_told == unset_resolved == unset_told
         assert AnthropicCacheControlHook.count_request_cache_breakpoints(pinned_resolved[0]) == 1
+        assert ("prompt_cache_options" in pinned_resolved[1]) == supports_openai_prompt_cache_breakpoint(
+            self.MODEL, "azure_ai"
+        )
+
+    @pytest.mark.parametrize("model", [MODEL, "bedrock_mantle/openai.gpt-5.6-sol"])
+    def test_chat_path_marks_the_deployment_like_litellm_proxy_when_calls_route_to_one(
+        self, monkeypatch: pytest.MonkeyPatch, model: str
+    ) -> None:
+        self._pin_ambient_api_base(monkeypatch, False)
+        monkeypatch.setenv("USE_LITELLM_PROXY", "True")
+        assert self._chat(None, self.UPSTREAM_PROXY_API_BASE, model) == self._chat(
+            "litellm_proxy", self.UPSTREAM_PROXY_API_BASE, model
+        )
 
 
 class TestClientBreakpointsCountedOnce:
