@@ -70,7 +70,12 @@ try:
     from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
     from litellm_enterprise.proxy.hooks.managed_vector_stores import PROXY_LiteLLMManagedVectorStores
 except ImportError as litellm_enterprise_import_error:
-    verbose_proxy_logger.warning(
+    log_disabled_managed_hooks: Final = (
+        verbose_proxy_logger.debug
+        if litellm_enterprise_import_error.name == "litellm_enterprise"
+        else verbose_proxy_logger.warning
+    )
+    log_disabled_managed_hooks(
         "Managed files and managed vector stores are disabled because litellm_enterprise failed to import: %s",
         litellm_enterprise_import_error,
     )

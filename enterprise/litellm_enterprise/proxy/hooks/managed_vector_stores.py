@@ -41,16 +41,14 @@ else:
     PrismaClient = Any
 
 
-_ROUTED_VECTOR_STORE_CALL_TYPES: Final = frozenset(
-    {"avector_store_search", "avector_store_retrieve", "avector_store_delete"}
-)
+_WRITE_VECTOR_STORE_CALL_TYPES: Final = frozenset({"avector_store_update", "avector_store_delete"})
+_ROUTED_VECTOR_STORE_CALL_TYPES: Final = _WRITE_VECTOR_STORE_CALL_TYPES | {
+    "avector_store_search",
+    "avector_store_retrieve",
+}
 
 
-def _route_to_provider_vector_store(data: dict[str, object]) -> dict[str, object]:
-    vector_store_id: Final = data.get("vector_store_id")
-    decoded_id: Final = is_base64_encoded_unified_id(vector_store_id) if isinstance(vector_store_id, str) else False
-    if not decoded_id:
-        return data
+def _route_to_provider_vector_store(data: dict[str, object], decoded_id: str) -> dict[str, object]:
     routing_model: Final = extract_model_id_from_unified_id(decoded_id) or next(
         iter(extract_target_model_names_from_unified_id(decoded_id)), None
     )
@@ -71,7 +69,7 @@ class _PROXY_LiteLLMManagedVectorStores(
     This class provides functionality to:
     - Create vector stores across multiple models
     - Retrieve vector stores by unified ID
-    - Delete vector stores from all models
+    - Update or delete a vector store created on one model by unified ID
     - List vector stores created by a user
     """
 
@@ -349,7 +347,21 @@ class _PROXY_LiteLLMManagedVectorStores(
         if call_type not in _ROUTED_VECTOR_STORE_CALL_TYPES:
             return data
         await self.check_managed_vector_store_access(data, user_api_key_dict)
-        return _route_to_provider_vector_store(data)
+        vector_store_id: Final = data.get("vector_store_id")
+        decoded_id: Final = is_base64_encoded_unified_id(vector_store_id) if isinstance(vector_store_id, str) else False
+        if not decoded_id:
+            return data
+        created_on_several_models: Final = len(extract_target_model_names_from_unified_id(decoded_id)) > 1
+        if call_type in _WRITE_VECTOR_STORE_CALL_TYPES and created_on_several_models:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Vector store {vector_store_id} was created on several models, so updating or deleting it by "
+                    "this id would only change the first model's store. Update or delete each model's store by its "
+                    "provider id instead."
+                ),
+            )
+        return _route_to_provider_vector_store(data, decoded_id)
 
     # ============================================================================
     #                     POST-CALL HOOK (For Response Transformation)

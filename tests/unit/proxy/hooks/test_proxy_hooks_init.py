@@ -96,3 +96,33 @@ def test_proxy_hooks_still_import_and_warn_when_litellm_enterprise_cannot_load(
     assert any(
         "Managed files and managed vector stores are disabled" in record.getMessage() for record in caplog.records
     )
+
+
+class _LitellmEnterpriseNotInstalled:
+    def find_spec(self, fullname: str, path: object, target: object = None) -> None:
+        if fullname.partition(".")[0] == "litellm_enterprise":
+            raise ModuleNotFoundError(f"No module named {fullname!r}", name=fullname)
+        return None
+
+
+def test_proxy_hooks_import_without_a_warning_when_litellm_enterprise_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    for enterprise_module in [name for name in sys.modules if name.partition(".")[0] == "litellm_enterprise"]:
+        monkeypatch.delitem(sys.modules, enterprise_module)
+    monkeypatch.setattr(sys, "meta_path", [_LitellmEnterpriseNotInstalled(), *sys.meta_path])
+    monkeypatch.delitem(sys.modules, "litellm.proxy.hooks")
+    monkeypatch.delattr(litellm.proxy, "hooks")
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            sdk_only_hooks: Final = importlib.import_module("litellm.proxy.hooks")
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert "managed_files" not in sdk_only_hooks.PROXY_HOOKS
+    assert "parallel_request_limiter" in sdk_only_hooks.PROXY_HOOKS
+    assert not any(
+        "Managed files and managed vector stores are disabled" in record.getMessage() for record in caplog.records
+    )

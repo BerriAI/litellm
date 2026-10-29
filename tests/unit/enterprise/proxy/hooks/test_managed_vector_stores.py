@@ -12,7 +12,9 @@ from litellm.types.vector_stores import VectorStoreCreateResponse
 
 _OWNER: Final = "vector-store-owner"
 _PROVIDER_ID: Final = "vs_provider_store"
-_ROUTED_CALL_TYPES: Final = ("avector_store_search", "avector_store_retrieve", "avector_store_delete")
+_READ_CALL_TYPES: Final = ("avector_store_search", "avector_store_retrieve")
+_WRITE_CALL_TYPES: Final = ("avector_store_update", "avector_store_delete")
+_ROUTED_CALL_TYPES: Final = _READ_CALL_TYPES + _WRITE_CALL_TYPES
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +40,9 @@ class _PrismaClient:
         self.db: Final = _Database()
 
 
-def _hook_and_unified_id() -> tuple[PROXY_LiteLLMManagedVectorStores, str]:
+def _hook_and_unified_id(
+    target_model_names: tuple[str, ...] = ("model-a",),
+) -> tuple[PROXY_LiteLLMManagedVectorStores, str]:
     hook: Final = PROXY_LiteLLMManagedVectorStores(DualCache(), prisma_client=_PrismaClient())
     created: Final = VectorStoreCreateResponse(
         id=_PROVIDER_ID,
@@ -54,14 +58,14 @@ def _hook_and_unified_id() -> tuple[PROXY_LiteLLMManagedVectorStores, str]:
         metadata={},
     )
     unified_id: Final = hook.generate_unified_resource_id(
-        resource_objects=[created], target_model_names_list=["model-a", "model-b"]
+        resource_objects=[created], target_model_names_list=list(target_model_names)
     )
     return hook, unified_id
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_type", _ROUTED_CALL_TYPES)
-async def test_owner_request_goes_to_provider_store_on_first_target_model(call_type: str) -> None:
+async def test_owner_request_goes_to_provider_store_on_its_model(call_type: str) -> None:
     hook, unified_id = _hook_and_unified_id()
 
     routed: Final = await hook.async_pre_call_hook(
@@ -72,6 +76,39 @@ async def test_owner_request_goes_to_provider_store_on_first_target_model(call_t
     )
 
     assert routed == {"vector_store_id": _PROVIDER_ID, "model": "model-a"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", _READ_CALL_TYPES)
+async def test_reading_store_created_on_several_models_goes_to_first_target_model(call_type: str) -> None:
+    hook, unified_id = _hook_and_unified_id(("model-a", "model-b"))
+
+    routed: Final = await hook.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id=_OWNER),
+        cache=DualCache(),
+        data={"vector_store_id": unified_id},
+        call_type=call_type,
+    )
+
+    assert routed == {"vector_store_id": _PROVIDER_ID, "model": "model-a"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", _WRITE_CALL_TYPES)
+async def test_changing_store_created_on_several_models_is_refused_instead_of_changing_one_copy(
+    call_type: str,
+) -> None:
+    hook, unified_id = _hook_and_unified_id(("model-a", "model-b"))
+
+    with pytest.raises(HTTPException) as refused:
+        await hook.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id=_OWNER),
+            cache=DualCache(),
+            data={"vector_store_id": unified_id},
+            call_type=call_type,
+        )
+
+    assert refused.value.status_code == 400
 
 
 @pytest.mark.asyncio
