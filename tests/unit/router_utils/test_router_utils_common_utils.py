@@ -370,13 +370,21 @@ class TestFilterWebSearchDeployments:
         result = filter_web_search_deployments(deployments, request_kwargs)
         assert len(result) == 2
 
-    def test_no_deployment_supporting_web_search_keeps_every_deployment(self) -> None:
+    @pytest.mark.parametrize(
+        "request_kwargs",
+        [
+            {"tools": [{"type": "web_search"}]},
+            {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+            {"tools": [{"googleSearch": {}}]},
+            {"web_search_options": {}},
+        ],
+    )
+    def test_no_deployment_supporting_web_search_leaves_none(self, request_kwargs: dict[str, object]) -> None:
         deployments: Final = [
             {"model_info": {"id": "d1", "supports_web_search": False}},
             {"model_info": {"id": "d2", "supports_web_search": False}},
         ]
-        result: Final = filter_web_search_deployments(deployments, {"tools": [{"type": "web_search"}]})
-        assert result == deployments
+        assert filter_web_search_deployments(deployments, request_kwargs) == []
 
     def test_a_tool_that_is_not_an_object_is_no_web_search_request(
         self, sample_deployments: list[dict[str, object]]
@@ -460,20 +468,26 @@ def test_sync_pick_skips_deployments_without_web_search(routing_strategy: str) -
 
 
 @pytest.mark.asyncio
-async def test_web_search_request_still_routes_when_every_deployment_disables_web_search() -> None:
+async def test_web_search_request_to_a_group_without_web_search_falls_back_to_a_group_with_it() -> None:
     router: Final = Router(
         model_list=[
             {
-                "model_name": "search-model",
-                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key"},
+                "model_name": "flagged-model",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "flagged"},
                 "model_info": {"id": "no-search", "supports_web_search": False},
-            }
-        ]
+            },
+            {
+                "model_name": "search-model",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "searched"},
+                "model_info": {"id": "search"},
+            },
+        ],
+        fallbacks=[{"flagged-model": ["search-model"]}],
     )
-    deployment: Final = await router.async_get_available_deployment(
-        model="search-model", request_kwargs=dict(_ANTHROPIC_WEB_SEARCH_REQUEST)
+    response: Final = await router.acompletion(
+        model="flagged-model", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
     )
-    assert deployment["model_info"]["id"] == "no-search"
+    assert response.choices[0].message.content == "searched"
 
 
 @pytest.mark.asyncio

@@ -477,11 +477,9 @@ def filter_web_search_deployments(
 
     # Filter out deployments that don't support web search
     final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    if final_deployments:
-        return final_deployments
-    if healthy_deployments:
-        verbose_logger.warning("No deployment supports web search for this request, so every deployment stays eligible")
-    return healthy_deployments
+    if healthy_deployments and not final_deployments:
+        verbose_logger.warning("No deployments support web search for request")
+    return final_deployments
 
 
 # Credential params that only one provider family reads, paired with the providers
