@@ -44,9 +44,10 @@ def _model_changes(model: str, old_schema: Schema, new_schema: Schema) -> Iterat
     if model not in new_schema:
         yield f"Breaking: Model {model} was removed"
         return
+    new_fields: Final = new_schema[model]
     for field, old_type in old_schema[model].items():
-        if not _is_relation(old_type, old_schema):
-            yield from _field_changes(model, field, old_type, new_schema[model])
+        if field in new_fields or not _is_relation(old_type, old_schema):
+            yield from _field_changes(model, field, old_type, new_fields)
 
 
 def check_breaking_changes(old_schema: Schema, new_schema: Schema) -> tuple[str, ...]:

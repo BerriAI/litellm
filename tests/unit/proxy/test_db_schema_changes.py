@@ -60,3 +60,12 @@ def test_schema_compatibility_allows_dropping_relations_but_not_their_columns() 
         "Breaking: Field Item.owner_id was removed",
         "Breaking: Field Item.created_by was removed",
     )
+
+
+def test_schema_compatibility_still_rejects_changes_to_a_kept_relation() -> None:
+    old_creator: Final = 'Owner @relation("Created", fields: [created_by], references: [id])'
+    new_creator: Final = 'Owner @relation("Created", fields: [created_by], references: [id], onDelete: Restrict)'
+    restricted: Final = RELATED.replace(old_creator, new_creator)
+    assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(restricted)) == (
+        f"Breaking: Field Item.creator changed type from {old_creator} to {new_creator}",
+    )
