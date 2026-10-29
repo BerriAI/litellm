@@ -856,6 +856,16 @@ def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, ob
     )
 
 
+_ACCESS_GROUPS: Final[TypeAdapter[tuple[str, ...] | None]] = TypeAdapter(tuple[str, ...] | None)
+
+
+def _raise_if_access_groups_malformed(model_info_writes: Mapping[str, object]) -> None:
+    try:
+        _ACCESS_GROUPS.validate_python(model_info_writes.get("access_groups"))
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="model_info.access_groups must be a list of strings") from None
+
+
 def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     """Enforce the PTU cross-field invariant on the effective model_info.
 
@@ -3139,6 +3149,7 @@ async def update_model(
             requested_model_info: Final = _legacy_update_model_info_writes(
                 deployment, _model_info, discovered_model_info, member_marker
             )
+            _raise_if_access_groups_malformed(requested_model_info)
             async with _auto_router_capability_slot(
                 prisma_client,
                 effective_params=effective_params,

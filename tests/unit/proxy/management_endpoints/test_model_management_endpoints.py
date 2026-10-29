@@ -1854,6 +1854,24 @@ class TestUpdateModel:
         assert persisted["base_model"] == "test-provider/test-model"
         assert not {"ptu_count", "blocked", "input_cost_per_token"} & persisted.keys()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("access_groups", [5, "group-a", ["group-a", 5], {"group": "group-a"}])
+    async def test_update_model_rejects_access_groups_that_are_not_a_list_of_strings(self, access_groups: object):
+        with pytest.raises(ProxyException) as error:
+            await self._update_model({"id": "m1"}, ModelInfo.model_validate({"id": "m1", "access_groups": access_groups}))
+
+        assert error.value.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_update_model_saves_access_groups_sent_as_a_list_of_strings(self):
+        db: Final = await self._update_model(
+            {"id": "m1"}, ModelInfo.model_validate({"id": "m1", "access_groups": ["group-a", "group-b"]})
+        )
+
+        persisted: Final = db.row.model_info
+        assert persisted is not None
+        assert persisted["access_groups"] == ["group-a", "group-b"]
+
     def test_update_model_does_not_pin_the_previous_base_models_echoed_values(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import legacy_update_model_info_changes
 
