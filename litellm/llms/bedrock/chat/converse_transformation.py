@@ -61,6 +61,7 @@ from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_image
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
@@ -116,14 +117,12 @@ from litellm.utils import (
     token_counter,
 )
 
-from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
     bedrock_cache_point_ttl_supported,
     bedrock_capability_model,
     bedrock_converse_supports_parallel_tool_use_config,
-    bedrock_cost_map_has_row,
     bedrock_model_accepts_cache_points,
     bedrock_reasoning_effort_disabled,
     bedrock_rejects_stop_sequences,
@@ -528,13 +527,14 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
+        - GPT-OSS, DeepSeek V3 and unknown models (``bedrock_model_is_unknown``): passed through unchanged
+          via additionalModelRequestFields.
         - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model or "deepseek" in model:
+        if "gpt-oss" in model or "deepseek" in model or bedrock_model_is_unknown(model):
             optional_params["reasoning_effort"] = reasoning_effort
         elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
@@ -662,13 +662,6 @@ class AmazonConverseConfig(BaseConfig):
                 return flag
         return True
 
-    @staticmethod
-    def _has_no_cost_map_row_or_invoke_provider(model: str, base_model: str) -> bool:
-        candidates: Final = (model, base_model, *(f"{prefix}{base_model}" for prefix in ("global.", "us.", "eu.")))
-        if bedrock_cost_map_has_row(candidates):
-            return False
-        return BaseAWSLLM.get_bedrock_invoke_provider(model) is None
-
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
@@ -687,9 +680,7 @@ class AmazonConverseConfig(BaseConfig):
             "parallel_tool_calls",
         ]
 
-        base_model: Final = BedrockModelInfo.get_base_model(model)
-
-        if "arn" in model or self._has_no_cost_map_row_or_invoke_provider(model=model, base_model=base_model):
+        if "arn" in model or bedrock_model_is_unknown(model):
             supported_params.append("tools")
             supported_params.append("tool_choice")
             supported_params.append("thinking")
@@ -699,6 +690,9 @@ class AmazonConverseConfig(BaseConfig):
             if "nova" in model.lower():
                 supported_params.append("web_search_options")
             return supported_params
+
+        ## Filter out 'cross-region' from model name
+        base_model: Final = BedrockModelInfo.get_base_model(model)
 
         if (
             base_model.startswith("anthropic")

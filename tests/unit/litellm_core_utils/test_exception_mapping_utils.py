@@ -58,7 +58,6 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 
-
 def _debug_info_for_api_base(configured_api_base: str) -> str:
     request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
     original: Final = OpenAIError(
@@ -1466,6 +1465,24 @@ def test_bedrock_mantle_400_maps_to_bad_request():
     assert excinfo.value.status_code == 400
     assert "Invalid 'input'" in excinfo.value.message
     assert type(excinfo.value) is litellm.BadRequestError
+
+
+class _ErrorWithoutResponse(Exception):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def test_bedrock_invalid_model_identifier_without_a_provider_response_still_answers_404():
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        exception_type(
+            model="us.newvendor.typo-1",
+            original_exception=_ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+            custom_llm_provider="bedrock",
+        )
+
+    assert excinfo.value.response.status_code == 404
 
 
 def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():

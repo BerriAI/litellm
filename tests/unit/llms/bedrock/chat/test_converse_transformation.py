@@ -1214,17 +1214,29 @@ def test_transform_request_drops_lookaround_regex_when_the_deployment_model_info
     assert properties == _LOOKAROUND_FREE_PROPERTIES
 
 
+def test_transform_request_drops_lookaround_regex_for_a_model_the_cost_map_does_not_list():
+    assert "us.newvendor.model-1" not in litellm.model_cost
+
+    assert _tool_schema_properties("us.newvendor.model-1", _ARTIFACT_DATA_ANTHROPIC_TOOL) == _LOOKAROUND_FREE_PROPERTIES
+
+
 @pytest.mark.parametrize(
     "model",
     [
-        "us.newvendor.model-1",
+        "converse/us.newvendor.model-1",
         "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        "us.anthropic.claude-unreleased-v1:0",
+        "eu.openai.gpt-unreleased",
+        "apac.newvendor.listed-1",
     ],
 )
-def test_transform_request_drops_lookaround_regex_for_a_model_the_cost_map_does_not_list(model):
-    assert model not in litellm.model_cost
+def test_transform_request_keeps_lookaround_regex_for_an_unlisted_model_litellm_still_recognizes(model, monkeypatch):
+    monkeypatch.setitem(litellm.model_cost, "us.newvendor.listed-1", {"litellm_provider": "bedrock_converse"})
 
-    assert _tool_schema_properties(model, _ARTIFACT_DATA_ANTHROPIC_TOOL) == _LOOKAROUND_FREE_PROPERTIES
+    properties = _tool_schema_properties(model, _ARTIFACT_DATA_ANTHROPIC_TOOL)
+
+    assert properties == _ARTIFACT_DATA_INPUT_SCHEMA["properties"]
 
 
 def test_transform_request_keeps_lookaround_regex_for_an_unlisted_model_whose_deployment_opts_out():
@@ -5408,7 +5420,6 @@ def test_recursive_output_config_format_follows_the_profile_native_key(
     assert ("outputConfig" in request) is forwarded
 
 
-
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -9243,29 +9254,63 @@ def test_bedrock_tools_transformation_valid_params():
     assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
 
 
-def test_not_found_error():
-    sent: Final[list[httpx.Request]] = []
-
+def _invalid_model_identifier_reply(sent: list[httpx.Request]):
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         return httpx.Response(
             400,
             json={"message": "The provided model identifier is invalid."},
-            headers={"x-amzn-ErrorType": "ValidationException"},
+            headers={"x-amzn-ErrorType": "ValidationException", "x-amzn-RequestId": "req-123"},
         )
+
+    return respond
+
+
+def test_not_found_error():
+    sent: Final[list[httpx.Request]] = []
 
     with pytest.raises(litellm.NotFoundError) as exc_info:
         completion(
             model="bedrock/bad_model",
             messages=[{"role": "user", "content": "What is the meaning of life"}],
-            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+            client=HTTPHandler(
+                client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))
+            ),
             aws_access_key_id="testing",
             aws_secret_access_key="testing",
             aws_region_name="us-west-2",
         )
 
     assert exc_info.value.status_code == 404
+    assert exc_info.value.response.status_code == 404
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-123"
     assert [request.url.raw_path for request in sent] == [b"/model/bad_model/converse"]
+
+
+@pytest.mark.parametrize(
+    "model, path",
+    [
+        ("bedrock/converse/bad_model", b"/model/bad_model/converse"),
+        ("bedrock/anthropic.claude-typo-v1:0", b"/model/anthropic.claude-typo-v1:0/invoke"),
+    ],
+)
+def test_invalid_model_identifier_stays_a_bad_request_for_a_model_litellm_recognizes(model, path):
+    sent: Final[list[httpx.Request]] = []
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the meaning of life"}],
+            client=HTTPHandler(
+                client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))
+            ),
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+            aws_region_name="us-west-2",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert [request.url.raw_path for request in sent] == [path]
 
 
 _WEATHER_TOOL: Final = {
@@ -9287,7 +9332,9 @@ def _converse_tool_call_reply(sent: list[httpx.Request]):
                 "output": {
                     "message": {
                         "role": "assistant",
-                        "content": [{"toolUse": {"toolUseId": "t1", "name": "get_weather", "input": {"city": "Paris"}}}],
+                        "content": [
+                            {"toolUse": {"toolUseId": "t1", "name": "get_weather", "input": {"city": "Paris"}}}
+                        ],
                     }
                 },
                 "stopReason": "tool_use",
@@ -9299,7 +9346,7 @@ def _converse_tool_call_reply(sent: list[httpx.Request]):
 
 
 def test_model_missing_from_cost_map_sends_tools_to_converse():
-    model: Final = "bedrock/converse/us.newvendor.model-1"
+    model: Final = "bedrock/us.newvendor.model-1"
     assert "us.newvendor.model-1" not in litellm.model_cost
     sent: Final[list[httpx.Request]] = []
 
@@ -9319,6 +9366,39 @@ def test_model_missing_from_cost_map_sends_tools_to_converse():
     tool_config: Final = json.loads(sent[0].content)["toolConfig"]
     assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == ["get_weather"]
     assert tool_config["toolChoice"] == {"auto": {}}
+
+
+def test_explicit_converse_route_to_an_unlisted_model_still_drops_tools_under_drop_params():
+    sent: Final[list[httpx.Request]] = []
+
+    completion(
+        model="bedrock/converse/us.newvendor.model-1",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[_WEATHER_TOOL],
+        drop_params=True,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    assert "toolConfig" not in json.loads(sent[0].content)
+
+
+def test_unknown_model_gets_reasoning_effort_as_sent():
+    sent: Final[list[httpx.Request]] = []
+
+    completion(
+        model="bedrock/us.newvendor.model-1",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        reasoning_effort="high",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    assert json.loads(sent[0].content)["additionalModelRequestFields"] == {"reasoning_effort": "high"}
 
 
 def test_mapped_model_without_function_calling_still_rejects_tools():
@@ -10810,7 +10890,10 @@ def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_infere
 
 
 _CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {
-    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}}}
+    "textFormat": {
+        "type": "json_schema",
+        "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}},
+    }
 }
 _BEDROCK_SCHEMA_TYPE_ERROR: Final = "outputConfig.textFormat.structure.jsonSchema.schema must be a string"
 

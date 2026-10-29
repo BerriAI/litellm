@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.bug_report import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
+from litellm.llms.bedrock.common_utils import bedrock_model_is_unknown
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -901,13 +902,15 @@ _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE: Final = (
 )
 
 
-def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPException) -> httpx.Response:
+def _bedrock_response_with_status(original_exception: _ProviderHTTPException, status_code: int) -> httpx.Response:
     original_response: Final = getattr(original_exception, "response", None)
     if not isinstance(original_response, httpx.Response) or getattr(original_response, "_request", None) is None:
-        return httpx.Response(status_code=400, request=httpx.Request(method="POST", url="https://api.openai.com/v1/"))
-    if original_response.status_code == 400:
+        return httpx.Response(
+            status_code=status_code, request=httpx.Request(method="POST", url="https://api.openai.com/v1/")
+        )
+    if original_response.status_code == status_code:
         return original_response
-    return httpx.Response(status_code=400, headers=original_response.headers, request=original_response.request)
+    return httpx.Response(status_code=status_code, headers=original_response.headers, request=original_response.request)
 
 
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
@@ -943,7 +946,7 @@ def _map_bedrock_exception(
                 message=mantle_context_window_message,
                 model=model,
                 llm_provider=custom_llm_provider,
-                response=_bedrock_mantle_context_window_response(original_exception),
+                response=_bedrock_response_with_status(original_exception, 400),
             )
     if (
         "too many tokens" in error_str
@@ -966,11 +969,12 @@ def _map_bedrock_exception(
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),
         )
-    elif "The provided model identifier is invalid" in error_str:
+    elif "The provided model identifier is invalid" in error_str and bedrock_model_is_unknown(model):
         raise NotFoundError(
             message=f"BedrockException - {error_str}",
             model=model,
             llm_provider="bedrock",
+            response=_bedrock_response_with_status(original_exception, 404),
         )
     elif "Malformed input request" in error_str:
         raise BadRequestError(
