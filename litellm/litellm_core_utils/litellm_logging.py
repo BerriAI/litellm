@@ -1130,9 +1130,6 @@ class Logging(LiteLLMLoggingBaseClass):
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
-        if is_debugging_on() or self.litellm_request_debug:
-            verbose_logger.debug("self.optional_params: %s", self.optional_params)
-
         self.model_call_details.update(
             {
                 "model": self.model,
@@ -2758,7 +2755,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if entry is None or not is_str_keyed_dict(litellm_params):
             return
         metadata: Final[object] = litellm_params.get("metadata")
-        bucket: Final = metadata if is_str_keyed_dict(metadata) else {}
+        bucket: Final = {**metadata} if is_str_keyed_dict(metadata) else {}
         litellm_params["metadata"] = bucket
         with_guardrail_entry(bucket, entry)
 
@@ -3481,7 +3478,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
-                            level=LogfireLevel.INFO.value,
+                            level=LogfireLevel.INFO,
                         )
 
                     if callback == "lunary" and lunaryLogger is not None:
@@ -4442,7 +4439,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            level=LogfireLevel.ERROR.value,
+                            level=LogfireLevel.ERROR,
                             print_verbose=print_verbose,
                         )
 
