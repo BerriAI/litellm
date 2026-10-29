@@ -11,6 +11,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 import litellm
@@ -2519,18 +2520,14 @@ async def test_azure_client_cache_respects_retry_limit(
     from litellm.constants import DEFAULT_MAX_RETRIES
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    requests: list[httpx.Request] = []
-
-    def rate_limited(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(
-            429,
-            json={"error": {"message": "rate limited"}},
-            headers={"retry-after-ms": "1"},
-        )
-
-    sync_http: Final = httpx.Client(transport=httpx.MockTransport(rate_limited))
-    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(rate_limited))
+    router: Final = respx.Router(assert_all_mocked=True)
+    rate_limited: Final = router.route().respond(
+        429,
+        json={"error": {"message": "rate limited"}},
+        headers={"retry-after-ms": "1"},
+    )
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(router.handler))
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(router.async_handler))
     monkeypatch.setattr(litellm, "client_session", sync_http)
     monkeypatch.setattr(litellm, "aclient_session", async_http)
     llm: Final = BaseAzureLLM()
@@ -2556,7 +2553,7 @@ async def test_azure_client_cache_respects_retry_limit(
             assert client_for({"max_retries": DEFAULT_MAX_RETRIES}) is initial
         with pytest.raises(RateLimitError):
             await _send_chat_completion(no_retry, is_async)
-        assert len(requests) == 1
+        assert rate_limited.call_count == 1
         assert no_retry is not initial
         assert client_for({"max_retries": 0}) is no_retry
         assert client_for({"max_retries": first_retries}) is initial
@@ -2574,25 +2571,19 @@ async def test_azure_client_cache_keeps_each_timeout_on_its_own_client(
     from litellm.caching.llm_caching_handler import LLMClientCache
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    sent_read_timeouts: list[float | None] = []
-
-    def completes(request: httpx.Request) -> httpx.Response:
-        sent_read_timeouts.append(request.extensions["timeout"]["read"])
-        return httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-timeout-cache",
-                "object": "chat.completion",
-                "created": 0,
-                "model": "test-deployment",
-                "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
-                ],
-            },
-        )
-
-    sync_http: Final = httpx.Client(transport=httpx.MockTransport(completes))
-    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(completes))
+    router: Final = respx.Router(assert_all_mocked=True)
+    completes: Final = router.route().respond(
+        200,
+        json={
+            "id": "chatcmpl-timeout-cache",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test-deployment",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        },
+    )
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(router.handler))
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(router.async_handler))
     monkeypatch.setattr(litellm, "client_session", sync_http)
     monkeypatch.setattr(litellm, "aclient_session", async_http)
     llm: Final = BaseAzureLLM()
@@ -2614,7 +2605,7 @@ async def test_azure_client_cache_keeps_each_timeout_on_its_own_client(
         await _send_chat_completion(short_client, is_async)
         await _send_chat_completion(long_client, is_async)
 
-        assert sent_read_timeouts == [0.1, 30.0]
+        assert [call.request.extensions["timeout"]["read"] for call in completes.calls] == [0.1, 30.0]
         assert default_client is not short_client
         assert default_client is not long_client
         assert client_for({"timeout": 0.1}) is short_client
@@ -2636,14 +2627,12 @@ async def test_azure_audio_clients_honor_the_requested_retry_limit_and_timeout(
     from litellm.caching.llm_caching_handler import LLMClientCache
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    sent_read_timeouts: list[float | None] = []
-
-    def rate_limited(request: httpx.Request) -> httpx.Response:
-        sent_read_timeouts.append(request.extensions["timeout"]["read"])
-        return httpx.Response(429, json={"error": {"message": "rate limited"}}, headers={"retry-after-ms": "1"})
-
-    sync_http: Final = httpx.Client(transport=httpx.MockTransport(rate_limited))
-    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(rate_limited))
+    router: Final = respx.Router(assert_all_mocked=True)
+    rate_limited: Final = router.route().respond(
+        429, json={"error": {"message": "rate limited"}}, headers={"retry-after-ms": "1"}
+    )
+    sync_http: Final = httpx.Client(transport=httpx.MockTransport(router.handler))
+    async_http: Final = httpx.AsyncClient(transport=httpx.MockTransport(router.async_handler))
     monkeypatch.setattr(litellm, "client_session", sync_http)
     monkeypatch.setattr(litellm, "aclient_session", async_http)
     shared: Final = dict(
@@ -2667,7 +2656,7 @@ async def test_azure_audio_clients_honor_the_requested_retry_limit_and_timeout(
     try:
         with pytest.raises(RateLimitError):
             await call()
-        assert sent_read_timeouts == [7.0]
+        assert [call.request.extensions["timeout"]["read"] for call in rate_limited.calls] == [7.0]
     finally:
         sync_http.close()
         await async_http.aclose()

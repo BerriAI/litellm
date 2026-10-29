@@ -1201,8 +1201,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         litellm_params: dict | None = None,
     ) -> HttpxBinaryResponseContent:
-        optional_params.pop("max_retries", None)
-
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
                 model=model,
