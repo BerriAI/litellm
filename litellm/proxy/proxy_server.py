@@ -168,12 +168,7 @@ from litellm.proxy.common_utils.token_count_settings import (
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
-from litellm.router_utils.access_windows import access_windows_config_error
-from litellm.router_utils.add_retry_fallback_headers import (
-    get_fallback_errors_from_headers,
-    get_hidden_params_dict,
-)
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
     capability_limit_violation,
@@ -181,11 +176,16 @@ from litellm.router_utils.auto_router_model_naming import (
     count_capability_routers,
     validate_complexity_router_config_placement,
 )
-from litellm.router_utils.auto_router_tuning_baseline import (
+from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     TUNING_BASELINE_PARAM_NAME,
     mutable_tuned_identities,
     snapshot_tuning_baselines,
     tuning_limit_violation,
+)
+from litellm.router_utils.access_windows import access_windows_config_error
+from litellm.router_utils.add_retry_fallback_headers import (
+    get_fallback_errors_from_headers,
+    get_hidden_params_dict,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
@@ -668,7 +668,11 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    SCHEDULER_PRIORITY_HEADER,
+    LiteLLMProxyRequestSetup,
+    add_litellm_data_to_request,
+)
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -18533,6 +18537,11 @@ async def async_queue_request(
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
         router: Final = llm_router
 
+        data.update(
+            router.priority_header_update(
+                model=data["model"], kwargs=data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
+            )
+        )
         queued_priority, _ = router.split_request_priority(model=data["model"], kwargs=data)
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
