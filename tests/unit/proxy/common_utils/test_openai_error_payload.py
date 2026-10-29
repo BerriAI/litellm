@@ -20,7 +20,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
         (401, "authentication_error"),
         (403, "permission_error"),
         (404, "invalid_request_error"),
-        (408, "invalid_request_error"),
+        (408, "timeout_error"),
         (422, "invalid_request_error"),
         (429, "rate_limit_error"),
         (499, "invalid_request_error"),
@@ -159,6 +159,16 @@ def test_an_upstream_5xx_body_does_not_relabel_the_internal_server_error():
 
     assert carried.body == {"message": "Controlled provider failure", "type": "server_error", "code": "500"}
     assert openai_error_type(carried, error_status_code(carried, 400)) == "internal_server_error"
+
+
+def test_an_upstream_timeout_is_not_typed_as_the_clients_mistake():
+    """A provider timeout carries status 408 and no type, and calling it an
+    invalid_request_error tells a client branching on type not to retry a request that can succeed."""
+    from litellm.exceptions import Timeout
+
+    timeout = Timeout(message="Request timed out", model="gpt-5.4-mini", llm_provider="openai")
+
+    assert openai_error_type(timeout, error_status_code(timeout, 500)) == "timeout_error"
 
 
 def test_a_stringified_none_type_or_param_is_treated_as_absent():
