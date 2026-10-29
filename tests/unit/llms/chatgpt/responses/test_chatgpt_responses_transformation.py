@@ -587,6 +587,37 @@ class TestChatGPTResponsesMultiAccount:
         assert headers_default["ChatGPT-Account-Id"] == "acct-default"
 
 
+def test_chatgpt_non_stream_sse_keeps_an_output_item_whose_text_holds_unicode_line_separators() -> None:
+    text: Final = "Hello\u2028from\u2029stream"
+    output_item_done: Final = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]},
+    }
+    completed: Final = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-6.1-sol",
+            "output": [],
+        },
+    }
+    sse_body: Final = "".join(
+        f"data: {json.dumps(event, ensure_ascii=False)}\n" for event in (output_item_done, completed)
+    )
+
+    parsed: Final = ChatGPTResponsesAPIConfig().transform_response_api_response(
+        model="chatgpt/gpt-6.1-sol",
+        raw_response=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body),
+        logging_obj=MagicMock(),
+    )
+
+    assert parsed.output_text == text
+
+
 @pytest.mark.parametrize("call", ["responses", "completion"])
 def test_prompt_cache_key_keeps_one_session_header_across_requests(
     call: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

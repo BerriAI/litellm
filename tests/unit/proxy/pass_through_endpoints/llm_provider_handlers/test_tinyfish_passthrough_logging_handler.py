@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -265,6 +266,12 @@ class TestRunCostStatusGate:
 class TestRunIdFromSseFrames:
     def test_finds_run_id_in_first_frame(self):
         frames = b'data: {"run_id": "run-7", "event": "INITIALIZED"}\n\ndata: {"run_id": "run-7", "event": "ACTION"}\n\n'
+        assert run_id_from_sse_frames(frames) == "run-7"
+
+    def test_finds_run_id_in_a_frame_whose_json_holds_unicode_line_separators(self) -> None:
+        event: Final = {"run_id": "run-7", "event": "ACTION", "message": "Clicked\u2028Submit\u2029button"}
+        frames: Final = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
         assert run_id_from_sse_frames(frames) == "run-7"
 
     def test_skips_frames_without_run_id(self):

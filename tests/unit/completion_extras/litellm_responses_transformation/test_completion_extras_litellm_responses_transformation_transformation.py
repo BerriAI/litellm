@@ -1102,6 +1102,24 @@ def test_recover_output_items_merges_text_only_items_at_distinct_indices():
     assert recovered[1]["content"][0]["text"] == "From OUTPUT_TEXT_DONE only"
 
 
+def test_recover_output_items_keeps_an_item_whose_text_holds_unicode_line_separators() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    item: Final = {
+        "type": "message",
+        "id": "msg_item_0",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "From\u2028OUTPUT_ITEM\u2029DONE", "annotations": []}],
+    }
+    event: Final = {"type": "response.output_item.done", "output_index": 0, "item": item}
+    raw_sse: Final = f"data: {json.dumps(event, ensure_ascii=False)}\ndata: [DONE]\n"
+
+    assert LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(raw_sse) == [item]
+
+
 def test_transform_response_prefers_completed_output_from_raw_sse():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,

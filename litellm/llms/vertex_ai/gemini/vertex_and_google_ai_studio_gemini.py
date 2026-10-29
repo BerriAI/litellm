@@ -41,6 +41,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
@@ -3241,7 +3242,7 @@ async def make_call(
             raise
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.aiter_lines(),
+        streaming_response=aiter_sse_lines(response.aiter_text()),
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
@@ -3312,7 +3313,7 @@ def make_sync_call(
             raise
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.iter_lines(),
+        streaming_response=iter_sse_lines(response.iter_text()),
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
@@ -4190,7 +4191,7 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response, token)
-        self.streaming_response = hop_response.aiter_lines()
+        self.streaming_response = aiter_sse_lines(hop_response.aiter_text())
         self.async_response_iterator = self.streaming_response
         return None
 
@@ -4204,7 +4205,7 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response, token)
-        self.streaming_response = hop_response.iter_lines()
+        self.streaming_response = iter_sse_lines(hop_response.iter_text())
         self.response_iterator = self.streaming_response
         return None
 

@@ -3,8 +3,9 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
+from itertools import pairwise
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -34,7 +35,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, ModelInfo, Usage
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
@@ -10125,7 +10126,7 @@ def test_vertex_ai_streaming_response_id():
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.iter_lines = MagicMock(return_value=stream_response())
+        mock_response.iter_text = MagicMock(return_value=stream_response())
         return mock_response
 
     logging_obj = MagicMock()
@@ -10688,6 +10689,63 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
     sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected
+
+
+class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield from self._chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _split_at(body: bytes, cuts: tuple[int, ...]) -> tuple[bytes, ...]:
+    return tuple(body[start:end] for start, end in pairwise((0, *sorted(cuts), len(body))))
+
+
+async def _gemini_stream(is_async: bool, chunks: tuple[bytes, ...]) -> list[ModelResponseStream]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_BodyInChunks(chunks), headers={"content-type": "text/event-stream"})
+
+    kwargs: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "api_key": "fake-gemini-key",
+    }
+    if is_async:
+        stream: Final = await litellm.acompletion(
+            **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+        )
+        return [chunk async for chunk in stream]
+    return list(
+        litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
+    )
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+async def test_gemini_stream_keeps_text_and_usage_when_a_part_contains_a_unicode_line_separator(is_async: bool) -> None:
+    events: Final = (
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": "line one\u2028line two"}]}}]},
+        {
+            "candidates": [{"content": {"role": "model", "parts": [{"text": " and three"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8, "totalTokenCount": 18},
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event, ensure_ascii=False)}\r\n\r\n" for event in events).encode()
+    cut_inside_separator_and_crlf: Final = (body.index(b"\xe2\x80\xa8") + 1, body.index(b"\r") + 1)
+
+    received: Final = await _gemini_stream(is_async, _split_at(body, cut_inside_separator_and_crlf))
+
+    usage: Final = next(chunk.usage for chunk in reversed(received) if getattr(chunk, "usage", None))
+    text: Final = "".join(c.choices[0].delta.content or "" for c in received if c.choices)
+    assert text == "line one\u2028line two and three"
+    assert (usage.prompt_tokens, usage.completion_tokens) == (10, 8)
 
 
 @pytest.mark.parametrize("chunk_indices", [[0, 1], [2, 1, 0]])

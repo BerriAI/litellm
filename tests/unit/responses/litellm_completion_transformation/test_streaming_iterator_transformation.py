@@ -1288,6 +1288,106 @@ async def test_reasoning_item_closes_before_a_tool_call_from_the_same_chunk_open
     ]
 
 
+def _text_opening_a_tool_call_chunk(content: str, arguments: str = "") -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=content,
+                    tool_calls=[
+                        {
+                            "id": "call_weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": arguments},
+                            "index": 0,
+                        }
+                    ],
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _tool_arguments_chunk(arguments: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[{"type": "function", "function": {"arguments": arguments}, "index": 0}],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_call_opened_in_a_text_chunk_streams_each_argument_delta(sync_mode: bool) -> None:
+    argument_pieces: Final = ('{"', "city", '"', ': "', "Paris", '"', "}")
+    iterator: Final = _build_iterator(
+        [
+            _text_opening_a_tool_call_chunk("</think>"),
+            *(_tool_arguments_chunk(piece) for piece in argument_pieces),
+            _chunk("", finish_reason="tool_calls"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "</think>"
+    assert [
+        event.delta
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ] == list(argument_pieces)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_call_sharing_a_chunk_with_text_opens_after_the_whole_message(sync_mode: bool) -> None:
+    iterator: Final = _build_iterator(
+        [
+            _text_opening_a_tool_call_chunk("Checking ", arguments='{"city": "Paris"}'),
+            _chunk("the "),
+            _chunk("weather now."),
+            _chunk("", finish_reason="tool_calls"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    event_types: Final = [getattr(event, "type", None) for event in events]
+    function_call_added_at: Final = next(
+        position
+        for position, event in enumerate(events)
+        if event_types[position] == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and event.item.type == "function_call"
+    )
+    streamed: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA)
+    ]
+    assert ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA not in event_types[function_call_added_at:]
+    assert [event.sequence_number for event in streamed] == sorted(event.sequence_number for event in streamed)
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Checking the weather now."
+    assert _event_text(events, ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA) == '{"city": "Paris"}'
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_tool_only_stream_puts_the_function_call_at_output_index_zero(sync_mode: bool):

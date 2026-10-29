@@ -18,6 +18,7 @@ from starlette.types import Message
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
@@ -81,7 +82,7 @@ class _StreamsBody(Protocol):
 
 
 def _sse_frame_data(frame: str) -> str | None:
-    return next((line[6:].strip() for line in frame.splitlines() if line.startswith("data: ")), None)
+    return next((line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: ")), None)
 
 
 async def _never_receive() -> Message:
