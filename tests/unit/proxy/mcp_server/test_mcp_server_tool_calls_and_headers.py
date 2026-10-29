@@ -7280,6 +7280,18 @@ class TestTruePassthroughProbeForwardsCallerHeaders:
                 client_ip=None,
                 raw_headers={"X-Platform-User": "alice"},
             )
+            with pytest.raises(HTTPException) as exc_info:
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope=self._scope(),
+                    mcp_servers=[self.ALIAS],
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(),
+                    client_ip=None,
+                    raw_headers={"X-Platform-User": "bob"},
+                )
+
+        assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_probe_never_forwards_authorization_via_extra_headers(self):
