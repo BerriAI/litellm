@@ -137,7 +137,7 @@ def test_session_rejects_unsupported_settings(update: str, message: str):
 
 def test_options_are_appended_to_the_query():
     options: Final = ElevenLabsRealtimeOptions(
-        keyterms=("GBS", "Portainer"),
+        keyterms=("Scribe", "realtime"),
         secondary_languages=("es",),
         no_verbatim=True,
         filter_background_audio=False,
@@ -149,7 +149,7 @@ def test_options_are_appended_to_the_query():
     )
     query: Final = _query(parse_session_update(_session_update(), options))
 
-    assert query["keyterms"] == ["GBS", "Portainer"]
+    assert query["keyterms"] == ["Scribe", "realtime"]
     assert query["secondary_languages"] == ["es"]
     assert query["no_verbatim"] == ["true"]
     assert query["filter_background_audio"] == ["false"]
@@ -170,15 +170,15 @@ def test_unset_options_are_not_sent():
 
 def test_options_from_params_ignore_unrelated_litellm_params():
     options: Final = realtime_options_from_params(
-        {"api_key": "secret", "rpm": 10, "keyterms": ["GBS"], "no_verbatim": True, "vad_threshold": None}
+        {"api_key": "secret", "rpm": 10, "keyterms": ["Scribe"], "no_verbatim": True, "vad_threshold": None}
     )
 
-    assert options == ElevenLabsRealtimeOptions(keyterms=("GBS",), no_verbatim=True)
+    assert options == ElevenLabsRealtimeOptions(keyterms=("Scribe",), no_verbatim=True)
 
 
 @pytest.mark.parametrize(
     "params",
-    [{"keyterms": "GBS"}, {"no_verbatim": "yes"}, {"min_speech_duration_ms": -1}, {"vad_threshold": -0.1}],
+    [{"keyterms": "Scribe"}, {"no_verbatim": "yes"}, {"min_speech_duration_ms": -1}, {"vad_threshold": -0.1}],
 )
 def test_options_from_params_reject_invalid_values(params: dict[str, object]):
     with pytest.raises(ValueError, match="Invalid ElevenLabs realtime options"):

@@ -80,11 +80,11 @@ class ElevenLabsErrorMessage(LiteLLMBaseModel):
     error: str
 
 
-ElevenLabsServerMessageUnion = (
+ElevenLabsServerMessageUnion: TypeAlias = (
     ElevenLabsSessionStarted
     | ElevenLabsPartialTranscript
     | ElevenLabsCommittedTranscript
     | ElevenLabsWarning
     | ElevenLabsErrorMessage
 )
-ElevenLabsServerMessage = Annotated[ElevenLabsServerMessageUnion, Field(discriminator="message_type")]
+ElevenLabsServerMessage: TypeAlias = Annotated[ElevenLabsServerMessageUnion, Field(discriminator="message_type")]

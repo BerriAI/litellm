@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import ValidationError
 from typing_extensions import Self
@@ -14,7 +14,7 @@ from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
 from litellm.types.llms.elevenlabs import ElevenLabsRealtimeConfigure
 
-RealtimeConnect = Callable[[str, Mapping[str, str]], Awaitable[RealtimeBackend]]
+RealtimeConnect: TypeAlias = Callable[[str, Mapping[str, str]], Awaitable[RealtimeBackend]]
 
 _OPEN_TIMEOUT_SECONDS: Final = 8.0
 

@@ -224,3 +224,8 @@ async def test_close_after_connection_failure_does_not_raise():
 
     await backend.send(CONFIGURE)
     await backend.close()
+
+    with pytest.raises(ConnectionClosedError) as closed:
+        await backend.recv()
+    assert closed.value.rcvd is not None
+    assert closed.value.rcvd.code == 1011

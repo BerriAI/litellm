@@ -538,7 +538,9 @@ async def _arealtime(
         from ..llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
 
         elevenlabs_params: Final = TypeAdapter(dict[str, object]).validate_python(kwargs)
-        provider_config = elevenlabs_realtime_config(elevenlabs_params, drop_params=drop_params)
+        provider_config = (  # rebind-ok: LIT010 existing shared provider dispatch
+            elevenlabs_realtime_config(elevenlabs_params, drop_params=drop_params)
+        )
     elif _custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_config(
             model=model,

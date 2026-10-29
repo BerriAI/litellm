@@ -199,7 +199,9 @@ def parse_session_update(
     )
 
 
-def session_created_event(config: ElevenLabsSessionConfig, session_id: str) -> OpenAIRealtimeTranscriptionSessionCreated:
+def session_created_event(
+    config: ElevenLabsSessionConfig, session_id: str
+) -> OpenAIRealtimeTranscriptionSessionCreated:
     return transcription_session_created_event(config.openai_session(session_id))
 
 
