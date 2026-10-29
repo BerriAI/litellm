@@ -60,15 +60,15 @@ from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
+    StrategyRouterDependencyRole,
+    classify_strategy_router_model,
+    strategy_router_dependencies,
+)
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.request_models import (
     AutoRouterRoutingTestRequest,
     RequestComplexityRouterConfig,
-)
-from litellm.router_utils.auto_router_model_naming import (
-    StrategyRouterDependencyRole,
-    classify_strategy_router_model,
-    strategy_router_dependencies,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
@@ -411,7 +411,7 @@ async def validate_complexity_router_config(
         auto_router_environment_reference_error(data.complexity_router_config, user_api_key_dict)
     )
 
-    from litellm.router_utils.auto_router_model_naming import (
+    from litellm.router_strategy.auto_router.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
 
