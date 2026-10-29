@@ -66,16 +66,19 @@ class _ClearAtLeast(BaseModel):
 class _ClearToolUsesFields(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    trigger: Mapping[str, object] | None = None
+    keep: Mapping[str, object] | None = None
     clear_at_least: _ClearAtLeast | None = None
     exclude_tools: tuple[str, ...] | None = None
     clear_tool_inputs: bool | tuple[str, ...] | None = None
 
 
 _BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-# api.anthropic.com, measured 2026-10-19: its wording for the two shapes pydantic words differently
+# api.anthropic.com, measured 2026-10-19 and 2026-10-28: its wording for the shapes pydantic words differently
 _API_MESSAGES: Final = MappingProxyType(
     {
         "tuple_type": "Input should be a valid array",
+        "dict_type": "Input should be an object",
         "model_type": "Input does not match the expected shape.",
     }
 )

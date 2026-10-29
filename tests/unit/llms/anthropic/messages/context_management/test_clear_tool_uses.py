@@ -662,6 +662,9 @@ async def _malformed_spec_error(edits: list[dict[str, object]]) -> AnthropicCont
         ("exclude_tools", "get_weather"),
         ("exclude_tools", [1]),
         ("clear_tool_inputs", "get_weather"),
+        ("trigger", "soon"),
+        ("trigger", [1]),
+        ("keep", 5),
     ],
 )
 async def test_malformed_fields_are_a_400_even_below_the_trigger(field: str, value: object) -> None:
@@ -679,12 +682,15 @@ async def test_malformed_fields_are_a_400_even_below_the_trigger(field: str, val
         ("clear_at_least", 1200, "clear_at_least: Input does not match the expected shape."),
         ("clear_at_least", {"type": "input_tokens", "value": "1200"}, "value: Input should be a valid integer"),
         ("clear_tool_inputs", 5, "clear_tool_inputs.bool: Input should be a valid boolean, unable to interpret input"),
+        ("trigger", "soon", "trigger: Input should be an object"),
+        ("keep", 5, "keep: Input should be an object"),
     ],
 )
 async def test_malformed_field_400_names_the_edit_and_field_as_the_api_does(
     field: str, value: object, message: str
 ) -> None:
-    # api.anthropic.com, measured 2026-10-19, answers these four with these messages for the edit at index 1.
+    # api.anthropic.com answers these with these messages for the edit at index 1 (trigger and keep measured
+    # 2026-10-28, the rest 2026-10-19).
     error = await _malformed_spec_error(
         [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919", field: value}]
     )
@@ -726,6 +732,28 @@ async def test_drop_params_drops_only_the_malformed_field(field: str, value: obj
     assert result is not None
     assert _cleared_ids(result.messages) == {"toolu_00", "toolu_01"}
     assert _tool_inputs(result.messages) == {"toolu_00": {}, "toolu_01": {}, "toolu_02": {"location": "City2"}}
+
+
+@pytest.mark.parametrize(("field", "value"), [("trigger", "soon"), ("keep", 5)])
+async def test_drop_params_treats_a_malformed_trigger_or_keep_as_never_sent(field: str, value: object) -> None:
+    async def run(edit: dict[str, object], drop_invalid_edits: bool) -> PolyfillResult | None:
+        return await _run_polyfill_if_enabled(
+            model=MODEL,
+            messages=_make_history(n_pairs=5),
+            tools=None,
+            system=None,
+            context_management_spec={"edits": [edit]},
+            litellm_metadata={},
+            additional_drop_params=None,
+            llm_router=None,
+            drop_invalid_edits=drop_invalid_edits,
+        )
+
+    malformed: Final = {**_VALID_EDIT, field: value}
+    with pytest.raises(AnthropicContextManagementError, match=rf"\.{field}: Input should be an object$"):
+        await run(malformed, drop_invalid_edits=False)
+    never_sent: Final = {key: spec for key, spec in _VALID_EDIT.items() if key != field}
+    assert await run(malformed, drop_invalid_edits=True) == await run(never_sent, drop_invalid_edits=True)
 
 
 async def test_malformed_edit_is_rejected_before_a_compact_summary_is_paid_for(

@@ -520,6 +520,28 @@ def test_token_counter_skips_non_mapping_tools():
     assert mixed_tokens == valid_tokens
 
 
+@pytest.mark.parametrize(
+    ("shorthand", "explicit"),
+    [({"type": "array"}, {"type": "array", "items": {}}), (True, {})],
+    ids=["array_without_items", "boolean_subschema"],
+)
+def test_token_counter_counts_json_schema_shorthands_like_their_explicit_form(shorthand: object, explicit: object) -> None:
+    def tool(property_schema: object) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "read_files",
+                "parameters": {"type": "object", "properties": {"paths": property_schema}},
+            },
+        }
+
+    messages: Final = [{"role": "user", "content": "Read the config files"}]
+
+    assert token_counter_new(model="gpt-4o", messages=messages, tools=[tool(shorthand)]) == token_counter_new(
+        model="gpt-4o", messages=messages, tools=[tool(explicit)]
+    )
+
+
 _WEATHER_FUNCTION: Final = {
     "name": "get_weather",
     "description": "Get the current weather for a city",
@@ -1839,6 +1861,20 @@ def test_token_counter_counts_anthropic_search_result_text() -> None:
 
     assert _count_content_list(len, [search_result], False, None) == len(
         "https://example.invalid/notesProject notesThe code word is 7f3a."
+    )
+
+
+def test_token_counter_counts_a_search_result_without_a_title() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.invalid/notes",
+        "content": [{"type": "text", "text": "The code word is 7f3a."}],
+    }
+
+    assert _count_content_list(len, [search_result], False, None) == len(
+        "https://example.invalid/notesThe code word is 7f3a."
     )
 
 

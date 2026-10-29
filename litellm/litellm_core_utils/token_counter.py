@@ -1095,10 +1095,6 @@ def _validate_anthropic_content(content: Mapping[str, object]) -> type:
     if expected_cls is None:
         raise ValueError(f"Unknown Anthropic content type: '{content_type}'")
 
-    missing: Final = [k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content]
-    if missing:
-        raise ValueError(f"Missing required fields in {content_type} block: {', '.join(missing)}")
-
     return expected_cls
 
 
@@ -1428,7 +1424,7 @@ def _format_object_parameters(parameters, indent):
     required_params: Final = parameters.get("required", [])
     lines: Final = []
     for key, props in properties.items():
-        description = props.get("description")
+        description = props.get("description") if isinstance(props, Mapping) else None
         if description:
             lines.append(f"// {description}")
         question = "?"
@@ -1439,14 +1435,15 @@ def _format_object_parameters(parameters, indent):
 
 
 def _format_type(props, indent):
+    if not isinstance(props, Mapping):
+        return "any"
     type: Final = props.get("type")
     if type == "string":
         if "enum" in props:
             return " | ".join([f'"{item}"' for item in props["enum"]])
         return "string"
     elif type == "array":
-        # items is required, OpenAI throws an error if it's missing
-        return f"{_format_type(props['items'], indent)}[]"
+        return f"{_format_type(props.get('items'), indent)}[]"
     elif type == "object":
         return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
     elif type in ["integer", "number"]:
