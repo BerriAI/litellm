@@ -7249,8 +7249,8 @@ class MCPServerManager:
         for server in self.get_registry().values():
             if self.oauth_discovery_slot(server.server_id) is not None:
                 continue
-            if server.needs_user_oauth_token:
-                # Skip OAuth2 servers that rely on user-provided tokens
+            if server.needs_user_oauth_token or server.is_oauth_delegate:
+                # Startup has no caller token for these OAuth servers.
                 continue
             try:
                 tools = await self.get_tools_from_server(server)
