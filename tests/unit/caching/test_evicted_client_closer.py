@@ -356,11 +356,19 @@ async def test_a_client_serving_a_request_is_not_closed_when_its_grace_window_en
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("http2", [False, True], ids=["aiohttp", "http2-connection-spread"])
-async def test_a_handler_is_not_closed_mid_request(http2: bool):
+@pytest.mark.parametrize(
+    ("http2", "proxied"),
+    [(False, False), (True, False), (True, True)],
+    ids=["aiohttp", "http2-connection-spread", "http2-behind-http-proxy"],
+)
+async def test_a_handler_is_not_closed_mid_request(http2: bool, proxied: bool, monkeypatch: pytest.MonkeyPatch):
     """Both async handler paths account for their own leases: aiohttp's pool and the HTTP/2 connection spread."""
     server = await asyncio.start_server(_trickling_upstream, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    if proxied:
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")
     clock = FakeClock()
     closer = make_closer(clock)
     handler = AsyncHTTPHandler(http2=http2)
@@ -369,7 +377,7 @@ async def test_a_handler_is_not_closed_mid_request(http2: bool):
     closer.mark_owned(handler)
     closer.schedule(handler)
 
-    request = asyncio.create_task(handler.get(f"http://127.0.0.1:{port}/"))
+    request = asyncio.create_task(handler.get("http://upstream.invalid/" if proxied else f"http://127.0.0.1:{port}/"))
     await asyncio.sleep(0.25)
     clock.advance(3600.0)
     closer.reap()
