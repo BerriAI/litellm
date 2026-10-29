@@ -554,6 +554,7 @@ async def acompletion_with_mcp(
                 if isinstance(follow_up_response, CustomStreamWrapper):
                     if earlier_rounds is not None:
                         follow_up_response.bill_failure_after_earlier_rounds(earlier_rounds)
+                    follow_up_response.messages = follow_up_messages
                     self.follow_up_stream = follow_up_response
                     from litellm._logging import verbose_logger
 

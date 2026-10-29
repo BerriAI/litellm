@@ -1847,6 +1847,11 @@ def _assert_one_stream_row_bills_both_rounds_once(
     assert usage.cost == pytest.approx(row["response_cost"])
 
 
+def _prompt_tokens_the_follow_up_sent(respx_mock: respx.MockRouter) -> int:
+    follow_up_request: Final = json.loads(respx_mock.calls[1].request.content)
+    return litellm.token_counter(model="gpt-5.6", messages=follow_up_request["messages"])
+
+
 def _assert_one_row_bills_round_one(logged: Sequence[StandardLoggingPayload]) -> None:
     assert len(logged) == 1
     assert (logged[0]["prompt_tokens"], logged[0]["completion_tokens"]) == (71, 19)
@@ -2045,6 +2050,7 @@ async def test_stream_auto_execute_bills_a_broken_follow_up_on_its_own_failure_r
         )
         - _FIXED_MARGIN
     )
+    assert failed["prompt_tokens"] == _prompt_tokens_the_follow_up_sent(respx_mock)
     assert failed["completion_tokens"] > 0
     assert failed["response_cost"] == pytest.approx(unmargined)
     request_failure: Final = _failure_fields_to_lift(request_data)
@@ -2174,12 +2180,15 @@ async def test_stream_auto_execute_whose_follow_up_cannot_be_assembled_ends_with
     assert usage.cost == pytest.approx(recorder.logged[0]["response_cost"])
 
 
-def _assert_one_row_bills_round_one_and_the_partial_answer(recorder: _ChatRoundRecorder) -> None:
+def _assert_one_row_bills_round_one_and_the_partial_answer(
+    recorder: _ChatRoundRecorder, respx_mock: respx.MockRouter
+) -> None:
     assert len(recorder.logged) == 1
     row: Final = recorder.logged[0]
     assert row["id"] == _CHAT_ROUND_ONE["id"]
     partial_prompt, partial_completion = (row["prompt_tokens"] - 71, row["completion_tokens"] - 19)
-    assert partial_prompt > 0 and partial_completion > 0
+    assert partial_prompt == _prompt_tokens_the_follow_up_sent(respx_mock)
+    assert partial_completion > 0
     partial_answer: Final = litellm.completion_cost(
         completion_response=ModelResponse(
             model="gpt-5.6",
@@ -2220,7 +2229,7 @@ async def test_stream_auto_execute_hung_up_during_the_follow_up_bills_round_one_
         )
     await recorder.settled(logged=1)
 
-    _assert_one_row_bills_round_one_and_the_partial_answer(recorder)
+    _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
 
 
 class _StallsOnceTheAnswerStarts(httpx.AsyncByteStream):
@@ -2310,7 +2319,7 @@ async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_an
         await _serve_until_the_client_hangs_up_after(served, "PING")
     await recorder.settled(logged=1)
 
-    _assert_one_row_bills_round_one_and_the_partial_answer(recorder)
+    _assert_one_row_bills_round_one_and_the_partial_answer(recorder, respx_mock)
 
 
 async def _read_through_the_usage_chunk(
