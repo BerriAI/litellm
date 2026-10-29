@@ -308,10 +308,7 @@ def should_use_polling_for_request(
         # Otherwise, check ALL deployments for this model_name in router
         elif llm_router is not None:
             try:
-                # Get all deployment indices for this model name
-                indices: Final = llm_router.model_name_to_deployment_indices.get(model, [])
-                for idx in indices:
-                    deployment_dict = llm_router.model_list[idx]
+                for deployment_dict in llm_router.deployments_named(model) or ():
                     litellm_params = deployment_dict.get("litellm_params", {})
 
                     # Check custom_llm_provider first
