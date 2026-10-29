@@ -1,6 +1,6 @@
 import os
 from collections.abc import Collection, Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NoReturn
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -297,3 +297,21 @@ class AzureAIAgentResponsesAPIConfig(AzureAIResponsesAPIConfig):
                 model, (*_caller_agent_fields(request), *_caller_agent_fields(extra_body)), litellm_params
             ),
         }
+
+    def transform_compact_response_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: same
+    ) -> NoReturn:
+        raise UnsupportedParamsError(
+            message=(
+                "azure_ai Foundry agents cannot be compacted, because the project's /responses/compact endpoint "
+                "takes a model deployment, not an agent. Call compact on a model entry for that deployment instead"
+            ),
+            llm_provider=LlmProviders.AZURE_AI.value,
+            model=model,
+        )

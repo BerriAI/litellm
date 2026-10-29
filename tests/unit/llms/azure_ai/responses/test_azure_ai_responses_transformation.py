@@ -706,6 +706,22 @@ async def test_aresponses_rejects_instructions_on_a_previous_response_turn_witho
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_acompact_responses_rejects_a_foundry_agent_without_calling_the_project():
+    route = respx.post(url__regex=r".*/openai/v1/responses/compact(\?.*)?$")
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="compact"):
+        await litellm.acompact_responses(
+            model="azure_ai/agents/support-agent",
+            input="What is 2+2?",
+            api_base=FOUNDRY_PROJECT_BASE,
+            api_key="fake-key",
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_aresponses_drops_instructions_on_a_previous_response_turn_under_drop_params():
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
