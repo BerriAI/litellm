@@ -1,7 +1,7 @@
 """
 Supports writing files to Google AI Studio Files API.
 
-For vertex ai, check out the vertex_ai/files/handler.py file.
+For vertex ai, check out the vertex_ai/files/transformation.py file.
 """
 
 import time
