@@ -222,7 +222,7 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
         return
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
     if pending:
-        verbose_logger.warning("Timed out draining %d logging tasks on shutdown, dropping them", len(pending))
+        verbose_logger.warning("Timed out draining logging tasks on shutdown: %d tasks still alive", len(pending))
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(

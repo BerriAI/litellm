@@ -1,12 +1,14 @@
 import hashlib
 import json
 import os
+import re
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
@@ -29,6 +31,7 @@ BURST_REQUESTS: Final = 30
 
 _GATED_LOGGER: Final = """
 import os
+import re
 import httpx
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -139,7 +142,10 @@ def test_callback_backlog_is_accounted_before_shutdown_disconnects(
 ) -> None:
     release: Final = threading.Event()
     tags: Final = (f"backlog-a-{uuid.uuid4().hex}", f"backlog-b-{uuid.uuid4().hex}")
-    with wire_server(_provider) as wire, wire_server(lambda _: Reply(chunks=(b"{}",), gate_before_first=release)) as logger:
+    with (
+        wire_server(_provider) as wire,
+        wire_server(lambda _: Reply(chunks=(b"{}",), gate_before_first=release)) as logger,
+    ):
         config: Final = _tag_shutdown_config(tmp_path, wire.url, redis_buffer, gated=True)
         with owned_proxy_process(
             gateway,
@@ -174,6 +180,70 @@ def test_callback_backlog_is_accounted_before_shutdown_disconnects(
                 _assert_shutdown_accounting(key, tags, 3)
             finally:
                 release.set()
+
+
+@pytest.mark.parametrize("gunicorn", [False, True])
+def test_sigterm_http_drain_consumes_callback_budget(gateway: Gateway, tmp_path: Path, gunicorn: bool) -> None:
+    release_request: Final = threading.Event()
+    release_callback: Final = threading.Event()
+    tags: Final = (f"deadline-a-{uuid.uuid4().hex}", f"deadline-b-{uuid.uuid4().hex}")
+
+    def held_provider(request: Request) -> Reply:
+        response: Final = _provider(request)
+        return replace(response, chunks=(response.body,), gate_before_first=release_request)
+
+    with (
+        wire_server(held_provider) as wire,
+        wire_server(lambda _: Reply(chunks=(b"{}",), gate_before_first=release_callback)) as logger,
+    ):
+        config: Final = _tag_shutdown_config(tmp_path, wire.url, False, gated=True)
+        with (
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                {
+                    "DATABASE_URL": os.environ["DATABASE_URL"],
+                    "SHUTDOWN_CALLBACK_URL": logger.url,
+                    "GRACEFUL_SHUTDOWN_TIMEOUT": "30",
+                    "LITELLM_LOG": "DEBUG",
+                },
+                config=config,
+                extra_arguments=("--run_gunicorn",) if gunicorn else (),
+            ) as owned,
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            key: Final = string_value(
+                owned.gateway.post("/key/generate", {"user_id": f"deadline-{uuid.uuid4().hex}"})["key"]
+            )
+            request: Final = executor.submit(_tagged_chat, owned.gateway, key, tags)
+            try:
+                eventually(wire.received.qsize, lambda count: count == 1, seconds=10)
+                owned.begin_shutdown()
+                eventually(
+                    lambda: "graceful_shutdown_started" in owned.log.read_text(), lambda stamped: stamped, seconds=5
+                )
+                assert not request.done(), "The shutdown clock must start before the HTTP request drains"
+                stamped: Final = time.monotonic()
+                eventually(time.monotonic, lambda now: now - stamped >= 2, seconds=5)
+                held_seconds: Final = time.monotonic() - stamped
+                release_request.set()
+                request.result(timeout=10)
+                budget: Final = eventually(
+                    lambda: re.search(r"remaining_s=([\d.]+) callback_timeout_s=([\d.]+)", owned.log.read_text()),
+                    lambda match: match is not None,
+                    seconds=15,
+                )
+                assert budget is not None
+                remaining: Final = float(budget[1])
+                allowance: Final = float(budget[2])
+                assert remaining <= 30 - held_seconds + 0.05
+                assert allowance == pytest.approx(max(0, remaining - 10), abs=0.002)
+                release_callback.set()
+                owned.process.wait(timeout=45)
+                _assert_shutdown_accounting(key, tags, 1)
+            finally:
+                release_request.set()
+                release_callback.set()
 
 
 def _api_requests(table: str, column: str, identity: str) -> int:

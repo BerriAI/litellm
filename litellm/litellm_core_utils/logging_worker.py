@@ -473,12 +473,19 @@ class LoggingWorker:
         self.start()
         self.enqueue(async_coroutine)
 
-    async def stop(self, *, discard_pending: bool = False) -> None:
+    @property
+    def pending_count(self) -> int:
+        return (self._queue.qsize() if self._queue is not None else 0) + len(self._dequeued_tasks)
+
+    async def stop(self, *, discard_pending: bool = False, timeout: float | None = None) -> None:
         """Stop the logging worker and clean up resources."""
         if discard_pending and self._queue is not None:
-            for task in self._drain_pending(self._queue):
+            discarded: Final = self._drain_pending(self._queue)
+            for task in discarded:
                 task["coroutine"].close()
                 self._queue.task_done()
+            if discarded:
+                verbose_logger.warning("LoggingWorker shutdown: %d queued callbacks discarded", len(discarded))
         if self._timeout_summary_task is not None:
             self._timeout_summary_task.cancel()
             self._timeout_summary_task = None
@@ -498,16 +505,20 @@ class LoggingWorker:
             task.cancel()
 
         # Wait for cancellation to settle; ignore errors raised during shutdown.
-        await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+        done, pending = await asyncio.wait(tasks_to_cancel, timeout=timeout)
+        await asyncio.gather(*done, return_exceptions=True)
+        if pending:
+            verbose_logger.warning("LoggingWorker shutdown: %d tasks still alive after cancellation", len(pending))
 
         if discard_pending and self._queue is not None:
             for task in self._unstarted_dequeued_tasks():
                 task["coroutine"].close()
                 self._untrack_dequeued(task)
                 self._queue.task_done()
-        self._worker_task = None
+        if self._worker_task is not None and self._worker_task.done():
+            self._worker_task = None
         # Drop references to completed tasks so we can restart cleanly.
-        self._running_tasks.clear()
+        self._running_tasks.difference_update(done)
 
     async def flush(self) -> None:
         """Flush the logging queue.
