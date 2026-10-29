@@ -4369,6 +4369,26 @@ def test_a_deployment_that_marks_cache_control_keeps_the_callers_own_marker_what
     assert [part.get("prompt_cache_breakpoint") for part in parts] == [{"mode": "explicit"}, {"mode": "explicit"}]
 
 
+def test_a_model_that_takes_markers_sends_kept_parts_byte_for_byte_and_drops_only_the_rejected_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    kept: Final = [
+        {"type": "input_text", "text": "a", "prompt_cache_breakpoint": None},
+        {"prompt_cache_breakpoint": {"mode": "explicit"}, "type": "input_text", "text": "b"},
+    ]
+    rejected: Final = {"type": "input_text", "text": "c"}
+    bad_ttl: Final = {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+    input: Final = [
+        {"type": "message", "role": "user", "content": kept},
+        {"type": "message", "role": "user", "content": [{**bad_ttl, **rejected}]},
+    ]
+    transformed: Final = _transformed_input_for("gpt-6.1-sol", input, GenericLiteLLMParams(drop_params=True))
+    assert json.dumps(transformed) == json.dumps(
+        [{"type": "message", "role": "user", "content": kept}, {"type": "message", "role": "user", "content": [rejected]}]
+    )
+
+
 @pytest.mark.parametrize("content", ("Say ok", [{"type": "input_text", "text": "Say ok"}]), ids=("string", "parts"))
 @pytest.mark.parametrize("marker", (_VALID_MARKERS[0], "yes"), ids=("explicit", "string"))
 def test_a_prompt_cache_breakpoint_on_the_message_item_is_dropped_under_drop_params(
