@@ -17,12 +17,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.batch_utils import InMemoryFile
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -422,6 +422,109 @@ def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> 
         url: Final = image_source.get("url")
         return url if isinstance(url, str) else ""
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class InlineDocument:
+    filename: str
+    file_data: str
+
+
+def _document_media_type(source: object) -> str:
+    match source:
+        case {"media_type": str() as media_type} if media_type:
+            return media_type
+        case _:
+            return "application/pdf"
+
+
+def anthropic_inline_document(document: Mapping[str, object]) -> InlineDocument | None:
+    source: Final = document.get("source")
+    match source:
+        case {"type": "base64", "data": str() as data} if data:
+            title: Final = document.get("title")
+            return InlineDocument(
+                filename=title if isinstance(title, str) and title else "document.pdf",
+                file_data=f"data:{_document_media_type(source)};base64,{data}",
+            )
+        case _:
+            return None
+
+
+def is_pdf_file_part(part: object) -> bool:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data.startswith("data:"):
+            return file_data.startswith("data:application/pdf")
+        case {"type": "file", "file": {"format": str() as file_format}}:
+            return file_format == "application/pdf"
+        case {"type": "file", "file": {"filename": str() as filename}}:
+            return filename.lower().endswith(".pdf")
+        case _:
+            return False
+
+
+_CONTENT_PARTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def content_parts(message: Mapping[str, object]) -> Sequence[object]:
+    content: Final = message.get("content")
+    return _CONTENT_PARTS.validate_python(content) if isinstance(content, list) else ()
+
+
+def _has_pdf_file_part(message: Mapping[str, object]) -> bool:
+    return any(is_pdf_file_part(part) for part in content_parts(message))
+
+
+def messages_have_pdf_file_part(messages: Sequence[Mapping[str, object]]) -> bool:
+    return any(_has_pdf_file_part(message) for message in messages)
+
+
+def _message_without_pdf_file_parts(message: AllMessageValues) -> AllMessageValues:
+    if not _has_pdf_file_part(message):
+        return message
+    kept: Final = [part for part in content_parts(message) if not is_pdf_file_part(part)]
+    return cast(AllMessageValues, {**message, "content": kept})  # cast-ok: same message with fewer content parts
+
+
+def _is_pdf_only_user_turn(message: AllMessageValues) -> bool:
+    parts: Final = content_parts(message)
+    return message["role"] == "user" and bool(parts) and all(is_pdf_file_part(part) for part in parts)
+
+
+def messages_without_pdf_file_parts(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    return tuple(
+        _message_without_pdf_file_parts(message) for message in messages if not _is_pdf_only_user_turn(message)
+    )
+
+
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_as_image_url(part: object) -> object:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            fields: Final = _CONTENT_PART.validate_python(part)
+            return {key: value for key, value in fields.items() if key != "file"} | {
+                "type": "image_url",
+                "image_url": {"url": file_data},
+            }
+        case _:
+            return part
+
+
+def message_with_file_parts_as_image_urls(message: Mapping[str, object]) -> Mapping[str, object]:
+    parts: Final = content_parts(message)
+    if not parts:
+        return message
+    return {**message, "content": [_file_part_as_image_url(part) for part in parts]}
+
+
+def _typed_message_with_file_parts_as_image_urls(message: AllMessageValues) -> AllMessageValues:
+    return cast(AllMessageValues, message_with_file_parts_as_image_urls(message))  # cast-ok: same message, image parts
+
+
+def messages_with_file_parts_as_image_urls(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    return tuple(_typed_message_with_file_parts_as_image_urls(message) for message in messages)
 
 
 def _image_part_url(part: Mapping[str, object]) -> str | None:
@@ -2071,6 +2174,19 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
+
+
+_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+
+
+def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
+    if marker is None or not drop_params:
+        return marker
+    try:
+        return _PROMPT_CACHE_BREAKPOINT.validate_python(marker)
+    except ValidationError:
+        verbose_logger.debug("Dropping malformed prompt_cache_breakpoint %r under drop_params", marker)
+        return None
 
 
 def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:

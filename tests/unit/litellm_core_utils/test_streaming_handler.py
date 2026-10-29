@@ -506,6 +506,118 @@ def test_multi_chunk_reasoning_and_content(
     assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
 
 
+def _stream_chunk(delta: dict[str, object], finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason}])
+
+
+def _content_through_first_call(deltas: Sequence[Delta]) -> str:
+    first_call: Final = next(
+        (index for index, delta in enumerate(deltas) if delta.tool_calls or delta.function_call), len(deltas)
+    )
+    return "".join(delta.content or "" for delta in deltas[: first_call + 1])
+
+
+_GET_WEATHER_CALL: Final = {
+    "index": 0,
+    "id": "call_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.parametrize(
+    "chunks,expected_content,expected_tool_calls",
+    [
+        (
+            (
+                _stream_chunk({"reasoning_content": "Check the weather"}),
+                _stream_chunk({"tool_calls": [_GET_WEATHER_CALL]}),
+                _stream_chunk({}, "tool_calls"),
+            ),
+            "<think>Check the weather</think>",
+            1,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "Pick a function"}),
+                _stream_chunk({"function_call": {"name": "get_weather", "arguments": "{}"}}),
+                _stream_chunk({}, "function_call"),
+            ),
+            "<think>Pick a function</think>",
+            0,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "Step one"}),
+                _stream_chunk({"reasoning_content": ", step two"}),
+                _stream_chunk({}, "length"),
+            ),
+            "<think>Step one, step two</think>",
+            0,
+        ),
+        (
+            (
+                _stream_chunk({"reasoning_content": "a"}),
+                _stream_chunk({"content": "b"}),
+                _stream_chunk({"reasoning_content": "c"}),
+                _stream_chunk({"content": "d"}),
+                _stream_chunk({}, "stop"),
+            ),
+            "<think>a</think>b<think>c</think>d",
+            0,
+        ),
+        (
+            (_stream_chunk({"reasoning_content": "Still thinking"}),),
+            "<think>Still thinking</think>",
+            0,
+        ),
+        (
+            (_stream_chunk({"content": "hi"}), _stream_chunk({}, "stop")),
+            "hi",
+            0,
+        ),
+    ],
+    ids=[
+        "reasoning_then_tool_call",
+        "reasoning_then_function_call",
+        "reasoning_cut_by_length",
+        "reasoning_after_answer",
+        "stream_ends_mid_reasoning",
+        "answer_without_reasoning",
+    ],
+)
+async def test_merged_reasoning_stream_keeps_think_tags_balanced(
+    logging_obj: Logging,
+    is_async: bool,
+    chunks: tuple[ModelResponseStream, ...],
+    expected_content: str,
+    expected_tool_calls: int,
+) -> None:
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=[chunk.model_copy(deep=True) for chunk in chunks]),
+        model="deepseek-reasoner",
+        logging_obj=logging_obj,
+    )
+    response.merge_reasoning_content_in_choices = True
+
+    deltas: Final = (
+        tuple([chunk.choices[0].delta async for chunk in response])
+        if is_async
+        else tuple(chunk.choices[0].delta for chunk in response)
+    )
+    logged: Final = litellm.stream_chunk_builder(chunks=response.chunks)
+
+    assert "".join(delta.content or "" for delta in deltas) == expected_content
+    assert _content_through_first_call(deltas) == expected_content
+    assert sum(len(delta.tool_calls or ()) for delta in deltas) == expected_tool_calls
+    assert logged.choices[0].message.content == (expected_content or None)
+    assert any(chunk.choices[0].finish_reason for chunk in response.chunks if chunk.choices) == any(
+        chunk.choices[0].finish_reason for chunk in chunks
+    )
+
+
 def test_strip_sse_data_from_chunk():
     """Test the static method that strips 'data: ' prefix from SSE chunks"""
     # Test with string inputs
@@ -6204,6 +6316,22 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
     assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
 
 
+def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row() -> None:
+    from litellm.litellm_core_utils.streaming_handler import (
+        _stamp_usage_cost,  # pyright: ignore[reportPrivateUsage]  # the helper under test
+    )
+
+    complete: Final = ModelResponse(model="omni-model", usage=Usage(prompt_tokens=100, completion_tokens=20))
+    complete.hidden_params = {"response_cost": 0.00032}
+    chunk_usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    setattr(chunk_usage, "cost", 0.037)
+    usage_chunk: Final = ModelResponseStream(id="chunk-1", model="omni-model", choices=[], usage=chunk_usage)
+
+    _stamp_usage_cost(usage_chunk, complete)
+
+    assert usage_chunk.usage is not None and usage_chunk.usage.cost == 0.00032, "the client sees what the row bills"
+
+
 def test_chunk_creator_keeps_provider_model_private_across_stream():
     from litellm.router_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,
@@ -7692,6 +7820,38 @@ async def test_openai_stream_relays_the_served_service_tier_on_every_chunk_inclu
     assert relayed[-1]["usage"]["total_tokens"] == 11
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_stream_relays_the_served_service_tier_on_the_finish_chunk_it_adds(logging_obj: Logging, sync_mode: bool):
+    from litellm.utils import ModelResponseListIterator
+
+    def _chunk(content: str, finish_reason: str | None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-tier",
+            created=1742056047,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content))],
+            service_tier="priority",
+        )
+
+    logging_obj.update_environment_variables(
+        model="gpt-4.1-mini", optional_params={}, litellm_params={}, custom_llm_provider="openai"
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=[_chunk("Hi", None), _chunk("!", "stop")]),
+        model="gpt-4.1-mini",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    relayed = (
+        [chunk.model_dump() for chunk in wrapper] if sync_mode else [chunk.model_dump() async for chunk in wrapper]
+    )
+
+    assert [chunk["choices"][0]["finish_reason"] for chunk in relayed] == [None, None, "stop"], relayed
+    assert [chunk.get("service_tier") for chunk in relayed] == ["priority"] * len(relayed), relayed
+
+
 def _last_chunk_carries_finish_reason_wrapper(
     logging_obj: Logging, finish_reason: str, sync_stream: bool
 ) -> CustomStreamWrapper:
@@ -7849,7 +8009,7 @@ def gemini_mock_post_streaming(url, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "text/event-stream"}
-    mock_response.iter_lines = MagicMock(return_value=stream_response())
+    mock_response.iter_text = MagicMock(return_value=stream_response())
 
     return mock_response
 

@@ -37,8 +37,8 @@ from litellm.proxy.spend_tracking.savings import (
     _effective_model_info,  # pyright: ignore[reportPrivateUsage]  # existing deployment-price owner
     _proxy_llm_router,  # pyright: ignore[reportPrivateUsage]  # existing optional proxy-router owner
 )
+from litellm.router_strategy.auto_router.baseline_request import baseline_request
 from litellm.router_strategy.complexity_router.context_compaction import compaction_applied
-from litellm.router_utils.baseline_request import baseline_request
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import CallTypes, ModelInfo, Usage
@@ -150,7 +150,7 @@ class AutoRouterBaselineCache(CustomLogger):
             if not isinstance(session, str) or not session or len(session) > 256:
                 return
             router: Final = self.router()
-            deployment: Final = router.get_deployment(request.route.baseline_deployment_id) if router else None
+            deployment: Final = router.registry().deployment(request.route.baseline_deployment_id) if router else None
             if deployment is None:
                 return
             target: Final = resolve_baseline_prediction_target(deployment.litellm_params)
