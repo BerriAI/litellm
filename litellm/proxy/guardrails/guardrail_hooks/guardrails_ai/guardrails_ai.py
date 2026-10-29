@@ -7,12 +7,9 @@
 
 import json
 import os
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 from fastapi import HTTPException
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -37,17 +34,17 @@ class GuardrailsAIResponse(TypedDict):
     validationPassed: bool
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
-class _PreCallOutput(TypedDict):
-    data: ReadOnly[NotRequired[Sequence[str]]]
+class InferenceData(TypedDict):
+    name: str
+    shape: list[int]
+    data: list
+    datatype: str
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
-class _PreCallResponse(TypedDict):
-    outputs: ReadOnly[NotRequired[Sequence[_PreCallOutput]]]
-
-
-_PRE_CALL_RESPONSE: Final = TypeAdapter(_PreCallResponse)
+class GuardrailsAIResponsePreCall(TypedDict):
+    modelname: str
+    modelversion: str
+    outputs: list[InferenceData]
 
 
 class GuardrailsAI(CustomGuardrail):
@@ -133,7 +130,7 @@ class GuardrailsAI(CustomGuardrail):
                 },
             )
 
-        _json_response: Final = _PRE_CALL_RESPONSE.validate_python(response.json())
+        _json_response: Final = GuardrailsAIResponsePreCall(**response.json())
         response = _json_response.get("outputs", [])[0].get("data", [])[0]
         return response
 

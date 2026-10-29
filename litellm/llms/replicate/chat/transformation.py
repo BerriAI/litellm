@@ -3,8 +3,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -32,20 +31,6 @@ else:
 
 _TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_input_in_errors=True))
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _ReplicatePredictionUrls(TypedDict):
-    get: ReadOnly[NotRequired[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _ReplicatePrediction(TypedDict):
-    urls: ReadOnly[NotRequired[_ReplicatePredictionUrls]]
-
-
-_JSON_BODY: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
-_REPLICATE_PREDICTION: Final = TypeAdapter(_ReplicatePrediction)
 
 
 class ReplicateConfig(BaseConfig):
@@ -307,11 +292,8 @@ class ReplicateConfig(BaseConfig):
         "urls":{"cancel":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4/cancel","get":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4","stream":"https://stream-b.svc.rno2.c.replicate.net/v1/streams/eot4gbydowuin4snhncydwxt57dfwgsc3w3snycx5nid7oef7jga"}
         }
         """
-        response_json: Final = _JSON_BODY.validate_python(response.json())
-        prediction_urls: Final = _REPLICATE_PREDICTION.validate_python(response_json).get("urls")
-        prediction_url: Final = (
-            prediction_urls["get"] if prediction_urls is not None and "get" in prediction_urls else None
-        )
+        response_json: Final = response.json()
+        prediction_url: Final = response_json.get("urls", {}).get("get")
         if prediction_url is None:
             raise ReplicateError(
                 status_code=400,
