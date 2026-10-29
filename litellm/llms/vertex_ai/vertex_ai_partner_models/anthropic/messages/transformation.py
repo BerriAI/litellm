@@ -1,6 +1,8 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -16,6 +18,41 @@ from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
+
+_VERSION_HEADER_VERTEX_READS_FROM_BODY: Final = "anthropic-version"
+_VERTEX_DEFAULT_VERSION: Final = "vertex-2023-10-16"
+_VERSIONS_SERVED_AS_VERTEX_DEFAULT: Final = frozenset({"", "2023-01-01", "2023-06-01"})
+_VERSIONS_VERTEX_ACCEPTS_IN_BODY: Final = frozenset({_VERTEX_DEFAULT_VERSION, "2026-10-21"})
+
+
+def _requested_version(headers: Mapping[str, object]) -> str:
+    requested: Final = next(
+        (value for name, value in headers.items() if name.lower() == _VERSION_HEADER_VERTEX_READS_FROM_BODY),
+        "",
+    )
+    return requested.strip() if isinstance(requested, str) else ""
+
+
+def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool) -> str | UnsupportedParamsError:
+    requested: Final = _requested_version(headers)
+    if requested in _VERSIONS_SERVED_AS_VERTEX_DEFAULT:
+        return _VERTEX_DEFAULT_VERSION
+    if requested in _VERSIONS_VERTEX_ACCEPTS_IN_BODY:
+        return requested
+    if drop_params:
+        return _VERTEX_DEFAULT_VERSION
+    return UnsupportedParamsError(
+        message=(
+            f"{model} does not support {_VERSION_HEADER_VERTEX_READS_FROM_BODY}={requested}. "
+            "To drop unsupported params, set `litellm.drop_params = True`."
+        ),
+        llm_provider="vertex_ai",
+        model=model,
+    )
+
+
+def _without_version_header(headers: Mapping[str, str]) -> dict[str, str]:  # mutable-ok: the caller sends these headers
+    return {name: value for name, value in headers.items() if name.lower() != _VERSION_HEADER_VERTEX_READS_FROM_BODY}
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -174,6 +211,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
+        beta_values.update(
+            anthropic_model_info.thinking_betas(
+                optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
+            )
+        )
+
         if beta_values:
             request_headers["anthropic-beta"] = ",".join(beta_values)
 
@@ -198,7 +241,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         messages: list[dict],
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],  # mutable-ok: mirrors the provider transform contract
     ) -> dict:
         anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
@@ -208,14 +251,34 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             headers=headers,
         )
 
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
 
         self._remove_scope_from_cache_control(anthropic_messages_request)
 
-        anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
+        version: Final = _vertex_version(
+            headers, model=model, drop_params=drops_unsupported_params(litellm_params.drop_params)
+        )
+        if isinstance(version, UnsupportedParamsError):
+            raise version
+        anthropic_messages_request["anthropic_version"] = version
 
         anthropic_messages_request.pop("model", None)  # do not pass model in request body to vertex ai
 
         sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 
         return anthropic_messages_request
+
+    def sign_request(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the caller sends these headers
+        return _without_version_header(headers), None

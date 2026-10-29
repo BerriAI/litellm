@@ -1,4 +1,5 @@
 
+import base64
 import copy
 import json
 from collections.abc import Mapping
@@ -38,6 +39,33 @@ def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
         assert "thinking" in supported_openai_params
     else:
         assert "thinking" not in supported_openai_params
+
+
+@pytest.mark.parametrize(
+    ("labels", "headers", "expected_header"),
+    [
+        ({"team": "triage", "env": "prod"}, {}, {"team": "triage", "env": "prod"}),
+        ({"team": "triage", "cost": 3}, {}, {"team": "triage"}),
+        ({"cost": 3}, {}, None),
+        ("team=triage", {}, None),
+        ({"team": "triage"}, {"x-vertex-ai-labels": "e30="}, {}),
+    ],
+    ids=["string_labels", "non_string_values_dropped", "no_string_values", "not_a_mapping", "caller_header_wins"],
+)
+def test_vertex_anthropic_labels_move_from_body_to_header(
+    labels: object, headers: dict[str, str], expected_header: dict[str, str] | None
+) -> None:
+    body: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={"max_tokens": 16, "anthropic_version": "vertex-2023-10-16", "labels": labels},
+        litellm_params={},
+        headers=headers,
+    )
+    sent_labels: Final = next((value for name, value in headers.items() if name.lower() == "x-vertex-ai-labels"), None)
+
+    assert "labels" not in body
+    assert (None if sent_labels is None else json.loads(base64.b64decode(sent_labels))) == expected_header
 
 
 @pytest.mark.parametrize(
@@ -125,6 +153,25 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
         "anthropic-beta" not in headers_non_vertex
         or "web-search" not in headers_non_vertex.get("anthropic-beta", "")
     ), "anthropic-beta with web-search should not be present for non-Vertex requests"
+
+
+def test_vertex_ai_anthropic_chat_adds_the_betas_for_bound_thinking_with_display_updates() -> None:
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    result: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"thinking": thinking, "max_tokens": 100, "is_vertex_request": True},
+        litellm_params={},
+        headers={},
+    )
+    assert result["thinking"] == thinking
+    assert {"thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18"} <= set(
+        result["anthropic_beta"]
+    )
 
 
 def test_vertex_ai_anthropic_context_management_compact_beta_header():

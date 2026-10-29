@@ -13,6 +13,7 @@ from litellm.llms.anthropic.chat.handler import (
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.messages.native.utils import MESSAGE_DELTA_OPTIONAL_KEYS
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.utils import (
     Choices,
     Message,
@@ -269,7 +270,7 @@ def build_complete_streaming_response_legacy(
 
 def extract_sse_data(event_str: str) -> dict | None:
     """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
-    for line in event_str.splitlines():
+    for line in split_sse_lines(event_str):
         stripped = line.strip()
         if stripped.startswith("data:"):
             payload = stripped[len("data:") :].strip()

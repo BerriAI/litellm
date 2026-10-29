@@ -3487,6 +3487,13 @@
               "title": "Entities",
               "type": "object"
             },
+            "guardrails": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailMetric"
+              },
+              "title": "Guardrails",
+              "type": "object"
+            },
             "mcp_servers": {
               "additionalProperties": {
                 "$ref": "#/components/schemas/MetricWithMetadata"
@@ -3801,6 +3808,74 @@
           ],
           "title": "ExportType",
           "type": "string"
+        },
+        "GuardrailKeyMetric": {
+          "properties": {
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+            }
+          },
+          "required": [
+            "metrics",
+            "metadata"
+          ],
+          "title": "GuardrailKeyMetric",
+          "type": "object"
+        },
+        "GuardrailMetadata": {
+          "properties": {
+            "guardrail_name": {
+              "title": "Guardrail Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "guardrail_name"
+          ],
+          "title": "GuardrailMetadata",
+          "type": "object"
+        },
+        "GuardrailMetric": {
+          "properties": {
+            "api_key_breakdown": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/GuardrailKeyMetric"
+              },
+              "title": "Api Key Breakdown",
+              "type": "object"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/GuardrailMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+            }
+          },
+          "required": [
+            "metrics",
+            "metadata"
+          ],
+          "title": "GuardrailMetric",
+          "type": "object"
+        },
+        "GuardrailSpendMetrics": {
+          "properties": {
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "untracked_units": {
+              "default": 0,
+              "title": "Untracked Units",
+              "type": "integer"
+            }
+          },
+          "title": "GuardrailSpendMetrics",
+          "type": "object"
         },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
@@ -7741,7 +7816,7 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout a key the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nWith `general_settings.claude_code_marketplace_auth_required: true` the key must come\nin the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the\nmarketplace source's `headers`), `?key=` is ignored, and a caller with no valid key\ngets a 401 with `WWW-Authenticate: Bearer`.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
           "parameters": [
             {
@@ -15015,7 +15090,7 @@
           ]
         },
         "post": {
-          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"name\": \"my-custom-slides-agent\",\n        \"base_agent\": \"waverunner\",\n        \"instructions\": \"You are a helpful assistant that creates slides.\",\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
+          "description": "Create a named custom agent on the Gemini side.\n\nExample:\n```bash\ncurl -X POST \"http://localhost:4000/v1beta/agents\" \\\n    -H \"Authorization: Bearer sk-...\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"id\": \"my-custom-slides-agent\",\n        \"base_agent\": \"antigravity-preview-09-2026\",\n        \"system_instruction\": \"You are a helpful assistant that creates slides.\",\n        \"agent_config\": {\"type\": \"antigravity\", \"model\": \"gemini-3.8-flash\"},\n        \"base_environment\": {\n            \"type\": \"remote\",\n            \"sources\": [\n                {\"type\": \"gcs\", \"source\": \"gs://eap-templates/slides-skill\",\n                 \"target\": \"/.agents/skills/slides-skill\"}\n            ]\n        }\n    }'\n```",
           "operationId": "create_gemini_agent_v1beta_agents_post",
           "responses": {
             "200": {
@@ -18257,6 +18332,7 @@
                 {
                   "enum": [
                     "block",
+                    "mask",
                     "monitor",
                     "inject_system_message"
                   ],
@@ -18267,7 +18343,7 @@
                 }
               ],
               "default": "block",
-              "description": "Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+              "description": "Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only detections and allow, block anything else), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)",
               "title": "On Flagged"
             },
             "on_flagged_action": {
@@ -33564,7 +33640,7 @@
           ]
         },
         "get": {
-          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Resume a background response's event stream after sequence number 7\ncurl -N \"http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "get_response_openai_v1_responses__response_id__get",
           "parameters": [
             {
@@ -33575,6 +33651,46 @@
                 "title": "Response Id",
                 "type": "string"
               }
+            },
+            {
+              "description": "Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry)",
+              "in": "query",
+              "name": "stream",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "description": "With stream=true, replay only the events after this sequence number",
+              "in": "query",
+              "name": "starting_after",
+              "required": false,
+              "schema": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Additional output data to include, forwarded to the provider",
+              "in": "query",
+              "name": "include",
+              "required": false,
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            {
+              "description": "With stream=true, whether delta events carry obfuscation padding",
+              "in": "query",
+              "name": "include_obfuscation",
+              "required": false,
+              "schema": {
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -33583,6 +33699,12 @@
                 "application/json": {
                   "schema": {
                     "$ref": "#/components/schemas/ResponsesAPIResponse"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "description": "Server sent events when stream=true",
+                    "type": "string"
                   }
                 }
               },
@@ -47634,6 +47756,12 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionImageObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionAudioObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionFileObject"
                       }
                     ]
                   },
@@ -47770,8 +47898,11 @@
         },
         "ChatCompletionAudioObject": {
           "properties": {
+            "cache_control": {
+              "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
             "input_audio": {
-              "$ref": "#/components/schemas/InputAudio"
+              "$ref": "#/components/schemas/ChatCompletionInputAudio"
             },
             "type": {
               "const": "input_audio",
@@ -47780,8 +47911,8 @@
             }
           },
           "required": [
-            "input_audio",
-            "type"
+            "type",
+            "input_audio"
           ],
           "title": "ChatCompletionAudioObject",
           "type": "object"
@@ -48018,12 +48149,35 @@
             "url": {
               "title": "Url",
               "type": "string"
+            },
+            "video_metadata": {
+              "additionalProperties": true,
+              "title": "Video Metadata",
+              "type": "object"
             }
           },
           "required": [
             "url"
           ],
           "title": "ChatCompletionImageUrlObject",
+          "type": "object"
+        },
+        "ChatCompletionInputAudio": {
+          "properties": {
+            "data": {
+              "title": "Data",
+              "type": "string"
+            },
+            "format": {
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "format"
+          ],
+          "title": "ChatCompletionInputAudio",
           "type": "object"
         },
         "ChatCompletionMessageToolCall": {
@@ -48311,6 +48465,12 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionImageObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionAudioObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionFileObject"
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionToolReferenceObject"
@@ -48749,28 +48909,6 @@
             }
           },
           "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "InputAudio": {
-          "properties": {
-            "data": {
-              "title": "Data",
-              "type": "string"
-            },
-            "format": {
-              "enum": [
-                "wav",
-                "mp3"
-              ],
-              "title": "Format",
-              "type": "string"
-            }
-          },
-          "required": [
-            "data",
-            "format"
-          ],
-          "title": "InputAudio",
           "type": "object"
         },
         "PolicyGuardrailsResponse": {

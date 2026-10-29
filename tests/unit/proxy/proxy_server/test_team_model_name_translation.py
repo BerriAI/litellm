@@ -10,7 +10,7 @@ rows instead of the internal routing key `model_name_{team_id}_{uuid}`.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -30,6 +30,8 @@ from litellm.proxy.proxy_server import (
     _translate_model_name_for_response,
 )
 from litellm.types.router import DeploymentModelListingInfo
+
+from .conftest import route_entry_points_to_stubs
 
 
 def _team_row() -> dict:
@@ -115,7 +117,7 @@ def test_get_proxy_model_info_returns_public_name_for_team_row():
 async def test_model_info_v2_translates_team_model_name(monkeypatch):
     """/v2/model/info must surface the public name for team-scoped rows.
     Covers the translation step in model_info_v2 (the read-path call site)."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [_team_row()]
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -170,7 +172,7 @@ async def test_model_info_v2_exact_model_filter_matches_team_public_name(monkeyp
         "litellm_params": {"model": "gpt-4o"},
         "model_info": {"id": "normal-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [_team_row(), global_row]
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -223,7 +225,7 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
         "litellm_params": {"model": "gpt-4o"},
         "model_info": {"id": "normal-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [team_row, global_row]
     router.get_model_names.return_value = ["gpt-4o"]
     router.get_model_access_groups.return_value = {}
@@ -253,7 +255,7 @@ async def test_model_info_v1_unrestricted_key_returns_all_deployments(monkeypatc
         "litellm_params": {"model": "gpt-4"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [deployment]
     router.get_model_names.return_value = ["gpt-4"]
     router.get_model_access_groups.return_value = {}
@@ -285,7 +287,7 @@ async def test_model_info_v1_restricted_key_filters_deployments(monkeypatch):
         "litellm_params": {"model": "gpt-4"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [team_row, global_row]
     router.get_model_names.return_value = ["gpt-4", "team-claude-sonnet"]
     router.get_model_access_groups.return_value = {}
@@ -335,7 +337,7 @@ async def test_model_info_v1_unrestricted_key_hides_other_team_byok(monkeypatch)
         "litellm_params": {"model": "gpt-4"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [team_row, other_team_row, global_row]
     router.get_model_names.return_value = ["gpt-4"]
     router.get_model_access_groups.return_value = {}
@@ -391,7 +393,7 @@ async def test_model_info_v1_service_key_hides_all_team_byok(monkeypatch):
         "litellm_params": {"model": "gpt-4"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [team_row, other_team_row, global_row]
     router.get_model_names.return_value = ["gpt-4"]
     router.get_model_access_groups.return_value = {}
@@ -440,7 +442,7 @@ async def test_model_info_v1_team_key_sees_own_byok_regardless_of_user_lookup(
         "litellm_params": {"model": "gpt-4"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [_team_row(), _other_team_row(), global_row]
     router.get_model_names.return_value = ["gpt-4"]
     router.get_model_access_groups.return_value = {}
@@ -481,7 +483,7 @@ async def test_model_info_v1_user_team_membership_grants_byok(monkeypatch):
         "litellm_params": {"model": "gpt-4"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [_team_row(), _other_team_row(), global_row]
     router.get_model_names.return_value = ["gpt-4"]
     router.get_model_access_groups.return_value = {}
@@ -528,7 +530,7 @@ async def test_model_info_v1_populates_access_via_team_ids(monkeypatch):
         "litellm_params": {"model": "gpt-4o"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [team_row, global_row]
     router.get_model_names.return_value = ["gpt-4o", "team-claude-sonnet"]
     router.get_model_access_groups.return_value = {}
@@ -575,7 +577,7 @@ async def test_populate_team_access_sets_direct_access_false_by_default(monkeypa
         "litellm_params": {"model": "gpt-4o"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["global-id-1"]
     monkeypatch.setattr(
         ps,
@@ -608,7 +610,7 @@ async def test_populate_team_access_gives_view_only_admin_full_admin_scope(monke
         "litellm_params": {"model": "gpt-4o"},
         "model_info": {"id": "global-id-1", "db_model": False},
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["global-id-1"]
 
     get_all_team_models = AsyncMock(return_value={"byok-id-1": ["team-abc-123"]})
@@ -658,7 +660,7 @@ async def test_populate_team_access_grants_config_access_group_model():
         },
     }
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["team-allowed-model-a"]
     router.get_model_access_groups.return_value = {"test-access-group": ["team-allowed-model-a"]}
     router.get_model_ids.return_value = []
@@ -700,7 +702,7 @@ async def test_populate_team_access_grants_config_access_group_model():
 @pytest.mark.asyncio
 async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
     """`teamId` without a connected DB raises 500 before any enrichment work runs."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [_team_row()]
 
     enrich_spy = MagicMock(side_effect=lambda model, **kw: model)
@@ -729,7 +731,7 @@ async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
 async def test_model_info_v1_include_team_models_without_db_fails_fast(monkeypatch):
     """`include_team_models` without a connected DB raises 500 instead of silently
     returning an empty list (the access fields can only be populated from the DB)."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [_team_row()]
 
     enrich_spy = MagicMock(side_effect=lambda model, **kw: model)
@@ -760,7 +762,7 @@ async def test_model_info_v1_litellm_model_id_team_id_without_db_fails_fast(
 ):
     """`litellm_model_id` + `teamId` without a connected DB must raise 500 too, not
     return 200 with a model dict missing direct_access/access_via_team_ids."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [_team_row()]
 
     monkeypatch.setattr(ps, "user_model", None)
@@ -792,7 +794,7 @@ async def test_model_info_v1_litellm_model_id_include_team_models_filters_inacce
     use instead of returning it unconditionally from the single-model lookup."""
     team_row = _team_row()
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.model_dump.return_value = team_row
     router.get_deployment.return_value = deployment
@@ -828,7 +830,7 @@ async def test_model_info_v1_litellm_model_id_team_id_applies_team_filter(monkey
     rather than returning it regardless of the team's access."""
     team_row = _team_row()
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     deployment = MagicMock()
     deployment.model_dump.return_value = team_row
     router.get_deployment.return_value = deployment
@@ -880,7 +882,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
             "access_groups": ["grp-a"],
         },
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
@@ -922,7 +924,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
             "access_groups": ["grp-a"],
         },
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
@@ -957,7 +959,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
             "access_groups": ["grp-a"],
         },
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
@@ -1003,7 +1005,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
             "access_groups": ["grp-a"],
         },
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
@@ -1060,7 +1062,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
             "team_public_model_name": "tushar-gpt-4.1",  # same public name, other team
         },
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
@@ -1108,7 +1110,7 @@ async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypa
             "max_output_tokens": 128000,
         },
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["model_name_teamX_terra_uuid"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_terra_uuid"]}
     router.get_fully_blocked_model_names.return_value = set()
@@ -1156,7 +1158,7 @@ async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeyp
             "mode": "image_generation",
         },
     }
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = ["model_name_teamX_image_uuid"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_image_uuid"]}
     router.get_fully_blocked_model_names.return_value = set()
@@ -1191,7 +1193,7 @@ async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeyp
 def test_translate_team_model_names_for_listing_swaps_and_dedupes():
     """Internal team routing keys -> public name; sibling deployments sharing a
     public name collapse to one entry (order preserved); globals untouched."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
@@ -1222,7 +1224,7 @@ def test_listing_entries_keep_internal_lookup_id_for_team_rows():
     """`listing_entries` returns (public response id, internal lookup id) so the
     response shows the public name while metadata lookups keep the routing key.
     Sibling deployments collapse to one entry; globals map to themselves."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
@@ -1258,7 +1260,7 @@ def test_listing_entries_lookup_id_never_crosses_team_boundary():
     the shared public name must stay within the caller's accessible model_names and
     never resolve to the other team's internal routing key (which would leak that
     team's fallback metadata under include_metadata=true)."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
@@ -1290,7 +1292,7 @@ def test_listing_entries_global_wins_when_team_alias_collides_with_global():
     entry rather than overwriting its lookup id with the colliding team's
     internal routing key (which would surface the team's metadata under the
     global id)."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
@@ -1314,7 +1316,7 @@ def test_listing_and_resolve_agree_on_sibling_internal_key():
     retrieve must pick the same internal routing key, otherwise `/v1/models/{id}`
     describes a different deployment than what the listing's metadata was built
     from."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
@@ -1350,7 +1352,7 @@ def test_listing_entries_skips_empty_team_public_model_name():
     """Regression: a misconfigured row with `team_public_model_name: ""` must not
     produce a listing entry with an empty `id`; the internal routing key should
     pass through unchanged, matching `/v1/model/info`'s falsy-check behavior."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
@@ -1378,7 +1380,7 @@ def test_listing_entries_passthrough_when_disabled():
 
 def test_translate_team_model_names_for_listing_leaves_unmapped_names():
     """Names with no team mapping (globals, access-group keys) pass through."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {"model_name": "gpt-4o", "model_info": {"db_model": False}}
     ]
@@ -1395,7 +1397,7 @@ def test_translate_team_model_names_for_listing_none_router():
 
 def test_translate_team_model_names_for_listing_respects_legacy_flag():
     """Operators can keep returning the legacy internal routing key."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "model_name_teamX_uuidA",
@@ -1412,7 +1414,7 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag():
 
 
 def _public_named_router(*team_rows: dict) -> MagicMock:
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = list(team_rows)
     router.get_model_listing_info.return_value = None
     router.routable_model_group.side_effect = lambda model_name: model_name
@@ -1497,7 +1499,7 @@ def test_resolve_public_name_respects_legacy_flag():
 def test_configured_display_names_keyed_by_response_id():
     """The map is keyed by the public response id while the router lookup uses
     the internal routing key, and entries without a configured name are omitted."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_display_name = MagicMock(
         side_effect=lambda model_name: "Team Sonnet" if model_name == "model_name_team-abc-123_4a6b8" else None
     )
@@ -1575,9 +1577,10 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     assert resp.get("max_input_tokens") == 16384
     assert resp.get("max_output_tokens") == 4096
     # lookup happened by the internal routing key, not the public name
-    router.get_deployment_by_model_group_name.assert_called_once_with(
-        "model_name_team-abc-123_4a6b8"
-    )
+    first_in_group_lookups = [
+        c for c in router.registry.return_value.deployments.call_args_list if c.kwargs.get("source") == "first_in_group"
+    ]
+    assert first_in_group_lookups == [call("model_name_team-abc-123_4a6b8", source="first_in_group")]
 
 
 @pytest.mark.asyncio
@@ -1681,7 +1684,7 @@ def test_get_direct_access_models_expands_all_proxy_models_sentinel():
     """A user provisioned with 'all-proxy-models' has direct access to every non-team
     deployment. The sentinel must resolve via get_model_ids, not be looked up as a
     literal model_name (which matches nothing). Regression for GH#22791."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["global-id-1", "global-id-2"]
     router.get_model_list.return_value = []
 
@@ -1701,7 +1704,7 @@ def test_get_direct_access_models_expands_all_proxy_models_sentinel():
 def test_get_direct_access_models_resolves_explicit_model_names():
     """Without the sentinel, only the user's explicitly listed models resolve to ids;
     the all-proxy-models shortcut must not fire."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [{"model_info": {"id": "gpt4o-id"}}]
 
     user = LiteLLM_UserTable(user_id="u", models=["gpt-4o"], teams=[])
@@ -1718,7 +1721,7 @@ def test_get_direct_access_models_empty_models_grants_all_non_team_models():
     (can_user_call_model), so the listing must resolve it like 'all-proxy-models'
     instead of returning nothing. Regression for a user with models=[] and no
     teams seeing an empty Models+Endpoints page."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["global-id-1", "global-id-2"]
 
     user = LiteLLM_UserTable(user_id="u", models=[], teams=[])
@@ -1740,7 +1743,7 @@ async def test_populate_team_access_grants_empty_models_user_direct_access(monke
         "model_info": {"id": "global-id-1", "db_model": False},
     }
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["global-id-1"]
 
     user_row = LiteLLM_UserTable(
@@ -1771,7 +1774,7 @@ async def test_populate_team_access_grants_empty_models_user_direct_access(monke
 def test_get_direct_access_models_restricted_key_narrows_unrestricted_user():
     """A key scoped to one model cannot call the rest, so the listing must not show
     every non-team model just because the user record is unrestricted."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
     router.get_model_access_groups.return_value = {}
     router.get_model_list.side_effect = lambda model_name: (
@@ -1788,7 +1791,7 @@ def test_get_direct_access_models_restricted_key_narrows_unrestricted_user():
 def test_get_direct_access_models_all_proxy_models_key_keeps_team_scoped_user_grant():
     """'all-proxy-models' on the key means unrestricted, so it must leave the user's
     grant alone rather than clipping it to the non-team deployment set."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["global-id"]
     router.get_model_access_groups.return_value = {}
     router.get_model_list.side_effect = lambda model_name: (
@@ -1809,7 +1812,7 @@ def test_get_direct_access_models_all_proxy_models_key_keeps_team_scoped_user_gr
 def test_get_direct_access_models_expands_access_group_grant():
     """A grant naming an access group can call the group's members at call time, so the
     listing must resolve the members instead of looking up the group name as a model."""
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_access_groups.return_value = {"beta-models": ["gpt-4o", "sonnet"]}
     router.get_model_list.side_effect = lambda model_name: {
         "gpt-4o": [{"model_info": {"id": "gpt4o-id"}}],
@@ -1838,7 +1841,7 @@ async def test_populate_team_access_hides_models_the_calling_key_cannot_call(mon
         "model_info": {"id": "sonnet-id", "db_model": False},
     }
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["gpt4o-id", "sonnet-id"]
     router.get_model_access_groups.return_value = {}
     router.get_model_list.side_effect = lambda model_name: (
@@ -1888,7 +1891,7 @@ async def test_populate_team_access_grants_all_proxy_models_user_direct_access(
         "model_info": {"id": "global-id-1", "db_model": False},
     }
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_ids.return_value = ["global-id-1"]
 
     user_row = LiteLLM_UserTable(

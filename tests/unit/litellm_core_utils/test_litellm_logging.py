@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
     set_callbacks,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import update_response_metadata
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1116,6 +1117,115 @@ class TestZeroCostDiagnostic:
         finally:
             litellm.model_cost.pop(router_model_id, None)
             litellm.model_cost.pop(served_model, None)
+
+
+class TestPerSecondMessagesCost:
+    DEPLOYMENT_ID: Final = "per-second-priced-deployment"
+    MODEL_GROUP: Final = "per-second-priced-claude"
+    RATE: Final = 0.00042
+    PER_SECOND_PRICING: Final = {"input_cost_per_second": RATE, "output_cost_per_second": RATE}
+    MESSAGES_RESPONSE: Final = {
+        "id": "msg_per-second-call",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [{"type": "text", "text": "Hi there friend"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+    @pytest.fixture(autouse=True)
+    def registered_deployment(self) -> Iterator[None]:
+        litellm.register_model(model_cost={self.DEPLOYMENT_ID: self.PER_SECOND_PRICING}, persist_across_reloads=False)
+        try:
+            yield
+        finally:
+            litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
+
+    def _routed_messages_call(
+        self, *, stream: bool, received_seconds_before_start: float | None = None
+    ) -> LitellmLogging:
+        started: Final = datetime.datetime.now()
+        proxy_receive_stamp: Final = (
+            {}
+            if received_seconds_before_start is None
+            else {
+                "litellm_received_at": (started - datetime.timedelta(seconds=received_seconds_before_start)).astimezone(
+                    datetime.timezone.utc
+                )
+            }
+        )
+        logging_obj: Final = LitellmLogging(
+            model=self.MODEL_GROUP,
+            messages=[{"role": "user", "content": "Say hi in three words"}],
+            stream=stream,
+            call_type="anthropic_messages",
+            start_time=started,
+            litellm_call_id="per-second-call",
+            function_id="fn",
+            kwargs={"model": self.MODEL_GROUP},
+        )
+        logging_obj.update_from_kwargs(
+            kwargs={
+                "model": "anthropic/claude-haiku-5-5",
+                "litellm_metadata": {
+                    "deployment": "anthropic/claude-haiku-5-5",
+                    "model_info": {"id": self.DEPLOYMENT_ID},
+                    **proxy_receive_stamp,
+                },
+            },
+            model="claude-haiku-5-5",
+            optional_params={"max_tokens": 32},
+            litellm_params={
+                "preset_cache_key": None,
+                "stream_response": {},
+                "model_info": None,
+                **self.PER_SECOND_PRICING,
+                "max_tokens": 32,
+            },
+            custom_llm_provider="anthropic",
+        )
+        return logging_obj
+
+    @staticmethod
+    def _response_handed_back_after(logging_obj: LitellmLogging, seconds: float) -> None:
+        started: Final = logging_obj.start_time
+        update_response_metadata(
+            result=dict(TestPerSecondMessagesCost.MESSAGES_RESPONSE),
+            logging_obj=logging_obj,
+            model="claude-haiku-5-5",
+            kwargs={},
+            start_time=started,
+            end_time=started + datetime.timedelta(seconds=seconds),
+        )
+
+    def test_messages_call_prices_the_reported_response_time_however_late_the_cost_is_read(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=False)
+        self._response_handed_back_after(logging_obj, seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+        cost_for_the_response_header: Final = logging_obj._response_cost_calculator(result=result)
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + datetime.timedelta(seconds=1.5)
+        cost_for_the_spend_log: Final = logging_obj._response_cost_calculator(result=result)
+
+        assert cost_for_the_response_header == pytest.approx(self.RATE)
+        assert cost_for_the_spend_log == pytest.approx(self.RATE)
+
+    def test_messages_call_bills_from_logging_setup_not_from_proxy_receive(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=False, received_seconds_before_start=2.0)
+        self._response_handed_back_after(logging_obj, seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+
+        assert logging_obj.response_timing_metrics["_response_ms"] == pytest.approx(3000)
+        assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
+
+    def test_streamed_messages_call_bills_the_whole_stream_not_the_first_byte(self) -> None:
+        logging_obj: Final = self._routed_messages_call(stream=True)
+        self._response_handed_back_after(logging_obj, seconds=0.25)
+        logging_obj.model_call_details["end_time"] = logging_obj.start_time + datetime.timedelta(seconds=1.0)
+        result: Final = logging_obj._handle_anthropic_messages_response_logging(result=dict(self.MESSAGES_RESPONSE))
+
+        assert logging_obj._response_cost_calculator(result=result) == pytest.approx(self.RATE)
 
 
 class TestGetRouterModelId:
@@ -3520,6 +3630,21 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "User-Agent: litellm/1.0.0" in tags
 
 
+@pytest.mark.parametrize("unusable_metadata_tags", [123, "tag", {"tag": True}, []])
+def test_get_request_tags_falls_back_to_litellm_metadata_when_metadata_tags_are_unusable(unusable_metadata_tags):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={
+            "metadata": {"tags": unusable_metadata_tags},
+            "litellm_metadata": {"tags": ["litellm-metadata-tag"]},
+        },
+        proxy_server_request={},
+    )
+
+    assert tags == ["litellm-metadata-tag"]
+
+
 def test_get_request_tags_does_not_mutate_original_tags():
     """
     Test that _get_request_tags does not mutate the original tags list in metadata.
@@ -3670,6 +3795,73 @@ def test_get_extra_header_tags():
             # Remove the attribute if it didn't exist before
             if hasattr(litellm, "extra_spend_tag_headers"):
                 delattr(litellm, "extra_spend_tag_headers")
+
+
+def test_get_extra_header_tags_matches_title_case_config_with_lowercase_request_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["X-Org-Id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-org-id": "org_1"}}
+    ) == ["X-Org-Id: org_1"]
+
+
+def test_get_extra_header_tags_matches_mixed_case_request_header_with_lowercase_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-customer-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"X-Customer-Id": "v"}}
+    ) == ["x-customer-id: v"]
+
+
+def test_get_extra_header_tags_keeps_lowercase_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-customer-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-customer-id": "v"}}
+    ) == ["x-customer-id: v"]
+
+
+def test_get_extra_header_tags_returns_none_for_absent_or_empty_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-org-id"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {}}) is None
+    assert (
+        StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request={"headers": {"x-org-id": ""}}) is None
+    )
+
+
+def test_get_extra_header_tags_preserves_configured_header_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-second", "x-first"], raising=False)
+
+    assert StandardLoggingPayloadSetup._get_extra_header_tags(
+        proxy_server_request={"headers": {"x-first": "1", "x-second": "2"}}
+    ) == ["x-second: 2", "x-first: 1"]
+
+
+def test_get_request_tags_includes_extra_header_tag_with_user_agent_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["X-Org-Id"], raising=False)
+
+    assert StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={},
+        proxy_server_request={
+            "headers": {
+                "user-agent": "litellm/1.0",
+                "x-org-id": "org_1",
+            }
+        },
+    ) == ["User-Agent: litellm", "User-Agent: litellm/1.0", "X-Org-Id: org_1"]
 
 
 def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_obj):
@@ -11857,7 +12049,7 @@ def test_get_additional_headers():
 
 
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
-    for field in StandardLoggingMetadata.__annotations__.keys():
+    for field in StandardLoggingMetadata.__required_keys__:
         assert field in standard_logging_metadata
 
 
@@ -11891,6 +12083,26 @@ def test_get_standard_logging_metadata(metadata_key, metadata_value):
 
     # Assert that the specific metadata field is set correctly
     assert standard_logging_metadata[metadata_key] == metadata_value
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_module_level_get_standard_logging_metadata_drops_only_a_caller_sent_silent_experiment_flag():
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_metadata
+
+    caller_metadata: Final = {
+        "is_silent_experiment": True,
+        "user_api_key_alias": "alias",
+        "usage_object": {"total_tokens": 3},
+        "used_client_oauth_token": True,
+        "kubernetes_pod_routing": {"pod": "a"},
+    }
+
+    result = get_standard_logging_metadata(caller_metadata)
+
+    assert "is_silent_experiment" not in result
+    assert {key: result[key] for key in caller_metadata.keys() - {"is_silent_experiment"}} == {
+        key: value for key, value in caller_metadata.items() if key != "is_silent_experiment"
+    }
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -13642,3 +13854,88 @@ def test_native_messages_body_carries_the_reported_list_cost_into_the_priced_res
     assert isinstance(priced, ModelResponse)
     headers = priced._hidden_params.get("additional_headers") or {}
     assert headers.get("llm_provider-x-litellm-response-cost") == expected_header
+
+
+def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-none-metadata",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": None}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+    assert entry["guardrail_usage"] == {"contentPolicyUnits": 2}
+    assert entry["guardrail_cost"] > 0
+
+
+def test_record_native_bedrock_guardrail_bills_nothing_for_a_response_served_from_cache() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-cache-hit",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": 2}}}}}}
+    cached = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(cached, "trace", trace)
+    cached._hidden_params = {"cache_hit": True}
+
+    logging_obj.record_native_bedrock_guardrail(cached)
+    logging_obj.model_call_details["cache_hit"] = True
+    logging_obj.record_native_bedrock_guardrail({"trace": trace})
+
+    assert "standard_logging_guardrail_information" not in logging_obj.model_call_details["litellm_params"]["metadata"]
+
+
+def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_calls_share_one_metadata_dict() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+
+    shared_metadata = {"tag": "x"}
+    traces = tuple(
+        {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"contentPolicyUnits": units}}}}}}
+        for units in (1, 2)
+    )
+    costs = []
+    for call_index, trace in enumerate(traces):
+        logging_obj = Logging(
+            model="bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id=f"call-shared-metadata-{call_index}",
+            function_id="fn",
+        )
+        logging_obj.model_call_details["litellm_params"] = {"metadata": shared_metadata}
+        logging_obj.record_native_bedrock_guardrail({"trace": trace})
+        recorded = logging_obj.model_call_details["litellm_params"]["metadata"][
+            "standard_logging_guardrail_information"
+        ]
+        costs.append(guardrail_information_cost(recorded))
+
+    (first_cost, second_cost) = costs
+    assert second_cost == pytest.approx(2 * first_cost)
+    assert shared_metadata == {"tag": "x"}

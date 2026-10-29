@@ -39,9 +39,17 @@ from litellm.constants import (
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import (
+    process_response_headers,
+    provider_reported_usage_cost,
+    set_response_cost_in_hidden_params,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
-from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
+from litellm.litellm_core_utils.internal_call_metadata import (
+    is_background_response,
+    requests_background,
+    without_budget_reservation,
+)
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
@@ -63,9 +71,10 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
+    replayable_responses_input,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, ModelResponse
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -218,7 +227,7 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
         return
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
     if pending:
-        verbose_logger.warning("Timed out draining %d logging tasks on shutdown, dropping them", len(pending))
+        verbose_logger.warning("Timed out draining logging tasks on shutdown: %d tasks still alive", len(pending))
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -288,7 +297,7 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
-def _map_stream_error_to_exception(
+def map_stream_error_to_exception(
     error_obj: object,
     model: str,
     custom_llm_provider: str,
@@ -365,7 +374,9 @@ class BaseResponsesAPIStreamingIterator:
     """
 
     _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+    _started_tool_call: bool = False
     _earlier_rounds_spend: BilledRoundsSpend | None = None
+    _replays_stored_stream: bool = False
 
     def __init__(
         self,
@@ -488,12 +499,16 @@ class BaseResponsesAPIStreamingIterator:
                     _args_delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_args_delta, str):
                         self._generated_tool_arguments += _args_delta
+                if _event_type in _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS:
+                    self._started_tool_call = True
                 _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
                     _item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
+                    if getattr(_item, "type", None) in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES:
+                        self._started_tool_call = True
                     if _item is not None:
                         ResponsesAPIRequestUtils.encode_container_id_on_output_item(
                             item=_item,
@@ -560,7 +575,7 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     _response_obj: Final[object] = getattr(openai_responses_api_chunk, "response", None)
-                    _estimate_wanted: Final[bool] = _chunk_type in (
+                    _estimate_wanted: Final[bool] = not self._replays_stored_stream and _chunk_type in (
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     )
@@ -573,6 +588,7 @@ class BaseResponsesAPIStreamingIterator:
                                     self.request_data.get("input"),
                                     self.request_data,
                                     self._generated_content + self._generated_tool_arguments,
+                                    use_default_image_token_count=False,
                                 )
                                 if _estimate_wanted
                                 else None
@@ -726,7 +742,7 @@ class BaseResponsesAPIStreamingIterator:
         self._earlier_rounds_spend = earlier
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
-        return _map_stream_error_to_exception(
+        return map_stream_error_to_exception(
             error_obj,
             self.model or "",
             self.custom_llm_provider or "",
@@ -976,6 +992,40 @@ class BaseResponsesAPIStreamingIterator:
         except Exception:
             pass
 
+    def _record_partial_usage_for_failure(self) -> None:
+        generated_text: Final = self._generated_content + self._generated_tool_arguments
+        if (
+            not generated_text
+            or self._replays_stored_stream
+            or requests_background(self.request_data)
+            or is_background_response(self._created_response)
+            or self._completed_response_logged
+            or self.logging_obj.model_call_details.get("combined_usage_object") is not None
+        ):
+            return
+        estimate: Final = _estimate_usage_safely(
+            self.model or "",
+            self.request_data.get("input"),
+            self.request_data,
+            generated_text,
+            use_default_image_token_count=True,
+        )
+        if estimate is None:
+            return
+        usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the success path above uses
+            estimate
+        )
+        served_tier: Final[object] = getattr(self._created_response, "service_tier", None)
+        assembled: Final = ModelResponse(
+            model=self.model, usage=usage, service_tier=served_tier if isinstance(served_tier, str) else None
+        )
+        if self._earlier_rounds_spend is None:
+            self.logging_obj.record_assembled_response_for_failure(assembled)
+            return
+        self.logging_obj.record_failure_after_earlier_rounds(
+            self._earlier_rounds_spend, usage, self.logging_obj.response_cost_calculator(result=assembled) or 0.0
+        )
+
     def _handle_failure(self, exception: Exception):
         """
         Trigger failure handlers before bubbling the exception.
@@ -985,6 +1035,7 @@ class BaseResponsesAPIStreamingIterator:
         if self._failure_handled:
             return
         self._failure_handled = True
+        self._record_partial_usage_for_failure()
 
         traceback_exception: Final = traceback.format_exc()
         end_time: Final = datetime.now()
@@ -1044,21 +1095,31 @@ class BaseResponsesAPIStreamingIterator:
         if pending:
             await asyncio.wait(pending)
 
+    @property
+    def started_tool_call(self) -> bool:
+        """Whether the stream began a tool call, which a text continuation could never finish."""
+        return self._started_tool_call
+
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream,
         the same shape the success handler assembles for a natural end of stream.
         Its response is the response.created payload (it carries the served
         service_tier) plus the text and tool arguments relayed so far, with counted
-        usage since the provider never sent any. None when nothing was relayed yet
-        or the stream already reached its terminal event and billed itself.
+        usage since the provider never sent any. None when nothing was relayed yet,
+        the stream already reached its terminal event and billed itself, or its failure
+        log already billed the relayed output.
         """
         created: Final = self._created_response
         generated: Final = self._generated_content + self._generated_tool_arguments
-        if self.completed_response is not None or created is None or not generated:
+        if self._replays_stored_stream or created is None or not generated or self._billed_without_disconnect():
             return None
         usage: Final = _estimate_usage_safely(
-            self.model or "", self.request_data.get("input"), self.request_data, generated
+            self.model or "",
+            self.request_data.get("input"),
+            self.request_data,
+            generated,
+            use_default_image_token_count=False,
         )
         if usage is None:
             return None
@@ -1071,6 +1132,9 @@ class BaseResponsesAPIStreamingIterator:
         )
         stamp_responses_usage_cost(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
+
+    def _billed_without_disconnect(self) -> bool:
+        return self.completed_response is not None or self._failure_handled
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -1099,6 +1163,8 @@ class BaseResponsesAPIStreamingIterator:
 
     def _raise_if_ended_without_terminal_event(self) -> None:
         if self.completed_response is not None:
+            return
+        if self._replays_stored_stream and not self._yielded_first_chunk:
             return
         error: Final = self._stream_ended_early_error()
         self._handle_failure(error)
@@ -1147,6 +1213,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
+        replays_stored_stream: bool = False,
     ):
         super().__init__(
             response,
@@ -1158,6 +1225,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
+        self._replays_stored_stream = replays_stored_stream
         self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
 
     def __aiter__(self):
@@ -1169,6 +1237,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         except Exception:
             await self._await_pending_logging()
             raise
+
+    async def aclose(self) -> None:
+        await self.response.aclose()
 
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
@@ -1208,6 +1279,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raise StopAsyncIteration from e
             self._raise_for_transport_error(e)
         except httpx.TimeoutException as e:
+            if self.completed_response is not None:
+                self.finished = True
+                raise StopAsyncIteration from e
             self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
@@ -1239,6 +1313,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
+        replays_stored_stream: bool = False,
     ):
         super().__init__(
             response,
@@ -1250,10 +1325,14 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
+        self._replays_stored_stream = replays_stored_stream
         self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
 
     def __iter__(self):
         return self
+
+    def close(self) -> None:
+        self.response.close()
 
     def __next__(self):
         try:
@@ -1293,6 +1372,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raise StopIteration from e
             self._raise_for_transport_error(e)
         except httpx.TimeoutException as e:
+            if self.completed_response is not None:
+                self.finished = True
+                raise StopIteration from e
             self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
@@ -1690,13 +1772,26 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return None
 
 
-_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
+    {
+        "function_call",
+        "custom_tool_call",
+        "mcp_approval_request",
+        "computer_call",
+        "local_shell_call",
+        "shell_call",
+        "apply_patch_call",
+    }
+)
+_CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
         ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA,
-        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
     }
 )
+_TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
+    ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
+}
 
 
 def _estimate_usage_from_text(
@@ -1704,6 +1799,8 @@ def _estimate_usage_from_text(
     request_input: object,
     responses_api_request: Mapping[str, object],
     generated_text: str,
+    *,
+    use_default_image_token_count: bool = False,
 ) -> ResponseAPIUsage:
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
@@ -1711,7 +1808,7 @@ def _estimate_usage_from_text(
         only_since_compaction=True,
     )
     input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
-        model=model, messages=messages
+        model=model, messages=messages, use_default_image_token_count=use_default_image_token_count
     )
     output_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
         model=model, text=generated_text, count_response_tokens=True
@@ -1728,6 +1825,8 @@ def _estimate_usage_safely(
     request_input: object,
     responses_api_request: Mapping[str, object],
     generated_text: str,
+    *,
+    use_default_image_token_count: bool,
 ) -> ResponseAPIUsage | None:
     try:
         return _estimate_usage_from_text(
@@ -1735,6 +1834,7 @@ def _estimate_usage_safely(
             request_input=request_input,
             responses_api_request=responses_api_request,
             generated_text=generated_text,
+            use_default_image_token_count=use_default_image_token_count,
         )
     except Exception as e:
         verbose_logger.debug("Could not estimate usage from stream text, billing $0: %s", e)
@@ -1744,20 +1844,32 @@ def _estimate_usage_safely(
 def stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
-    if response_obj is None or logging_obj is None:
+    """The terminal response's ``usage.cost`` is the bill litellm writes to the spend row. It is priced on a copy
+    shaped the way the success handler shapes the spend row's result (the reported ``usage.cost`` in the
+    response-cost header, the usage in chat shape), so the client and the row read the same number."""
+    if response_obj is None:
         return
     usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
     if usage_obj is None:
         return
-    response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
-    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
+    response_obj.usage = usage_obj  # rebind-ok: the typed usage has to ride on the response the client receives
+    if logging_obj is None:
         return
+    priced: Final = response_obj.model_copy(
+        update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)}
+    )
+    priced.hidden_params = {}
+    set_response_cost_in_hidden_params(
+        priced, provider_reported_usage_cost(usage_obj, logging_obj.model_call_details.get("custom_llm_provider"))
+    )
     try:
-        cost: Final[float | None] = logging_obj.response_cost_calculator(result=response_obj)
-    except Exception:
+        bill: Final = logging_obj.response_cost_calculator(result=priced)
+    except Exception:  # noqa: BLE001  # a pricing failure leaves the client usage as the upstream sent it
         return
-    if isinstance(cost, (int, float)) and cost > 0:
-        setattr(usage_obj, "cost", cost)
+    if isinstance(bill, bool) or not isinstance(bill, (int, float)):
+        return
+    if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
+        setattr(usage_obj, "cost", float(bill))
 
 
 def opening_item_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -2253,7 +2365,7 @@ class _ResponsesWsTurn:
         )
         if failed_event is None:
             return None
-        return _map_stream_error_to_exception(
+        return map_stream_error_to_exception(
             _ws_event_error(failed_event), model, custom_llm_provider, logging_obj=connection_logging_obj
         )
 
@@ -2268,15 +2380,17 @@ def _ws_event_error(event: Mapping[str, object]) -> object:
     return response.get("error") if _is_json_object(response) else None
 
 
-def _restore_input_item_ids(items: Sequence[object]) -> Sequence[object]:
-    return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
+def _replayable_input_items(items: Sequence[object]) -> object:
+    return replayable_responses_input(
+        ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(list(items)))
+    )
 
 
 def _restored_container_fields(container: Mapping[str, object]) -> Mapping[str, object]:
     input_items: Final = container.get("input")
     previous_response_id: Final = container.get("previous_response_id")
     restored: Final = {
-        "input": _restore_input_item_ids(input_items) if _is_json_array(input_items) else input_items,
+        "input": _replayable_input_items(input_items) if _is_json_array(input_items) else input_items,
         "previous_response_id": (
             ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(previous_response_id)
             if isinstance(previous_response_id, str)
