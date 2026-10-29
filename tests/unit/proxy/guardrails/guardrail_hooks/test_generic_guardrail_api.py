@@ -506,6 +506,114 @@ class TestMetadataExtraction:
             assert req_headers.get("X-Request-Id") == _HEADER_PRESENT_PLACEHOLDER
 
 
+class TestMCPHooks:
+    """MCP tool calls: the MCP modes are supported, and identity / headers / IDs reach the guardrail
+    on post_mcp_call, where LiteLLM passes its logging details (not the request) as request_data."""
+
+    @staticmethod
+    def _logging_details(metadata: dict) -> dict:
+        # Shape of litellm_logging_obj.model_call_details as passed by post_mcp_call_hook
+        return {
+            "litellm_call_id": "mcp-call-id",
+            "litellm_trace_id": "mcp-trace-id",
+            "litellm_params": {"metadata": metadata},
+        }
+
+    @staticmethod
+    def _none_response() -> MagicMock:
+        response = MagicMock()
+        response.json.return_value = {"action": "NONE"}
+        response.raise_for_status = MagicMock()
+        return response
+
+    def test_mcp_modes_are_supported(self):
+        hooks = GenericGuardrailAPI.get_supported_event_hooks()
+        assert litellm.types.guardrails.GuardrailEventHooks.pre_mcp_call in hooks
+        assert litellm.types.guardrails.GuardrailEventHooks.post_mcp_call in hooks
+        # Configuring the MCP modes must not raise (the proxy skips a guardrail whose modes are unsupported)
+        GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            event_hook=["pre_call", "post_call", "pre_mcp_call", "post_mcp_call"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_mcp_call_sends_identity_headers_and_ids_from_logging_details(self):
+        guardrail = GenericGuardrailAPI(api_base="https://api.test.guardrail.com", extra_headers=["x-device-id"])
+        request_data = self._logging_details(
+            {
+                "user_api_key_hash": "hashed-key",
+                "user_api_key_alias": "bob-key",
+                "user_api_key_user_id": "bob",
+                "user_api_key_team_id": "engineering",
+                "headers": {"x-device-id": "laptop-bob-01", "x-other": "value"},
+            }
+        )
+
+        with patch.object(guardrail.async_handler, "post", return_value=self._none_response()) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["tool result"]},
+                request_data=request_data,
+                input_type="response",
+                logging_obj=None,  # post_mcp_call passes none
+            )
+
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["request_data"]["user_api_key_user_id"] == "bob"
+        assert payload["request_data"]["user_api_key_alias"] == "bob-key"
+        assert payload["request_data"]["user_api_key_team_id"] == "engineering"
+        assert payload["request_headers"]["x-device-id"] == "laptop-bob-01"
+        assert payload["request_headers"]["x-other"] == _HEADER_PRESENT_PLACEHOLDER
+        assert payload["litellm_call_id"] == "mcp-call-id"
+        assert payload["litellm_trace_id"] == "mcp-trace-id"
+
+    @pytest.mark.asyncio
+    async def test_request_metadata_wins_and_logged_metadata_only_fills_gaps(self):
+        guardrail = GenericGuardrailAPI(api_base="https://api.test.guardrail.com")
+        request_data = {
+            "metadata": {"user_api_key_user_id": "from-request"},
+            **self._logging_details({"user_api_key_user_id": "from-logging", "user_api_key_alias": "bob-key"}),
+        }
+
+        with patch.object(guardrail.async_handler, "post", return_value=self._none_response()) as mock_post:
+            await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+        sent = mock_post.call_args.kwargs["json"]["request_data"]
+        assert sent["user_api_key_user_id"] == "from-request"
+        assert sent["user_api_key_alias"] == "bob-key"
+
+    @pytest.mark.asyncio
+    async def test_identity_gaps_filled_from_logging_obj(self):
+        """pre_mcp_call: request metadata lacks the key alias; the logging object's details have it."""
+        guardrail = GenericGuardrailAPI(api_base="https://api.test.guardrail.com")
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id, logging_obj.litellm_trace_id, logging_obj.call_type = "c", "t", "call_mcp_tool"
+        logging_obj.model_call_details = self._logging_details({"user_api_key_alias": "bob-key"})
+
+        with patch.object(guardrail.async_handler, "post", return_value=self._none_response()) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["C002"]},
+                request_data={"metadata": {"user_api_key_user_id": "bob"}},
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+
+        sent = mock_post.call_args.kwargs["json"]
+        assert sent["request_data"]["user_api_key_user_id"] == "bob"
+        assert sent["request_data"]["user_api_key_alias"] == "bob-key"
+        assert sent["call_type"] == "call_mcp_tool"
+
+    @pytest.mark.asyncio
+    async def test_call_type_sent_from_request_data(self):
+        """post_mcp_call passes the logging details as request_data; their call_type tells MCP from LLM calls."""
+        guardrail = GenericGuardrailAPI(api_base="https://api.test.guardrail.com")
+        request_data = {**self._logging_details({}), "call_type": "call_mcp_tool"}
+
+        with patch.object(guardrail.async_handler, "post", return_value=self._none_response()) as mock_post:
+            await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="response")
+
+        assert mock_post.call_args.kwargs["json"]["call_type"] == "call_mcp_tool"
+
+
 class TestGuardrailActions:
     """Test different guardrail action responses"""
 
