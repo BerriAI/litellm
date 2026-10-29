@@ -164,6 +164,30 @@ def test_zai_drop_params_drops_max_completion_tokens_above_model_limit(
     assert body.get("max_tokens") == (requested if forwarded else None)
 
 
+@pytest.mark.parametrize("with_over_limit_max_completion_tokens", [False, True])
+def test_zai_drop_params_keeps_max_tokens_above_model_limit(
+    local_model_cost_map, respx_mock, zai_response, monkeypatch, with_over_limit_max_completion_tokens
+):
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
+    over_limit = litellm.model_cost["zai/glm-4.5-flash"]["max_output_tokens"] + 1
+    over_limit_max_completion_tokens = (
+        {"max_completion_tokens": over_limit + 1} if with_over_limit_max_completion_tokens else {}
+    )
+
+    completion(
+        model="zai/glm-4.5-flash",
+        messages=[{"role": "user", "content": "Count"}],
+        max_tokens=over_limit,
+        drop_params=True,
+        **over_limit_max_completion_tokens,
+    )
+
+    body = json.loads(respx_mock.calls[0].request.content)
+    assert body["max_tokens"] == over_limit
+
+
 @pytest.mark.parametrize("pass_through", [{}, {"allowed_openai_params": ["response_format"]}])
 def test_zai_forwards_json_schema_to_models_that_enforce_it(
     local_model_cost_map, respx_mock, zai_response, monkeypatch, pass_through

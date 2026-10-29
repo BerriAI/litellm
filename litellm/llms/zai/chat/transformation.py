@@ -45,6 +45,10 @@ class ZAIChatConfig(OpenAIGPTConfig):
     def custom_llm_provider(self) -> str | None:
         return "zai"
 
+    @property
+    def prompts_unsupported_json_schema(self) -> bool:
+        return True
+
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
@@ -103,14 +107,15 @@ class ZAIChatConfig(OpenAIGPTConfig):
     ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
         supported_params: Final = self.get_supported_openai_params(model)
         sent: Final = {param: value for param, value in non_default_params.items() if param in supported_params}
-        max_tokens: Final = sent.get("max_completion_tokens", sent.get("max_tokens"))
-        drops_max_tokens: Final = max_tokens is None or (
-            (litellm.drop_params or drop_params) and _exceeds_output_limit(model, max_tokens)
+        max_completion_tokens: Final = sent.get("max_completion_tokens")
+        falls_back_to_max_tokens: Final = max_completion_tokens is None or (
+            (litellm.drop_params or drop_params) and _exceeds_output_limit(model, max_completion_tokens)
         )
+        max_tokens: Final = sent.get("max_tokens") if falls_back_to_max_tokens else max_completion_tokens
         return {
             **optional_params,
             **{param: value for param, value in sent.items() if param not in TOKEN_LIMIT_PARAMS},
-            **({} if drops_max_tokens else {"max_tokens": max_tokens}),
+            **({} if max_tokens is None else {"max_tokens": max_tokens}),
         }
 
     def transform_request(
@@ -121,7 +126,11 @@ class ZAIChatConfig(OpenAIGPTConfig):
         litellm_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
         headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
     ) -> dict[str, object]:  # mutable-ok: inherited contract returns the request body
-        schema: Final = _schema_without_native_support(model, optional_params.get("response_format"))
+        schema: Final = (
+            _schema_without_native_support(model, optional_params.get("response_format"))
+            if self.prompts_unsupported_json_schema
+            else None
+        )
         schema_message: Final = (
             ()
             if schema is None
