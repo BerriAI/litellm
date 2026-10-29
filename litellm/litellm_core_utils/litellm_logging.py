@@ -7376,6 +7376,12 @@ def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
     )
 
 
+def _finalized_cost_of(logging_obj: object) -> FinalizedCost | None:
+    """Duck-typed logging objects (and test doubles) carry no finalized cost."""
+    finalized: Final = getattr(logging_obj, "finalized_cost", None)
+    return finalized if isinstance(finalized, FinalizedCost) else None
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: object,
@@ -7478,10 +7484,9 @@ def get_standard_logging_object_payload(
         raw_response_cost: Final = kwargs.get("response_cost")
         llm_response_cost: Final[float] = raw_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
+        finalized_cost: Final = _finalized_cost_of(logging_obj)
         response_cost: Final[float] = (
-            logging_obj.finalized_cost.amount
-            if logging_obj.finalized_cost is not None
-            else llm_response_cost + guardrail_cost
+            finalized_cost.amount if finalized_cost is not None else llm_response_cost + guardrail_cost
         )
 
         # clean up litellm hidden params
@@ -7550,8 +7555,8 @@ def get_standard_logging_object_payload(
             model_name = response_model_name
 
         request_cost_breakdown: Final = (
-            logging_obj.finalized_cost.logging_breakdown()
-            if logging_obj.finalized_cost is not None
+            finalized_cost.logging_breakdown()
+            if finalized_cost is not None
             else cost_breakdown_with_guardrail(
                 (
                     _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
@@ -7616,7 +7621,7 @@ def get_standard_logging_object_payload(
             model=model_name,
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
-            cost_finalized=logging_obj.finalized_cost is not None,
+            cost_finalized=finalized_cost is not None,
             response_cost=response_cost,
             cost_breakdown=request_cost_breakdown,
             autorouter_savings=autorouter_savings,
