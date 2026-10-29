@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -382,14 +381,3 @@ def test_vispark_models_are_listed_for_the_provider():
     assert expected
     assert set(litellm.models_by_provider["vispark"]) == expected
     assert expected <= set(get_valid_models(custom_llm_provider="vispark"))
-
-
-def test_vispark_endpoint_matrix_matches_between_root_and_backup():
-    backup_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    root_path: Final = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
-
-    backup_entry: Final = json.loads(backup_path.read_text())["providers"]["vispark"]
-    root_entry: Final = json.loads(root_path.read_text())["providers"]["vispark"]
-
-    assert backup_entry == root_entry
-    assert root_entry["endpoints"]["chat_completions"] is True

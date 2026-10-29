@@ -1530,49 +1530,57 @@ def _get_model_cost_infos(
     deployment can never leave the request under-reserved.
     """
     try:
-        base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
-        if base is None:
+        group_info: Final = _get_model_cost_info(model=model, llm_router=llm_router)
+        if group_info is None:
             return []
-        tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
+        deployment_infos: Final = _get_deployment_model_infos(model=model, llm_router=llm_router)
     except Exception:
         verbose_proxy_logger.debug(
             "Unable to load model cost info for budget reservation",
             exc_info=True,
         )
         return []
-    if not tiered_tables:
-        return [base]
+    billing_minimums: Final = [
+        minimum
+        for deployment_info in deployment_infos
+        if (minimum := _to_int(deployment_info.get("min_billed_input_tokens"))) is not None
+    ]
+    base: Final = {**group_info, "min_billed_input_tokens": max(billing_minimums)} if billing_minimums else group_info
+    tiered_tables: Final = [
+        table for deployment_info in deployment_infos if (table := _tiered_pricing_table(deployment_info)) is not None
+    ]
     return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
 
 
-def _deployment_tiered_pricing_table(
-    deployment: DeploymentTypedDict,
-    llm_router: Router,
-) -> Sequence[Mapping[str, object]] | None:
-    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
-    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
-    if not isinstance(model_id, str) or not isinstance(backend_model, str):
-        return None
-    deployment_model_info: Final = llm_router.cached_deployment_model_info(model_id, backend_model)
-    if deployment_model_info is None:
-        return None
-    tiered_pricing: Final = deployment_model_info.get("tiered_pricing")
+def _tiered_pricing_table(deployment_info: Mapping[str, object]) -> Sequence[Mapping[str, object]] | None:
+    tiered_pricing: Final = deployment_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         return tiered_pricing
     return None
 
 
-def _get_deployment_tiered_pricing_tables(
+def _deployment_model_info(
+    deployment: DeploymentTypedDict,
+    llm_router: Router,
+) -> Mapping[str, object] | None:
+    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
+    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
+    if not isinstance(model_id, str) or not isinstance(backend_model, str):
+        return None
+    return llm_router.cached_deployment_model_info(model_id, backend_model)
+
+
+def _get_deployment_model_infos(
     model: str,
     llm_router: Router | None,
-) -> Sequence[Sequence[Mapping[str, object]]]:
+) -> Sequence[Mapping[str, object]]:
     if llm_router is None:
         return []
     deployments: Final = llm_router.get_model_list(model_name=model) or []
     return [
-        table
+        deployment_info
         for deployment in deployments
-        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
+        if (deployment_info := _deployment_model_info(deployment, llm_router)) is not None
     ]
 
 
@@ -1614,14 +1622,10 @@ def _estimate_input_tokens(
         if input_tokens is not None
         else count_input_tokens_for_model(request_body=request_body, model=model)
     )
-    if counted is not None:
-        return counted
-
-    max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
-    if max_input_tokens is not None:
-        return max_input_tokens
-
-    return None
+    estimated: Final = counted if counted is not None else _to_int(model_info.get("max_input_tokens"))
+    if estimated is None:
+        return None
+    return max(estimated, _to_int(model_info.get("min_billed_input_tokens")) or 0)
 
 
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
