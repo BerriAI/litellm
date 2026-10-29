@@ -561,7 +561,7 @@ def get_team_provider_credentials(
         return None
 
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+    from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
     from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
 
     team_id: Final = user_api_key_dict.team_id
@@ -663,7 +663,9 @@ def get_team_provider_credentials(
     deployments_granted_by_wildcard: Final = (
         model_name
         for model_name in proxy_model_list
-        if model_matches_any_wildcard_pattern_in_list(model=model_name, allowed_model_list=granted_models)
+        if any(
+            is_model_allowed_by_pattern(model=model_name, allowed_model_pattern=granted) for granted in granted_models
+        )
     )
     return next(
         (

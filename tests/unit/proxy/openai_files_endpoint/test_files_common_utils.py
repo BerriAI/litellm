@@ -940,3 +940,26 @@ def test_a_key_wildcard_finds_the_deployment_it_grants_without_listing_any_provi
     assert credentials is not None
     assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
     assert catalog_requests.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("deployed_name", "api_key"), [("gpt-4o-mini", None), ("openai/gpt-4o-mini", "openai-deployment-key")]
+)
+def test_a_provider_wildcard_grant_finds_only_deployments_named_under_it(deployed_name: str, api_key: str | None):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": deployed_name,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"]),
+        custom_llm_provider="openai",
+        include_accessible_deployments=True,
+    )
+
+    assert (None if credentials is None else credentials["api_key"]) == api_key

@@ -8948,6 +8948,26 @@ def test_get_valid_models_keeps_a_good_listing_when_an_overlapping_listing_fails
     ) == ["openrouter/anthropic/claude-haiku-5-5"]
 
 
+@respx.mock
+def test_get_valid_models_asks_a_provider_once_when_many_listings_start_together(reset_mock_cache: None) -> None:
+    def slow_catalog(request: httpx.Request) -> httpx.Response:
+        threading.Event().wait(0.2)
+        return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=slow_catalog)
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-many-listings")
+
+    def list_models(_: int) -> tuple[str, ...]:
+        return tuple(
+            get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        listings: Final = frozenset(pool.map(list_models, range(8)))
+
+    assert (listings, catalog.call_count) == (frozenset({("openrouter/anthropic/claude-haiku-5-5",)}), 1)
+
+
 @pytest.fixture
 def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(

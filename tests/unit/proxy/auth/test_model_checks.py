@@ -7,6 +7,8 @@ import httpx
 import pytest
 import respx
 
+from litellm import Router
+
 
 def test_get_team_models_for_all_models_and_team_only_models():
     from litellm.proxy.auth.model_checks import get_team_models
@@ -1212,6 +1214,73 @@ def test_key_granted_openrouter_wildcard_without_an_openrouter_deployment_lists_
     )
 
     assert (listed, catalog.call_count) == ([], 0)
+
+
+@contextmanager
+def _openai_catalog_behind_a_catch_all(
+    monkeypatch: pytest.MonkeyPatch, concrete_name: str, concrete_model_info: Mapping[str, str]
+) -> Generator[Router, None, None]:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.get("https://api.openai.com/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+        )
+        yield Router(
+            model_list=[
+                {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-openai-catch-all"}},
+                {
+                    "model_name": concrete_name,
+                    "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-or-gpt-4o"},
+                    "model_info": dict(concrete_model_info),
+                },
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("concrete_name", "concrete_model_info", "team_id"),
+    [
+        ("gpt-4o", {}, None),
+        ("model_name_team-x_gpt-4o", {"team_id": "team-x", "team_public_model_name": "gpt-4o"}, "team-x"),
+    ],
+)
+def test_catch_all_wildcard_never_lists_a_name_a_concrete_deployment_serves(
+    monkeypatch: pytest.MonkeyPatch, concrete_name: str, concrete_model_info: Mapping[str, str], team_id: str | None
+) -> None:
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    with _openai_catalog_behind_a_catch_all(monkeypatch, concrete_name, concrete_model_info) as router:
+        listed: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=router.get_model_names(team_id=team_id),
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+            team_id=team_id,
+        )
+
+    assert sorted(listed) == ["gpt-4o", "gpt-4o-mini"]
+
+
+def test_catch_all_wildcard_model_info_keeps_only_the_concrete_row_for_a_deployed_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    with _openai_catalog_behind_a_catch_all(monkeypatch, "gpt-4o", {}) as router:
+        rows: Final = expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or ()], llm_router=router
+        )
+
+    assert sorted((row["model_name"], row["litellm_params"]["model"]) for row in rows) == [
+        ("gpt-4o", "openrouter/openai/gpt-4o"),
+        ("gpt-4o-mini", "openai/gpt-4o-mini"),
+    ]
 
 
 @respx.mock

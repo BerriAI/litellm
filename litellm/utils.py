@@ -8432,6 +8432,9 @@ class AvailableModelsCache(InMemoryCache):
         cache_key: Final = self._get_cache_key(custom_llm_provider, litellm_params)
         self._store(_failed_listing_key(cache_key), True, ttl=ttl_seconds)
 
+    def listing_lock(self, custom_llm_provider: str, litellm_params: LiteLLM_Params | None) -> threading.RLock:
+        return _provider_listing_lock(self._get_cache_key(custom_llm_provider, litellm_params))
+
     def _cached(self, key: str) -> Sequence[str] | bool | None:
         return cast(Sequence[str] | bool | None, self.get_cache(key))
 
@@ -8441,6 +8444,19 @@ class AvailableModelsCache(InMemoryCache):
 
 def _failed_listing_key(cache_key: str) -> str:
     return f"{cache_key}:failed"
+
+
+_PROVIDER_LISTING_LOCK_GUARD: Final = threading.Lock()
+
+
+@lru_cache(maxsize=1024)
+def _cached_provider_listing_lock(cache_key: str) -> threading.RLock:
+    return threading.RLock()
+
+
+def _provider_listing_lock(cache_key: str) -> threading.RLock:
+    with _PROVIDER_LISTING_LOCK_GUARD:
+        return _cached_provider_listing_lock(cache_key)
 
 
 # Global cache instance
@@ -8494,6 +8510,15 @@ def _get_valid_models_from_provider_api(
     provider_config: BaseLLMModelInfo,
     custom_llm_provider: str,
     litellm_params: LiteLLM_Params | None = None,
+) -> list[str]:
+    with _model_cache.listing_lock(custom_llm_provider, litellm_params):
+        return _cached_or_listed_provider_models(provider_config, custom_llm_provider, litellm_params)
+
+
+def _cached_or_listed_provider_models(
+    provider_config: BaseLLMModelInfo,
+    custom_llm_provider: str,
+    litellm_params: LiteLLM_Params | None,
 ) -> list[str]:
     try:
         cached_result: Final = _model_cache.get_cached_model_info(custom_llm_provider, litellm_params)

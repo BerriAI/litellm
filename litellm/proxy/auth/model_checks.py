@@ -399,7 +399,18 @@ def _deployment_team_id(deployment: Mapping[str, object]) -> str | None:
 
 
 def _cached_wildcard_routing(llm_router: Router | None) -> Callable[[str, str | None], frozenset[str]] | None:
-    return None if llm_router is None else functools.cache(llm_router.wildcard_routed_models)
+    if llm_router is None:
+        return None
+    deployed_names: Final = frozenset(llm_router.model_names)
+    team_deployed_names: Final = frozenset(llm_router.team_model_to_deployment_indices)
+    wildcard_routed_models: Final = llm_router.wildcard_routed_models
+
+    def routed_models(model: str, team_id: str | None) -> frozenset[str]:
+        if model in deployed_names or (team_id, model) in team_deployed_names:
+            return frozenset()
+        return wildcard_routed_models(model, team_id)
+
+    return functools.cache(routed_models)
 
 
 def _routes_to_model(
