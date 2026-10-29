@@ -40,9 +40,11 @@ directory (#46780)
 
 ## Fixtures that boot a proxy
 
-Scope them to the module or class, never the session, and request them as arguments, never through
-`request.getfixturevalue`. The harness puts the tests that share a module or class fixture on one xdist
-worker, so the proxy boots once and stops when its tests finish. A session fixture boots a copy on every
-worker that runs one of its tests and keeps them all until the node ends, and those copies ran CircleCI
-integration-extensions nodes out of memory. `session_gateway` in `conftest.py` is the one proxy each
-worker keeps on purpose
+Scope them to the module or class, or pin a session one to a single worker with an `xdist_group` mark
+as `_llm_gateway` in `mcp/test_mcp_llm_endpoints.py` does, and request them as arguments, never through
+`request.getfixturevalue`. The harness puts tests that request the same set of module or class fixtures
+on one xdist worker, so the proxy they share boots there once and stops when that worker moves to another
+file. A test that requests one more of those fixtures than its neighbors gets its own group and can boot
+the proxy again on another worker, so keep that set the same across the tests that share a proxy. An
+unpinned session fixture boots a copy on every worker that runs one of its tests and keeps them all until
+the node ends, and those copies ran CircleCI integration-extensions nodes out of memory
