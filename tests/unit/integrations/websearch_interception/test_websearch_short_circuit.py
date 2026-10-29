@@ -6,6 +6,7 @@ and executes the search directly without routing through the backend LLM.
 """
 
 import json
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -457,7 +458,7 @@ class TestShortCircuitThroughMessagesEntryPoint:
 
     NATIVE_TOOL = {"type": "web_search_20250305", "name": "web_search"}
 
-    async def _send(self, *, tools: list[dict], stream: bool):
+    async def _send(self, *, tools: list[dict], stream: bool, **kwargs):
         import litellm
 
         logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
@@ -470,6 +471,7 @@ class TestShortCircuitThroughMessagesEntryPoint:
                     tools=tools,
                     max_tokens=64,
                     stream=stream,
+                    **kwargs,
                 )
                 if not stream:
                     return response
@@ -488,6 +490,24 @@ class TestShortCircuitThroughMessagesEntryPoint:
         assert server_tool_use["name"] == "web_search"
         assert server_tool_use["input"] == {"query": "latest python release"}
         assert tool_result["tool_use_id"] == server_tool_use["id"]
+
+    @pytest.mark.asyncio
+    async def test_native_blocks_reply_can_be_costed(self):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model="bedrock/converse/us.anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "latest python release"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=time.time(),
+            litellm_call_id="short-circuit-cost",
+            function_id="short-circuit-cost",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        response = await self._send(tools=[self.NATIVE_TOOL], stream=False, litellm_logging_obj=logging_obj)
+
+        assert logging_obj.response_cost_calculator(result=response) == 0.0
 
     @pytest.mark.asyncio
     async def test_native_tool_streams_native_blocks(self):
