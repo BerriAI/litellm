@@ -7,6 +7,7 @@ import re
 import sqlite3
 from collections.abc import Mapping
 from datetime import timezone
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4772,24 +4773,25 @@ async def test_ui_view_spend_logs_with_error_code(client):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_with_a_long_error_code_returns_only_that_exact_code(client):
-    prefix = "E" * 128
-    mock_spend_logs = [
+async def test_ui_view_spend_logs_with_a_long_error_code_returns_only_that_exact_code(client: TestClient) -> None:
+    prefix: Final = "E" * 128
+    codes: Final = MappingProxyType({f"log-{suffix}": prefix + suffix for suffix in ("first", "second")})
+    mock_spend_logs: Final = [
         {
-            "id": f"log-{suffix}",
-            "request_id": f"req-{suffix}",
+            "id": log_id,
+            "request_id": f"req-{log_id}",
             "api_key": "sk-test-key",
             "spend": 0.05,
             "startTime": datetime.datetime.now(timezone.utc).isoformat(),
             "model": "gpt-4",
-            "metadata": json.dumps({"error_information": {"error_code": prefix + suffix}}),
+            "metadata": json.dumps({"error_information": {"error_code": code}}),
         }
-        for suffix in ("first", "second")
+        for log_id, code in codes.items()
     ]
 
-    def filter_by_exact_error_code(where):
-        wanted = str(where.get("metadata", {}).get("equals", "")).strip('"')
-        return [log for log in mock_spend_logs if json.loads(log["metadata"])["error_information"]["error_code"] == wanted]
+    def filter_by_exact_error_code(where: Mapping[str, Mapping[str, object]]) -> list[dict[str, str | float]]:
+        wanted: Final = str(where.get("metadata", {}).get("equals", "")).strip('"')
+        return [log for log in mock_spend_logs if codes[str(log["id"])] == wanted]
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"

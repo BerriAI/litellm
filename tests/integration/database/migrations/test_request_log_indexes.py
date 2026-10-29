@@ -923,26 +923,31 @@ def test_the_partial_error_index_is_built_beside_the_plain_start_time_index_neve
     assert _index_predicate(scratch_database, ERROR_INDEX) is not None
 
 
-def _seed_analyzed_spend_logs(database_url: str, partitioned: bool) -> int:
-    """Seed the spend logs, partitioned or not, ANALYZE them, and return how many rows they hold."""
+def _seed_spend_logs(database_url: str, partitioned: bool) -> None:
+    """Seed the spend logs, partitioned or not, and never ANALYZE them, as in a freshly restored database."""
     if partitioned:
         _partition_spend_logs(database_url)
     with psycopg.connect(database_url, autocommit=True) as conn:
         for n in range(SEEDED_ROWS):
             _insert_spend_log(conn, f"capped-{n}", "2026-10-01")
-        conn.execute('ANALYZE "LiteLLM_SpendLogs"')
-    return SEEDED_ROWS + (len(PARTITIONS) + 1) * ROWS_PER_PARTITION if partitioned else SEEDED_ROWS
+
+
+def _run_the_logged_statements(database_url: str, messages: list[str]) -> None:
+    logged: Final = next(message for message in messages if "Not building index" in message)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        for statement in logged.split("finds it in place: ", 1)[1].split("; "):
+            conn.execute(statement.encode())
 
 
 @requires_db
 @pytest.mark.parametrize("partitioned", (False, True), ids=("plain", "partitioned"))
-def test_an_index_over_its_row_cap_is_left_for_an_operator_without_failing_the_build(
+def test_an_index_on_a_table_over_its_size_cap_is_left_for_an_operator_without_failing_the_build(
     scratch_database: str, partitioned: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A metadata index costs far more per row to build than a column index, so on a table over its cap the
-    migration job must finish without it instead of running past its deadline and failing the upgrade."""
-    rows: Final = _seed_analyzed_spend_logs(scratch_database, partitioned)
-    capped: Final = replace(ERROR_INDEX_DEFINITION, max_rows=rows - 1)
+    """A metadata index takes time to build in proportion to the table's size on disk, so on a table over its cap
+    the migration job must finish without it instead of running past its deadline and failing the upgrade."""
+    _seed_spend_logs(scratch_database, partitioned)
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
 
     with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
@@ -950,22 +955,20 @@ def test_an_index_over_its_row_cap_is_left_for_an_operator_without_failing_the_b
     assert f"in place except {ERROR_INDEX}" in caplog.text
     assert _indexed_table(scratch_database, ERROR_INDEX) is None
 
-    assert ensure_request_log_indexes(scratch_database, "public", (replace(capped, max_rows=rows),)) is True
+    assert ensure_request_log_indexes(scratch_database, "public", (ERROR_INDEX_DEFINITION,)) is True
     assert _index_validity(scratch_database, "error_code_startTime_idx")[ERROR_INDEX] is True
 
 
 @requires_db
 @pytest.mark.parametrize("partitioned", (False, True), ids=("plain", "partitioned"))
-def test_the_statement_logged_for_an_index_over_its_cap_builds_it_and_the_next_build_finds_it_in_place(
+def test_the_statements_logged_for_an_index_over_its_cap_build_it_and_the_next_build_finds_it_in_place(
     scratch_database: str, partitioned: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
-    _seed_analyzed_spend_logs(scratch_database, partitioned)
-    capped: Final = replace(ERROR_INDEX_DEFINITION, max_rows=1)
+    _seed_spend_logs(scratch_database, partitioned)
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
     with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
-    logged: Final = next(message for message in caplog.messages if "Not building index" in message)
-    with psycopg.connect(scratch_database, autocommit=True) as conn:
-        conn.execute(logged.split("finds it in place: ", 1)[1].encode())
+    _run_the_logged_statements(scratch_database, caplog.messages)
     hand_built: Final = _index_oids(scratch_database)[ERROR_INDEX]
     caplog.clear()
 
@@ -973,15 +976,18 @@ def test_the_statement_logged_for_an_index_over_its_cap_builds_it_and_the_next_b
         assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
     assert "Not building index" not in caplog.text
     assert _index_oids(scratch_database)[ERROR_INDEX] == hand_built
-    assert _index_validity(scratch_database, "error_code_startTime_idx")[ERROR_INDEX] is True
+    if partitioned:
+        _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, "error_code_startTime_idx")
+    else:
+        assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: True}
 
 
-def _leave_an_invalid_error_index(database_url: str) -> None:
-    with _pin_a_snapshot_on(database_url, "LiteLLM_SpendLogs"):
+def _leave_an_invalid_error_index(database_url: str, name: str, table: str) -> None:
+    with _pin_a_snapshot_on(database_url, table):
         with psycopg.connect(database_url, autocommit=True) as builder:
             builder.execute("SET statement_timeout = '1s'")
             prefix: Final = sql.SQL("CREATE INDEX CONCURRENTLY {} ON {} ").format(
-                sql.Identifier(ERROR_INDEX), sql.Identifier("LiteLLM_SpendLogs")
+                sql.Identifier(name), sql.Identifier(table)
             )
             with pytest.raises(psycopg.errors.QueryCanceled):
                 builder.execute(prefix.as_bytes(builder) + ERROR_INDEX_DEFINITION.body.encode())
@@ -991,37 +997,63 @@ def _leave_an_invalid_error_index(database_url: str) -> None:
 def test_an_interrupted_build_of_an_index_over_its_cap_is_left_to_the_logged_reindex_instead_of_repaired_at_boot(
     scratch_database: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    _seed_analyzed_spend_logs(scratch_database, partitioned=False)
-    _leave_an_invalid_error_index(scratch_database)
-    capped: Final = replace(ERROR_INDEX_DEFINITION, max_rows=1)
+    _seed_spend_logs(scratch_database, partitioned=False)
+    _leave_an_invalid_error_index(scratch_database, ERROR_INDEX, "LiteLLM_SpendLogs")
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
 
     assert ProxyExtrasDBManager.repair_invalid_indexes() is True
     assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: False}
 
     with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
-    logged: Final = next(message for message in caplog.messages if "Not building index" in message)
-    with psycopg.connect(scratch_database, autocommit=True) as conn:
-        conn.execute(logged.split("finds it in place: ", 1)[1].encode())
+    _run_the_logged_statements(scratch_database, caplog.messages)
 
     assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: True}
     assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
 
 
 @requires_db
-def test_a_table_never_analyzed_is_counted_before_deciding_whether_it_is_over_the_cap(
+def test_a_partitioned_build_interrupted_between_partitions_over_its_cap_is_finished_by_the_logged_statements(
     scratch_database: str, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """A partitioned build that stopped with one child attached, one left invalid and one never started must be
+    finished by the logged statements, and the boot-time repair must leave the invalid child to them."""
+    _seed_spend_logs(scratch_database, partitioned=True)
+    suffix: Final = "error_code_startTime_idx"
+    attached, interrupted = PARTITIONS
     with psycopg.connect(scratch_database, autocommit=True) as conn:
-        for n in range(SEEDED_ROWS):
-            _insert_spend_log(conn, f"unanalyzed-{n}", "2026-10-01")
-    capped: Final = replace(ERROR_INDEX_DEFINITION, max_rows=SEEDED_ROWS - 1)
+        parent: Final = sql.SQL("CREATE INDEX {} ON ONLY {} ").format(
+            sql.Identifier(ERROR_INDEX), sql.Identifier("LiteLLM_SpendLogs")
+        )
+        conn.execute(parent.as_bytes(conn) + ERROR_INDEX_DEFINITION.body.encode())
+        child: Final = sql.SQL("CREATE INDEX CONCURRENTLY {} ON {} ").format(
+            sql.Identifier(f"{attached}_{suffix}"), sql.Identifier(attached)
+        )
+        conn.execute(child.as_bytes(conn) + ERROR_INDEX_DEFINITION.body.encode())
+        conn.execute(
+            sql.SQL("ALTER INDEX {} ATTACH PARTITION {}").format(
+                sql.Identifier(ERROR_INDEX), sql.Identifier(f"{attached}_{suffix}")
+            )
+        )
+    _leave_an_invalid_error_index(scratch_database, f"{interrupted}_{suffix}", interrupted)
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is True
+    assert _index_validity(scratch_database, suffix) == {
+        ERROR_INDEX: False,
+        f"{attached}_{suffix}": True,
+        f"{interrupted}_{suffix}": False,
+    }
 
     with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    _run_the_logged_statements(scratch_database, caplog.messages)
+    caplog.clear()
 
-    assert f"Not building index {ERROR_INDEX}" in caplog.text
-    assert _indexed_table(scratch_database, ERROR_INDEX) is None
+    _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, suffix)
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    assert "Not building index" not in caplog.text
 
 
 @requires_db
