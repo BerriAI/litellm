@@ -3,6 +3,9 @@ Helper functions for health check calls.
 """
 
 import base64
+import itertools
+import re
+import sys
 from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
@@ -26,6 +29,7 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 )
 
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
+WILDCARD_HEALTH_CHECK_MODEL_COUNT: Final = 3
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
 )
@@ -84,6 +88,51 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
     return native(model, custom_llm_provider)
 
 
+def _provider_base_model(custom_llm_provider: str, model: str) -> str | None:
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        model_info: Final = ProviderConfigManager.get_provider_model_info(
+            model=None, provider=LlmProviders(custom_llm_provider)
+        )
+        return None if model_info is None else model_info.get_base_model(model)
+    except (ValueError, NotImplementedError):
+        return None
+
+
+def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segment: str) -> bool:
+    base_model: Final = _provider_base_model(custom_llm_provider, f"{segment}/{model_after_segment}")
+    return base_model is not None and not base_model.startswith(f"{segment}/")
+
+
+def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tuple[str, ...]:
+    from litellm.litellm_core_utils.health_check_utils import STR_TUPLE
+    from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    provider_prefix: Final = f"{custom_llm_provider}/"
+    segments: Final = wildcard.removeprefix(provider_prefix).split("/")
+    route_segments: Final = tuple(
+        itertools.takewhile(
+            lambda segment_index: _is_route_segment(
+                custom_llm_provider, segments[segment_index], "/".join(segments[segment_index + 1 :])
+            ),
+            range(len(segments) - 1),
+        )
+    )
+    route_prefix: Final = "".join(f"{segments[segment_index]}/" for segment_index in route_segments)
+    model_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex("/".join(segments[len(route_segments) :])))
+    chat_models: Final = STR_TUPLE.validate_python(
+        pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=sys.maxsize)
+    )
+    model_ids: Final = (chat_model.removeprefix(provider_prefix) for chat_model in chat_models)
+    served_models: Final = dict.fromkeys(
+        f"{provider_prefix}{route_prefix}{model_id}" for model_id in model_ids if model_regex.fullmatch(model_id)
+    )
+    return tuple(itertools.islice(served_models, WILDCARD_HEALTH_CHECK_MODEL_COUNT))
+
+
 class HealthCheckHelpers:
     @staticmethod
     async def ahealth_check_wildcard_models(
@@ -93,23 +142,16 @@ class HealthCheckHelpers:
         litellm_logging_obj: "Logging",
     ) -> dict:
         from litellm import acompletion
-        from litellm.litellm_core_utils.llm_request_utils import (
-            pick_cheapest_chat_models_from_llm_provider,
-        )
 
-        # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=3)
-        if len(cheapest_models) == 0:
+        probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
+        if len(probe_models) == 0:
             raise Exception(
-                f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                f"Unable to health check wildcard model {model} for provider {custom_llm_provider}: no chat model "
+                "in the cost map matches it. Set model_info.health_check_model to a model this wildcard serves"
             )
-        if len(cheapest_models) > 1:
-            fallback_models = cheapest_models[1:]  # Pick the last 2 models from the shuffled list
-        else:
-            fallback_models = None
-        model_params["model"] = cheapest_models[0]
+        model_params["model"] = probe_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
-        model_params["fallbacks"] = fallback_models
+        model_params["fallbacks"] = list(probe_models[1:]) or None
         model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16
         await acompletion(**model_params)
         return {}
