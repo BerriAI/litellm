@@ -110,7 +110,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 pass
 
         claude_options: Final = claude_count_options(
-            model_to_use, LlmProviders.AZURE_AI, request_options, context_management, deployment
+            model_to_use, LlmProviders.AZURE_AI, messages, request_options, context_management, deployment
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, "azure_ai_anthropic_api")
@@ -136,7 +136,9 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         try:
             result: Final = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                messages=messages,
+                messages=messages
+                if claude_options.messages is None
+                else [dict(message) for message in claude_options.messages],
                 api_key=api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,

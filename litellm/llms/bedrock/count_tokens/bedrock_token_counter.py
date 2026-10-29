@@ -181,10 +181,12 @@ class BedrockTokenCounter(BaseTokenCounter):
         )
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
+        sent_messages: Final = messages if translated is None else translated.messages
         claude_options: Final = (
             claude_count_options(
                 counted_model,
                 LlmProviders.BEDROCK_MANTLE if use_mantle else LlmProviders.BEDROCK,
+                sent_messages,
                 request_options,
                 context_management,
                 deployment,
@@ -194,11 +196,12 @@ class BedrockTokenCounter(BaseTokenCounter):
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, primary_tokenizer)
+        counted_messages: Final = sent_messages if claude_options.messages is None else claude_options.messages
         runtime_request: Final = {
             **(
-                _request_data(model_to_use, messages, tools, system)
+                _request_data(model_to_use, counted_messages, tools, system)
                 if translated is None
-                else _request_data(model_to_use, translated.messages, translated.tools, translated.system)
+                else _request_data(model_to_use, counted_messages, translated.tools, translated.system)
             ),
             **_invoke_fields(claude_options),
         }

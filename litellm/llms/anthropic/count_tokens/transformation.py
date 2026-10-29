@@ -129,7 +129,6 @@ class _AnthropicChatRequest(_CountedOptions):
 
 
 _ANTHROPIC_CHAT_REQUEST: Final = TypeAdapter(_AnthropicChatRequest)
-_COUNTED_OPTIONS: Final = TypeAdapter(_CountedOptions)
 _INFERENCE_PARAMS: Final = TypeAdapter(dict[str, object])
 _ChatParams: TypeAlias = dict[str, object]
 _ChatMessages: TypeAlias = list[AllMessageValues]
@@ -337,15 +336,18 @@ def anthropic_fields_for_chat_tool_use(
 class ClaudeCountOptions:
     options: Mapping[str, JsonValue]
     betas: tuple[str, ...]
+    messages: tuple[Mapping[str, JsonValue], ...] | None
 
 
-NO_CLAUDE_COUNT_OPTIONS: Final = ClaudeCountOptions(options=MappingProxyType({}), betas=())
+NO_CLAUDE_COUNT_OPTIONS: Final = ClaudeCountOptions(options=MappingProxyType({}), betas=(), messages=None)
+_COUNTED_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _MAX_TOKENS_ABOVE_ANY_BUDGET: Final = 2**31 - 1
 
 
 def claude_count_options(
     model: str,
     provider: LlmProviders,
+    messages: Sequence[Mapping[str, object]],
     request_options: Mapping[str, JsonValue],
     context_management: CountContextManagement | None,
     deployment: Mapping[str, object] | None,
@@ -367,10 +369,12 @@ def claude_count_options(
         return NO_CLAUDE_COUNT_OPTIONS
     resolved_deployment: Final = deployment or {}
     deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    leading_system, conversation = split_leading_system_run(messages)
+    sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
     try:
         request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts
             model=model,
-            messages=[],
+            messages=sent_conversation,
             anthropic_messages_optional_request_params={
                 **copy.deepcopy(sent),
                 "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET,
@@ -385,7 +389,8 @@ def claude_count_options(
         )
     except (AnthropicError, BadRequestError) as e:
         return ChatCountTranslationError(message=str(e.message))
-    options: Final = _count_options(_COUNTED_OPTIONS.validate_python(request))
+    transformed: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
+    options: Final = _count_options(transformed)
     betas: Final = sorted(context_management_betas(options.get("context_management")))
     return ClaudeCountOptions(
         options=options,
@@ -394,6 +399,7 @@ def claude_count_options(
             if messages_config.should_filter_anthropic_beta_headers()
             else betas
         ),
+        messages=(*_COUNTED_MESSAGES.validate_python(leading_system), *transformed["messages"]),
     )
 
 

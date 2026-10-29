@@ -1512,8 +1512,9 @@ class VertexAITokenCounter(BaseTokenCounter):
                 claude_count_options,
             )
 
+            sent_messages: Final = messages or []
             claude_options: Final = claude_count_options(
-                model_to_use, LlmProviders.VERTEX_AI, request_options, context_management, deployment
+                model_to_use, LlmProviders.VERTEX_AI, sent_messages, request_options, context_management, deployment
             )
             if isinstance(claude_options, ChatCountTranslationError):
                 return claude_options.response(request_model, model_to_use, "vertex_ai_partner_models")
@@ -1541,7 +1542,9 @@ class VertexAITokenCounter(BaseTokenCounter):
             try:
                 result = await partner_models_handler.count_tokens(
                     model=model_to_use,
-                    messages=messages or [],
+                    messages=sent_messages
+                    if claude_options.messages is None
+                    else [dict(message) for message in claude_options.messages],
                     litellm_params=partner_litellm_params,
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,

@@ -979,6 +979,30 @@ async def test_counter_sends_the_options_and_context_edits_messages_inference_se
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @_COUNTERS
+async def test_counter_sending_options_still_counts_the_leading_system_run_as_system(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    _, (count,) = await _counted_requests(
+        counter_type,
+        count_endpoint,
+        [{"role": "system", "content": "Be terse."}, {"role": "user", "content": "Weather in SF?"}],
+        None,
+        "anthropic",
+        request_options={"thinking": _ENABLED_THINKING},
+        model="claude-haiku-5-5",
+    )
+
+    body: Final = _JSON_BODY.validate_json(count.content)
+    assert "thinking" in body
+    assert {name: body.get(name) for name in ("system", "messages")} == {
+        "system": [{"type": "text", "text": "Be terse."}],
+        "messages": [{"role": "user", "content": "Weather in SF?"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
 async def test_counter_refuses_options_messages_inference_refuses_without_calling_anthropic(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
 ) -> None:

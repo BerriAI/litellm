@@ -1,4 +1,5 @@
 import base64
+import json
 from collections.abc import Mapping
 from typing import Final
 
@@ -416,6 +417,67 @@ async def test_mantle_count_sends_the_options_context_edits_and_beta_mantle_infe
     assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
     assert "anthropic_beta" not in counted
     assert bedrock.requests[0].headers["anthropic-beta"] == inference.requests[0].headers["anthropic-beta"]
+
+
+_CITY_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_CITY_FORMAT: Final[dict[str, JsonValue]] = {"output_config": {"format": {"type": "json_schema", "schema": _CITY_SCHEMA}}}
+
+
+def _texts(message: JsonValue) -> tuple[str, ...]:
+    content: Final = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return ()
+    return tuple(text for block in content if isinstance(block, dict) and isinstance(text := block.get("text"), str))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("native_output", "request_options", "schema_inlined"),
+    (
+        (False, _CITY_FORMAT, True),
+        (True, _CITY_FORMAT, False),
+        (False, _THINKING_AND_TOOL_CHOICE, False),
+    ),
+    ids=("inlined_schema", "native_schema", "no_format"),
+)
+async def test_runtime_count_counts_the_messages_bedrock_invoke_inference_sends(
+    native_output: bool, request_options: dict[str, JsonValue], schema_inlined: bool
+) -> None:
+    deployment_model: Final = "bedrock/invoke/us.anthropic.claude-count-probe-v1:0"
+    model_info: Final = {"supports_bedrock_native_structured_output": native_output}
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.anthropic_messages(
+        model=deployment_model,
+        messages=MESSAGES,
+        max_tokens=4096,
+        model_info=model_info,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **request_options,
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-count-probe-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}, "model_info": model_info},
+        request_model="claude",
+        request_options=request_options,
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    counted: Final = _invoke_body(bedrock.requests[0])["messages"]
+    assert counted == _JSON_BODY.validate_json(inference.requests[0].content)["messages"]
+    assert isinstance(counted, list)
+    assert (json.dumps(_CITY_SCHEMA) in _texts(counted[-1])) is schema_inlined
+    assert (counted == MESSAGES) is not schema_inlined
 
 
 @pytest.mark.asyncio
