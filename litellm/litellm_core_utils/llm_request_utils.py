@@ -1,5 +1,4 @@
 from collections.abc import Iterable, Iterator, Mapping
-from itertools import islice
 from typing import Final, cast
 
 import litellm
@@ -156,8 +155,12 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
         return []
 
     known_models: Final[Iterable[str]] = litellm.models_by_provider.get(custom_llm_provider, ())
-    cheapest_first: Final = sorted(_chat_row_costs(known_models, custom_llm_provider), key=lambda row: row[1])
-    return list(islice((model for model, _ in cheapest_first if _routes_to(model, custom_llm_provider)), n))
+    ranked_rows: Final = (
+        (route_rank, cost, model)
+        for model, cost in _chat_row_costs(known_models, custom_llm_provider)
+        if (route_rank := _route_rank(model, custom_llm_provider)) is not None
+    )
+    return [model for _, _, model in sorted(ranked_rows, key=lambda row: row[:2])[:n]]
 
 
 def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float]]:
@@ -171,9 +174,13 @@ def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator
         yield model, (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
 
 
-def _routes_to(model: str, custom_llm_provider: str) -> bool:
+def _route_rank(model: str, custom_llm_provider: str) -> int | None:
     routed_provider: Final = inferred_provider(model)
-    return routed_provider is not None and routed_provider == inferred_provider(f"{custom_llm_provider}/{model}")
+    if routed_provider is None:
+        return 1
+    if routed_provider == inferred_provider(f"{custom_llm_provider}/{model}"):
+        return 0
+    return None
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:

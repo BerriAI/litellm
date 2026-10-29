@@ -156,11 +156,12 @@ def deepseek_rows_whose_cheapest_ids_route_elsewhere(monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(litellm.models_by_provider, PICKER_PROVIDER, tuple(rows))
 
 
-def test_pick_cheapest_chat_models_offers_only_ids_the_router_sends_to_the_provider(
+def test_pick_cheapest_chat_models_prefers_provider_routed_ids_and_skips_ids_routed_elsewhere(
     deepseek_rows_whose_cheapest_ids_route_elsewhere: None,
 ) -> None:
     assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=10) == [
         "deepseek/fake-cheap-chat",
         "deepseek/fake-pricey-chat",
+        "fake-free-chat-without-provider",
     ]
     assert pick_cheapest_chat_models_from_llm_provider(PICKER_PROVIDER, n=1) == ["deepseek/fake-cheap-chat"]

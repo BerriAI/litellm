@@ -1620,3 +1620,28 @@ async def test_ai21_wildcard_health_check_calls_ai21(
     assert ai21_route.called
     assert not other_hosts.called
 
+
+async def test_wildcard_health_check_with_pinned_provider_calls_a_model_without_a_routing_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fake-together-chat",
+        {"input_cost_per_token": 1e-9, "output_cost_per_token": 1e-9, "mode": "chat", "litellm_provider": "together_ai"},
+    )
+    monkeypatch.setitem(litellm.models_by_provider, "together_ai", ("fake-together-chat",))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    together_route: Final = respx_mock.route(host="api.together.ai").respond(json=dict(CHAT_COMPLETION_BODY))
+    other_hosts: Final = respx_mock.route().respond(json=dict(CHAT_COMPLETION_BODY))
+
+    result: Final = await ahealth_check(
+        model_params={"model": "together_ai/*", "custom_llm_provider": "together_ai", "api_key": "health-together-key"},
+        mode="chat",
+    )
+
+    assert "error" not in result, result
+    assert json.loads(together_route.calls.last.request.content)["model"] == "fake-together-chat"
+    assert not other_hosts.called
+
