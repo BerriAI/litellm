@@ -1,8 +1,9 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    NotRequired,
     ReadOnly,
     Required,
     TypedDict,
@@ -591,6 +592,7 @@ class Instance(TypedDict, total=False):
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: Required[list[Instance]]
     parameters: dict
+    labels: ReadOnly[Mapping[str, str]]
 
 
 class VideoEmbedding(TypedDict):
@@ -738,6 +740,7 @@ class VertexAIBatchPredictionJob(TypedDict):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+    labels: NotRequired[ReadOnly[Mapping[str, str]]]
 
 
 class VertexBatchPredictionResponse(TypedDict, total=False):

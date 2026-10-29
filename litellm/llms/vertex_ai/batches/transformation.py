@@ -158,6 +158,7 @@ class VertexAIBatchTransformation:
         request: CreateBatchRequest,
         vertex_project: str | None = None,
         vertex_location: str | None = None,
+        labels: Mapping[str, str] | None = None,
     ) -> VertexAIBatchPredictionJob:
         """
         Transforms OpenAI Batch requests to Vertex AI Batch requests
@@ -176,12 +177,15 @@ class VertexAIBatchTransformation:
             predictionsFormat="jsonl",
             gcsDestination=GcsDestination(outputUriPrefix=cls._get_gcs_uri_prefix_from_file(input_file_id)),
         )
-        return VertexAIBatchPredictionJob(
+        job: Final = VertexAIBatchPredictionJob(
             inputConfig=input_config,
             outputConfig=output_config,
             model=model,
             displayName=request_display_name,
         )
+        if not labels:
+            return job
+        return {**job, "labels": dict(labels)}
 
     @classmethod
     def transform_vertex_ai_batch_response_to_openai_batch_response(

@@ -4,10 +4,12 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 
 
@@ -382,3 +384,138 @@ async def test_vertex_generate_content_spend_follows_the_deployment_location(
     recorded: Final = await _logged_vertex_generate_content_cost(location, stream=stream)
 
     assert recorded == pytest.approx(expected), (location, stream)
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType(
+    {**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}, "requester_metadata": {"team": "search"}}
+)
+_FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+_GENAI_ENTRYPOINTS: Final = (
+    "generate_content",
+    "agenerate_content",
+    "generate_content_stream",
+    "agenerate_content_stream",
+)
+_GEMINI_REPLY: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+}
+_SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+async def _generate_content_body(
+    entrypoint: str, monkeypatch: pytest.MonkeyPatch, request_fields: Mapping[str, object], model: str
+) -> Mapping[str, object]:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+
+    from litellm import google_genai
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
+
+    reply: Final = MagicMock(side_effect=lambda _request: httpx.Response(200, json=_GEMINI_REPLY))
+    vertex_token: Final = ("token", "proj")
+    monkeypatch.setattr(VertexAIGoogleGenAIConfig, "_ensure_access_token", MagicMock(return_value=vertex_token))
+    monkeypatch.setattr(VertexAIGoogleGenAIConfig, "_ensure_access_token_async", AsyncMock(return_value=vertex_token))
+    is_async: Final = entrypoint.startswith("a")
+    transport: Final = httpx.MockTransport(reply)
+    client: Final = (
+        AsyncHTTPHandler(transport=transport) if is_async else HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    call: Final = getattr(google_genai, entrypoint)(
+        model=model,
+        contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
+        client=client,
+        metadata=dict(_PROXY_METADATA),
+        **request_fields,
+    )
+    if is_async:
+        await call
+
+    sent: Final[httpx.Request] = reply.call_args.args[0]
+    return _SENT_BODY.validate_json(sent.content)
+
+
+async def _vertex_generate_content_body(
+    entrypoint: str, monkeypatch: pytest.MonkeyPatch, request_fields: Mapping[str, object]
+) -> Mapping[str, object]:
+    return await _generate_content_body(
+        entrypoint,
+        monkeypatch,
+        {**request_fields, "vertex_location": "us-central1"},
+        "vertex_ai/gemini-3.8-flash",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", _GENAI_ENTRYPOINTS)
+@pytest.mark.parametrize(
+    "request_fields",
+    [{"labels": dict(_FORGED)}, {"extra_body": {"labels": dict(_FORGED)}}],
+    ids=["top-level-labels", "extra-body-labels"],
+)
+async def test_vertex_generate_content_sends_identity_labels_a_caller_cannot_forge(
+    entrypoint: str, request_fields: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+
+    body: Final = await _vertex_generate_content_body(entrypoint, monkeypatch, request_fields)
+
+    labels: Final = _SENT_LABELS.validate_python(body["labels"])
+    assert list(labels.items()) == [*_IDENTITY.items(), ("app", "bot"), ("cost-center", "cc-1")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", _GENAI_ENTRYPOINTS)
+async def test_vertex_generate_content_without_caller_labels_still_carries_identity(
+    entrypoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+
+    body: Final = await _vertex_generate_content_body(entrypoint, monkeypatch, {})
+
+    labels: Final = _SENT_LABELS.validate_python(body["labels"])
+    assert list(labels.items()) == [*_IDENTITY.items(), ("team", "search"), ("cost-center", "cc-1")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", _GENAI_ENTRYPOINTS)
+@pytest.mark.parametrize(
+    "request_fields, expected_labels",
+    [
+        ({}, "absent"),
+        ({"labels": dict(_FORGED)}, _FORGED),
+        ({"extra_body": {"labels": dict(_FORGED)}}, _FORGED),
+        ({"labels": "not-a-mapping"}, "not-a-mapping"),
+    ],
+    ids=["no-labels", "top-level-labels", "extra-body-labels", "non-mapping-labels"],
+)
+async def test_vertex_generate_content_with_the_setting_off_sends_only_the_callers_labels(
+    entrypoint: str,
+    request_fields: Mapping[str, object],
+    expected_labels: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+
+    body: Final = await _vertex_generate_content_body(entrypoint, monkeypatch, request_fields)
+
+    assert body.get("labels", "absent") == expected_labels
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", _GENAI_ENTRYPOINTS)
+async def test_ai_studio_generate_content_keeps_the_callers_labels_with_the_setting_on(
+    entrypoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+
+    body: Final = await _generate_content_body(
+        entrypoint, monkeypatch, {"labels": dict(_FORGED), "api_key": "test-key"}, "gemini/gemini-3.8-flash"
+    )
+
+    assert body["labels"] == _FORGED
