@@ -5221,7 +5221,7 @@ def _stream_builder_logging_obj(model: str = "gpt-4o", custom_llm_provider: str 
     return logging_obj
 
 
-def test_stream_chunk_builder_bills_a_stream_without_writing_into_its_usage(monkeypatch: pytest.MonkeyPatch):
+def test_stream_chunk_builder_stamps_streaming_usage_cost_by_default(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
     chunks: Final = [
         _stream_builder_text_chunk("gpt-4o", "Hello "),
@@ -5233,28 +5233,10 @@ def test_stream_chunk_builder_bills_a_stream_without_writing_into_its_usage(monk
     )
 
     assert response is not None
-    assert getattr(response.usage, "cost", None) is None, "usage.cost is the upstream's field, the bill rides hidden"
-    assert response._hidden_params["response_cost"] > 0
-
-
-def test_stream_chunk_builder_keeps_a_zero_bill_as_hidden_response_cost() -> None:
-    logging_obj: Final = _stream_builder_logging_obj()
-    logging_obj.update_environment_variables(
-        litellm_params={"custom_llm_provider": "openai", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
-        optional_params={},
-    )
-    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
-    chunks: Final = [
-        _stream_builder_text_chunk("gpt-4o", "Hello "),
-        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
-    ]
-
-    response: Final = litellm.stream_chunk_builder(
-        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
-    )
-
-    assert response is not None
-    assert response._hidden_params["response_cost"] == 0.0, "a free stream still tells the egress what was billed"
+    usage_cost: Final = getattr(response.usage, "cost", None)
+    assert usage_cost is not None
+    assert usage_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(usage_cost)
 
 
 def test_stream_chunk_builder_stamped_cost_is_not_re_read_as_xai_reported_cost():
@@ -5285,8 +5267,7 @@ def test_stream_chunk_builder_stamped_cost_is_not_re_read_as_xai_reported_cost()
     )
 
     assert response is not None
-    assert getattr(response.usage, "cost", None) is None
-    usage_cost: Final = response._hidden_params.get("response_cost")
+    usage_cost: Final = getattr(response.usage, "cost", None)
     assert usage_cost is not None
     assert usage_cost > 0
 
@@ -5297,9 +5278,10 @@ def test_stream_chunk_builder_stamped_cost_is_not_re_read_as_xai_reported_cost()
     assert breakdown["output_cost"] > 0
     assert breakdown["input_cost"] + breakdown["output_cost"] == pytest.approx(usage_cost)
     assert spend_row_cost == pytest.approx(usage_cost)
+    assert response._hidden_params.get("response_cost") == pytest.approx(usage_cost)
 
 
-def test_stream_chunk_builder_stamps_the_zero_bill_when_cost_is_unpriceable():
+def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
     import time as time_module
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -5328,7 +5310,7 @@ def test_stream_chunk_builder_stamps_the_zero_bill_when_cost_is_unpriceable():
 
     assert response is not None
     assert getattr(response.usage, "cost", None) is None
-    assert response._hidden_params.get("response_cost") == 0.0, "the spend row reads 0, so the egress must too"
+    assert response._hidden_params.get("response_cost") is None
 
 
 def test_stream_chunk_builder_prices_alias_response_at_its_deployment_model():
@@ -5362,7 +5344,7 @@ def test_stream_chunk_builder_prices_alias_response_at_its_deployment_model():
     entry: Final = litellm.model_cost[deployment_model]
     expected_cost: Final = 40 * entry["input_cost_per_token"] + 5 * entry["output_cost_per_token"]
     assert response is not None
-    assert getattr(response.usage, "cost", None) is None
+    assert getattr(response.usage, "cost", None) == pytest.approx(expected_cost)
     assert response._hidden_params.get("response_cost") == pytest.approx(expected_cost)
 
 
@@ -5405,9 +5387,7 @@ def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
     assert response._hidden_params["response_cost"] == pytest.approx(0.000704)
 
 
-def test_stream_chunk_builder_bills_the_margin_over_the_xai_reported_cost_it_leaves_in_usage(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "cost_margin_config", {"xai": 0.5})
     usage_chunk: Final = _stream_builder_text_chunk("grok-4", "")
     usage_chunk.usage = Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7, cost=0.42)
@@ -9169,7 +9149,7 @@ def test_openai_streaming_tool_call_arguments_are_valid_json(
 
 
 @respx.mock
-def test_streaming_openai_usage_carries_no_cost_the_upstream_did_not_report(
+def test_streaming_openai_usage_includes_test_owned_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -9227,10 +9207,12 @@ def test_streaming_openai_usage_carries_no_cost_the_upstream_did_not_report(
     )
     stream_chunks: Final = tuple(stream)
     usage_chunks: Final = tuple(
-        getattr(chunk, "usage", None) for chunk in stream_chunks if getattr(chunk, "usage", None) is not None
+        getattr(chunk, "usage", None)
+        for chunk in stream_chunks
+        if getattr(chunk, "usage", None) is not None
     )
     assert len(usage_chunks) == 1
-    assert getattr(usage_chunks[0], "cost", None) is None, "the bill reaches a client through the proxy egress only"
+    assert usage_chunks[0].cost == pytest.approx(4 * 0.001 + 2 * 0.002)
 
 
 def test_completion_ensure_alternating_roles_sends_continue_messages(respx_mock: respx.MockRouter) -> None:
