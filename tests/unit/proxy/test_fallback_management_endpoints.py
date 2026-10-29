@@ -435,7 +435,7 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert stored.stored_fallbacks() == [GATEWAY_RULE]
 
-    @pytest.mark.parametrize("param_value", [None, ["team-primary"], 7])
+    @pytest.mark.parametrize("param_value", [None, ["team-primary"], 7, "not json"])
     async def test_a_create_replaces_a_stored_row_that_is_not_an_object(self, param_value: JsonValue) -> None:
         stored: Final = _StoredRouterSettings(None)
         stored.row = SimpleNamespace(param_name="router_settings", param_value=param_value)

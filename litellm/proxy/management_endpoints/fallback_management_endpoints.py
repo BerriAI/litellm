@@ -60,7 +60,10 @@ async def _reload_config_file_ownership(proxy_config: "ProxyConfig") -> None:
 
 
 async def _stored_router_settings(prisma_client: PrismaClient) -> Mapping[str, JsonValue]:
-    row: Final = await ConfigRepository(prisma_client, use_writer=True).get_param(ROUTER_SETTINGS_PARAM)
+    try:
+        row: Final = await ConfigRepository(prisma_client, use_writer=True).get_param(ROUTER_SETTINGS_PARAM)
+    except json.JSONDecodeError:
+        return {}
     if row is None or not isinstance(row.param_value, Mapping):
         return {}
     return _STORED_ROUTER_SETTINGS.validate_python(row.param_value)
