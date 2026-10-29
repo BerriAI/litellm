@@ -76,54 +76,35 @@ def seconds_until_daily_reset(now: datetime, reset_offset: timedelta = timedelta
     return max(1, int((next_reset - now).total_seconds()))
 
 
-def _first_set(*values: int | None) -> int | None:
-    return next((value for value in values if value is not None), None)
+class _DailyLimitParams(BaseModel):
+    """rpd, tpd and reset_time live in litellm_params only."""
 
-
-class _DailyLimitFields(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+    model: str | None = None
     tpd: int | None = None
     rpd: int | None = None
-
-
-class _DailyLimitParams(_DailyLimitFields):
-    model: str | None = None
     reset_time: str | None = None
-
-
-class _DailyLimitModelInfo(_DailyLimitFields):
-    id: str | None = None
-    reset_time: str | None = None
-
-
-class _DailyLimitRequestMetadata(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-    model_info: _DailyLimitModelInfo | None = None
-
-
-class _DailyLimitRequestParams(_DailyLimitParams):
-    metadata: _DailyLimitRequestMetadata | None = None
 
     def reset_offset(self) -> timedelta:
-        info: Final = self.metadata.model_info if self.metadata is not None else None
-        fallback: Final = info.reset_time if info is not None else None
-        return parse_reset_time(self.reset_time if self.reset_time is not None else fallback)
+        return parse_reset_time(self.reset_time)
 
 
-class _DailyLimitDeployment(_DailyLimitFields):
+class _DailyLimitModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+    id: str | None = None
+
+
+class _DailyLimitDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
     model_name: str = ""
     litellm_params: _DailyLimitParams = _DailyLimitParams()
     model_info: _DailyLimitModelInfo = _DailyLimitModelInfo()
 
     def limits(self) -> tuple[int | None, int | None]:
-        return (
-            _first_set(self.tpd, self.litellm_params.tpd, self.model_info.tpd),
-            _first_set(self.rpd, self.litellm_params.rpd, self.model_info.rpd),
-        )
+        return self.litellm_params.tpd, self.litellm_params.rpd
 
     def reset_offset(self) -> timedelta:
-        configured: Final = self.litellm_params.reset_time
-        return parse_reset_time(configured if configured is not None else self.model_info.reset_time)
+        return self.litellm_params.reset_offset()
 
     def cache_keys(self, now: datetime) -> tuple[str, str]:
         prefix: Final = f"{self.model_info.id}:{self.litellm_params.model}"
@@ -148,7 +129,7 @@ def _reset_offset_from_kwargs(kwargs: Mapping[str, object]) -> timedelta:
     litellm_params: Final = kwargs.get("litellm_params")
     if litellm_params is None:
         return timedelta(0)
-    return _DailyLimitRequestParams.model_validate(litellm_params).reset_offset()
+    return _DailyLimitParams.model_validate(litellm_params).reset_offset()
 
 
 class ModelRateLimitingCheck(CustomLogger):

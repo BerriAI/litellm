@@ -801,44 +801,17 @@ class TestResetTime:
         clock.now = RESET_AT_EIGHT
         assert await _async_pre_call(check, deployment) == deployment
 
-    @pytest.mark.asyncio
-    async def test_tokens_logged_with_reset_time_in_model_info_land_in_the_same_window(self):
-        deployment = {
-            "litellm_params": {"model": "gpt-4.1-mini", "tpd": 100},
-            "model_info": {"id": "daily-test-id", "reset_time": "08:00"},
-            "model_name": "daily-model",
-        }
-        clock = Clock(RESET_AT_EIGHT - timedelta(minutes=1))
-        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
-        await _async_log_success(
-            check,
-            {
-                "litellm_params": {"metadata": {"model_info": {"id": "daily-test-id", "reset_time": "08:00"}}},
-                "standard_logging_object": {
-                    "model_id": "daily-test-id",
-                    "total_tokens": 120,
-                    "hidden_params": {"litellm_model_name": "gpt-4.1-mini"},
-                },
-            },
-        )
-        with pytest.raises(litellm.RateLimitError, match="TPD limit=100, current usage=120"):
-            await _async_pre_call(check, deployment)
+    @pytest.mark.parametrize(
+        "deployment",
+        [
+            {"litellm_params": {"model": "gpt-4.1-mini"}, "model_info": {"id": "x", "rpd": 0}, "model_name": "m"},
+            {"litellm_params": {"model": "gpt-4.1-mini"}, "model_info": {"id": "x"}, "model_name": "m", "rpd": 0},
+        ],
+    )
+    def test_rpd_outside_litellm_params_is_not_a_limit(self, deployment: dict[str, object]):
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
 
-        clock.now = RESET_AT_EIGHT
-        assert await _async_pre_call(check, deployment) == deployment
-
-    def test_reset_time_in_model_info_is_honored(self):
-        deployment = {
-            "litellm_params": {"model": "gpt-4.1-mini", "rpd": 0},
-            "model_info": {"id": "daily-test-id", "reset_time": "08:00"},
-            "model_name": "daily-model",
-        }
-        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(RESET_AT_EIGHT - timedelta(minutes=30)))
-
-        with pytest.raises(litellm.RateLimitError) as exc_info:
-            _pre_call(check, deployment)
-
-        assert exc_info.value.response.headers["retry-after"] == "1800"
+        assert _pre_call(check, deployment) == deployment
 
     def test_router_rejects_a_reset_time_that_is_not_hh_mm(self):
         with pytest.raises(Exception, match="reset_time"):
