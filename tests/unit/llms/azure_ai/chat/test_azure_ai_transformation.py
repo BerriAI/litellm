@@ -15,6 +15,7 @@ from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
 from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+from litellm.llms.azure_ai.common_utils import AZURE_AI_AGENTS_SCOPE
 
 
 @pytest.mark.asyncio
@@ -147,50 +148,145 @@ async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoin
     assert response.choices[0].message.content == "Hi!"
 
 
+FOUNDRY_RESOURCE_BASE: Final = "https://example-resource.services.ai.azure.com"
+FOUNDRY_PROJECT_BASE: Final = f"{FOUNDRY_RESOURCE_BASE}/api/projects/example-project"
+FOUNDRY_PROJECT_CHAT_PATH: Final = "/api/projects/example-project/openai/v1/chat/completions"
+CHAT_COMPLETION_PAYLOAD: Final = {
+    "id": "chatcmpl-azure-ai",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-4.1-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 14, "completion_tokens": 1, "total_tokens": 15},
+}
+
+
 @pytest.mark.parametrize(
-    ("api_base", "expected_path"),
+    ("api_base", "api_version", "expected_path", "expected_query"),
     [
+        pytest.param(FOUNDRY_RESOURCE_BASE, None, "/models/chat/completions", b"", id="resource-root"),
         pytest.param(
-            "https://example-resource.services.ai.azure.com",
-            "/models/chat/completions",
-            id="resource-root",
+            f"{FOUNDRY_RESOURCE_BASE}/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
+            None,
+            "/openai/deployments/gpt-4.1-mini/chat/completions",
+            None,
+            id="full-deployment-url",
+        ),
+        pytest.param(FOUNDRY_PROJECT_BASE, None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project"),
+        pytest.param(
+            FOUNDRY_PROJECT_BASE, "2024-05-01-preview", FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-with-api-version"
         ),
         pytest.param(
-            "https://example-resource.services.ai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
-            "?api-version=2023-03-15-preview",
-            "/openai/deployments/gpt-4.1-mini/chat/completions",
-            id="full-deployment-url",
+            f"{FOUNDRY_PROJECT_BASE}/openai/v1/", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-openai-v1"
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1?api-version=preview&subscription-key=gateway-key",
+            "2024-05-01-preview",
+            "/openai/v1/chat/completions",
+            b"subscription-key=gateway-key",
+            id="resource-openai-v1-with-api-version",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway/openai/v1/chat/completions",
+            None,
+            "/gateway/openai/v1/chat/completions",
+            b"",
+            id="prefixed-openai-v1-chat-url",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1/tenant-x",
+            None,
+            "/openai/v1/tenant-x/models/chat/completions",
+            b"",
+            id="path-after-openai-v1",
         ),
     ],
 )
 def test_azure_ai_completion_routes_flexible_api_base(
-    respx_mock: respx.MockRouter, api_base: str, expected_path: str
+    respx_mock: respx.MockRouter,
+    api_base: str,
+    api_version: str | None,
+    expected_path: str,
+    expected_query: bytes | None,
 ) -> None:
     route: Final = respx_mock.post(host="example-resource.services.ai.azure.com", path=expected_path).mock(
-        return_value=Response(
-            200,
-            json={
-                "id": "chatcmpl-azure-ai",
-                "object": "chat.completion",
-                "created": 1700000000,
-                "model": "gpt-4.1-mini",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 14, "completion_tokens": 1, "total_tokens": 15},
-            },
-        )
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
     )
     messages: Final = [{"role": "user", "content": "What is the meaning of life?"}]
 
     response: Final = litellm.completion(
         model="azure_ai/gpt-4.1-mini",
         api_base=api_base,
+        api_version=api_version,
         api_key="azure-ai-test-key",
         messages=messages,
     )
 
     assert route.calls.last.request.url.path == expected_path
+    assert expected_query is None or route.calls.last.request.url.query == expected_query
     assert json.loads(route.calls.last.request.content) == {"model": "gpt-4.1-mini", "messages": messages}
     assert response.choices[0].message.content == "42"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "configured_scope", "env_scope", "expected_scope"),
+    [
+        pytest.param(FOUNDRY_PROJECT_BASE, None, None, AZURE_AI_AGENTS_SCOPE, id="project-default"),
+        pytest.param(
+            FOUNDRY_PROJECT_BASE,
+            "api://custom-app/.default",
+            "https://ai.azure.us/.default",
+            "api://custom-app/.default",
+            id="project-configured-scope",
+        ),
+        pytest.param(
+            FOUNDRY_PROJECT_BASE, None, "https://ai.azure.us/.default", "https://ai.azure.us/.default", id="project-env"
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1",
+            None,
+            None,
+            "https://cognitiveservices.azure.com/.default",
+            id="resource-openai-v1-default",
+        ),
+    ],
+)
+def test_azure_ai_completion_mints_the_service_principal_token_for_the_base_scope(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str,
+    configured_scope: str | None,
+    env_scope: str | None,
+    expected_scope: str,
+) -> None:
+    for env_var in ("AZURE_AI_API_KEY", "AZURE_API_KEY", "AZURE_OPENAI_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    if env_scope is None:
+        monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    else:
+        monkeypatch.setenv("AZURE_SCOPE", env_scope)
+    route: Final = respx_mock.post(
+        host="example-resource.services.ai.azure.com", path__regex=r"/openai/v1/chat/completions$"
+    ).mock(return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD))
+
+    with (
+        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id
+    ):  # test-quality-ok: stubs the Entra token fetch to assert the scope a chat entry requests and the bearer it sends; live service principal path proven by the PR's Foundry e2e QA
+        mock_entra_id.return_value = lambda: "foundry-sp-token"
+        litellm.completion(
+            model="azure_ai/gpt-4.1-mini",
+            api_base=api_base,
+            tenant_id="tenant",
+            client_id="client",
+            client_secret="secret",
+            azure_scope=configured_scope,
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+        )
+
+    mock_entra_id.assert_called_once_with(
+        tenant_id="tenant", client_id="client", client_secret="secret", scope=expected_scope
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer foundry-sp-token"
 
 
 @pytest.mark.respx(assert_all_called=True)

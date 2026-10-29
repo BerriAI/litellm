@@ -18,8 +18,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
+    CHAT_COMPLETIONS_PATH,
     api_key_header_for_base,
+    foundry_v1_root,
     is_foundry_model_inference_base,
+    with_foundry_project_scope,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
@@ -165,7 +168,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                 headers["Authorization"] = f"Bearer {api_key}"
         else:
             # No api_key provided — fall back to Azure AD token-based auth
-            litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
+            litellm_params_obj: Final = with_foundry_project_scope(
+                GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {})), api_base
+            )
             headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
@@ -208,6 +213,10 @@ class AzureAIStudioConfig(OpenAIConfig):
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
             )
         original_url: Final = httpx.URL(api_base)
+        v1_root: Final = foundry_v1_root(original_url)
+        if v1_root is not None:
+            v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=v1_chat_path).copy_remove_param("api-version"))
 
         # Extract api_version or use default
         api_version: Final = cast(str | None, litellm_params.get("api_version"))
