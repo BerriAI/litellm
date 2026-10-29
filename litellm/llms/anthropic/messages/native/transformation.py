@@ -18,10 +18,11 @@ from litellm.anthropic_beta_headers_manager import (
     is_beta_header_supported_by_bundled_config,
 )
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
-from litellm.exceptions import AuthenticationError
+from litellm.exceptions import AuthenticationError, UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.messages.api_versions import requested_api_version, sampling_params_to_drop
 from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -653,6 +654,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if thinking_enabled or effort_enabled:
             optional_params.pop("temperature", None)
 
+    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
+        return requested_api_version(headers) if self._resolved_provider == "anthropic" else None
+
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
         """False on legs whose final ``anthropic_beta`` list is only known after this transform (Bedrock Invoke),
         which strip beta-gated fields themselves once that list exists, and on providers with no row in
@@ -727,6 +731,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
+        dropped_sampling_params: Final = sampling_params_to_drop(
+            anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            self.anthropic_api_version(headers),  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            model=model,
+            provider=self._resolved_provider,
+            drop_params=drops_unsupported_params(getattr(litellm_params, "drop_params", None)),
+        )
+        if isinstance(dropped_sampling_params, UnsupportedParamsError):
+            raise dropped_sampling_params
+
         system_param: Final = anthropic_messages_optional_request_params.get("system")
         if self.should_strip_billing_metadata() and system_param is not None:
             filtered_system: Final = self._filter_billing_headers_from_system(system_param)
@@ -780,7 +794,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             ),
             max_tokens=max_tokens,
             model=model,
-            **anthropic_messages_optional_request_params,
+            **{
+                name: value
+                for name, value in anthropic_messages_optional_request_params.items()  # pyright: ignore[reportUnknownVariableType]  # the base signature types this as a bare dict
+                if name not in dropped_sampling_params
+            },
         )
         request: Final = (
             {**dict(anthropic_messages_request), "thinking": gated.thinking}

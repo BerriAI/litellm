@@ -2,9 +2,10 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+from litellm.llms.anthropic.messages.api_versions import requested_api_version
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -26,6 +27,9 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
+        return requested_api_version(headers)
 
     def validate_anthropic_messages_environment(
         self,

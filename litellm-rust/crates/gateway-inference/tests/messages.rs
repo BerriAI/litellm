@@ -89,6 +89,35 @@ async fn invalid_messages_stays_an_anthropic_error() {
     assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
+#[tokio::test]
+async fn sampling_params_under_an_api_version_that_removed_them_are_refused_without_a_provider_call()
+ {
+    let upstream = MockServer::start().await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("anthropic-version", "2026-10-21")
+        .body(Body::from(
+            json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 16, "temperature": 1})
+            .to_string(),
+        ))
+        .unwrap();
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(
+        body["error"]["message"],
+        "invalid request: test-model does not support temperature=1.0. anthropic-version \
+         2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set \
+         `litellm.drop_params = True`."
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
 const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";
 
 #[tokio::test]

@@ -18,7 +18,10 @@ use crate::{
         common_utils::{merge_beta_headers, supports_effort_param},
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{provider_feature_betas, transform_messages_request},
+            transformation::{
+                drop_sampling_params_removed_by_version, provider_feature_betas,
+                transform_messages_request,
+            },
         },
     },
     base_llm::{
@@ -146,6 +149,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
             header_value(headers, VERSION_HEADER),
             drop_params,
         )?;
+        let request = drop_sampling_params_removed_by_version(request, version, drop_params)?;
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
                 extra: request
@@ -603,6 +607,60 @@ mod tests {
                 "claude-sonnet-4-5 does not support anthropic-version={requested}. \
                  To drop unsupported params, set `litellm.drop_params = True`."
             )
+        );
+    }
+
+    fn sampling_request() -> MessagesRequest {
+        serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
+            "temperature": 1.0,
+            "top_p": 0.9,
+            "top_k": 40,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .unwrap()
+    }
+
+    fn sampling_params(body: &MessagesRequest) -> (Option<f64>, Option<f64>, Option<i64>) {
+        (
+            body.params.temperature,
+            body.params.top_p,
+            body.params.top_k,
+        )
+    }
+
+    #[rstest]
+    #[case::sdk_2_under_drop_params("2026-10-21", true, (None, None, None))]
+    #[case::sdk_1("2023-06-01", false, (Some(1.0), Some(0.9), Some(40)))]
+    #[case::sdk_1_under_drop_params("2023-06-01", true, (Some(1.0), Some(0.9), Some(40)))]
+    #[case::unknown_version_served_as_the_vertex_default("2027-01-01", true, (Some(1.0), Some(0.9), Some(40)))]
+    fn sampling_params_follow_the_version_vertex_applies(
+        #[case] requested: &str,
+        #[case] drop_params: bool,
+        #[case] expected: (Option<f64>, Option<f64>, Option<i64>),
+    ) {
+        let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
+        let body = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            .request_body(sampling_request(), &headers, drop_params)
+            .unwrap();
+        assert_eq!(sampling_params(&body), expected);
+    }
+
+    #[rstest]
+    fn sampling_params_are_refused_under_2026_10_21_without_drop_params() {
+        let headers: Headers = vec![("anthropic-version".to_string(), "2026-10-21".to_string())];
+        let Error::InvalidRequest(detail) = VERTEX_ANTHROPIC_MESSAGES_CONFIG
+            .request_body(sampling_request(), &headers, false)
+            .unwrap_err()
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-sonnet-4-5 does not support temperature=1.0. anthropic-version 2026-10-21 \
+             removed temperature, top_p and top_k. To drop unsupported params, set \
+             `litellm.drop_params = True`."
         );
     }
 

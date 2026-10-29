@@ -12,7 +12,10 @@ use crate::{
         common_utils::API_KEY_PLACEMENT,
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_safeguards_beta},
+            transformation::{
+                drop_sampling_params_removed_by_version, requested_api_version,
+                transform_messages_request, update_headers_with_safeguards_beta,
+            },
         },
     },
     azure_ai::common_utils::{
@@ -106,6 +109,19 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_version(
+            request,
+            requested_api_version(headers),
+            drop_params,
+        )
     }
 }
 
@@ -646,5 +662,27 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", None)]
+    #[case::sdk_1("2023-06-01", Some(1.0))]
+    fn temperature_follows_the_forwarded_api_version(
+        #[case] version: &str,
+        #[case] temperature: Option<f64>,
+    ) {
+        let body = AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .request_body(
+                request_from(json!({
+                    "model": "claude-test",
+                    "max_tokens": 16,
+                    "temperature": 1.0,
+                    "messages": [{"role": "user", "content": "hi"}]
+                })),
+                &vec![("anthropic-version".to_string(), version.to_string())],
+                true,
+            )
+            .unwrap();
+        assert_eq!(body.params.temperature, temperature);
     }
 }

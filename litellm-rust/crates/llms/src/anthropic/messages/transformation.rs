@@ -1,9 +1,12 @@
 use litellm_auth::CredentialPlacement;
+use litellm_http::request::header_value;
 use litellm_llms_types::{
     formats::messages::{
         ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
     },
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
+    providers::anthropic::{
+        API_VERSION, AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS, VERSION_HEADER,
+    },
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
@@ -25,6 +28,8 @@ use crate::{
         messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
 };
+
+const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
 
 pub struct AnthropicMessagesConfig;
 
@@ -113,6 +118,19 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         merge_beta_headers(
             headers,
             provider_feature_betas(request, BetaProvider::Anthropic),
+        )
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_version(
+            request,
+            requested_api_version(headers),
+            drop_params,
         )
     }
 }
@@ -315,6 +333,60 @@ fn drop_unsupported_params(
         },
         ..request
     })
+}
+
+pub(crate) fn requested_api_version(headers: &Headers) -> &str {
+    header_value(headers, VERSION_HEADER).map_or(API_VERSION, str::trim)
+}
+
+pub(crate) fn drop_sampling_params_removed_by_version(
+    request: MessagesRequest,
+    api_version: &str,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    if !removes_sampling_params(api_version) {
+        return Ok(request);
+    }
+    let params = &request.params;
+    let first_sent = [
+        ("temperature", params.temperature.map(|value| json!(value))),
+        ("top_p", params.top_p.map(|value| json!(value))),
+        ("top_k", params.top_k.map(|value| json!(value))),
+    ]
+    .into_iter()
+    .find_map(|(param, value)| Some((param, value?)));
+    if let (Some((param, value)), false) = (first_sent, drop_params) {
+        return Err(unsupported_param(
+            &request.model,
+            param,
+            &value.to_string(),
+            &format!("anthropic-version {api_version} removed temperature, top_p and top_k. "),
+        ));
+    }
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            ..request.params
+        },
+        ..request
+    })
+}
+
+fn removes_sampling_params(api_version: &str) -> bool {
+    is_dated_version(api_version) && api_version >= FIRST_VERSION_WITHOUT_SAMPLING_PARAMS
+}
+
+fn is_dated_version(version: &str) -> bool {
+    version.len() == 10
+        && version
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                4 | 7 => byte == b'-',
+                _ => byte.is_ascii_digit(),
+            })
 }
 
 fn speed_text(speed: &Recognized<Speed>) -> String {
@@ -637,6 +709,92 @@ mod tests {
             panic!("expected an invalid request");
         };
         assert_eq!(detail.to_string(), message);
+    }
+
+    fn versioned_body(
+        version: &[(&str, &str)],
+        fields: Value,
+        drop_params: bool,
+    ) -> Result<Value, Error> {
+        ANTHROPIC_MESSAGES_CONFIG
+            .request_body(request(fields), &headers(version), drop_params)
+            .map(|body| serde_json::to_value(body).unwrap())
+    }
+
+    #[rstest]
+    #[case::unit_temperature(&[("anthropic-version", "2026-10-21")], json!({"temperature": 1.0}), json!({}))]
+    #[case::any_header_case(&[("Anthropic-Version", "2026-10-21")], json!({"top_p": 0.9}), json!({}))]
+    #[case::padded_header(&[("anthropic-version", " 2026-10-21 ")], json!({"top_k": 40}), json!({}))]
+    #[case::every_sampling_param_keeping_the_rest(
+        &[("anthropic-version", "2026-10-21")],
+        json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40, "stream": true}),
+        json!({"stream": true})
+    )]
+    #[case::later_dated_version(&[("anthropic-version", "2027-01-01")], json!({"top_k": 40}), json!({}))]
+    fn sampling_params_are_dropped_under_an_api_version_that_removed_them(
+        #[case] version: &[(&str, &str)],
+        #[case] fields: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(versioned_body(version, fields, true), Ok(body(expected)));
+    }
+
+    #[rstest]
+    #[case::sdk_1(&[("anthropic-version", "2023-06-01")])]
+    #[case::default_version(&[])]
+    #[case::day_before(&[("anthropic-version", "2026-10-20")])]
+    #[case::undated(&[("anthropic-version", "latest")])]
+    fn sampling_params_reach_an_api_version_that_has_them(
+        #[case] version: &[(&str, &str)],
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let fields = json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40});
+        assert_eq!(
+            versioned_body(version, fields.clone(), drop_params),
+            Ok(body(fields))
+        );
+    }
+
+    #[rstest]
+    #[case::unit_temperature(
+        "2026-10-21",
+        json!({"temperature": 1.0}),
+        "claude does not support temperature=1.0. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::top_k(
+        "2026-10-21",
+        json!({"top_k": 40}),
+        "claude does not support top_k=40. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::top_p_ahead_of_top_k(
+        "2026-10-21",
+        json!({"top_p": 0.9, "top_k": 40}),
+        "claude does not support top_p=0.9. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::later_dated_version(
+        "2027-01-01",
+        json!({"temperature": 0.3}),
+        "claude does not support temperature=0.3. anthropic-version 2027-01-01 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    fn sampling_params_are_rejected_under_an_api_version_that_removed_them(
+        #[case] version: &str,
+        #[case] fields: Value,
+        #[case] message: &str,
+    ) {
+        let Error::InvalidRequest(detail) =
+            versioned_body(&[("anthropic-version", version)], fields, false).unwrap_err()
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(detail.to_string(), message);
+    }
+
+    #[rstest]
+    fn a_request_without_sampling_params_passes_an_api_version_that_removed_them() {
+        assert_eq!(
+            versioned_body(&[("anthropic-version", "2026-10-21")], json!({}), false),
+            Ok(body(json!({})))
+        );
     }
 
     #[rstest]

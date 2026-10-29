@@ -18,7 +18,10 @@ use crate::{
         common_utils::{existing_betas, merge_beta_headers},
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{provider_feature_betas, transform_messages_request},
+            transformation::{
+                drop_sampling_params_removed_by_version, provider_feature_betas,
+                requested_api_version, transform_messages_request,
+            },
         },
     },
     base_llm::{
@@ -130,6 +133,19 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         reasoning_auto_summary: bool,
     ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, reasoning_auto_summary)
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_version(
+            request,
+            requested_api_version(headers),
+            drop_params,
+        )
     }
 
     fn wire_body(&self, body: Value) -> Value {
@@ -540,5 +556,28 @@ mod tests {
     #[rstest]
     fn wire_body_keeps_streaming_and_removes_sdk_fields() {
         assert_eq!(BEDROCK_MANTLE_MESSAGES_CONFIG.wire_body(json!({"model": "mantle/us-west-2/anthropic.claude-test", "stream": true, "anthropic_version": "sdk", "anthropic_beta": ["sdk"], "messages": []})), json!({"model": "anthropic.claude-test", "stream": true, "messages": []}));
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", None)]
+    #[case::sdk_1("2023-06-01", Some(1.0))]
+    fn temperature_follows_the_forwarded_api_version(
+        #[case] version: &str,
+        #[case] temperature: Option<f64>,
+    ) {
+        let body = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .request_body(
+                serde_json::from_value(json!({
+                    "model": "claude-test",
+                    "max_tokens": 16,
+                    "temperature": 1.0,
+                    "messages": [{"role": "user", "content": "hi"}]
+                }))
+                .unwrap(),
+                &vec![("anthropic-version".to_string(), version.to_string())],
+                true,
+            )
+            .unwrap();
+        assert_eq!(body.params.temperature, temperature);
     }
 }

@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
+from litellm.llms.anthropic.messages.api_versions import requested_api_version
 from litellm.llms.anthropic.messages.native.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
@@ -20,6 +22,9 @@ from .common_utils import (
 class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
+
+    def anthropic_api_version(self, headers: Mapping[str, object]) -> str | None:
+        return requested_api_version(headers)
 
     def validate_anthropic_messages_environment(
         self,

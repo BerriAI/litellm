@@ -82,6 +82,59 @@ async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
         assert "stop_sequences" not in body
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+async def test_anthropic_version_2026_10_21_never_sends_deployment_sampling_params_upstream(
+    monkeypatch: pytest.MonkeyPatch, drop_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "test-api-key",
+                    "temperature": 1,
+                    "drop_params": drop_params,
+                },
+            }
+        ]
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        anthropic: Final = upstream.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_sampling",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-6",
+                    "content": [{"type": "text", "text": "hi"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+        )
+        pending: Final = router.aanthropic_messages(
+            model="claude",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"anthropic-version": "2026-10-21"},
+        )
+        if not drop_params:
+            with pytest.raises(litellm.UnsupportedParamsError, match="temperature=1 under anthropic-version 2026-10-21"):
+                await pending
+            assert not anthropic.called
+            return
+        await pending
+
+    sent: Final = anthropic.calls.last.request
+    assert sent.headers["anthropic-version"] == "2026-10-21"
+    assert "temperature" not in json.loads(sent.content)
+
+
 @pytest.mark.parametrize("stop_sequences", [None, []], ids=["no-stops", "empty-stops"])
 def test_anthropic_messages_handler(stop_sequences):
     """
