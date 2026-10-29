@@ -8,15 +8,19 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_counted_usage_tokens
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
@@ -33,6 +37,13 @@ else:
 
 class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
+
+
+class _SuccessKwargs(TypedDict, total=False):
+    litellm_params: ReadOnly[Mapping[str, object] | None]
+
+
+_SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
 
 
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
@@ -296,7 +307,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     @with_service_target("router_usage")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -308,30 +319,19 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise ValueError("standard_logging_object not passed in.")
             model_group: Final = standard_logging_object.get("model_group")
             model: Final = standard_logging_object["hidden_params"]["litellm_model_name"]
-            id = standard_logging_object.get("model_id")
-            if model_group is None or id is None:
-                return
-            elif isinstance(id, int):
-                id = str(id)
+            model_id: Final = standard_logging_object.get("model_id")
             total_tokens: Final = standard_logging_object.get("total_tokens")
-            # ------------
-            # Setup values
-            # ------------
-            dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
-
-            tpm_key: Final = f"{id}:{model}:tpm:{current_minute}"
-            # ------------
-            # Update usage
-            # ------------
-            # update cache
-            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            ## TPM
-            await self.router_cache.async_increment_cache_post_call(
-                key=tpm_key,
-                value=total_tokens,
-                ttl=self.routing_args.ttl,
-                parent_otel_span=parent_otel_span,
+            if model_group is None or not isinstance(model_id, (str, int)) or not isinstance(total_tokens, int):
+                return
+            counted_tokens: Final = get_counted_usage_tokens(
+                _SUCCESS_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_params") or {},
+                USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+            )
+            await self.async_increment_tpm(
+                deployment_id=str(model_id),
+                deployment_name=model if isinstance(model, str) else None,
+                tokens=total_tokens if counted_tokens is None else max(0, total_tokens - counted_tokens),
+                parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
             )
 
             ### TESTING ###
@@ -341,6 +341,18 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             verbose_logger.exception(
                 "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - %s", e
             )
+
+    @with_service_target("router_usage")
+    async def async_increment_tpm(
+        self, *, deployment_id: str, deployment_name: str | None, tokens: int, parent_otel_span: Span | None
+    ) -> None:
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        await self.router_cache.async_increment_cache_post_call(
+            key=f"{deployment_id}:{deployment_name}:tpm:{current_minute}",
+            value=tokens,
+            ttl=self.routing_args.ttl,
+            parent_otel_span=parent_otel_span,
+        )
 
     def _return_potential_deployments(
         self,

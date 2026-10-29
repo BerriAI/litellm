@@ -102,6 +102,7 @@ from litellm.constants import (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail, is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
@@ -867,6 +868,30 @@ def _request_fallback_list(
 def _request_model_group(kwargs: Mapping[str, object]) -> str | None:
     model_group: Final = kwargs.get("model")
     return model_group if isinstance(model_group, str) else None
+
+
+def _routed_deployment_id(deployment_metadata: Mapping[str, object]) -> str | None:
+    model_info: Final = deployment_metadata.get("model_info")
+    deployment_id: Final = (
+        _MODEL_INFO_ADAPTER.validate_python(model_info).get("id") if isinstance(model_info, dict) else None
+    )
+    return None if deployment_id is None else str(deployment_id)
+
+
+async def _count_before_callbacks(
+    deployment_metadata: dict[str, object],  # mutable-ok: the success callbacks read the marker from it
+    marker: str,
+    tokens: int,
+    count: Callable[[], Awaitable[object]] | None,
+) -> None:
+    if count is None:
+        return
+    deployment_metadata[marker] = tokens  # rebind-ok: the success callbacks read the marker off this call's metadata
+    try:
+        await count()
+    except Exception:
+        deployment_metadata.pop(marker, None)
+        raise
 
 
 def _mid_stream_error_before_output(error: "MidStreamFallbackError") -> bool:
@@ -6423,7 +6448,10 @@ class Router:
                 "model": model_name,
                 **_with_router_resolved_session_model(kwargs.get("session"), model_name),
                 **(
-                    {"turn_admission": partial(self.async_admit_deployment_turn, model, deployment, kwargs)}
+                    {
+                        "turn_admission": partial(self.async_admit_deployment_turn, model, deployment, kwargs),
+                        "turn_usage_recorder": partial(self.async_record_deployment_turn_usage, model, kwargs),
+                    }
                     if generic_function_name == "_aresponses_websocket"
                     else {}
                 ),
@@ -9565,29 +9593,113 @@ class Router:
             model_group: Final = request_kwargs.get("model")
             if deployment_metadata is None or not isinstance(model_group, str):
                 return
-            model_info: Final = deployment_metadata["model_info"]
-            deployment_id: Final = model_info.get("id") if isinstance(model_info, dict) else None
-            if deployment_id is None:
-                return
             total_tokens: Final = response_total_token_count(response)
-            deployment_name: Final = deployment_metadata.get("deployment")
-            deployment_metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] = total_tokens
-            try:
-                await self._increment_deployment_usage(
-                    deployment_id=str(deployment_id),
-                    deployment_name=deployment_name if isinstance(deployment_name, str) else None,
+            await _count_before_callbacks(
+                deployment_metadata,
+                ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+                total_tokens,
+                self._deployment_usage_count(
+                    deployment_metadata=deployment_metadata,
                     model_group=model_group,
                     total_tokens=total_tokens,
-                    rpm_increment=1,
                     parent_otel_span=get_parent_otel_span_from_kwargs(request_kwargs),
-                )
-            except Exception:
-                deployment_metadata.pop(ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, None)
-                raise
+                ),
+            )
         except Exception as e:
             verbose_router_logger.debug(
                 "litellm.router.Router::increment_deployment_usage_for_response(): Exception occured - %s", e
             )
+
+    async def async_record_deployment_turn_usage(
+        self,
+        model_group: str,
+        request_kwargs: Mapping[str, object],
+        turn_litellm_params: Mapping[str, object],
+        total_tokens: int,
+    ) -> None:
+        try:
+            deployment_metadata: Final = find_deployment_metadata(turn_litellm_params)
+            if deployment_metadata is None:
+                return
+            parent_otel_span: Final = get_parent_otel_span_from_kwargs(request_kwargs)
+            await _count_before_callbacks(
+                deployment_metadata,
+                ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+                total_tokens,
+                self._deployment_usage_count(
+                    deployment_metadata=deployment_metadata,
+                    model_group=model_group,
+                    total_tokens=total_tokens,
+                    parent_otel_span=parent_otel_span,
+                ),
+            )
+            await _count_before_callbacks(
+                deployment_metadata,
+                USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+                total_tokens,
+                self._routing_strategy_usage_count(
+                    deployment_metadata=deployment_metadata,
+                    model_group=model_group,
+                    request_kwargs=request_kwargs,
+                    total_tokens=total_tokens,
+                    parent_otel_span=parent_otel_span,
+                ),
+            )
+        except Exception as e:  # noqa: BLE001  # a failed early count must not break the turn; its logging counts it
+            verbose_router_logger.debug(
+                "litellm.router.Router::async_record_deployment_turn_usage(): Exception occured - %s", e
+            )
+
+    def _deployment_usage_count(
+        self,
+        *,
+        deployment_metadata: Mapping[str, object],
+        model_group: str,
+        total_tokens: int,
+        parent_otel_span: Span | None,
+    ) -> Callable[[], Awaitable[object]] | None:
+        deployment_id: Final = _routed_deployment_id(deployment_metadata)
+        if deployment_id is None:
+            return None
+        deployment_name: Final = deployment_metadata.get("deployment")
+        return partial(
+            self._increment_deployment_usage,
+            deployment_id=deployment_id,
+            deployment_name=deployment_name if isinstance(deployment_name, str) else None,
+            model_group=model_group,
+            total_tokens=total_tokens,
+            rpm_increment=1,
+            parent_otel_span=parent_otel_span,
+        )
+
+    def _routing_strategy_usage_count(
+        self,
+        *,
+        deployment_metadata: Mapping[str, object],
+        model_group: str,
+        request_kwargs: Mapping[str, object],
+        total_tokens: int,
+        parent_otel_span: Span | None,
+    ) -> Callable[[], Awaitable[object]] | None:
+        routing_kwargs: Final = {key: value for key, value in request_kwargs.items() if key != "litellm_logging_obj"}
+        _, selector = self._get_routing_context(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped request dict
+            model=model_group, request_kwargs=routing_kwargs
+        )
+        deployment_id: Final = _routed_deployment_id(deployment_metadata)
+        deployment_name: Final = deployment_metadata.get("deployment")
+        if (
+            not isinstance(selector, LowestTPMLoggingHandler_v2)
+            or deployment_id is None
+            or not isinstance(deployment_name, str)
+        ):
+            return None
+        return partial(
+            selector.async_increment_tpm,
+            deployment_id=deployment_id,
+            deployment_name=deployment_name,
+            tokens=total_tokens,
+            parent_otel_span=parent_otel_span,
+        )
 
     async def _increment_deployment_usage(
         self,

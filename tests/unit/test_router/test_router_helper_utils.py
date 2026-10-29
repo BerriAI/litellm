@@ -4,7 +4,7 @@ import gc
 import json
 import os
 import weakref
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timezone
 from types import MethodType
 from typing import Final
@@ -19,8 +19,11 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.router import AlertingConfig, Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
@@ -545,29 +548,201 @@ async def _kwargs_routed_to(router: Router, model: str, function_name: str) -> d
         routed.update(kwargs)
 
     call.__name__ = function_name
-    await router._ageneric_api_call_with_fallbacks_helper(model=model, original_generic_function=call)
+    await router._ageneric_api_call_with_fallbacks_helper(
+        model=model, original_generic_function=call, litellm_metadata={"model_group": model}
+    )
     return routed
 
 
-async def _finish_35_token_websocket_turn(routed: Mapping[str, object], call_id: str) -> None:
+def _open_websocket_turn(routed: Mapping[str, object], call_id: str) -> Logging:
     import time
 
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    turn: Final = Logging(
+    connection: Final = Logging(
         model="gpt-5-mini",
         messages=[],
         stream=False,
         call_type=CallTypes.aresponses_websocket.value,
         start_time=time.time(),
-        litellm_call_id=call_id,
+        litellm_call_id=f"{call_id}-connection",
         function_id=call_id,
     )
-    turn.update_environment_variables(litellm_params={"litellm_metadata": routed["litellm_metadata"]}, optional_params={})
+    connection.update_environment_variables(litellm_params=get_litellm_params(**routed), optional_params={})
+    return connection.copy_for_new_call(litellm_call_id=call_id, start_time=datetime.now())
+
+
+async def _complete_35_token_turn(turn: Logging) -> None:
     await turn.dispatch_success_handlers(
         [{"type": "response.completed", "response": {"usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}}}],
         prefer_async_handlers=True,
     )
+
+
+async def _finish_35_token_websocket_turn(routed: Mapping[str, object], call_id: str) -> None:
+    await _complete_35_token_turn(_open_websocket_turn(routed, call_id))
+
+
+def _with_success_callbacks_of(monkeypatch: pytest.MonkeyPatch, build_router: Callable[[], Router]) -> Router:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    router: Final = build_router()
+    monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, *litellm.callbacks])
+    return router
+
+
+def _usage_based_routing_router(monkeypatch: pytest.MonkeyPatch, model_name: str, tpm: int) -> Router:
+    return _with_success_callbacks_of(
+        monkeypatch,
+        lambda: Router(
+            model_list=[
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "tpm": tpm},
+                    "model_info": {"id": f"{model_name}-dep"},
+                }
+            ],
+            routing_strategy="usage-based-routing-v2",
+        ),
+    )
+
+
+_TurnAdmission = Callable[[], Awaitable[None]]
+_TurnUsageRecorder = Callable[[Mapping[str, object], int], Awaitable[None]]
+
+
+async def _websocket_turn_hooks(
+    router: Router, model_name: str
+) -> tuple[dict[str, object], _TurnAdmission, _TurnUsageRecorder]:
+    routed: Final = await _kwargs_routed_to(router, model_name, "_aresponses_websocket")
+    admit_turn: Final = routed["turn_admission"]
+    record_turn: Final = routed["turn_usage_recorder"]
+    assert callable(admit_turn)
+    assert callable(record_turn)
+    return routed, admit_turn, record_turn
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_usage_based_routing_refuses_the_next_websocket_turn_before_the_finished_turn_s_logging_runs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-early", tpm=30)
+    routed, admit_turn, record_turn = await _websocket_turn_hooks(router, "ws-tpm-v2-early")
+    await admit_turn()
+
+    await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-early-turn").litellm_params, 35)
+
+    with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-early"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_when_the_logging_runs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-once", tpm=69)
+    routed, admit_turn, record_turn = await _websocket_turn_hooks(router, "ws-tpm-v2-once")
+    await admit_turn()
+    first_turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-once-first")
+
+    await record_turn(first_turn.litellm_params, 35)
+    assert await router.get_model_group_usage("ws-tpm-v2-once") == (35, 1)
+    await _complete_35_token_turn(first_turn)
+
+    assert await router.get_model_group_usage("ws-tpm-v2-once") == (35, 1)
+    await admit_turn()
+    await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-once-second").litellm_params, 35)
+    with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-once"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_usage_based_routing_counts_an_http_call_once(monkeypatch: pytest.MonkeyPatch):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    router: Final = _usage_based_routing_router(monkeypatch, "http-tpm-v2", tpm=1000)
+
+    response: Final = await router.acompletion(
+        model="http-tpm-v2", messages=[{"role": "user", "content": "hi"}], mock_response="pong"
+    )
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    tpm_keys, _ = router.lowesttpm_logger_v2.usage_counter_keys(router.get_model_list(model_name="http-tpm-v2"))
+    assert await router.cache.async_get_cache(key=tpm_keys[0]) == response.usage.total_tokens
+
+
+class _FirstIncrementFailingCache(DualCache):
+    def __init__(self) -> None:
+        super().__init__(in_memory_cache=InMemoryCache())
+        self.failed: bool = False
+
+    async def async_increment_cache_pipeline(
+        self, increment_list: list[RedisPipelineIncrementOperation], **kwargs: object
+    ) -> list[float] | None:
+        if self.failed:
+            return await super().async_increment_cache_pipeline(increment_list, **kwargs)
+        self.failed = True
+        raise RuntimeError("cache unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_websocket_turn_whose_early_count_fails_is_counted_in_full_by_its_logging(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = _with_success_callbacks_of(monkeypatch, lambda: _rpm_tpm_router("ws-early-count-fails"))
+    router.cache = _FirstIncrementFailingCache()
+    routed, _, record_turn = await _websocket_turn_hooks(router, "gpt-5-mini")
+    turn: Final = _open_websocket_turn(routed, "ws-early-count-fails-turn")
+
+    await record_turn(turn.litellm_params, 35)
+    await _complete_35_token_turn(turn)
+
+    assert await router.get_model_group_usage("gpt-5-mini") == (35, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_websocket_turn_on_a_router_without_usage_based_routing_is_counted_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = _with_success_callbacks_of(monkeypatch, lambda: _rpm_tpm_router("ws-default-routing"))
+    routed, _, record_turn = await _websocket_turn_hooks(router, "gpt-5-mini")
+    turn: Final = _open_websocket_turn(routed, "ws-default-routing-turn")
+
+    await record_turn(turn.litellm_params, 35)
+    assert await router.get_model_group_usage("gpt-5-mini") == (35, 1)
+    await _complete_35_token_turn(turn)
+
+    assert await router.get_model_group_usage("gpt-5-mini") == (35, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+@pytest.mark.parametrize(
+    "deployment_metadata",
+    [{}, {"model_info": {"id": None}}],
+    ids=["no_deployment", "deployment_without_id"],
+)
+async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_the_next_turn(
+    monkeypatch: pytest.MonkeyPatch, deployment_metadata: dict[str, object]
+):
+    router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-unrouted", tpm=30)
+    routed, admit_turn, record_turn = await _websocket_turn_hooks(router, "ws-tpm-v2-unrouted")
+    await admit_turn()
+    turn: Final = _open_websocket_turn(
+        {**routed, "litellm_metadata": {"model_group": "ws-tpm-v2-unrouted", **deployment_metadata}},
+        "ws-tpm-v2-unrouted-turn",
+    )
+
+    await record_turn(turn.litellm_params, 35)
+    await _complete_35_token_turn(turn)
+
+    await admit_turn()
+    assert await router.get_model_group_usage("ws-tpm-v2-unrouted") == (None, None)
 
 
 @pytest.mark.asyncio
@@ -1198,6 +1373,7 @@ def _rpm_tpm_router(model_id: str) -> Router:
 def router_minute_pinned(monkeypatch: pytest.MonkeyPatch) -> datetime:
     pinned: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
     monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: pinned)
     return pinned
 
 

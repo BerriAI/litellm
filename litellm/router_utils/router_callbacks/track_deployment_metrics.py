@@ -29,14 +29,12 @@ def find_deployment_metadata(kwargs: Mapping[str, object]) -> dict[str, object] 
     return next((bucket for bucket in buckets if isinstance(bucket, dict) and "model_info" in bucket), None)
 
 
-def get_counted_usage_tokens(litellm_params: Mapping[str, object]) -> int | None:
+def get_counted_usage_tokens(
+    litellm_params: Mapping[str, object], marker: str = ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+) -> int | None:
     buckets: Final = (litellm_params.get(channel) for channel in _METADATA_CHANNELS)
     counted: Final = next(
-        (
-            bucket[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY]
-            for bucket in buckets
-            if isinstance(bucket, dict) and ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY in bucket
-        ),
+        (bucket[marker] for bucket in buckets if isinstance(bucket, dict) and marker in bucket),
         None,
     )
     return counted if isinstance(counted, int) and not isinstance(counted, bool) else None

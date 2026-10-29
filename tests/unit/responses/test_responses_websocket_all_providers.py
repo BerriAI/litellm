@@ -1582,6 +1582,9 @@ class TestWebSocketProjectQuotaEnforcement:
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
 
 
+_TURN_USAGE: Final = {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}
+
+
 def _turn_frames() -> tuple[str, str, str]:
     return tuple(json.dumps({"type": "response.create", "input": word}) for word in ("one", "two", "three"))
 
@@ -1661,6 +1664,66 @@ def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
 
 class TestWebSocketTurnAdmission:
     """A turn after the connection's first is admitted by the deployment again before it reaches the provider."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("terminal_event", "counted_before_it_reaches_the_client"),
+        [
+            ({"type": "response.completed", "response": {"usage": _TURN_USAGE}}, [("ws-dep", 35)]),
+            ({"type": "response.incomplete", "response": {"usage": _TURN_USAGE}}, [("ws-dep", 35)]),
+            ({"type": "response.failed", "response": {"usage": _TURN_USAGE, "error": {"code": "server_error"}}}, []),
+        ],
+    )
+    async def test_native_relay_counts_a_finished_turn_before_forwarding_its_terminal_event(
+        self, terminal_event: dict[str, object], counted_before_it_reaches_the_client: list[tuple[object, int]]
+    ):
+        from unittest.mock import AsyncMock
+
+        import websockets.exceptions
+
+        counted: Final[list[tuple[object, int]]] = []
+
+        async def record_turn_usage(turn_litellm_params: Mapping[str, object], total_tokens: int) -> None:
+            await asyncio.sleep(0)
+            metadata: Final = turn_litellm_params["litellm_metadata"]
+            assert isinstance(metadata, dict)
+            counted.append((metadata["model_info"]["id"], total_tokens))
+
+        class Backend:
+            def __init__(self, *events: dict[str, object]) -> None:
+                self.events: Final = list(events)
+
+            async def recv(self, decode: bool = False) -> str:
+                if not self.events:
+                    raise websockets.exceptions.ConnectionClosed(None, None)
+                return json.dumps(self.events.pop(0))
+
+        class Client:
+            def __init__(self) -> None:
+                self.seen: Final[list[tuple[object, list[tuple[object, int]]]]] = []
+
+            async def send_text(self, data: str) -> None:
+                self.seen.append((json.loads(data)["type"], list(counted)))
+
+        logging_obj: Final = MagicMock()
+        logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": "ws-dep"}}}
+        logging_obj.copy_for_new_call.return_value = logging_obj
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.dispatch_failure_handlers = AsyncMock()
+        client: Final = Client()
+        handler: Final = _make_streaming(
+            websocket=client,
+            backend_ws=Backend({"type": "response.created", "response": {}}, terminal_event),
+            logging_obj=logging_obj,
+            turn_usage_recorder=record_turn_usage,
+        )
+
+        await handler.backend_to_client()
+
+        assert client.seen == [
+            ("response.created", []),
+            (terminal_event["type"], counted_before_it_reaches_the_client),
+        ]
 
     @pytest.mark.asyncio
     async def test_native_relay_drops_a_later_turn_the_deployment_refuses(self):
