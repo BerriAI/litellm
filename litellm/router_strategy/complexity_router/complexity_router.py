@@ -23,6 +23,7 @@ import random
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
@@ -37,6 +38,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin, read_affinity_pin
 from litellm.constants import (
+    COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
@@ -1389,6 +1391,11 @@ def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None)
     return {"model": model, "tier": tier_value}
 
 
+@dataclass(frozen=True, slots=True)
+class _JevConnectionError:
+    message: str
+
+
 class ComplexityRouter(CustomLogger):
     """
     Complexity router that classifies requests and routes to appropriate models.
@@ -1404,7 +1411,7 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient | _JevConnectionError:
         if config.deployment_name is not None:
             return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
         if config.provider in ("laya", "bespoke"):
@@ -1425,12 +1432,22 @@ class ComplexityRouter(CustomLogger):
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="databricks",
             )
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
-            raise ValueError(
+        api_key: Final = (
+            get_secret_str(config.api_key)
+            if config.api_key is not None and config.api_key.startswith("os.environ/")
+            else config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        )
+        if not api_key or not api_key.strip():
+            return _JevConnectionError(
                 "opensource_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'oss_classifier'"
             )
-        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        api_base: Final = (
+            get_secret_str(config.api_base)
+            if config.api_base is not None and config.api_base.startswith("os.environ/")
+            else config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        )
+        if not api_base or not api_base.strip():
+            return _JevConnectionError("opensource_classifier_config.api_base must resolve to a non-empty value")
         return HttpJevClassifierClient(
             api_key=api_key,
             api_base=api_base,
@@ -1473,13 +1490,18 @@ class ComplexityRouter(CustomLogger):
             self.config.default_model = default_model
 
         jev_config: Final = self.config.opensource_classifier_config
-        self._jev_client: JevClassifierClient | None = (
+        jev_client_result: Final = (
             jev_client
             if jev_client is not None
             else self._build_jev_client(jev_config)
             if self.config.classifier_type == "oss_classifier" and jev_config is not None
             else None
         )
+        match jev_client_result:
+            case _JevConnectionError(message=message):
+                raise ValueError(message)
+            case _:
+                self._jev_client: JevClassifierClient | None = jev_client_result
 
         self._tier_affinity_config = hashlib.sha256(
             self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
@@ -4358,23 +4380,38 @@ class ComplexityRouter(CustomLogger):
         return newest_ask is not None and newest_ask.startswith(_CODEX_COMPACTION_SUMMARY_PREFIX)
 
     @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
+    def _iter_metadata_dicts(request_kwargs: Mapping[str, object]) -> list[Mapping[str, object]]:
         """Metadata may land on `metadata` or `litellm_metadata` depending on the
         endpoint, mirroring DeploymentAffinityCheck's precedence."""
         return [
-            metadata
+            cast(Mapping[str, object], metadata)  # cast-ok: request metadata is a str-keyed JSON object
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), dict)
         ]
 
     @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
             if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
+
+    def _get_tier_pin_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
+        if self.config.classification_mode == "user_turn" and not self.config.session_affinity:
+            child_metadata: Final = next(
+                (
+                    metadata
+                    for metadata in self._iter_metadata_dicts(request_kwargs)
+                    if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
+                ),
+                None,
+            )
+            if child_metadata is not None:
+                child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+                return child_session if isinstance(child_session, str) and child_session else None
+        return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
     def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
@@ -4460,7 +4497,7 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
-        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
+        session_id: Final = self._get_tier_pin_session_id(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
