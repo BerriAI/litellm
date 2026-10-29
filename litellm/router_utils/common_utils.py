@@ -507,11 +507,19 @@ def prefer_web_search_deployments(
             *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
         )
     )
-    capable: Final = [d for d in deployments if _deployment_supports_web_search(d)]
-    if any(_deployment_id(d) not in tried for d in capable):
-        return capable
-    verbose_router_logger.debug("No deployment left for this web search request supports web search, so all stay")
-    return deployments
+    untried: Final = (d for d in deployments if _deployment_id(d) not in tried)
+    orders_with_an_untried_capable_deployment: Final = frozenset(
+        litellm.utils.get_deployment_order(d) for d in untried if _deployment_supports_web_search(d)
+    )
+    if not orders_with_an_untried_capable_deployment:
+        verbose_router_logger.debug("No deployment left for this web search request supports web search, so all stay")
+        return deployments
+    return [
+        d
+        for d in deployments
+        if _deployment_supports_web_search(d)
+        or litellm.utils.get_deployment_order(d) not in orders_with_an_untried_capable_deployment
+    ]
 
 
 # Credential params that only one provider family reads, paired with the providers

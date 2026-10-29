@@ -536,17 +536,33 @@ async def test_legacy_usage_based_async_pick_skips_deployments_without_web_searc
     assert picks == {"search"}
 
 
-def _router_with_a_mixed_web_search_group(enable_tag_filtering: bool) -> Router:
+def _order_param(order: int | None) -> dict[str, int]:
+    return {} if order is None else {"order": order}
+
+
+def _router_with_a_mixed_web_search_group(
+    enable_tag_filtering: bool, orders: tuple[int | None, int | None] = (None, None)
+) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "tags": ["cheap"], "order": 1},
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "tags": ["cheap"],
+                    **_order_param(orders[0]),
+                },
                 "model_info": {"id": "no-search", "supports_web_search": False},
             },
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "tags": ["premium"], "order": 2},
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "tags": ["premium"],
+                    **_order_param(orders[1]),
+                },
                 "model_info": {"id": "search"},
             },
         ],
@@ -562,25 +578,39 @@ def _cool_down(router: Router, model_ids: tuple[str, ...]) -> None:
 
 
 _LATER_FILTER_CASES: Final = pytest.mark.parametrize(
-    ("enable_tag_filtering", "cooled_down", "request_kwargs", "expected_id"),
+    ("orders", "cooled_down", "request_kwargs", "expected_id"),
     [
-        (False, (), _ANTHROPIC_WEB_SEARCH_REQUEST, "search"),
-        (False, (), {"web_search_options": {}}, "search"),
-        (False, ("search",), _ANTHROPIC_WEB_SEARCH_REQUEST, "no-search"),
-        (False, ("search",), {"web_search_options": {}}, "no-search"),
-        (False, (), {**_ANTHROPIC_WEB_SEARCH_REQUEST, "_excluded_deployment_ids": ["search"]}, "no-search"),
-        (False, (), {**_ANTHROPIC_WEB_SEARCH_REQUEST, "_retry_skipped_deployment_ids": ("search",)}, "no-search"),
+        ((None, None), (), _ANTHROPIC_WEB_SEARCH_REQUEST, "search"),
+        ((None, None), (), {"web_search_options": {}}, "search"),
+        ((1, 2), (), _ANTHROPIC_WEB_SEARCH_REQUEST, "no-search"),
+        ((1, 2), (), {"web_search_options": {}}, "no-search"),
+        ((None, None), ("search",), _ANTHROPIC_WEB_SEARCH_REQUEST, "no-search"),
+        ((None, None), ("search",), {"web_search_options": {}}, "no-search"),
+        ((None, None), (), {**_ANTHROPIC_WEB_SEARCH_REQUEST, "_excluded_deployment_ids": ["search"]}, "no-search"),
+        ((None, None), (), {**_ANTHROPIC_WEB_SEARCH_REQUEST, "_retry_skipped_deployment_ids": ("search",)}, "no-search"),
     ],
-    ids=["order", "order-options", "cooldown", "cooldown-options", "weighted-failover", "retry-skip"],
+    ids=[
+        "same-tier",
+        "same-tier-options",
+        "lower-order-tier",
+        "lower-order-tier-options",
+        "cooldown",
+        "cooldown-options",
+        "weighted-failover",
+        "retry-skip",
+    ],
 )
 
 
 @pytest.mark.asyncio
 @_LATER_FILTER_CASES
 async def test_async_pick_prefers_web_search_until_later_filters_leave_none_that_can(
-    enable_tag_filtering: bool, cooled_down: tuple[str, ...], request_kwargs: dict[str, object], expected_id: str
+    orders: tuple[int | None, int | None],
+    cooled_down: tuple[str, ...],
+    request_kwargs: dict[str, object],
+    expected_id: str,
 ) -> None:
-    router: Final = _router_with_a_mixed_web_search_group(enable_tag_filtering)
+    router: Final = _router_with_a_mixed_web_search_group(False, orders)
     _cool_down(router, cooled_down)
     deployment: Final = await router.async_get_available_deployment(
         model="mixed", messages=[{"role": "user", "content": "hi"}], request_kwargs=dict(request_kwargs)
@@ -590,14 +620,90 @@ async def test_async_pick_prefers_web_search_until_later_filters_leave_none_that
 
 @_LATER_FILTER_CASES
 def test_sync_pick_prefers_web_search_until_later_filters_leave_none_that_can(
-    enable_tag_filtering: bool, cooled_down: tuple[str, ...], request_kwargs: dict[str, object], expected_id: str
+    orders: tuple[int | None, int | None],
+    cooled_down: tuple[str, ...],
+    request_kwargs: dict[str, object],
+    expected_id: str,
 ) -> None:
-    router: Final = _router_with_a_mixed_web_search_group(enable_tag_filtering)
+    router: Final = _router_with_a_mixed_web_search_group(False, orders)
     _cool_down(router, cooled_down)
     deployment: Final = router.get_available_deployment(
         model="mixed", messages=[{"role": "user", "content": "hi"}], request_kwargs=dict(request_kwargs)
     )
     assert deployment["model_info"]["id"] == expected_id
+
+
+_WEB_SEARCH_REQUESTS: Final = pytest.mark.parametrize(
+    "web_search_request",
+    [_ANTHROPIC_WEB_SEARCH_REQUEST, {"web_search_options": {}}],
+    ids=["web-search-tool", "web-search-options"],
+)
+
+
+@pytest.mark.asyncio
+@_WEB_SEARCH_REQUESTS
+async def test_order_fallback_answers_a_web_search_request_from_the_next_tier_when_the_capable_one_fails(
+    web_search_request: dict[str, object],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "ordered",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": Exception("connection error"),
+                    "order": 1,
+                },
+                "model_info": {"id": "search"},
+            },
+            {
+                "model_name": "ordered",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi", "order": 2},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+        ],
+        num_retries=0,
+    )
+    response: Final = await router.acompletion(
+        model="ordered", messages=[{"role": "user", "content": "hi"}], **web_search_request
+    )
+    assert response._hidden_params["model_id"] == "no-search"
+
+
+@pytest.mark.asyncio
+@_WEB_SEARCH_REQUESTS
+async def test_web_search_request_prefers_the_capable_deployment_inside_its_order_tier(
+    web_search_request: dict[str, object],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "ordered",
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "order": 1},
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+            {
+                "model_name": "ordered",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "order": 1},
+                "model_info": {"id": "search"},
+            },
+            {
+                "model_name": "ordered",
+                "litellm_params": {"model": "openai/gpt-z", "api_key": "fake-key", "order": 2},
+                "model_info": {"id": "later-no-search", "supports_web_search": False},
+            },
+        ],
+    )
+    picks: Final = {
+        (
+            await router.async_get_available_deployment(
+                model="ordered", messages=[{"role": "user", "content": "hi"}], request_kwargs=dict(web_search_request)
+            )
+        )["model_info"]["id"]
+        for _ in range(20)
+    }
+    assert picks == {"search"}
 
 
 @pytest.mark.asyncio
