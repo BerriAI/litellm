@@ -329,8 +329,6 @@ model LiteLLM_UserTable {
     // relations
     litellm_organization_table LiteLLM_OrganizationTable?                   @relation(fields: [organization_id], references: [organization_id])
     organization_memberships LiteLLM_OrganizationMembership[]
-    invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
-    invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 }
@@ -844,8 +842,6 @@ model LiteLLM_InvitationLink {
 
   // Relations
   liteLLM_user_table_user    LiteLLM_UserTable  @relation("UserId", fields: [user_id], references: [user_id])
-  liteLLM_user_table_created LiteLLM_UserTable  @relation("CreatedBy", fields: [created_by], references: [user_id])
-  liteLLM_user_table_updated LiteLLM_UserTable  @relation("UpdatedBy", fields: [updated_by], references: [user_id])
 }
 
 

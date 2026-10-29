@@ -40,3 +40,23 @@ def test_schema_compatibility_rejects_removed_models_fields_and_narrowed_types(
     schema: str, expected: tuple[str, ...]
 ) -> None:
     assert check_breaking_changes(parse_model_fields(ORIGINAL), parse_model_fields(schema)) == expected
+
+
+RELATED: Final = (
+    "model Owner {\n id String @id\n items Item[] @relation(\"Owned\")\n created Item[] @relation(\"Created\")\n}\n"
+    "model Item {\n id String @id\n owner_id String?\n created_by String\n"
+    ' owner Owner? @relation("Owned", fields: [owner_id], references: [id])\n'
+    ' creator Owner @relation("Created", fields: [created_by], references: [id])\n}\n'
+)
+
+
+def test_schema_compatibility_allows_dropping_relations_but_not_their_columns() -> None:
+    relations_dropped: Final = (
+        "model Owner {\n id String @id\n}\nmodel Item {\n id String @id\n owner_id String?\n created_by String\n}\n"
+    )
+    columns_dropped: Final = "model Owner {\n id String @id\n}\nmodel Item {\n id String @id\n}\n"
+    assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(relations_dropped)) == ()
+    assert check_breaking_changes(parse_model_fields(RELATED), parse_model_fields(columns_dropped)) == (
+        "Breaking: Field Item.owner_id was removed",
+        "Breaking: Field Item.created_by was removed",
+    )
