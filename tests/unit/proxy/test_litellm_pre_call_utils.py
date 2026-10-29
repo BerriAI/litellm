@@ -2137,6 +2137,41 @@ async def test_add_litellm_data_to_request_honors_header_tags():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body_metadata", [None, {}], ids=["no_metadata", "empty_metadata"])
+@pytest.mark.parametrize(
+    "header_tags, root_tags, expected_tags",
+    [
+        ("usecase:a", ["other"], ["usecase:a", "other"]),
+        ("a,b", ["b", "c"], ["a", "b", "c"]),
+        ("usecase:a", [], ["usecase:a"]),
+    ],
+)
+async def test_add_litellm_data_to_request_merges_header_tags_with_root_tags(
+    body_metadata, header_tags, root_tags, expected_tags
+):
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = _make_request_mock(
+        "/v1/chat/completions",
+        {"Content-Type": "application/json", "x-litellm-tags": header_tags},
+    )
+    data = {"model": "gpt-4o", "tags": root_tags}
+    if body_metadata is not None:
+        data["metadata"] = body_metadata
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={}),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["metadata"]["tags"] == expected_tags
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_preserves_caller_metadata_tags():
     """Caller-supplied metadata.tags are preserved and reach the router."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request

@@ -2274,23 +2274,18 @@ class LiteLLMProxyRequestSetup:
     @staticmethod
     def add_request_tag_to_metadata(
         llm_router: Router | None,
-        headers: dict,
-        data: dict,
+        headers: Mapping[str, str],
+        data: Mapping[str, object],
     ) -> list[str] | None:
-        tags = None
-
-        # Check request headers for tags
-        if "x-litellm-tags" in headers:
-            if isinstance(headers["x-litellm-tags"], str):
-                _tags: Final = headers["x-litellm-tags"].split(",")
-                tags = [tag.strip() for tag in _tags]
-            elif isinstance(headers["x-litellm-tags"], list):
-                tags = headers["x-litellm-tags"]
-        # Check request body for tags
-        if "tags" in data and isinstance(data["tags"], list):
-            tags = data["tags"]
-
-        return tags
+        raw_header_tags: Final = headers.get("x-litellm-tags")
+        header_tags: Final = None if raw_header_tags is None else [tag.strip() for tag in raw_header_tags.split(",")]
+        body_tags: Final = data.get("tags")
+        root_tags: Final = (
+            list(_CLIENT_TAGS_ADAPTER.validate_python(body_tags)) if isinstance(body_tags, list) else None
+        )
+        if header_tags is None and root_tags is None:
+            return None
+        return LiteLLMProxyRequestSetup.merge_tags(request_tags=header_tags, tags_to_add=root_tags)
 
     @staticmethod
     def pre_seed_litellm_metadata_for_route(
@@ -2976,7 +2971,7 @@ async def add_litellm_data_to_request(
 
     _caller_body_metadata: Final = data.get("metadata") if _metadata_variable_name != "metadata" else None
     _caller_body_tags: Final = (
-        _caller_body_metadata.get("tags")
+        list(_CLIENT_TAGS_ADAPTER.validate_python(_caller_body_metadata.get("tags")))
         if isinstance(_caller_body_metadata, dict) and isinstance(_caller_body_metadata.get("tags"), list)
         else None
     )
