@@ -1617,9 +1617,12 @@ class Router(DeprecatedRouterMembers):
         self._core_deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self._core_deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"
         redis_cache = None
-        cache_config: Final[dict[str, Any]] = {}
+        cache_config: dict[str, Any] = {}
+
+        cache_config.update(cache_kwargs)
+        cache_type = cache_config.pop("type", cache_type)
 
         self.client_ttl = client_ttl
         self._core_kubernetes_pod_discovery: Final = KubernetesPodDiscovery()
@@ -1644,8 +1647,6 @@ class Router(DeprecatedRouterMembers):
                 )
                 cache_config["db"] = str(redis_db)
 
-            # Add additional key-value pairs from cache_kwargs
-            cache_config.update(cache_kwargs)
             redis_cache = self._create_redis_cache(cache_config)
 
         if cache_responses:
